@@ -2917,6 +2917,9 @@ public class AbilityUtils {
         if (tgtCard.isModal() && tgtCard.hasState(CardStateName.Backside)) {
             collectSpellsForPlayEffect(list, tgtCard.getState(CardStateName.Backside), controller, withAltCost);
         }
+        if (tgtCard.hasState(CardStateName.Secondary)) {
+            collectSpellsForPlayEffect(list, tgtCard.getState(CardStateName.Secondary), controller, withAltCost);
+        }
 
         for (SpellAbility s : list) {
             if (s.isLandAbility()) {
