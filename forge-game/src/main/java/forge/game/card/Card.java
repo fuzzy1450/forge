@@ -3440,7 +3440,10 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             return false;
         }
         for (SpellAbility sa : getSpellAbilities()) {
-            if (sa.isLandAbility() || sa.isBasicSpell()) {
+            if (sa.isLandAbility()) {
+                continue;
+            }
+            if (sa.isBasicSpell() && sa.getPayCosts().isOnlyManaCost()) {
                 continue;
             }
             return false;
