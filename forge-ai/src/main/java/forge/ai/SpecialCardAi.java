@@ -42,6 +42,7 @@ import forge.game.player.PlayerCollection;
 import forge.game.player.PlayerPredicates;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityPredicates;
+import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.spellability.SpellPermanent;
 import forge.game.staticability.StaticAbility;
 import forge.game.trigger.Trigger;
@@ -536,6 +537,25 @@ public class SpecialCardAi {
             }
 
             return sa.getTargets().size() > 0;
+        }
+    }
+
+    // Demonic Consultation - cast only in response to our own Thassa's Oracle
+    // ETB trigger: the trigger then resolves against an empty library and its
+    // WinsGame sub fires (X = devotion >= Y = 0). Casting in any other window
+    // exiles the library with no win attached, so the guard is the whole point.
+    public static class DemonicConsultation {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            for (SpellAbilityStackInstance si : ai.getGame().getStack()) {
+                SpellAbility stackSa = si.getSpellAbility();
+                if (stackSa != null && stackSa.isTrigger()
+                        && ai.equals(stackSa.getActivatingPlayer())
+                        && stackSa.getHostCard() != null
+                        && "Thassa's Oracle".equals(stackSa.getHostCard().getName())) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
     }
 

@@ -2,6 +2,7 @@ package forge.ai;
 
 import com.google.common.collect.*;
 import forge.LobbyPlayer;
+import forge.StaticData;
 import forge.ai.ability.ProtectAi;
 import forge.card.CardStateName;
 import forge.card.ColorSet;
@@ -1465,6 +1466,20 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public String chooseCardName(SpellAbility sa, Predicate<ICardFace> cpp, String valid, String message) {
+        if ("Demonic Consultation".equals(sa.getHostCard().getName())) {
+            // Name a card provably absent from our library: a hit would stop
+            // the reveal early, leave cards behind, and turn the exile into a
+            // guaranteed loss instead of the Oracle win.
+            Set<String> libNames = new HashSet<>();
+            for (Card c : player.getCardsIn(ZoneType.Library)) {
+                libNames.add(c.getName());
+            }
+            for (PaperCard pc : StaticData.instance().getCommonCards().getUniqueCards()) {
+                if (!libNames.contains(pc.getName())) {
+                    return pc.getName();
+                }
+            }
+        }
         if (sa.hasParam("AILogic")) {
             CardCollectionView aiLibrary = player.getCardsIn(ZoneType.Library);
             CardCollectionView oppLibrary = player.getStrongestOpponent().getCardsIn(ZoneType.Library);

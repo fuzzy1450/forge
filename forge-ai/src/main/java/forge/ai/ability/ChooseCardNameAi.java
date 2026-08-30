@@ -23,6 +23,9 @@ public class ChooseCardNameAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision canPlay(Player ai, SpellAbility sa) {
+        if ("Demonic Consultation".equals(sa.getHostCard().getName())) {
+            return SpecialCardAi.DemonicConsultation.consider(ai, sa);
+        }
         if (sa.hasParam("AILogic")) {
             // Don't tap creatures that may be able to block
             if (ComputerUtil.waitForBlocking(sa)) {
