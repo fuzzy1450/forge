@@ -546,6 +546,9 @@ public class SpecialCardAi {
     // exiles the library with no win attached, so the guard is the whole point.
     public static class DemonicConsultation {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (ai.cantWin() || ai.getCardsIn(ZoneType.Library).isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
             for (SpellAbilityStackInstance si : ai.getGame().getStack()) {
                 SpellAbility stackSa = si.getSpellAbility();
                 if (stackSa != null && stackSa.isTrigger()
