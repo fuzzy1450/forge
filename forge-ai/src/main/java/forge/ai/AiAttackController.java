@@ -81,7 +81,7 @@ public class AiAttackController {
     private final boolean nextTurn; // include creature that can only attack/block next turn
     private final int timeOut;
     private final boolean canUseTimeout;
-    private List<CompletableFuture<Integer>> futures = new ArrayList<>();
+    private List<CompletableFuture<GameEntity>> futures = new ArrayList<>();
 
     /**
      * <p>
@@ -882,7 +882,16 @@ public class AiAttackController {
         // nextTurn is now only used by effect from Oracle en-Vec, which can skip check must attack,
         // because creatures not chosen can't attack.
         if (!nextTurn) {
-            for (final Card attacker : this.attackers) {
+            // Evaluate must-attack requirements in parallel, but apply the results on THIS
+            // thread in declaration order. The futures used to call combat.addAttacker and
+            // attackersLeft.remove themselves, so the combat multimap's attacker order was
+            // whatever order the pool scheduled the futures in - different every run, which
+            // reordered combat-damage triggers on the stack and made same-seed games diverge.
+            // As a bonus the evaluations now read a combat that is not being mutated under
+            // them mid-check, and a timed-out straggler can no longer mutate combat behind
+            // the main thread's back (its result is simply never applied).
+            final List<Card> mustAttackCandidates = new ArrayList<>(this.attackers);
+            for (final Card attacker : mustAttackCandidates) {
                 final GameEntity finalDefender = defender;
                 futures.add(CompletableFuture.supplyAsync(()-> {
                     GameEntity mustAttackDef = null;
@@ -895,7 +904,7 @@ public class AiAttackController {
                         //TODO: if there are other ways to tap this creature (like mana creature), then don't need to attack
                         mustAttackDef = finalDefender;
                     } else {
-                        if (combat.getAttackConstraints().getRequirements().get(attacker) == null) return 0;
+                        if (combat.getAttackConstraints().getRequirements().get(attacker) == null) return null;
                         // check defenders in order of maximum requirements
                         List<Pair<GameEntity, Integer>> reqs = combat.getAttackConstraints().getRequirements().get(attacker).getSortedRequirements();
                         final GameEntity def = finalDefender;
@@ -931,20 +940,10 @@ public class AiAttackController {
                             }
                         }
                     }
-                    if (mustAttackDef != null) {
-                        // combat is shared across these parallel futures and its attacker
-                        // multimap is not thread-safe; unsynchronized addAttacker calls
-                        // collide (ConcurrentModificationException, dropped attackers)
-                        synchronized (combat) {
-                            combat.addAttacker(attacker, mustAttackDef);
-                        }
-                        attackersLeft.remove(attacker);
-                        numForcedAttackers.incrementAndGet();
-                    }
-                    return 0;
+                    return mustAttackDef;
                 }).exceptionally(ex -> {
                     ex.printStackTrace();
-                    return 0;
+                    return null;
                 }));
             }
             CompletableFuture<?>[] futuresArray = futures.toArray(new CompletableFuture<?>[0]);
@@ -952,6 +951,17 @@ public class AiAttackController {
                 CompletableFuture.allOf(futuresArray).completeOnTimeout(null, timeOut, TimeUnit.SECONDS).join();
             else
                 CompletableFuture.allOf(futuresArray).join();
+            // deterministic application: declaration order, caller thread only
+            for (int i = 0; i < futures.size(); i++) {
+                CompletableFuture<GameEntity> f = futures.get(i);
+                GameEntity mustAttackDef = f.getNow(null);
+                if (mustAttackDef != null) {
+                    Card attacker = mustAttackCandidates.get(i);
+                    combat.addAttacker(attacker, mustAttackDef);
+                    attackersLeft.remove(attacker);
+                    numForcedAttackers.incrementAndGet();
+                }
+            }
             futures.clear();
             if (attackersLeft.isEmpty()) {
                 return aiAggression;
