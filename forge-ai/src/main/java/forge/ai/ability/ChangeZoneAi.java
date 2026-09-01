@@ -1944,8 +1944,11 @@ public class ChangeZoneAi extends SpellAbilityAi {
             }
 
             Set<CardType.CoreType> presentTypes = aiPlayer.getGame().getCardsIn(ZoneType.Graveyard).stream().flatMap(inGrave -> inGrave.getType().getCoreTypes().stream()).collect(Collectors.toSet());
+            // EnumMap supplier: max() keeps the first entry on a count tie, and a plain groupingBy
+            // HashMap iterates enum keys in identity-hash order, which varies per JVM run - so the
+            // tie-broken max type (and which card gets fetched) flipped from run to run.
             final CardType.CoreType determinedMaxType = scanList.stream().flatMap(c -> c.getType().getCoreTypes().stream()).filter(presentTypes::contains)
-                    .collect(Collectors.groupingBy(ct -> ct, Collectors.counting()))
+                    .collect(Collectors.groupingBy(ct -> ct, () -> new EnumMap<>(CardType.CoreType.class), Collectors.counting()))
                     .entrySet().stream().max(Entry.comparingByValue()).orElse(Map.entry(CardType.CoreType.Land, 0l)).getKey();
             CardCollection preferredList = CardLists.filter(fetchList, card -> card.getType().hasType(determinedMaxType));
             CardCollection preferredOppList = CardLists.filter(preferredList, CardPredicates.isControlledByAnyOf(aiPlayer.getOpponents()));

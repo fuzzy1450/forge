@@ -3,6 +3,7 @@ package forge.ai;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -1034,9 +1035,12 @@ public class ComputerUtilCard {
             return null;
         }
 
+        // EnumMap supplier: max() keeps the first entry on a count tie, and a plain groupingBy
+        // HashMap iterates enum keys in identity-hash order, which varies per JVM run - the
+        // tie-broken "most prominent" type (and the AI decision built on it) flipped with it.
         Map.Entry<CardType.CoreType, Long> result = list.stream().flatMap(c -> c.getType().getCoreTypes().stream())
                 .filter(valid::contains)
-                .collect(Collectors.groupingBy(s -> s, Collectors.counting()))
+                .collect(Collectors.groupingBy(s -> s, () -> new EnumMap<>(CardType.CoreType.class), Collectors.counting()))
                 .entrySet().stream().max(Entry.comparingByValue()).orElse(null);
         return result == null ? null : result.getKey(); // Map.entry doesn't like null key
     }
