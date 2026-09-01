@@ -17,7 +17,7 @@
  */
 package forge.game.spellability;
 
-import com.google.common.collect.HashMultiset;
+import com.google.common.collect.LinkedHashMultiset;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multiset;
 
@@ -82,7 +82,10 @@ public class AbilityManaPart implements java.io.Serializable {
     private final boolean persistentMana;
     private final boolean combatMana;
 
-    private transient Multiset<Mana> lastManaProduced = HashMultiset.create();
+    // LinkedHashMultiset: ManaPool.addMana and payManaFromAbility iterate this, so its order
+    // decides the order mana enters the pool lanes and pays shards. Mana doesn't override
+    // hashCode, so a HashMultiset iterated in per-JVM-random identity-hash order.
+    private transient Multiset<Mana> lastManaProduced = LinkedHashMultiset.create();
 
     private transient Card sourceCard;
     private transient IHasSVars sVarHolder;
