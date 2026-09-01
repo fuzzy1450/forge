@@ -165,7 +165,11 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
     private final Table<Long, Long, Map<String, String>> changedSVars = TreeBasedTable.create();
 
-    private Map<StaticAbility, CardPlayOption> mayPlay = Maps.newHashMap();
+    // LinkedHashMap: mayPlay(Player) walks values() to build the alternative-cast list handed to
+    // GameActionUtil.getMayPlaySpellOptions, so its order decides which play option the AI sees
+    // first. StaticAbility.hashCode folds in the identity hash of the StaticAbility class object,
+    // which varies per JVM run - a plain HashMap therefore iterated in per-JVM-random order.
+    private Map<StaticAbility, CardPlayOption> mayPlay = Maps.newLinkedHashMap();
 
     private final Map<Long, PlayerCollection> mayLook = Maps.newHashMap();
     private final PlayerCollection mayLookFaceDownExile = new PlayerCollection();
@@ -3872,7 +3876,10 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         this.updateMayPlay();
     }
     public final Map<StaticAbility, CardPlayOption> getMayPlay() {
-        return Maps.newHashMap(mayPlay);
+        // LinkedHashMap copy: callers (CardCopyService, GameActionUtil's stack-check save/restore)
+        // hand this straight back to setMayPlay, so a hash-ordered copy would rescramble the
+        // deterministic order the field keeps.
+        return Maps.newLinkedHashMap(mayPlay);
     }
     public final Map<StaticAbility, CardPlayOption> setMayPlay(Map<StaticAbility, CardPlayOption> mp) {
         return mayPlay = mp;
