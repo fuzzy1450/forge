@@ -92,7 +92,10 @@ public class MillAi extends SpellAbilityAi {
 
         if (sa.usesTargeting()) {
             sa.resetTargets();
-            final Map<Player, Integer> list = Maps.newHashMap();
+            // LinkedHashMap: Collections.max below keeps the first entry on a tie, and Player
+            // doesn't override hashCode - a HashMap tie-break varied per JVM run. Insertion
+            // order (getOpponents() turn order) is deterministic.
+            final Map<Player, Integer> list = Maps.newLinkedHashMap();
             for (final Player o : ai.getOpponents()) {
                 if (!sa.canTarget(o)) {
                     continue;

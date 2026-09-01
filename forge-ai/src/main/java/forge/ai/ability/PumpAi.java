@@ -741,7 +741,10 @@ public class PumpAi extends PumpAiBase {
             return false; // no valid targets
         }
 
-        Map<Player, Map.Entry<String, Integer>> data = Maps.newHashMap();
+        // LinkedHashMap: Collections.max below keeps the first entry on a value tie, and Player
+        // doesn't override hashCode - a HashMap tie-break varied per JVM run. Insertion order
+        // (getOpponents() turn order) is deterministic.
+        Map<Player, Map.Entry<String, Integer>> data = Maps.newLinkedHashMap();
 
         // need to filter for the opponents first
         for (final Player opp : aiPlayer.getOpponents()) {
