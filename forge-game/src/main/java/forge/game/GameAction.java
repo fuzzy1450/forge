@@ -252,7 +252,9 @@ public class GameAction {
 
             // need to copy counters when card enters another zone than hand or library
             if (StaticAbilityCountersRemain.countersRemain(lastKnownInfo, zoneTo)) {
-                copied.setCounters(HashMultiset.create(lastKnownInfo.getCounters()));
+                // LinkedHashMultiset: keep deterministic counter order across the zone change
+                // (CounterType hashes by identity, so HashMultiset rescrambles per JVM run).
+                copied.setCounters(LinkedHashMultiset.create(lastKnownInfo.getCounters()));
             }
 
             // perpetual stuff

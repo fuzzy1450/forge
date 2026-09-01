@@ -22,7 +22,7 @@ import java.util.Map;
 
 import org.apache.commons.lang3.tuple.Pair;
 
-import com.google.common.collect.HashMultiset;
+import com.google.common.collect.LinkedHashMultiset;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Multiset;
 
@@ -52,7 +52,11 @@ public abstract class GameEntity implements GameObject, IIdentifiable {
     protected int id;
     private String name = "";
     protected CardCollection attachedCards = new CardCollection();
-    protected Multiset<CounterType> counters = HashMultiset.create();
+    // LinkedHashMultiset: elementSet() feeds counter-type choice lists (CountersRemove/Move/
+    // PutOrRemove effects, proliferate) whose AI answer is first-in-list. Every CounterType
+    // implementation hashes by identity (CounterEnumType is an enum; the keyword/custom types
+    // don't override hashCode), so a HashMultiset iterated in per-JVM-random order.
+    protected Multiset<CounterType> counters = LinkedHashMultiset.create();
     protected List<Pair<Integer, Boolean>> damageReceivedThisTurn = Lists.newArrayList();
 
     protected GameEntity(int id0) {

@@ -1,15 +1,16 @@
 package forge.game;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
 import com.google.common.collect.ForwardingTable;
-import com.google.common.collect.HashBasedTable;
-import com.google.common.collect.HashMultiset;
+import com.google.common.collect.LinkedHashMultiset;
 import com.google.common.collect.Multiset;
 import com.google.common.collect.Multisets;
 import com.google.common.collect.Table;
+import com.google.common.collect.Tables;
 
 import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
@@ -22,7 +23,12 @@ import forge.game.trigger.TriggerType;
 
 public class GameEntityCounterTable extends ForwardingTable<Optional<Player>, GameEntity, Multiset<CounterType>> {
 
-    private Table<Optional<Player>, GameEntity, Multiset<CounterType>> dataMap = HashBasedTable.create();
+    // Insertion-ordered table: replaceCounterEffect and triggerCountersPutAll iterate columnMap()/
+    // cellSet(), which decides the order entities actually receive counters and the order the
+    // Counter*AddedAll triggers see them. Player and GameEntity don't override hashCode, so a
+    // HashBasedTable iterated in per-JVM-random identity-hash order.
+    private Table<Optional<Player>, GameEntity, Multiset<CounterType>> dataMap =
+            Tables.newCustomTable(new LinkedHashMap<>(), LinkedHashMap::new);
 
     public GameEntityCounterTable() {
     }
@@ -44,7 +50,7 @@ public class GameEntityCounterTable extends ForwardingTable<Optional<Player>, Ga
         Optional<Player> o = Optional.ofNullable(putter);
         Multiset<CounterType> map = get(o, object);
         if (map == null) {
-            map = HashMultiset.create();
+            map = LinkedHashMultiset.create();
             put(o, object, map);
         }
         if (value > 0) {
@@ -72,15 +78,18 @@ public class GameEntityCounterTable extends ForwardingTable<Optional<Player>, Ga
      */
     public Multiset<CounterType> filterToRemove(GameEntity ge) {
         if (!containsColumn(ge)) {
-            return HashMultiset.create(ge.getCounters());
+            return LinkedHashMultiset.create(ge.getCounters());
         }
         Multiset<CounterType> alreadyRemoved = column(ge).get(Optional.<Player>empty());
-        return HashMultiset.create(Multisets.difference(ge.getCounters(), alreadyRemoved));
+        return LinkedHashMultiset.create(Multisets.difference(ge.getCounters(), alreadyRemoved));
     }
 
     public Map<GameEntity, Integer> filterTable(CounterType type, String valid, String validSource, Card host, CardTraitBase sa) {
+        // LinkedHashMap supplier: TriggerCounterAddedAll hands result.keySet() to the trigger as
+        // its triggering-objects list, so iteration order must not depend on GameEntity identity
+        // hashes (the encounter order is the insertion-ordered columnMap above).
         Map<GameEntity, Integer> result = columnMap().entrySet().stream().filter(gm -> gm.getKey().isValid(valid, host.getController(), host, sa))
-            .collect(Collectors.groupingBy(gm -> gm.getKey(),
+            .collect(Collectors.groupingBy(gm -> gm.getKey(), LinkedHashMap::new,
                             Collectors.summingInt(gm -> gm.getValue().entrySet().stream().
                                     filter(e -> validSource == null || (e.getKey().isPresent() && e.getKey().get().isValid(validSource, host.getController(), host, sa))).
                                     mapToInt(e -> type == null ? e.getValue().size() : e.getValue().count(type)).sum())));

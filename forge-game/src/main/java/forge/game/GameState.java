@@ -1,7 +1,7 @@
 package forge.game;
 
 import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.HashMultiset;
+import com.google.common.collect.LinkedHashMultiset;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
@@ -1126,7 +1126,7 @@ public class GameState {
     }
 
     private void applyCountersToGameEntity(GameEntity entity, String counterString) {
-        entity.setCounters(HashMultiset.create());
+        entity.setCounters(LinkedHashMultiset.create());
         String[] allCounterStrings = counterString.split(",");
         for (final String counterPair : allCounterStrings) {
             String[] pair = counterPair.split("=", 2);
@@ -1178,7 +1178,7 @@ public class GameState {
                     boolean sickness = c.hasSickness();
                     Multiset<CounterType> counters = c.getCounters();
                     // Note: Not clearCounters() since we want to keep the counters var as-is.
-                    c.setCounters(HashMultiset.create());
+                    c.setCounters(LinkedHashMultiset.create());
                     if (c.isAura()) {
                         // dummy "enchanting" to indicate that the card will be force-attached elsewhere
                         // (will be overridden later, so the actual value shouldn't matter)

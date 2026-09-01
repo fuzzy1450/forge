@@ -1,6 +1,6 @@
 package forge.game.card;
 
-import com.google.common.collect.HashMultiset;
+import com.google.common.collect.LinkedHashMultiset;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import forge.card.CardStateName;
@@ -300,7 +300,9 @@ public class CardCopyService {
         newCopy.setPTBoost(copyFrom.getPTBoostTable());
 
         newCopy.copyFrom(copyFrom);
-        newCopy.setCounters(HashMultiset.create(copyFrom.getCounters()));
+        // LinkedHashMultiset: keep deterministic counter order in the LKI copy
+        // (CounterType hashes by identity, so HashMultiset rescrambles per JVM run).
+        newCopy.setCounters(LinkedHashMultiset.create(copyFrom.getCounters()));
 
         newCopy.setColor(copyFrom.getColor());
         newCopy.setPhasedOut(copyFrom.getPhasedOut());

@@ -97,7 +97,9 @@ public class GameCopier {
             newPlayer.setLifeStartedThisTurnWith(origPlayer.getLifeStartedThisTurnWith());
             newPlayer.setDamageReceivedThisTurn(origPlayer.getDamageReceivedThisTurn());
             newPlayer.setLandsPlayedThisTurn(origPlayer.getLandsPlayedThisTurn());
-            newPlayer.setCounters(HashMultiset.create(origPlayer.getCounters()));
+            // LinkedHashMultiset: keep the source's deterministic counter order in the copy
+            // (CounterType hashes by identity, so HashMultiset would rescramble it per JVM run).
+            newPlayer.setCounters(LinkedHashMultiset.create(origPlayer.getCounters()));
             newPlayer.setSpeed(origPlayer.getSpeed());
             // Blessing state travels with the copied command-zone effect card
             // (wired via copyEffectCardsToSnapshot below); calling setBlessing
@@ -422,7 +424,7 @@ public class GameCopier {
 
             Multiset<CounterType> counters = c.getCounters();
             if (!counters.isEmpty()) {
-                newCard.setCounters(HashMultiset.create(counters));
+                newCard.setCounters(LinkedHashMultiset.create(counters));
             }
             if (c.hasChosenPlayer()) {
                 newCard.setChosenPlayer(playerMap.get(c.getChosenPlayer()));

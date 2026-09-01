@@ -3,7 +3,7 @@ package forge.game.ability.effects;
 import java.util.List;
 import java.util.Map;
 
-import com.google.common.collect.HashMultiset;
+import com.google.common.collect.LinkedHashMultiset;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multiset;
@@ -144,11 +144,15 @@ public class CountersMoveEffect extends SpellAbilityEffect {
                 }
             }
 
-            Multiset<CounterType> countersToAdd = HashMultiset.create();
+            // LinkedHashMultiset throughout this effect: elementSet()/entrySet() iteration decides
+            // the order counters are removed, offered to chooseCounterType (AI takes the first
+            // entry) and re-added - CounterType hashes by identity, so a HashMultiset iterated in
+            // per-JVM-random order.
+            Multiset<CounterType> countersToAdd = LinkedHashMultiset.create();
 
             for (Card src : srcCards) {
                 if ("All".equals(counterName)) {
-                    final Multiset<CounterType> tgtCounters = HashMultiset.create(src.getCounters());
+                    final Multiset<CounterType> tgtCounters = LinkedHashMultiset.create(src.getCounters());
                     for (Multiset.Entry<CounterType> e : tgtCounters.entrySet()) {
                         removeCounter(sa, src, dest, e.getElement(), counterNum, countersToAdd);
                     }
@@ -263,14 +267,14 @@ public class CountersMoveEffect extends SpellAbilityEffect {
                         continue;
                     }
 
-                    Multiset<CounterType> countersToAdd = HashMultiset.create();
+                    Multiset<CounterType> countersToAdd = LinkedHashMultiset.create();
                     if ("All".equals(counterName)) {
-                        final Multiset<CounterType> tgtCounters = HashMultiset.create(source.getCounters());
+                        final Multiset<CounterType> tgtCounters = LinkedHashMultiset.create(source.getCounters());
                         for (CounterType e : tgtCounters.elementSet()) {
                             removeCounter(sa, source, cur, e, counterNum, countersToAdd);
                         }
                     } else if ("EachNotOn".equals(counterName)) {
-                        final Multiset<CounterType> tgtCounters = HashMultiset.create(source.getCounters());
+                        final Multiset<CounterType> tgtCounters = LinkedHashMultiset.create(source.getCounters());
                         for (CounterType e : tgtCounters.elementSet()) {
                             if (cur.getCounters(e) > 0) {
                                 continue;

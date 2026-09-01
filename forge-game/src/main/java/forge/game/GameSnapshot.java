@@ -1,6 +1,6 @@
 package forge.game;
 
-import com.google.common.collect.HashMultiset;
+import com.google.common.collect.LinkedHashMultiset;
 import com.google.common.collect.Lists;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
@@ -183,7 +183,9 @@ public class GameSnapshot {
         newPlayer.setLifeStartedThisTurnWith(origPlayer.getLifeStartedThisTurnWith());
         newPlayer.setDamageReceivedThisTurn(origPlayer.getDamageReceivedThisTurn());
         newPlayer.setLandsPlayedThisTurn(origPlayer.getLandsPlayedThisTurn());
-        newPlayer.setCounters(HashMultiset.create(origPlayer.getCounters()));
+        // LinkedHashMultiset: keep deterministic counter order in the snapshot copy
+        // (CounterType hashes by identity, so HashMultiset rescrambles per JVM run).
+        newPlayer.setCounters(LinkedHashMultiset.create(origPlayer.getCounters()));
         newPlayer.setBlessing(origPlayer.hasBlessing(), null);
         newPlayer.setLibrarySearched(origPlayer.getLibrarySearched());
         newPlayer.setSpellsCastLastTurn(origPlayer.getSpellsCastLastTurn());

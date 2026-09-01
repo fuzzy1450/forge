@@ -6,8 +6,8 @@ import forge.game.card.*;
 import forge.game.replacement.ReplacementType;
 import org.apache.commons.lang3.tuple.Pair;
 
-import com.google.common.collect.HashMultiset;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.LinkedHashMultiset;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multiset;
@@ -233,7 +233,9 @@ public class CountersRemoveEffect extends SpellAbilityEffect {
         final Game game = source.getGame();
         final Player activator = sa.getActivatingPlayer();
         final PlayerController pc = activator.getController();
-        final Multiset<CounterType> tgtCounters = HashMultiset.create(entity.getCounters());
+        // LinkedHashMultiset: elementSet() below is the chooseCounterType options list, and the
+        // AI default answer is the first entry - a hash-ordered copy varies per JVM run.
+        final Multiset<CounterType> tgtCounters = LinkedHashMultiset.create(entity.getCounters());
         for (CounterType ct : ImmutableList.copyOf(tgtCounters.elementSet())) {
             if (!entity.canRemoveCounters(ct)) {
                 tgtCounters.remove(ct);
