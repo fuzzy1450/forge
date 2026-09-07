@@ -196,7 +196,7 @@ public class CardPool extends ItemPool<PaperCard> {
      */
     public Map<CardEdition, Integer> getCardEditionStatistics(boolean includeBasicLands) {
         Map<CardEdition, Integer> editionStatistics = new HashMap<>();
-        for(Entry<PaperCard, Integer> cp : this.items.entrySet()) {
+        for(Entry<PaperCard, Integer> cp : new ArrayList<>(this.items.entrySet())) {
             PaperCard card = cp.getKey();
             // Check whether or not including basic land in stats count
             if (card.getRules().getType().isBasicLand() && !includeBasicLands)
@@ -472,7 +472,7 @@ public class CardPool extends ItemPool<PaperCard> {
     @Override
     public CardPool getFilteredPool(Predicate<PaperCard> predicate) {
         CardPool filteredPool = new CardPool();
-        for (PaperCard c : this.items.keySet()) {
+        for (PaperCard c : new ArrayList<>(this.items.keySet())) {
             if (predicate.test(c))
                 filteredPool.add(c, this.items.get(c));
         }

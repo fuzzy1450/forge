@@ -110,9 +110,23 @@ public class ItemPool<T extends InventoryItem> implements Iterable<Entry<T, Inte
             // file rather than hash buckets. Without that, a champion and its
             // one-card variant build libraries in unrelated orders and a matched
             // seed cannot hold the shuffle constant across an evolve pair.
-            // Every read of `items` below snapshots first, so dropping the
-            // concurrent map does not reintroduce the iteration crash that
-            // 9e9e7187d19 fixed for the quest spell shop's filter thread.
+            //
+            // Every enumerating read of `items` below (iterator/countAll/find/
+            // getFilteredPool/equals) copies the map before walking it, which
+            // narrows -- but does not eliminate -- the iteration crash
+            // 9e9e7187d19 fixed for the quest spell shop's filter thread: building
+            // the copy itself still walks the live map, so a mutation landing
+            // mid-copy can still throw ConcurrentModificationException. And
+            // ConcurrentHashMap's other guarantee, safety under concurrent
+            // *writes*, is gone outright -- LinkedHashMap gives no protection if
+            // one thread mutates this pool while another iterates it, e.g.
+            // forge.itemmanager.ItemManagerModel's unsynchronized addItem/
+            // removeItem/addItems/replaceAll racing its own synchronized
+            // getOrderedList()/rebuildOrderedList(). The headless `mtg sim` path
+            // this fork exists for builds and plays each game's pools on a
+            // single thread, so neither window is reachable there; GUI and quest
+            // code that touches a pool from more than one thread is the part
+            // that loses its safety net.
             items = new LinkedHashMap<>();
         }
         myClass = cls;
@@ -294,8 +308,11 @@ public class ItemPool<T extends InventoryItem> implements Iterable<Entry<T, Inte
 
     @Override
     public boolean equals(final Object obj) {
+        // Snapshot before comparing: AbstractMap.equals walks entrySet()
+        // internally, which is the same live-iteration hazard the other
+        // reads in this class guard against (see the constructor comment).
         return (obj instanceof ItemPool ip) &&
-                (this.items.equals(ip.items));
+                (new LinkedHashMap<>(this.items).equals(ip.items));
     }
 
     /**
