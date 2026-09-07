@@ -23,7 +23,6 @@ import forge.item.InventoryItem;
 import java.io.Serializable;
 import java.util.*;
 import java.util.Map.Entry;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.*;
 import java.util.stream.Collector;
 
@@ -40,7 +39,7 @@ public class ItemPool<T extends InventoryItem> implements Iterable<Entry<T, Inte
     private static final long serialVersionUID = 6572047177527559797L;
 
     public ItemPool(final Class<T> cls) {
-        this(new ConcurrentHashMap<>(), cls);
+        this(null, cls);
     }
 
     @SuppressWarnings("unchecked")
@@ -106,7 +105,15 @@ public class ItemPool<T extends InventoryItem> implements Iterable<Entry<T, Inte
             items = items0;
         }
         else {
-            items = new ConcurrentHashMap<>();
+            // LinkedHashMap, not ConcurrentHashMap: a deck's pre-shuffle library
+            // is built by iterating this pool, so its order must follow the .dck
+            // file rather than hash buckets. Without that, a champion and its
+            // one-card variant build libraries in unrelated orders and a matched
+            // seed cannot hold the shuffle constant across an evolve pair.
+            // Every read of `items` below snapshots first, so dropping the
+            // concurrent map does not reintroduce the iteration crash that
+            // 9e9e7187d19 fixed for the quest spell shop's filter thread.
+            items = new LinkedHashMap<>();
         }
         myClass = cls;
     }
@@ -118,7 +125,7 @@ public class ItemPool<T extends InventoryItem> implements Iterable<Entry<T, Inte
 
     @Override
     public final Iterator<Entry<T, Integer>> iterator() {
-        return items.entrySet().iterator();
+        return new ArrayList<>(items.entrySet()).iterator();
     }
 
     public final boolean contains(final T item) {
@@ -143,7 +150,7 @@ public class ItemPool<T extends InventoryItem> implements Iterable<Entry<T, Inte
 
     public int countAll(Predicate<T> condition){
         int count = 0;
-        for (Integer v : Maps.filterKeys(this.items, condition::test).values())
+        for (Integer v : Maps.filterKeys(new LinkedHashMap<>(this.items), condition::test).values())
             count += v;
         return count;
 
@@ -152,7 +159,7 @@ public class ItemPool<T extends InventoryItem> implements Iterable<Entry<T, Inte
     @SuppressWarnings("unchecked")
     public final <U extends InventoryItem> int countAll(Predicate<? super U> condition, Class<U> cls) {
         int count = 0;
-        Map<T, Integer> matchingKeys = Maps.filterKeys(this.items, item -> cls.isInstance(item) && (condition.test((U)item)));
+        Map<T, Integer> matchingKeys = Maps.filterKeys(new LinkedHashMap<>(this.items), item -> cls.isInstance(item) && (condition.test((U)item)));
         for (Integer i : matchingKeys.values()) {
             count += i;
         }
@@ -278,7 +285,7 @@ public class ItemPool<T extends InventoryItem> implements Iterable<Entry<T, Inte
     }
 
     public T find(Predicate<T> filter) {
-        return items.keySet().stream().filter(filter).findFirst().orElse(null);
+        return new ArrayList<>(items.keySet()).stream().filter(filter).findFirst().orElse(null);
     }
 
     public void clear() {
@@ -299,7 +306,7 @@ public class ItemPool<T extends InventoryItem> implements Iterable<Entry<T, Inte
      */
     public ItemPool<T> getFilteredPool(Predicate<T> predicate) {
         ItemPool<T> filteredPool = new ItemPool<>(myClass);
-        for (T c : this.items.keySet()) {
+        for (T c : new ArrayList<>(this.items.keySet())) {
             if (predicate.test(c))
                 filteredPool.add(c, this.items.get(c));
         }
