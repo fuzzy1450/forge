@@ -1068,6 +1068,69 @@ public class SpecialCardAi {
         }
     }
 
+    // Invert Polarity
+    // Cast only in response to an opponent's spell in Commandeer's window
+    // (untargeted anywhere in the chain, no "...All" api, CMC floor): winning
+    // the flip steals the haymaker exactly like Commandeer, losing it counters
+    // the same haymaker - both halves are pure gain in that window, so the
+    // coin cannot hurt us. Two extra guards beyond Commandeer's: the spell
+    // must be counterable (the lose-the-flip half is a Counter effect and
+    // would fizzle on an uncounterable spell, turning the flip into a real
+    // 50/50 gamble), and the floor is lower (three mana answers a four-drop).
+    public static class InvertPolarity {
+        public static final int MIN_SPELL_CMC = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+
+            if (game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final SpellAbility topSA = ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+            if (topSA == null || !topSA.isSpell()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            final Player caster = topSA.getActivatingPlayer();
+            if (caster == null || !caster.isOpponentOf(ai) || ai.getYourTeam().contains(caster)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // The lose-the-flip half counters the spell; if it can't be
+            // countered, that half buys nothing - stay out of the coin flip.
+            if (!topSA.isCounterableBy(null)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            for (SpellAbility part = topSA; part != null; part = part.getSubAbility()) {
+                if (part.usesTargeting() && !part.getTargets().isEmpty()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                if (part.getApi() != null && part.getApi().name().endsWith("All")) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+
+            int tgtCMC = 0;
+            if (topSA.getPayCosts() != null && topSA.getPayCosts().getTotalMana() != null) {
+                tgtCMC = topSA.getPayCosts().getTotalMana().getCMC();
+                if (topSA.getPayCosts().getTotalMana().countX() > 0) {
+                    tgtCMC += topSA.getXManaCostPaid() != null ? topSA.getXManaCostPaid() : 3;
+                }
+            }
+            if (tgtCMC < MIN_SPELL_CMC) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.resetTargets();
+            if (!sa.canTargetSpellAbility(topSA)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(topSA);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Intuition (and any other card that might potentially let you pick N cards from the library,
     // one of which will then be picked for you by the opponent)
     public static class Intuition {

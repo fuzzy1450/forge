@@ -3,6 +3,8 @@ package forge.ai.ability;
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtil;
+import forge.ai.ComputerUtilAbility;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.card.Card;
 import forge.game.phase.PhaseType;
@@ -16,6 +18,11 @@ public class FlipCoinAi extends SpellAbilityAi {
      */
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        if ("Invert Polarity".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Steal-or-counter an opponent's untargeted haymaker; every other
+            // FlipCoin card takes exactly the path it took before this branch.
+            return SpecialCardAi.InvertPolarity.consider(ai, sa);
+        }
         if (sa.hasParam("AILogic")) {
             String ailogic = sa.getParam("AILogic");
             if (ailogic.equals("PhaseOut")) {
