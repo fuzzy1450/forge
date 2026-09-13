@@ -70,7 +70,7 @@ public enum SpellApiToAi {
             .put(ApiType.CopyPermanent, CopyPermanentAi.class)
             .put(ApiType.CopySpellAbility, CopySpellAbilityAi.class)
             .put(ApiType.ControlPlayer, CannotPlayAi.class)
-            .put(ApiType.ControlSpell, CannotPlayAi.class)
+            .put(ApiType.ControlSpell, ControlSpellAi.class)
             .put(ApiType.Counter, CounterAi.class)
             .put(ApiType.DamageAll, DamageAllAi.class)
             .put(ApiType.DayTime, DayTimeAi.class)

@@ -31,6 +31,7 @@ import forge.game.ability.ApiType;
 import forge.game.card.*;
 import forge.game.combat.Combat;
 import forge.game.combat.CombatUtil;
+import forge.game.cost.CostExile;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostSacrifice;
 import forge.game.keyword.Keyword;
@@ -251,6 +252,84 @@ public class SpecialCardAi {
             }
 
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+    }
+
+    // Commandeer
+    // Cast only in response to an opponent's noncreature spell worth taking.
+    // Two hard limits shape the window: the AI cannot choose new targets for
+    // the stolen spell (PlayerControllerAi.chooseNewTargetsFor is a stub), so
+    // a spell with chosen targets resolves against its original targets and is
+    // never worth stealing; and mass "...All" effects mostly resolve the same
+    // (or worse - controller-relative wordings flip onto us) whoever controls
+    // them. So: opponent's spell, no chosen targets anywhere in its chain, no
+    // *All api, and a CMC floor so seven mana / three cards buys a haymaker.
+    public static class Commandeer {
+        public static final int MIN_STOLEN_CMC = 5;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+
+            // Routing through ControlSpellAi.canPlay's name gate bypasses the
+            // base class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+
+            if (game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final SpellAbility topSA = ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+            if (topSA == null || !topSA.isSpell()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            final Player caster = topSA.getActivatingPlayer();
+            if (caster == null || !caster.isOpponentOf(ai) || ai.getYourTeam().contains(caster)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            for (SpellAbility part = topSA; part != null; part = part.getSubAbility()) {
+                if (part.usesTargeting() && !part.getTargets().isEmpty()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                if (part.getApi() != null && part.getApi().name().endsWith("All")) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+
+            // Value floor: whichever cost is being weighed (seven mana, or
+            // exiling two other blue cards), only a haymaker pays it back.
+            int tgtCMC = 0;
+            if (topSA.getPayCosts() != null && topSA.getPayCosts().getTotalMana() != null) {
+                tgtCMC = topSA.getPayCosts().getTotalMana().getCMC();
+                if (topSA.getPayCosts().getTotalMana().countX() > 0) {
+                    tgtCMC += topSA.getXManaCostPaid() != null ? topSA.getXManaCostPaid() : 3;
+                }
+            }
+            if (tgtCMC < MIN_STOLEN_CMC) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Alternative-cost variant (exile two other blue cards from hand):
+            // require Commandeer plus two other blue cards, otherwise the cast
+            // fails at payment (same guard as ForceOfWill.consider below).
+            for (CostPart c : sa.getPayCosts().getCostParts()) {
+                if (c instanceof CostExile) {
+                    CardCollection blueCards = CardLists.filter(ai.getCardsIn(ZoneType.Hand), CardPredicates.isColor(MagicColor.BLUE));
+                    if (blueCards.size() < 3) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                    }
+                    break;
+                }
+            }
+
+            sa.resetTargets();
+            if (!sa.canTargetSpellAbility(topSA)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(topSA);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
     }
 
