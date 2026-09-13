@@ -99,6 +99,13 @@ public class DamageDealAi extends DamageAiBase {
         final Card source = sa.getHostCard();
         final String sourceName = ComputerUtilAbility.getAbilitySourceName(sa);
 
+        if ("Meteor Blast".equals(sourceName)) {
+            // X is the TARGET COUNT here, not the damage; the generic paths
+            // below never announce it. Every other DamageDeal card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.MeteorBlast.consider(ai, sa);
+        }
+
         final String damage = sa.getParam("NumDmg");
         int dmg = calculateDamageAmount(sa, source, damage);
 

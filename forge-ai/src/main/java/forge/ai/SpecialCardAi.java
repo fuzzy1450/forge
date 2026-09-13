@@ -1374,6 +1374,95 @@ public class SpecialCardAi {
         }
     }
 
+    // Meteor Blast
+    // "X R R R: 4 damage to each of X targets" - the generic DamageDealAi
+    // never announces this X (its X handling is keyed on NumDmg$ X, and here
+    // NumDmg is the fixed 4), so TargetMin/Max$ X read X=0 and the spell can
+    // never choose a target. Announce X ourselves and pick only targets that
+    // are pure gain: opponents' creatures that 4 damage actually kills (worth
+    // at least a real card), the opponent's face when 4 damage is lethal, and
+    // face padding only on top of at least one kill. Floor: two such targets,
+    // or lethal face.
+    public static class MeteorBlast {
+        public static final int DMG = 4;
+        public static final int MIN_TARGETS = 2;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // Routing from DamageDealAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+
+            final Card source = sa.getHostCard();
+            sa.setXManaCostPaid(null);
+            final int maxX = ComputerUtilCost.setMaxXValue(sa, ai, false);
+            if (maxX <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+
+            // Creatures 4 damage kills, best first; only bodies worth a card.
+            CardCollection kills = new CardCollection();
+            for (Card c : ai.getOpponents().getCreaturesInPlay()) {
+                if (!sa.canTarget(c)) {
+                    continue;
+                }
+                if (ComputerUtilCombat.getEnoughDamageToKill(c, DMG, source, false, true) > DMG) {
+                    continue;
+                }
+                if (c.getCMC() >= 2 || c.getNetPower() >= 3) {
+                    kills.add(c);
+                }
+            }
+            ComputerUtilCard.sortByEvaluateCreature(kills);
+
+            Player lethalFace = null;
+            Player anyFace = null;
+            for (Player opp : ai.getOpponents()) {
+                if (!sa.canTarget(opp) || !opp.canLoseLife()) {
+                    continue;
+                }
+                if (anyFace == null) {
+                    anyFace = opp;
+                }
+                if (opp.getLife() <= DMG && !opp.cantLoseForZeroOrLessLife()) {
+                    lethalFace = opp;
+                    break;
+                }
+            }
+
+            int x = Math.min(maxX, kills.size() + (lethalFace != null || (anyFace != null && !kills.isEmpty()) ? 1 : 0));
+            if (x < MIN_TARGETS && !(lethalFace != null && x >= 1)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.setXManaCostPaid(x);
+            sa.resetTargets();
+            int added = 0;
+            if (lethalFace != null) {
+                sa.getTargets().add(lethalFace);
+                added++;
+            }
+            for (Card c : kills) {
+                if (added >= x) {
+                    break;
+                }
+                sa.getTargets().add(c);
+                added++;
+            }
+            if (added < x && lethalFace == null && anyFace != null) {
+                sa.getTargets().add(anyFace);
+                added++;
+            }
+            if (added != x || !sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Mimic Vat
     public static class MimicVat {
         public static boolean considerExile(final Player ai, final SpellAbility sa) {
