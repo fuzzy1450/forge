@@ -972,6 +972,17 @@ public class AttachAi extends SpellAbilityAi {
             && sa.getParent().getApi() == ApiType.Token && sa.getParent().hasParam("RememberTokens")) {
             // Living Weapon or similar
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        } else if ("Remembered".equals(sa.getParam("Defined")) && sa.getParent() != null
+            && sa.getParent().getApi() == ApiType.Cloak && sa.getParent().hasParam("RememberCloaked")) {
+            // Cryptic Coat (the only RememberCloaked card): Living
+            // Weapon-shaped - the Cloak parent itself creates the attach
+            // target, so refusing for lack of one vetoes the whole permanent
+            // at AiController.checkETBEffects. Stay off a nearly-empty
+            // library, where the cloak would fizzle and leave a bare
+            // Equipment (mirrors ManifestBaseAi's own floor).
+            if (ai.getCardsIn(ZoneType.Library).size() >= 5) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
         }
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
