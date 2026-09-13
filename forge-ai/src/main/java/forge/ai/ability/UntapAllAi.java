@@ -2,6 +2,8 @@ package forge.ai.ability;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.ComputerUtilAbility;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
@@ -18,6 +20,12 @@ public class UntapAllAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision canPlay(Player aiPlayer, SpellAbility sa) {
         final Card source = sa.getHostCard();
+
+        if ("Reins of Power".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Army swap / defensive fog; every other UntapAll card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.ReinsOfPower.consider(aiPlayer, sa);
+        }
 
         final AbilitySub abSub = sa.getSubAbility();
         if (abSub != null) {

@@ -296,6 +296,16 @@ public class ControlGainAi extends SpellAbilityAi {
             }
         }
 
+        if ("Reins of Power".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Judged whole in SpecialCardAi.ReinsOfPower.consider (routed from
+            // UntapAllAi): the generic checks below misread both of its
+            // GainControl subs - the give-our-army-away sub's AllValid filter
+            // ("Creature.!IsRemembered+YouCtrl") can never match anything in
+            // an opponents-only list, and the LoseControl$ EOT phase veto
+            // would block the defensive declare-blockers window on purpose.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
         if (!sa.usesTargeting()) {
             if (sa.hasParam("AllValid")) {
                 CardCollectionView tgtCards = ai.getOpponents().getCardsIn(ZoneType.Battlefield);

@@ -1743,6 +1743,91 @@ public class SpecialCardAi {
         }
     }
 
+    // Reins of Power
+    // Two windows, both safe by construction. Offensive: our own turn before
+    // attackers are declared, stack empty, and the targeted opponent's army
+    // out-powers ours by a clear margin - swap, then swing their own creatures
+    // at them (the spell untaps and hastes everything it moves); the creatures
+    // we hand over can do nothing on our turn but block a combat that isn't
+    // happening, and control reverts at end of turn. Defensive: the opponent's
+    // declare-blockers step with lethal-ish damage incoming - gaining control
+    // of the attackers removes them from combat (GameAction.
+    // controllerChangeZoneCorrection -> Combat.removeFromCombat), a Fog that
+    // borrows their army for the rest of the turn.
+    public static class ReinsOfPower {
+        public static final int MIN_POWER_MARGIN = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+
+            // Routing through UntapAllAi.canPlay's name gate bypasses the base
+            // class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+
+            // Defensive fog: their combat, our life on the line.
+            final Combat combat = game.getCombat();
+            if (!ph.isPlayerTurn(ai) && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    && combat != null && !combat.getAttackersOf(ai).isEmpty()
+                    && ComputerUtilCombat.lifeInDanger(ai, combat)) {
+                Player attacker = null;
+                for (Card c : combat.getAttackersOf(ai)) {
+                    if (c.getController().isOpponentOf(ai) && sa.canTarget(c.getController())) {
+                        attacker = c.getController();
+                        break;
+                    }
+                }
+                if (attacker != null) {
+                    sa.resetTargets();
+                    sa.getTargets().add(attacker);
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+
+            // Offensive swap: only on our turn, only before combat, only with
+            // the stack empty, and only when their board clearly beats ours.
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final int ourPower = attackPower(ai.getCreaturesInPlay());
+            Player bestOpp = null;
+            int bestPower = 0;
+            for (Player opp : ai.getOpponents()) {
+                if (!sa.canTarget(opp)) {
+                    continue;
+                }
+                CardCollection theirs = opp.getCreaturesInPlay();
+                int power = attackPower(theirs);
+                if (theirs.size() >= 2 && power > bestPower) {
+                    bestPower = power;
+                    bestOpp = opp;
+                }
+            }
+            if (bestOpp == null || bestPower < ourPower + MIN_POWER_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.resetTargets();
+            sa.getTargets().add(bestOpp);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Power that would actually swing: positive-power non-defenders.
+        private static int attackPower(final CardCollection creatures) {
+            int total = 0;
+            for (Card c : creatures) {
+                if (c.getNetPower() > 0 && !c.hasKeyword(Keyword.DEFENDER)) {
+                    total += c.getNetPower();
+                }
+            }
+            return total;
+        }
+    }
+
     public static class SarkhanTheMad {
         public static AiAbilityDecision considerDig(final Player ai, final SpellAbility sa) {
             if (sa.getHostCard().getCounters(CounterEnumType.LOYALTY) == 1) {
