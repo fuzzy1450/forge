@@ -137,6 +137,15 @@ public class ChangeZoneAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision checkApiLogic(Player aiPlayer, SpellAbility sa) {
         multipleCardsToChoose.clear();
+
+        if ("Spelltwine".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Picks and targets both graveyard cards itself (the copies are
+            // force-cast, so the picks need a safety scan the generic
+            // targeting here doesn't do); every other ChangeZone card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.Spelltwine.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
@@ -190,6 +199,15 @@ public class ChangeZoneAi extends SpellAbilityAi {
      */
     @Override
     public AiAbilityDecision chkDrawback(Player aiPlayer, SpellAbility sa) {
+        if ("Spelltwine".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && sa.usesTargeting()) {
+            // The opponent-graveyard target was already chosen by
+            // SpecialCardAi.Spelltwine.consider with its force-cast safety
+            // scan; keep it instead of re-targeting generically.
+            if (sa.isTargetNumberValid()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
         if (sa.isHidden()) {
             return hiddenOriginPlayDrawbackAI(aiPlayer, sa);
         }

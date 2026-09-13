@@ -41,6 +41,7 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.player.PlayerCollection;
 import forge.game.player.PlayerPredicates;
+import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityPredicates;
 import forge.game.spellability.SpellAbilityStackInstance;
@@ -2051,6 +2052,78 @@ public class SpecialCardAi {
             }
 
             return bestInLib;
+        }
+    }
+
+    // Spelltwine
+    // Exile our best instant/sorcery and an opponent's, copy both, cast the
+    // copies free. The copies are cast "if able" - a forced cast the AI does
+    // not get to decline at resolution - so both picks are restricted to
+    // spells that are safe under compulsion: no targeting anywhere in the
+    // chain (a mandatory cast with only our own permanents as legal targets
+    // would be aimed at us) and no "...All" api (a copied wrath nukes our own
+    // board). A CMC floor makes six mana buy real cards.
+    public static class Spelltwine {
+        public static final int MIN_PICK_CMC = 2;
+        public static final int MIN_COMBINED_CMC = 5;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AbilitySub tgtOpp = sa.getSubAbility();
+            if (tgtOpp == null || tgtOpp.getApi() != ApiType.ChangeZone || !tgtOpp.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            Card mine = bestSafePick(CardLists.getValidCards(ai.getCardsIn(ZoneType.Graveyard),
+                    "Instant.YouCtrl,Sorcery.YouCtrl", ai, sa.getHostCard(), sa), sa);
+            Card theirs = bestSafePick(CardLists.getValidCards(ai.getOpponents().getCardsIn(ZoneType.Graveyard),
+                    "Instant.OppOwn,Sorcery.OppOwn", ai, sa.getHostCard(), tgtOpp), tgtOpp);
+
+            if (mine == null || theirs == null
+                    || mine.getManaCost().getCMC() + theirs.getManaCost().getCMC() < MIN_COMBINED_CMC) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.resetTargets();
+            if (!sa.canTarget(mine)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(mine);
+
+            tgtOpp.resetTargets();
+            if (!tgtOpp.canTarget(theirs)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            tgtOpp.getTargets().add(theirs);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Highest-CMC card (>= the floor) that is safe to cast under
+        // compulsion: no targeting and no mass effect anywhere in the chain.
+        private static Card bestSafePick(final CardCollection pool, final SpellAbility sa) {
+            Card best = null;
+            for (Card c : pool) {
+                if (c.getManaCost() == null || c.getManaCost().getCMC() < MIN_PICK_CMC) {
+                    continue;
+                }
+                boolean safe = true;
+                for (SpellAbility csa : c.getBasicSpells()) {
+                    for (SpellAbility part = csa; part != null; part = part.getSubAbility()) {
+                        if (part.usesTargeting()
+                                || (part.getApi() != null && part.getApi().name().endsWith("All"))) {
+                            safe = false;
+                            break;
+                        }
+                    }
+                    if (!safe) {
+                        break;
+                    }
+                }
+                if (safe && (best == null || c.getManaCost().getCMC() > best.getManaCost().getCMC())) {
+                    best = c;
+                }
+            }
+            return best;
         }
     }
 
