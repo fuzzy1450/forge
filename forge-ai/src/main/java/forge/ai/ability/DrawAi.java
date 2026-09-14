@@ -31,9 +31,11 @@ import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.*;
 import forge.game.spellability.SpellAbility;
+import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
 import forge.util.MyRandom;
 import forge.util.collect.FCollectionView;
+import org.apache.commons.lang3.StringUtils;
 
 public class DrawAi extends SpellAbilityAi {
 
@@ -477,6 +479,16 @@ public class DrawAi extends SpellAbilityAi {
 
             // no nice targets, don't do it
             if (!mandatory) {
+                // Symmetric draw: the same resolution draws us at least as many cards as it
+                // hands the targeted opponent. The untargeted equivalents (Vision Skeins,
+                // Words of Wisdom) already pass the non-targeted branch below; an
+                // opponent-only target must not veto the whole spell, chapter or trigger.
+                final Player symOpp = chooseSymmetricDrawOpponent(ai, sa, opps, numCards, xPaid,
+                        computerLibrarySize, computerMaxHandSize, loseLife, gainLife, getPoison);
+                if (symOpp != null) {
+                    sa.getTargets().add(symOpp);
+                    return true;
+                }
                 return false;
             }
 
@@ -526,6 +538,100 @@ public class DrawAi extends SpellAbilityAi {
             }
         }
         return true;
+    }
+
+    private static boolean hasConditionParam(final SpellAbility s) {
+        for (final String key : s.getMapParams().keySet()) {
+            if (key.startsWith("Condition")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The opponent to target with a non-mandatory, opponent-only draw that is symmetric: the
+     * same resolution draws the AI at least as many cards ("you and target opponent each draw",
+     * or a fixed Draw for us elsewhere in the chain, as in The Wedding of River Song). Returns
+     * null to keep the stock refusal. Draws no random numbers, like the return false it replaces.
+     */
+    private static Player chooseSymmetricDrawOpponent(final Player ai, final SpellAbility sa, final PlayerCollection opps,
+            final int numCards, final boolean xPaid, final int librarySize, final int maxHandSize,
+            final SpellAbility loseLife, final SpellAbility gainLife, final SpellAbility poison) {
+        // SHAPE: a fixed, unconditional, single-target draw that cannot target us, and whose target is a drawer
+        if (xPaid || numCards <= 0 || !StringUtils.isNumeric(sa.getParamOrDefault("NumCards", "1"))
+                || sa.isCurse() || sa.canTarget(ai)
+                || loseLife != null || gainLife != null || poison != null
+                || sa.hasParam("UnlessCost") || sa.hasParam("Upto") || hasConditionParam(sa)
+                || sa.getMaxTargets() != 1) {
+            return null;
+        }
+        // a root spell (Secret Rendezvous) keeps the stock refusal on every route, effect casts included
+        if (sa.isSpell() && sa.getParent() == null) {
+            return null;
+        }
+        final String defined = sa.getParam("Defined");
+        if (defined != null && !"TargetedAndYou".equals(defined)) {
+            return null; // Defined$ You and the like: the target is not the drawer
+        }
+        int selfDraw = "TargetedAndYou".equals(defined) ? numCards : 0;
+        for (SpellAbility s = sa.getRootAbility(); s != null; s = s.getSubAbility()) {
+            if (s == sa || s.getApi() != ApiType.Draw || s.usesTargeting()) {
+                continue;
+            }
+            if (!"You".equals(s.getParamOrDefault("Defined", "You"))) {
+                continue;
+            }
+            if (s.hasParam("UnlessCost") || s.hasParam("Upto") || s.hasParam("OptionalDecider") || hasConditionParam(s)) {
+                continue;
+            }
+            final String n = s.getParamOrDefault("NumCards", "1");
+            if (!StringUtils.isNumeric(n)) {
+                continue; // only a fixed, unconditional draw for us counts
+            }
+            selfDraw = Math.max(selfDraw, Integer.parseInt(n));
+        }
+        // FLOOR 1, parity: never give an opponent more cards than we draw in the same resolution
+        if (selfDraw < numCards) {
+            return null;
+        }
+        // FLOOR 2, our own draw is safe: no deck-out, no discard to hand size on our turn
+        if (!ai.canDraw() || selfDraw >= librarySize - 3) {
+            return null;
+        }
+        final Card host = sa.getHostCard();
+        final boolean hostInHand = host != null && host.isInZone(ZoneType.Hand);
+        final int handExcl = ai.getCardsIn(ZoneType.Hand).size() - (hostInHand ? 1 : 0);
+        if (handExcl + selfDraw > maxHandSize && ai.getGame().getPhaseHandler().isPlayerTurn(ai)) {
+            return null;
+        }
+        // FLOOR 3, refuel guard: when the resolution nets us fewer cards than the opponent gets
+        // (an instant or sorcery from hand is spent), never refill an opponent holding fewer cards than we do
+        final boolean spent = hostInHand && (host.isInstant() || host.isSorcery());
+        final boolean behindOnCards = selfDraw - (spent ? 1 : 0) < numCards;
+        Player best = null;
+        for (final Player opp : opps) {
+            // FLOOR 5: never feed an opponent's draw triggers (Psychosis Crawler, Niv-Mizzet, Sheoldred)
+            if (opp.getCardsIn(ZoneType.Battlefield).anyMatch(c -> c.getTriggers().anyMatch(t -> t.getMode() == TriggerType.Drawn))) {
+                continue;
+            }
+            if (!opp.canDraw()) {
+                return opp; // pure gain
+            }
+            // FLOOR 4: never draw an opponent into an empty library (the mill-kill branch above handled the good case)
+            if (numCards >= opp.getCardsIn(ZoneType.Library).size()) {
+                continue;
+            }
+            final int oppHand = opp.getCardsIn(ZoneType.Hand).size();
+            if (behindOnCards && handExcl > oppHand) {
+                continue;
+            }
+            // cards are worth least to the fullest hand
+            if (best == null || oppHand > best.getCardsIn(ZoneType.Hand).size()) {
+                best = opp;
+            }
+        }
+        return best;
     }
 
     @Override
