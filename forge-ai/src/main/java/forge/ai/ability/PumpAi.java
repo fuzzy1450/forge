@@ -120,7 +120,11 @@ public class PumpAi extends PumpAiBase {
         final boolean isFight = "Fight".equals(aiLogic) || "PowerDmg".equals(aiLogic);
         final boolean isBerserk = "Berserk".equals(aiLogic);
 
-        if ("Pummeler".equals(aiLogic)) {
+        if ("CascadeShell".equals(aiLogic)) {
+            // Throes of Chaos, Into the Time Vortex: a no-op Pump that only exists to carry Cascade.
+            // Judge the cascade; the stock bare-pump fallthrough below always declines it (CantPlayAi).
+            return SpecialCardAi.CascadeShell.consider(ai, sa, false);
+        } else if ("Pummeler".equals(aiLogic)) {
             return SpecialCardAi.ElectrostaticPummeler.consider(ai, sa);
         } else if (aiLogic.startsWith("AristocratCounters")) {
             // the preconditions to this are already tested in checkAiLogic
@@ -601,6 +605,11 @@ public class PumpAi extends PumpAiBase {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        if (!mandatory && "CascadeShell".equals(sa.getParam("AILogic"))) {
+            // Optional cast of a Cascade shell (Rebound, being cascaded into, cast by an effect): the
+            // non-targeting branch below declines it unconditionally. Mandatory keeps the stock WillPlay.
+            return SpecialCardAi.CascadeShell.consider(ai, sa, sa.hasParam("WithoutManaCost"));
+        }
         final SpellAbility root = sa.getRootAbility();
         final String numDefense = sa.getParamOrDefault("NumDef", "");
         final String numAttack = sa.getParamOrDefault("NumAtt", "");

@@ -206,6 +206,54 @@ public class SpecialCardAi {
         }
     }
 
+    // Cascade shells: Throes of Chaos, Into the Time Vortex (AILogic$ CascadeShell)
+    // Spells whose only effect is the Cascade cast trigger (plus Retrace / Rebound), scripted as a
+    // no-op SP$ Pump. All the value is the free cascade hit, and that hit is still judged, optionally,
+    // by its own handler when the trigger resolves (PlayAi.chooseSingleCard). So this only asks whether
+    // the library's composition (never its order) holds a hit the AI would actually cast.
+    public static class CascadeShell {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean free) {
+            final Card source = sa.getHostCard();
+            if (source == null || !source.hasKeyword(Keyword.CASCADE)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            // the accepted hit leaves the library like a draw (a Rebound cast comes right before the draw step)
+            if (library.size() <= 2) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int mv = source.getCMC(); // Cascade's X is the host's mana value
+            int hits = 0;      // cards the cascade can exile and offer
+            int proactive = 0; // hits the AI casts on its own, with nothing to respond to
+            for (final Card c : library) {
+                if (c.isLand() || c.getCMC() >= mv) {
+                    continue; // not a cascade hit
+                }
+                final ManaCost cost = c.getManaCost();
+                if (cost != null && cost.countX() > 0) {
+                    continue; // refused when free: PlayAi.chooseSingleCard (instants/sorceries), PermanentAi (permanents)
+                }
+                final SpellAbility first = c.getFirstSpellAbility();
+                if (first != null && first.getApi() == ApiType.Counter) {
+                    continue; // the only spell under the cascade trigger is our own shell
+                }
+                hits++;
+                if (c.isPermanent() || c.isSorcery()) {
+                    proactive++;
+                }
+            }
+            if (hits == 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            // Paying for it (mana, or a land via Retrace): most of the pool must be hits the AI casts,
+            // not counters/tricks/protection it declines at sorcery speed with an empty stack.
+            if (!free && proactive * 2 < hits) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Chain of Acid
     public static class ChainOfAcid {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
