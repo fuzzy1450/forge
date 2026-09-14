@@ -2,6 +2,11 @@ Name:Super Intelligence
 ManaCost:U
 Types:Enchantment Aura
 K:Enchant:Creature
+SVar:AttachAILogic:Pump
+SVar:AttachAITgts:Creature.YouOwn
 T:Mode$ Phase | Phase$ Upkeep | ValidPlayer$ Player.EnchantedController | TriggerZones$ Battlefield | Execute$ TrigDraw | TriggerDescription$ At the beginning of the upkeep of enchanted creature's controller, that player draws a card.
 SVar:TrigDraw:DB$ Draw | Defined$ TriggeredPlayer
+SVar:NeedsToPlayVar:Z GE10
+SVar:Z:Count$ValidLibrary Card.YouOwn/Minus.DrawPunishers
+SVar:DrawPunishers:Count$Valid Card.OppCtrl+namedNotion Thief,Card.OppCtrl+namedConsecrated Sphinx,Card.OppCtrl+namedFaerie Mastermind,Card.OppCtrl+namedOrcish Bowmasters/Times.100
 Oracle:Enchant creature\nAt the beginning of the upkeep of enchanted creature's controller, that player draws a card.
