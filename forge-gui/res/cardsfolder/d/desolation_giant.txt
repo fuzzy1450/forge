@@ -4,9 +4,10 @@ Types:Creature Giant
 PT:3/3
 K:Kicker:W W
 T:Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ TrigDestroy | TriggerDescription$ When CARDNAME enters, destroy all other creatures you control. If it was kicked, destroy all other creatures instead.
-SVar:TrigDestroy:DB$ DestroyAll | ValidCards$ Creature.StrictlyOther+YouCtrl | ConditionDefined$ Self | ConditionPresent$ Card.!kicked | SubAbility$ TrigKicker
+SVar:TrigDestroy:DB$ DestroyAll | ValidCards$ Creature.StrictlyOther+YouCtrl | ConditionDefined$ Self | ConditionPresent$ Card.!kicked | SubAbility$ TrigKicker | AILogic$ Always
 SVar:TrigKicker:DB$ DestroyAll | ValidCards$ Creature.StrictlyOther | ConditionDefined$ Self | ConditionPresent$ Card.kicked
-AI:RemoveDeck:All
+SVar:NeedsToPlayVar:Z EQ0
+SVar:Z:Count$Valid Creature.YouCtrl
 AI:RemoveDeck:Random
 DeckNeeds:Color$White
 Oracle:Kicker {W}{W} (You may pay an additional {W}{W} as you cast this spell.)\nWhen Desolation Giant enters, destroy all other creatures you control. If it was kicked, destroy all other creatures instead.
