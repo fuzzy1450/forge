@@ -983,6 +983,32 @@ public class AttachAi extends SpellAbilityAi {
             if (ai.getCardsIn(ZoneType.Library).size() >= 5) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
+        } else if ("Remembered".equals(sa.getParam("Defined")) && sa.getParent() != null
+            && sa.getParent().getApi() == ApiType.Animate && !sa.getParent().usesTargeting()
+            && sa.getParent().getParamOrDefault("Types", "").contains("Aura")
+            && sa.getParent().getParent() != null
+            && sa.getParent().getParent().getApi() == ApiType.Manifest
+            && sa.getParent().getParent().hasParam("RememberManifested")) {
+            // Lightform, Cloudform, Rageform (the only scripts of this chain):
+            // "becomes an Aura, manifest the top card, attach to it". Living
+            // Weapon-shaped one link removed - the Manifest grandparent creates
+            // the attach target, so refusing for lack of one vetoes the whole
+            // permanent at AiController.checkETBEffects (BadEtbEffects).
+            // Floor = the manifest AI's own TopOfLibrary floor
+            // (ManifestBaseAi.checkApiLogic, minus its phase checks and 80% roll):
+            // a library of at least 5 (ManifestAi's anti-self-mill line), and a
+            // top card ManifestAi.shouldApply accepts - no CantHappen-layer
+            // replacement stopping it entering (Grafdigger's Cage), and, only when
+            // the AI may see that card, a permanent without X, with positive
+            // toughness and no ETB trigger/replacement. Draws no random numbers,
+            // like the CantPlayAi return it replaces.
+            final SpellAbility manifest = sa.getParent().getParent();
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (library.size() >= 5
+                    && ((ManifestBaseAi) SpellApiToAi.Converter.get(manifest))
+                            .shouldApply(library.getFirst(), ai, manifest)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
         }
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
