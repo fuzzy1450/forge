@@ -33,8 +33,24 @@ public class ChooseGenericAi extends SpellAbilityAi {
             }
         } else if ("Always".equals(aiLogic)) {
             return true;
+        } else if (namedChoice(sa.getAdditionalAbilityList("Choices"), aiLogic) != null) {
+            // "As this enters, choose A or B" with AILogic naming the preferred mode
+            // (Battle of Hoover Dam: Legion). The choice itself is free; refusing it
+            // vetoes the whole permanent at AiController.checkETBEffects. Same contract
+            // the Khans/Dragons sieges already get; chooseSingleSpellAbility picks it.
+            return true;
         }
         return false;
+    }
+
+    /** The choice whose description is exactly the AILogic string, or null. */
+    private static <T extends SpellAbility> T namedChoice(final List<T> choices, final String logic) {
+        for (final T choice : choices) {
+            if (logic.equals(choice.getDescription())) {
+                return choice;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -282,6 +298,11 @@ public class ChooseGenericAi extends SpellAbilityAi {
             // TODO: implement a better way to check for possible benefits in each case. If made generic, replace
             // fixed spells.get(N) with a way to detect which SA creates which token
             return ComputerUtil.aiLifeInDanger(player, false, 0) ? spells.get(0) : spells.get(1);
+        }
+        // AILogic naming one of the choices: take that mode (see checkAiLogic)
+        final SpellAbility named = namedChoice(spells, logic);
+        if (named != null) {
+            return named;
         }
         return spells.get(0);   // return first choice if no logic found
     }
