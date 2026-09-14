@@ -11,5 +11,7 @@ SVar:NCRTrigger:Mode$ Phase | Phase$ End of Turn | Secondary$ True | ValidPlayer
 SVar:TrigReturn:DB$ ChangeZone | Origin$ Graveyard | Destination$ Battlefield | WithCountersType$ FINALITY | ValidTgts$ Creature.cmcLE3+YouCtrl | TgtPrompt$ Select target creature card with mana value 3 in your graveyard
 SVar:LegionTrigger:Mode$ ChangesZone | Secondary$ True | ValidCard$ Creature.YouCtrl | Origin$ Battlefield | Destination$ Graveyard | Execute$ TrigPutCounter | TriggerZones$ Battlefield | TriggerDescription$ Legion — Whenever a creature you control dies, put two +1/+1 counters on target creature you control.
 SVar:TrigPutCounter:DB$ PutCounter | ValidTgts$ Creature.YouCtrl | TgtPrompt$ Select target creature you control | CounterType$ P1P1 | CounterNum$ 2
+SVar:NeedsToPlayVar:Z GE2
+SVar:Z:Count$Valid Creature.YouCtrl
 DeckHas:Ability$Counters|Graveyard
 Oracle:As Battle of Hoover Dam enters, choose NCR or Legion.\n• NCR — At the beginning of your end step, return target creature card with mana value 3 or less from your graveyard to the battlefield with a finality counter on it.\n• Legion — Whenever a creature you control dies, put two +1/+1 counters on target creature you control.
