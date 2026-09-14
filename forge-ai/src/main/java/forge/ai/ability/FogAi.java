@@ -86,6 +86,15 @@ public class FogAi extends SpellAbilityAi {
     }
 
     private boolean handleMemoryCheck(Player ai, SpellAbility sa) {
+        // AIFogNoReserve$ True: opt out of the pre-combat mana hold below. For an expensive fog
+        // the hold can lock the whole cost through the AI's next turn (the memory reset is
+        // active-player-only, PhaseHandler:364), so such a card only fires from what it can pay
+        // at the opponent's declare-blockers. Returning before the :93 branch is safe: that
+        // branch needs CHOSEN_FOG_EFFECT, which only the reservation below remembers.
+        if (sa.hasParam("AIFogNoReserve")) {
+            return false;
+        }
+
         Card hostCard = sa.getHostCard();
         Game game = ai.getGame();
 
