@@ -2,7 +2,7 @@ Name:Struggle for Project Purity
 ManaCost:3 U
 Types:Enchantment
 K:ETBReplacement:Other:SiegeChoice
-SVar:SiegeChoice:DB$ GenericChoice | Choices$ Brotherhood,Enclave | Defined$ You | SetChosenMode$ True | AILogic$ Brotherhood | ShowChoice$ ExceptSelf | SpellDescription$ As CARDNAME enters, choose Brotherhood or Enclave.
+SVar:SiegeChoice:DB$ GenericChoice | Choices$ Brotherhood,Enclave | Defined$ You | SetChosenMode$ True | AILogic$ Enclave | ShowChoice$ ExceptSelf | SpellDescription$ As CARDNAME enters, choose Brotherhood or Enclave.
 SVar:Brotherhood:DB$ Pump | SpellDescription$ Brotherhood
 SVar:Enclave:DB$ Pump | SpellDescription$ Enclave
 S:Mode$ Continuous | Affected$ Card.Self+ChosenModeBrotherhood | AddTrigger$ BrotherhoodTrig | Description$ • Brotherhood — At the beginning of your upkeep, each opponent draws a card. You draw a card for each card drawn this way.
