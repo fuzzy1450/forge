@@ -97,9 +97,26 @@ public class DamageDealAi extends DamageAiBase {
             // player. Top-level random damage (Goblin Test Pilot) and
             // random-target triggers resolved via doTriggerNoCost (Cinderheart
             // Giant) take exactly the paths they took before.
-            return randomOpponentDamageLands(ai, sa, dmg)
-                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
-                    : new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            final boolean explosionOfRiches = "Explosion of Riches".equals(ComputerUtilAbility.getAbilitySourceName(sa));
+            if (explosionOfRiches) {
+                // Payability first: an Explosion that cannot be paid this priority is
+                // refused here (A's refusal point), so the floor's payment simulations
+                // never run on an unaffordable consult. This does NOT restore A/B parity
+                // for a held card: without it AiController reaches canPayCost for the
+                // card anyway, and that payment simulation perturbs later play.
+                final Card host = sa.getHostCard();
+                final SpellAbility spell = host == null ? null : host.getFirstSpellAbility();
+                if (spell == null || !ComputerUtilMana.canPayManaCost(spell, ai, 0, false)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+            }
+            if (!randomOpponentDamageLands(ai, sa, dmg)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            if (explosionOfRiches && explosionOfRichesStarvesPermanent(ai, sa, dmg)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
         if (damageTargetAI(ai, sa, dmg, true)) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
@@ -127,6 +144,45 @@ public class DamageDealAi extends DamageAiBase {
             }
         }
         return true;
+    }
+
+    // Explosion of Riches is {5}{R}: ComputerUtilAbility.saEvaluator sorts it
+    // level with any 5-MV creature (CMC + 1 creature priority) and ahead of
+    // every cheaper permanent, so it takes the turn's mana first. Hold it while
+    // a nonland permanent of MV >= 3 in hand can be paid now but not together
+    // with Explosion's mana value, unless an opponent candidate is at or below
+    // one trigger's damage (the AI's own mandatory draw alone kills). Payment is
+    // tested with ComputerUtilMana.canPayManaCost(extraMana): getAvailableManaEstimate
+    // over-counts Combo dual lands and is not used.
+    private static boolean explosionOfRichesStarvesPermanent(final Player ai, final SpellAbility sa, final int dmg) {
+        final Card host = sa.getHostCard();
+        if (host == null) {
+            return false;
+        }
+        for (final GameEntity ent : sa.getTargetRestrictions().getAllCandidates(sa)) {
+            if (ent instanceof Player p && p.getLife() <= dmg) {
+                return false;
+            }
+        }
+        final int hostCmc = host.getCMC();
+        for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+            if (c.equals(host) || !c.isPermanent() || c.isLand() || c.getCMC() < 3) {
+                continue;
+            }
+            if (c.getType().isLegendary() && ai.isCardInPlay(c.getName())) {
+                continue; // a legend we already control would not be cast anyway
+            }
+            final SpellAbility perm = c.getSpellPermanent();
+            if (perm == null) {
+                continue;
+            }
+            perm.setActivatingPlayer(ai);
+            if (ComputerUtilMana.canPayManaCost(perm, ai, 0, false)
+                    && !ComputerUtilMana.canPayManaCost(perm, ai, hostCmc, false)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
