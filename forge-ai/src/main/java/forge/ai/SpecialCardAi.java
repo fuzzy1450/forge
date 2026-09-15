@@ -2655,6 +2655,114 @@ public class SpecialCardAi {
         }
     }
 
+    // Endless Evil
+    // "Enchant creature you control. At the beginning of your upkeep, create a
+    // token that's a copy of enchanted creature, except it's a 1/1." Routed
+    // from AttachAi.attachGeneralAI. Each upkeep makes a MANDATORY copy that
+    // keeps every trigger and static of the original, so a pick must be safe
+    // to duplicate every turn:
+    // - a creature by its printed type (an animated Creeping Tar Pit or Dimir
+    //   Keyrune stops being one at cleanup and the aura falls off, no copies),
+    // - not legendary (the 1/1 copy just dies to the legend rule),
+    // - not leaving play, phasing, targeted-to-die or threatened on the stack
+    //   (the aura goes with it),
+    // - no trigger whose chain gifts an opponent (Hunted Horror's TokenOwner),
+    //   hurts our side (LoseLife/Sacrifice/Discard/Mill on us, damage to us or
+    //   itself), is symmetric ("...All" apis, e.g. Plague Spitter), or aims a
+    //   target that is not restricted to opponents' side,
+    // - no continuous static giving -X toughness to anything but opponents.
+    // Among safe picks, prefer a creature with its own ETB trigger (the copy
+    // repeats it), then the best creature. No safe pick returns null, so the
+    // card stays in hand. Draws no RNG.
+    public static class EndlessEvil {
+        public static Card chooseCopySource(final Player ai, final SpellAbility sa, final List<Card> options) {
+            CardCollection safe = CardLists.filter(options, c -> isSafeCopySource(ai, c));
+            safe = ComputerUtil.getSafeTargets(ai, sa, safe);
+            final List<?> threatened = ComputerUtil.predictThreatenedObjects(ai, null);
+            safe = CardLists.filter(safe, c -> !threatened.contains(c));
+            if (safe.isEmpty()) {
+                return null;
+            }
+            final CardCollection etb = CardLists.filter(safe, EndlessEvil::hasOwnEtbTrigger);
+            return ComputerUtilCard.getBestCreatureAI(etb.isEmpty() ? safe : etb);
+        }
+
+        private static boolean isSafeCopySource(final Player ai, final Card c) {
+            if (c == null || !c.isCreature() || !ai.equals(c.getController())) {
+                return false;
+            }
+            if (!c.getCurrentState().getType().isCreature()) { // printed type: not a creature only until end of turn
+                return false;
+            }
+            if (!c.ignoreLegendRule()) { // legendary
+                return false;
+            }
+            if (c.hasSVar("EndOfTurnLeavePlay") || c.hasKeyword(Keyword.PHASING)) {
+                return false;
+            }
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (st.checkMode(StaticAbilityMode.Continuous)
+                        && st.getParamOrDefault("AddToughness", "").startsWith("-")
+                        && !st.getParamOrDefault("Affected", "").contains("OppCtrl")) {
+                    return false;
+                }
+            }
+            for (final Trigger t : c.getTriggers()) {
+                for (SpellAbility ab = t.ensureAbility(); ab != null; ab = ab.getSubAbility()) {
+                    if (!isSafeWhenRepeated(ab)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        private static boolean isSafeWhenRepeated(final SpellAbility ab) {
+            final ApiType api = ab.getApi();
+            if (api == null) {
+                return true;
+            }
+            if (api.name().endsWith("All")) { // symmetric, scales with copies
+                return false;
+            }
+            final String tokenOwner = ab.getParam("TokenOwner");
+            if (tokenOwner != null && !"You".equals(tokenOwner)) { // Hunted Horror
+                return false;
+            }
+            final String defined = ab.getParam("Defined");
+            if ((api == ApiType.LoseLife || api == ApiType.Sacrifice || api == ApiType.Discard || api == ApiType.Mill)
+                    && (defined == null || defined.contains("You"))) { // Dross Harvester, echo/vanishing sacrifice
+                return false;
+            }
+            if (api == ApiType.DealDamage && defined != null && (defined.contains("You") || defined.contains("Self"))) {
+                return false;
+            }
+            if (ab.usesTargeting() && api != ApiType.GainControl) { // taking our own creature is a no-op
+                for (final String part : ab.getParamOrDefault("ValidTgts", "").split(",")) {
+                    if (!part.contains("Opp")) { // a mandatory aim could land on our side
+                        return false;
+                    }
+                }
+                if (ab.getTargetRestrictions().canTgtPlayer()
+                        && (api == ApiType.Draw || api == ApiType.GainLife || api == ApiType.Token || api == ApiType.PutCounter)) {
+                    return false; // a gift to a targeted opponent
+                }
+            }
+            return true;
+        }
+
+        private static boolean hasOwnEtbTrigger(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() == TriggerType.ChangesZone
+                        && "Battlefield".equals(t.getParam("Destination"))
+                        && t.getParamOrDefault("ValidCard", "").contains("Self")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Entrancing Melody
     // "X U U sorcery: gain control of target creature with mana value X" -
     // ControlGainAi never announces this X, so ValidTgts$ Creature.cmcEQX reads

@@ -1547,6 +1547,19 @@ public class AttachAi extends SpellAbilityAi {
             prefList = CardLists.filterControlledBy(list, prefPlayer);
         }
 
+        // Endless Evil: enchant creature YOU control, but HighestEvaluation's
+        // preferred player is an opponent, so prefList was always empty and the
+        // aura was never cast. Pick our own copy source with a floor instead; a
+        // mandatory attach with no safe pick keeps the stock fallback. Placed
+        // after the prefList block so choosePreferredDefenderPlayer's pod
+        // tiebreak (Aggregates.random) still draws exactly as it did.
+        if (attachSource != null && "Endless Evil".equals(attachSource.getName())) {
+            final Card pick = SpecialCardAi.EndlessEvil.chooseCopySource(ai, sa, list);
+            if (pick != null || !mandatory) {
+                return pick;
+            }
+        }
+
         final boolean keepsAttachedCardTapped = isAuraSpell(sa) && attachSource.getReplacementEffects()
                 .anyMatch(re -> re.getMode().equals(ReplacementType.Untap)
                         && re.getLayer().equals(ReplacementLayer.CantHappen));
