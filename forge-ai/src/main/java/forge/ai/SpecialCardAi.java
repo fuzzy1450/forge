@@ -2082,6 +2082,143 @@ public class SpecialCardAi {
         }
     }
 
+    // Heroic Sacrifice
+    // "Choose target creature you control. The next time a source would deal
+    // combat damage to you or another creature you control this turn, that
+    // damage is dealt to the chosen creature instead. When it dies this turn,
+    // draw a card and put its counters on a creature you control."
+    // EffectAi's no-AILogic fallthrough refused it every time, and its Fog
+    // branch only knows how to target an attacker (Turn the Tables). Reached
+    // from EffectAi.checkApiLogic's name gate after the randomReturn roll.
+    // Its own fog window, with no FogAi route: FogAi's memory check would
+    // reserve mana and remember a CHOSEN_FOG_EFFECT, and AiAttackController
+    // then stops holding blockers back for a fog that chooseMagnet may still
+    // refuse. The window is the opponent's declare-blockers step with an empty
+    // stack, combat damage not already prevented, attackers on us, and
+    // ComputerUtilCombat.lifeInDanger true (the only RNG draw, checked last).
+    public static class HeroicSacrifice {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            if (!ph.getPlayerTurn().isOpponentOf(ai) || !ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || !game.getStack().isEmpty() || combat == null
+                    || combat.getAttackersOf(ai).isEmpty()
+                    || game.getReplacementHandler().isPreventCombatDamageThisTurn()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!ComputerUtilCombat.lifeInDanger(ai, combat)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card magnet = chooseMagnet(ai, sa, combat);
+            if (magnet == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.resetTargets();
+            sa.getTargets().add(magnet);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The creature that soaks every point of this combat's damage aimed at
+        // us and our creatures, or null when no choice makes the redirect work.
+        public static Card chooseMagnet(final Player ai, final SpellAbility sa, final Combat combat) {
+            final CardCollection candidates = CardLists.getTargetableCards(ai.getCreaturesInPlay(), sa);
+            if (candidates.isEmpty()) {
+                return null;
+            }
+            // One entry per combat hit headed at us or at a creature we control.
+            // Attackers of our planeswalkers are counted too - an overcount,
+            // which only makes survival harder.
+            final List<Pair<Card, Integer>> allHits = new ArrayList<>();
+            final List<Pair<Card, Integer>> firstStrikeHits = new ArrayList<>();
+            for (final Card att : combat.getAttackers()) {
+                if (!ai.equals(combat.getDefenderPlayerByAttacker(att))) {
+                    continue;
+                }
+                final int hit = att.getNetCombatDamage()
+                        + ComputerUtilCombat.predictPowerBonusOfAttacker(att, null, combat, false);
+                if (hit <= 0) {
+                    continue;
+                }
+                allHits.add(Pair.of(att, hit));
+                if (att.hasFirstStrike() || att.hasDoubleStrike()) {
+                    firstStrikeHits.add(Pair.of(att, hit));
+                }
+                if (att.hasDoubleStrike()) {
+                    allHits.add(Pair.of(att, hit));
+                }
+            }
+            if (allHits.isEmpty()) {
+                return null;
+            }
+
+            // 1) A creature that absorbs all of it and lives: a pure fog. Most
+            //    headroom wins, so a response pump is least likely to flip it.
+            Card best = null;
+            int bestRoom = 0;
+            for (final Card c : candidates) {
+                final int room = headroom(c, allHits);
+                if (room > bestRoom) {
+                    best = c;
+                    bestRoom = room;
+                }
+            }
+            if (best != null) {
+                return best;
+            }
+
+            // 2) A sacrifice (replaced by the spell's draw). Never the commander,
+            //    and it must outlive the first-strike step - a magnet that dies
+            //    there stops redirecting and the regular-damage step lands in full.
+            final CardCollection sac = CardLists.filter(candidates,
+                    c -> !c.isCommander() && headroom(c, firstStrikeHits) > 0);
+            if (!sac.isEmpty()) {
+                // Prefer a blocker that is dying in this combat anyway.
+                final CardCollection doomed = CardLists.filter(sac,
+                        c -> combat.isBlocking(c) && ComputerUtilCombat.blockerWouldBeDestroyed(ai, c, combat));
+                return ComputerUtilCard.getWorstCreatureAI(doomed.isEmpty() ? sac : doomed);
+            }
+
+            // 3) Only when this combat kills us: the commander, under the same
+            //    first-strike rule. It goes to the command zone (no draw), and we live.
+            if (ComputerUtilCombat.lifeInSeriousDanger(ai, combat)) {
+                final CardCollection commanders = CardLists.filter(candidates,
+                        c -> c.isCommander() && headroom(c, firstStrikeHits) > 0);
+                if (!commanders.isEmpty()) {
+                    return ComputerUtilCard.getWorstCreatureAI(commanders);
+                }
+            }
+            return null;
+        }
+
+        // > 0: c survives these hits. Integer.MAX_VALUE when nothing gets
+        // through or c is indestructible against plain damage.
+        private static int headroom(final Card c, final List<Pair<Card, Integer>> hits) {
+            int dmg = 0;
+            boolean deathtouch = false;
+            boolean counters = false; // wither/infect: -1/-1 counters, indestructible doesn't help
+            for (final Pair<Card, Integer> h : hits) {
+                final int d = ComputerUtilCombat.predictDamageTo(c, h.getRight(), h.getLeft(), true);
+                if (d <= 0) {
+                    continue;
+                }
+                dmg += d;
+                deathtouch |= h.getLeft().hasKeyword(Keyword.DEATHTOUCH);
+                counters |= h.getLeft().isWitherDamage();
+            }
+            if (dmg == 0) {
+                return Integer.MAX_VALUE;
+            }
+            if (c.hasKeyword(Keyword.INDESTRUCTIBLE) && !counters) {
+                return Integer.MAX_VALUE;
+            }
+            if (deathtouch) {
+                return 0;
+            }
+            return ComputerUtilCombat.getDamageToKill(c, false) - dmg;
+        }
+    }
+
     // Hunted by The Family
     // "Choose up to four target creatures you don't control. For each of them,
     // that creature's controller faces a villainous choice: it becomes a 1/1

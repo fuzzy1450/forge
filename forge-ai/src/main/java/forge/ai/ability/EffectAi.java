@@ -51,6 +51,14 @@ public class EffectAi extends SpellAbilityAi {
         boolean randomReturn = MyRandom.getRandom().nextFloat() <= .6667;
         String logic = "";
 
+        if ("Heroic Sacrifice".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Own-creature damage magnet. Routed after the randomReturn roll: the
+            // card has no RemoveDeck hint, so the stock engine evaluated it and drew
+            // here before refusing at the no-AILogic fallthrough below. Every other
+            // Effect card takes exactly the path it took before this branch.
+            return SpecialCardAi.HeroicSacrifice.consider(ai, sa);
+        }
+
         if (sa.hasParam("AILogic")) {
             logic = sa.getParam("AILogic");
             if (logic.equals("BeginningOfOppTurn")) {
