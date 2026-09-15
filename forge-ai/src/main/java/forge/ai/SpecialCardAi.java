@@ -10857,22 +10857,51 @@ public class SpecialCardAi {
     // but do not own (the copy is ours for good), one held down by an opponent's
     // aura or -1/-1 counters, one whose own enters trigger the AI would run now.
     // Draws no random numbers of its own; a candidate's enters triggers go through
-    // AiController.doTrigger, lazily, in preference order.
+    // AiController.doTrigger, lazily, in preference order. The cast gate remembers
+    // the body it approved (MemorySet.THE_MASTER_BODY) and Body Thief takes that
+    // body without judging it again, so a random roll in that judgement (e.g.
+    // AlwaysPlayAi's 80% for a trigger already run this turn) cannot decline the
+    // body after the cast is committed.
     public static class TheMasterFormedAnew {
         private static final int UNSAFE = -1;
         private static final int NEUTRAL = 0;
         private static final int GAINS = 1;
 
         // CloneAi.doTriggerNoCost, not mandatory: the cast gate (through
-        // checkETBEffects) and the enters-as-a-copy answer at resolution.
+        // checkETBEffects), a held evaluation, and the enters-as-a-copy answer at
+        // resolution.
         public static AiAbilityDecision considerCopy(final Player ai, final SpellAbility sa) {
             final CardCollection inExile = CardLists.getValidCards(ai.getGame().getCardsIn(ZoneType.Exile),
                     sa.getParam("Choices"), ai, sa.getHostCard(), sa);
-            // resolution: Body Thief already exiled one; cast time: it will be able to
-            if (!inExile.isEmpty() || chooseBody(ai, ai.getCreaturesInPlay()) != null) {
+            if (sa.getHostCard().isInZone(ZoneType.Stack)) {
+                // resolution: copy what Body Thief exiled; judging bodies here could only draw
+                return inExile.isEmpty() ? new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+                        : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            // cast time: a takeover card already in exile, or a body Body Thief will take
+            final Card body = inExile.isEmpty() ? chooseBody(ai, ai.getCreaturesInPlay()) : null;
+            AiCardMemory.clearMemorySet(ai, AiCardMemory.MemorySet.THE_MASTER_BODY);
+            if (body != null) {
+                AiCardMemory.rememberCard(ai, body, AiCardMemory.MemorySet.THE_MASTER_BODY);
+            }
+            if (!inExile.isEmpty() || body != null) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+        }
+
+        // Body Thief, both its confirm and its pick: the body the cast was approved
+        // for, while it is still on the battlefield and still passes the static
+        // filters, WITHOUT running etbVerdict again. If that body is gone (removed in
+        // response) or none was remembered, chooseBody judges afresh.
+        public static Card bodyThiefPick(final Player ai, final Iterable<Card> pool) {
+            for (final Card c : pool) {
+                if (AiCardMemory.isRememberedCard(ai, c, AiCardMemory.MemorySet.THE_MASTER_BODY)
+                        && c.isInPlay() && staticPass(ai, c, false)) {
+                    return c;
+                }
+            }
+            return chooseBody(ai, pool);
         }
 
         // Which creature Body Thief exiles; null = exile nothing.
@@ -10883,28 +10912,12 @@ public class SpecialCardAi {
             final List<Card> hindered = new ArrayList<>();
             final List<Card> etb = new ArrayList<>();
             for (final Card c : pool) {
-                if (!ai.equals(c.getController()) || !c.isCreature() || c.isToken() || c.isCommander()
-                        || c.isCloned() || c.isFaceDown() || c.isPhasedOut() || c.hasMergedCard()
-                        || c.getCurrentStateName() != forge.card.CardStateName.Original) {
-                    continue; // nothing, or a different face, would be in exile to copy
-                }
-                final CardState original = c.getState(forge.card.CardStateName.Original);
-                if (!original.getType().isCreature() || original.getBaseToughness() <= 0
-                        || original.getManaCost().countX() > 0 || c.hasETBReplacement()) {
-                    // not a creature card in exile; a 0/0 copy dies; an X copy has X = 0;
-                    // an enters replacement (stun counters, etbCounter) applies again
+                if (!staticPass(ai, c, attackAhead)) {
                     continue;
-                }
-                if (attackAhead && CombatUtil.canAttack(c)) {
-                    continue; // never pay this turn's attack for it
                 }
                 if (!ai.equals(c.getOwner())) {
                     stolen.add(c); // controlled, not owned: the copy is ours for good
                     continue;
-                }
-                if (c.isEquipped() || c.getCounters(CounterEnumType.P1P1) > 0
-                        || c.getEnchantedBy().anyMatch(a -> !a.getController().isOpponentOf(ai))) {
-                    continue; // our own investment would be lost
                 }
                 if (c.getCounters(CounterEnumType.M1M1) > 0
                         || c.getEnchantedBy().anyMatch(a -> a.getController().isOpponentOf(ai))) {
@@ -10930,6 +10943,31 @@ public class SpecialCardAi {
                 }
             }
             return null;
+        }
+
+        // Every body filter that needs no judgement of its enters triggers (draws
+        // nothing): the stolen tier keeps its equipment / +1/+1 / own-aura bodies.
+        private static boolean staticPass(final Player ai, final Card c, final boolean attackAhead) {
+            if (!ai.equals(c.getController()) || !c.isCreature() || c.isToken() || c.isCommander()
+                    || c.isCloned() || c.isFaceDown() || c.isPhasedOut() || c.hasMergedCard()
+                    || c.getCurrentStateName() != forge.card.CardStateName.Original) {
+                return false; // nothing, or a different face, would be in exile to copy
+            }
+            final CardState original = c.getState(forge.card.CardStateName.Original);
+            if (!original.getType().isCreature() || original.getBaseToughness() <= 0
+                    || original.getManaCost().countX() > 0 || c.hasETBReplacement()) {
+                // not a creature card in exile; a 0/0 copy dies; an X copy has X = 0;
+                // an enters replacement (stun counters, etbCounter) applies again
+                return false;
+            }
+            if (attackAhead && CombatUtil.canAttack(c)) {
+                return false; // never pay this turn's attack for it
+            }
+            if (ai.equals(c.getOwner()) && (c.isEquipped() || c.getCounters(CounterEnumType.P1P1) > 0
+                    || c.getEnchantedBy().anyMatch(a -> !a.getController().isOpponentOf(ai)))) {
+                return false; // our own investment would be lost
+            }
+            return true;
         }
 
         // Highest evaluateCreature first; ties keep board order.
