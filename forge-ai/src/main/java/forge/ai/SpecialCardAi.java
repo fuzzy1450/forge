@@ -48,14 +48,17 @@ import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.spellability.SpellPermanent;
 import forge.game.staticability.StaticAbility;
 import forge.game.trigger.Trigger;
+import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
 import forge.util.Aggregates;
+import forge.util.FileSection;
 import forge.util.IterableUtil;
 import forge.util.MyRandom;
 import forge.util.TextUtil;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -301,6 +304,187 @@ public class SpecialCardAi {
             }
 
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+    }
+
+    // Clone Legion
+    // "For each creature target player controls, create a token that's a copy
+    // of that creature." CopyPermanentAi's DuplicatePerms count reads
+    // Defined$ Valid Creature.TargetedPlayerCtrl before any player is targeted,
+    // so it is always empty and the card was never cast; the player is chosen
+    // here instead. Every creature the target controls is copied and the copies
+    // enter under our control, ETBs included, so a player is vetoed outright
+    // when any of their creatures has a harmful self-ETB (lose the game, skip
+    // turns, a mass sacrifice/destroy, exiling our library or board, a
+    // sacrifice-unless). Nine mana and a card buy copies, so the floor is value:
+    // a player is eligible with at least two copies worth having whose summed
+    // value reaches MIN_COPY_VALUE, and the richest eligible board wins, ours
+    // first on ties.
+    public static class CloneLegion {
+        public static final int MIN_COPIES = 2;
+        public static final int MIN_COPY_VALUE = 400;
+
+        // A token copy is never evoked, kicked or cast, so a self-ETB that
+        // requires one of those never triggers for it ("!wasCast..." does).
+        private static final Pattern CAST_ONLY_ETB = Pattern.compile("(?<!!)(evoked|kicked|wasCast)");
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            if (!sa.usesTargeting() || !sa.getTargetRestrictions().canTgtPlayer()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final List<Player> candidates = Lists.newArrayList(ai);
+            candidates.addAll(ai.getOpponents());
+
+            Player best = null;
+            int bestValue = -1;
+            Player bestSafe = null; // highest sum among players not vetoed
+            int bestSafeValue = -1;
+            Player bestAny = null; // highest sum among all targetable players
+            int bestAnyValue = -1;
+            for (final Player p : candidates) {
+                if (!sa.canTarget(p)) {
+                    continue;
+                }
+                boolean vetoed = false;
+                int value = 0;
+                int count = 0;
+                for (final Card c : p.getCreaturesInPlay()) {
+                    if (hasHarmfulSelfETB(c)) {
+                        vetoed = true;
+                    }
+                    if (!worthCopying(ai, c)) {
+                        continue;
+                    }
+                    value += copyValue(c);
+                    count++;
+                }
+                if (value > bestAnyValue) {
+                    bestAny = p;
+                    bestAnyValue = value;
+                }
+                if (vetoed) {
+                    continue;
+                }
+                if (value > bestSafeValue) {
+                    bestSafe = p;
+                    bestSafeValue = value;
+                }
+                if (count >= MIN_COPIES && value >= MIN_COPY_VALUE && value > bestValue) {
+                    best = p;
+                    bestValue = value;
+                }
+            }
+
+            Player choice = best;
+            if (choice == null) {
+                if (!mandatory) {
+                    return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+                }
+                choice = bestSafe != null ? bestSafe : bestAny;
+                if (choice == null) {
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+            }
+            sa.getTargets().add(choice);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Left out of both count and value (still copied, just not worth
+        // paying for): a 0-toughness body that gets its size from counters
+        // (the copy enters as a 0/0 and dies), a card the AI cannot play, and
+        // a legend the legend rule would take straight back (ours, or theirs
+        // when we already control one with that name).
+        private static boolean worthCopying(final Player ai, final Card c) {
+            if (c.getBaseToughness() <= 0 || ComputerUtilCard.isCardRemAIDeck(c)) {
+                return false;
+            }
+            if (c.getType().isLegendary()) {
+                if (ai.equals(c.getController())) {
+                    return false;
+                }
+                if (!CardLists.filter(ai.getCardsIn(ZoneType.Battlefield),
+                        CardPredicates.nameEquals(c.getName())).isEmpty()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // A copy has the printed P/T, not the counters, auras, equipment or
+        // anthems on the original, so the P/T terms are taken from base values.
+        private static int copyValue(final Card c) {
+            return ComputerUtilCard.evaluateCreature(c, false, true)
+                    + 15 * Math.max(0, c.getBasePower()) + 10 * Math.max(0, c.getBaseToughness());
+        }
+
+        private static boolean hasHarmfulSelfETB(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() != TriggerType.ChangesZone || t.hasParam("OptionalDecider")) {
+                    continue;
+                }
+                if (!t.hasParam("Destination") || !t.getParam("Destination").contains("Battlefield")) {
+                    continue;
+                }
+                final String valid = t.hasParam("ValidCard") ? t.getParam("ValidCard") : "";
+                if (!valid.contains("Self") || CAST_ONLY_ETB.matcher(valid).find()) {
+                    continue;
+                }
+                if (ComputerUtilCard.isCardRemAIDeck(c) || isHarmfulChain(t)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Reads the trigger's ability chain without building it: an ability
+        // not built yet is read from its Execute SVar text, because building
+        // one allocates a SpellAbility id (ids feed SpellAbility.hashCode), and
+        // this runs on every look at the card, cast or not.
+        private static boolean isHarmfulChain(final Trigger t) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                for (SpellAbility part = built; part != null; part = part.getSubAbility()) {
+                    if (isHarmfulPart(part.getApi() == null ? "" : part.getApi().name(), part.usesTargeting(),
+                            part.getParam("Origin"), part.getParam("ChangeType"), part.getParam("UnlessCost"))) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            final Set<String> seen = new HashSet<>();
+            String svar = t.hasParam("Execute") ? t.getParam("Execute") : null;
+            while (svar != null && seen.add(svar)) {
+                final String text = t.getSVar(svar);
+                if (text.isEmpty()) {
+                    break;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                String api = params.get("DB");
+                if (api == null) {
+                    api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+                }
+                if (isHarmfulPart(api == null ? "" : api, params.containsKey("ValidTgts"),
+                        params.get("Origin"), params.get("ChangeType"), params.get("UnlessCost"))) {
+                    return true;
+                }
+                svar = params.get("SubAbility");
+            }
+            return false;
+        }
+
+        private static boolean isHarmfulPart(final String api, final boolean targeted, final String origin,
+                final String changeType, final String unlessCost) {
+            if (ApiType.LosesGame.name().equals(api) || ApiType.SkipTurn.name().equals(api)
+                    || ApiType.SacrificeAll.name().equals(api) || ApiType.DestroyAll.name().equals(api)) {
+                return true;
+            }
+            if (ApiType.ChangeZoneAll.name().equals(api) && !targeted && origin != null
+                    && (origin.contains("Library") || origin.contains("Battlefield"))
+                    && (changeType == null || !(changeType.contains("OppCtrl") || changeType.contains("OppOwn")))) {
+                return true;
+            }
+            return unlessCost != null && unlessCost.contains("Sac<");
         }
     }
 

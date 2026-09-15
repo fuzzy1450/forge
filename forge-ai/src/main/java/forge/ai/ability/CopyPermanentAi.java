@@ -45,6 +45,13 @@ public class CopyPermanentAi extends SpellAbilityAi {
                 return new AiAbilityDecision(0, AiPlayDecision.WaitForEndOfTurn);
             }
         } else if ("DuplicatePerms".equals(aiLogic)) {
+            if ("Clone Legion".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // Defined$ Valid Creature.TargetedPlayerCtrl is empty until a player is
+                // targeted, so the count below never passes for this card, and the player
+                // branch further down would always target us. Choose the player and apply
+                // the value floor there; every other DuplicatePerms card is unchanged.
+                return SpecialCardAi.CloneLegion.consider(aiPlayer, sa, false);
+            }
             final List<Card> valid = AbilityUtils.getDefinedCards(source, sa.getParam("Defined"), sa);
             if (valid.size() < 2) {
                 return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
@@ -120,6 +127,11 @@ public class CopyPermanentAi extends SpellAbilityAi {
         final String sourceName = ComputerUtilAbility.getAbilitySourceName(sa);
         final String aiLogic = sa.getParamOrDefault("AILogic", "");
         final boolean canCopyLegendary = sa.hasParam("NonLegendary");
+
+        if ("Clone Legion".equals(sourceName) && sa.usesTargeting()) {
+            // Free-cast path: the card-target loop below cannot target a player.
+            return SpecialCardAi.CloneLegion.consider(aiPlayer, sa, mandatory);
+        }
 
         if (sa.usesTargeting()) {
             sa.resetTargets();
