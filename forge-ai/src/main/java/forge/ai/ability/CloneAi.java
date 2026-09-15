@@ -116,13 +116,6 @@ public class CloneAi extends SpellAbilityAi {
                 // prevent StackOverflow from infinite loop copying another ETB RE
                 return new AiAbilityDecision(0, AiPlayDecision.StopRunawayActivations);
             }
-            if ("TheMasterFormedAnew".equals(sa.getParam("AILogic"))) {
-                // Its Choices live in exile (ChoiceZone$ Exile) and are made by the card's
-                // own cast trigger, so the battlefield scan below can never see one;
-                // SpecialCardAi judges both the cast and the copy.
-                return mandatory ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
-                        : SpecialCardAi.TheMasterFormedAnew.considerCopy(aiPlayer, sa);
-            }
             if (sa.hasParam("Choices")) {
                 CardCollectionView choices = CardLists.getValidCards(host.getGame().getCardsIn(ZoneType.Battlefield),
                         sa.getParam("Choices"), host.getController(), host, sa);
@@ -204,12 +197,6 @@ public class CloneAi extends SpellAbilityAi {
     @Override
     protected Card chooseSingleCard(Player ai, SpellAbility sa, Iterable<Card> options, boolean isOptional,
             Player targetedPlayer, Map<String, Object> params) {
-        if ("TheMasterFormedAnew".equals(sa.getParam("AILogic"))) {
-            // Exiled cards are controlled by their owners, so the filter below would pass
-            // over the legendary body Body Thief just exiled for an opponent's or a stale
-            // nonlegendary takeover card.
-            return ComputerUtilCard.getBestCreatureAI(options);
-        }
         final Card host = sa.getHostCard();
         final String name = host.getName();
         final Player ctrl = host.getController();
