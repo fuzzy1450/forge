@@ -6068,6 +6068,117 @@ public class SpecialCardAi {
         }
     }
 
+    // Infinite Reflection
+    // Enchant a creature (ours or an opponent's) only when turning each other nontoken creature
+    // we control into a copy of it is a clear board upgrade. The target must be a nonlegendary
+    // creature in its copiable state (CardState.getType, no type-changing effects): a crewed
+    // Vehicle or an animated land copies as a noncreature and a legendary copy dies to the
+    // legend rule. Each of our creatures is judged as the copy it would become - an LKI of it
+    // carrying the clone state CardFactory.getCloneStates builds from the target, so it keeps
+    // its own counters, pumps and granted keywords and none of the target's - against an LKI of
+    // itself as it is now. A copy that is not a creature, or whose toughness no longer covers
+    // the damage marked on it (a 0/0 whose body was counters), is worth nothing.
+    // Floor: at least MIN_IMPROVED creatures each gain MIN_STEP, the total gain reaches MIN_GAIN
+    // after subtracting every creature card in hand or the command zone that would later enter
+    // as a worse copy, and no creature commander of ours loses value. Our face-down creatures
+    // stay 2/2s (clone states write Original) and count for nothing either way.
+    // RNG: the stock path (attachToCardAIPreferences -> attachGeneralAI) calls
+    // choosePreferredDefenderPlayer, whose pod tiebreak draws, whenever the target list is not
+    // empty; this makes that call under the same condition and reads nothing else random.
+    public static class InfiniteReflection {
+        static final int MIN_GAIN = 200;    // total evaluation gained across our board
+        static final int MIN_IMPROVED = 2;  // creatures that each gain at least MIN_STEP
+        static final int MIN_STEP = 40;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // The aura spell is a cached singleton and getValidCardsToTarget drops what is
+            // already targeted: a target left by a WillPlay that could not be paid would
+            // hide the best template for as long as it stayed the best.
+            sa.resetTargets();
+            final CardCollection targets = CardUtil.getValidCardsToTarget(sa);
+            if (targets.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            AiAttackController.choosePreferredDefenderPlayer(ai); // RNG parity with the stock path
+
+            final CardCollection ours = CardLists.filter(ai.getCreaturesInPlay(),
+                    c -> !c.isToken() && !c.isFaceDown());
+            if (ours.size() < MIN_IMPROVED) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int[] oursNow = new int[ours.size()];
+            for (int i = 0; i < ours.size(); i++) {
+                oursNow[i] = ComputerUtilCard.evaluateCreature(CardCopyService.getLKICopy(ours.get(i)));
+            }
+            final CardCollection toCome = CardLists.filter(ai.getCardsIn(ZoneType.Hand), CardPredicates.CREATURES);
+            toCome.addAll(CardLists.filter(ai.getCardsIn(ZoneType.Command), CardPredicates.CREATURES));
+            final int[] toComeNow = new int[toCome.size()];
+            for (int i = 0; i < toCome.size(); i++) {
+                toComeNow[i] = ComputerUtilCard.evaluateCreature(CardCopyService.getLKICopy(toCome.get(i)));
+            }
+
+            final Card source = sa.getHostCard();
+            Card best = null;
+            int bestGain = Integer.MIN_VALUE;
+            for (final Card t : targets) {
+                if (!t.isInZone(ZoneType.Battlefield) || !t.isCreature() || t.isFaceDown()
+                        || !sa.canTarget(t) || !t.canBeAttached(source, sa)) {
+                    continue;
+                }
+                final CardState copiable = t.getState(t.getCurrentStateName());
+                if (copiable == null || !copiable.getType().isCreature() || copiable.getType().isLegendary()) {
+                    continue;
+                }
+                int gain = 0;
+                int improved = 0;
+                for (int i = 0; i < ours.size() && gain != Integer.MIN_VALUE; i++) {
+                    final Card c = ours.get(i);
+                    if (c.equals(t)) {
+                        continue;
+                    }
+                    final int delta = asCopyOf(c, t, sa) - oursNow[i];
+                    if (c.isCommander() && delta < 0) {
+                        gain = Integer.MIN_VALUE; // never overwrite our commander with something worse
+                    } else {
+                        if (delta >= MIN_STEP) {
+                            improved++;
+                        }
+                        gain += delta;
+                    }
+                }
+                if (gain == Integer.MIN_VALUE || improved < MIN_IMPROVED) {
+                    continue;
+                }
+                for (int i = 0; i < toCome.size(); i++) {
+                    gain += Math.min(0, asCopyOf(toCome.get(i), t, sa) - toComeNow[i]);
+                }
+                if (gain > bestGain) {
+                    bestGain = gain;
+                    best = t;
+                }
+            }
+            if (best == null || bestGain < MIN_GAIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // What c is worth once it has become a copy of t; 0 when the copy would not stay a
+        // creature on the battlefield. Nothing here touches the game: the clone state lives on
+        // an LKI copy only, keyed by the current timestamp without advancing it.
+        private static int asCopyOf(final Card c, final Card t, final SpellAbility sa) {
+            final Card copy = CardCopyService.getLKICopy(c);
+            copy.addCloneState(CardFactory.getCloneStates(t, copy, sa), c.getGame().getTimestamp());
+            copy.setLKICMC(t.getCMC()); // getLKICopy pinned c's mana value; the copy has t's
+            if (!copy.isCreature() || copy.getNetToughness() <= 0
+                    || (copy.getNetToughness() <= c.getDamage() && !copy.hasKeyword(Keyword.INDESTRUCTIBLE))) {
+                return 0;
+            }
+            return ComputerUtilCard.evaluateCreature(copy);
+        }
+    }
+
     // Invert Polarity
     // Cast only in response to an opponent's spell in Commandeer's window
     // (untargeted anywhere in the chain, no "...All" api, CMC floor): winning

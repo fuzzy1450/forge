@@ -67,6 +67,14 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.WarbriarBlessing.consider(ai, sa);
         }
 
+        if (sa.isSpell() && "Infinite Reflection".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Mass-copy aura, judged whole in SpecialCardAi.InfiniteReflection: the stock
+            // HighestEvaluation logic enchants the opponent's best creature with no look at
+            // our own board, and a legendary there would put every copy we make into the
+            // legend rule. Every other Attach card takes exactly the path it took before.
+            return SpecialCardAi.InfiniteReflection.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {
