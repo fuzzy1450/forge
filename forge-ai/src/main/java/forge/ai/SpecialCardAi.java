@@ -12511,6 +12511,19 @@ public class SpecialCardAi {
                 }
             }
 
+            // RNG parity: AI:RemoveDeck:All kept A from ever evaluating this card. Judging the copy
+            // below runs the copied api's handler (ChangeZoneAi, TokenAi, DamageDealAi, DrawAi and
+            // CounterAi draw MyRandom), and a WillPlay goes on to canPayCost, whose test payment draws
+            // MyRandom in ComputerUtilMana.isManaSourceReserved. So a held Wild Ricochet must not judge
+            // a copy it cannot pay for. RNG-free upper bounds instead (MizzixsMastery's shape): the
+            // cost after reductions against the mana estimate, and enough red sources;
+            // canPlayAndPayForFace runs the real canPayCost only after a WillPlay.
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, true) < cost.toManaCost().getCMC()
+                    || !hasRedSources(ai, sa.getHostCard(), cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
             sa.resetTargets();
             if (!sa.canTargetSpellAbility(topSA)) {
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
@@ -12543,6 +12556,34 @@ public class SpecialCardAi {
 
             sa.getTargets().add(topSA);
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Floating red plus untapped sources whose printed production could be red and whose mana
+        // this spell may spend (Electric Seaweed's helper, copied, taking the shard count).
+        private static boolean hasRedSources(final Player ai, final Card host, final int needed) {
+            final SpellAbility spell = host.getFirstSpellAbility();
+            int red = ai.getManaPool().getAmountOfColor(MagicColor.RED);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (red >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (spell != null && !ma.getManaPart().meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("R") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        red++;
+                        break;
+                    }
+                }
+            }
+            return red >= needed;
         }
 
         private static boolean readsManaSpent(final String text) {
