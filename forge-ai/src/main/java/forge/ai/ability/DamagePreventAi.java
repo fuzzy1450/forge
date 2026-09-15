@@ -193,7 +193,8 @@ public class DamagePreventAi extends SpellAbilityAi {
                 }
             }
             if (target == null) {
-                target = combatants.get(0);
+                // no creature among our targetables (e.g. only a planeswalker or battle): shield the best of what we have
+                target = combatants.isEmpty() ? ComputerUtilCard.getBestAI(compTargetables) : combatants.get(0);
             }
         } else {
             target = ComputerUtilCard.getCheapestPermanentAI(targetables, sa, true);
