@@ -385,6 +385,12 @@ public class EffectAi extends SpellAbilityAi {
                 // before refusing at the no-AILogic fallthrough. doTriggerNoCost skips its
                 // AILogic pre-call for this logic, so a consult still draws exactly once.
                 return SpecialCardAi.CraftyCutpurse.consider(ai, sa);
+            } else if (logic.equals("ElectricSeaweed")) {
+                // Electric Seaweed's ETB. Routed after the randomReturn roll: the card has
+                // no RemoveDeck hint, so the stock engine evaluated this sub and drew here
+                // before refusing at the no-AILogic fallthrough. doTriggerNoCost runs this
+                // logic's consult once, so a consult still draws exactly once.
+                return SpecialCardAi.ElectricSeaweed.consider(ai, sa);
             } else if (logic.equals("YawgmothsWill")) {
                 return SpecialCardAi.YawgmothsWill.consider(ai, sa) ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             } else if (logic.startsWith("NeedCreatures")) {
@@ -662,6 +668,15 @@ public class EffectAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(final Player aiPlayer, final SpellAbility sa, final boolean mandatory) {
+        if ("ElectricSeaweed".equals(sa.getParam("AILogic"))) {
+            // One consult, one checkApiLogic pass, one randomReturn roll, as the stock
+            // no-AILogic consult drew (the generic pre-call below would draw a second
+            // on every refusal). The ETB sub is an AbilitySub, so canPlay has no
+            // restrictions to check; the real trigger is mandatory and untargeted, so
+            // at resolution a refusal still resolves it, as super.doTriggerNoCost would.
+            final AiAbilityDecision decision = canPlay(aiPlayer, sa);
+            return decision.willingToPlay() || !mandatory ? decision : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         // CraftyCutpurse skips the pre-call: its checkApiLogic runs once, in
         // super.doTriggerNoCost below, drawing the one randomReturn roll the stock
         // no-AILogic consult drew (a declining pre-call would draw a second).

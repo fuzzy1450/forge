@@ -1834,6 +1834,76 @@ public class SpecialCardAi {
         }
     }
 
+    // Electric Seaweed
+    // "When this creature enters, until end of turn, whenever another creature
+    // dies, this creature deals 1 damage to each non-Wall creature."
+    // Reached from EffectAi.checkApiLogic's AILogic$ ElectricSeaweed branch (the
+    // ETB Effect sub that AiController.checkETBEffects consults before the cast)
+    // after the randomReturn roll, and EffectAi.doTriggerNoCost runs that consult
+    // once for this logic, so each consult draws the one roll the stock no-AILogic
+    // refusal drew. The chain is symmetric and feeds itself: every death it causes
+    // deals another point to each non-Wall creature on both sides, and its likeliest
+    // first death is our own hasty ping on an X/1 in main 2. Never before combat
+    // damage is over (combat seeds and widens the chain beyond any snapshot, and the
+    // pinger loses nothing by waiting). Then run the chain to its fixpoint on the
+    // current battlefield, walls and indestructible creatures excluded, under two
+    // seeds: a death from outside the pool (1 + deaths so far) and a pool creature's
+    // own death (deaths so far, at least 1). The outside seed kills a superset of the
+    // pool seed: WillPlay when it kills none of our creatures; otherwise WillPlay only
+    // when both chains kill strictly more opposing creature value than ours, else
+    // CantPlayAi (never ping their lone 1/1 and lose our tokens). No RNG of its own.
+    public static class ElectricSeaweed {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (ph.getPhase() == null || ph.getPhase().isBefore(PhaseType.COMBAT_END)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            CardCollection pool = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield),
+                    "Creature.nonWall", ai, host, sa);
+            pool = CardLists.getNotKeyword(pool, Keyword.INDESTRUCTIBLE);
+
+            final CardCollection deadExternal = chain(pool, host, true);
+            final CardCollection oursExternal = CardLists.filterControlledBy(deadExternal, ai);
+            if (oursExternal.isEmpty()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            if (ComputerUtilCard.evaluateCreatureList(CardLists.filterControlledBy(deadExternal, ai.getOpponents()))
+                    <= ComputerUtilCard.evaluateCreatureList(oursExternal)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection deadInPool = chain(pool, host, false);
+            if (ComputerUtilCard.evaluateCreatureList(CardLists.filterControlledBy(deadInPool, ai.getOpponents()))
+                    <= ComputerUtilCard.evaluateCreatureList(CardLists.filterControlledBy(deadInPool, ai))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // After k deaths every surviving pool creature has taken k damage, plus one
+        // for the seed's death when the seed came from outside the pool.
+        private static CardCollection chain(final CardCollection pool, final Card host, final boolean externalSeed) {
+            final CardCollection dead = new CardCollection();
+            boolean grew = true;
+            while (grew) {
+                grew = false;
+                final int dmg = Math.max(1, dead.size() + (externalSeed ? 1 : 0));
+                for (final Card c : pool) {
+                    if (!dead.contains(c) && ComputerUtilCombat.predictDamageTo(c, dmg, host, false)
+                            >= ComputerUtilCombat.getDamageToKill(c, false)) {
+                        dead.add(c);
+                        grew = true;
+                    }
+                }
+            }
+            return dead;
+        }
+    }
+
     // Electrostatic Pummeler
     public static class ElectrostaticPummeler {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
