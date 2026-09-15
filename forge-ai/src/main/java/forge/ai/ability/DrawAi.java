@@ -234,9 +234,56 @@ public class DrawAi extends SpellAbilityAi {
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
         if (targetAI(ai, sa, sa.isTrigger() && sa.getHostCard().isInPlay())) {
+            // Tataru Taru's tempo floor on the symmetric-draw approval: judged only after targetAI
+            // approved and only off resolution, so every stock path and every random draw is unchanged
+            if ((!sa.isTrigger() || !sa.getHostCard().isInPlay()) && isOwnDrawThenOptionalOpponentDraw(sa)
+                    && castDisplacesManaSource(ai, sa.getHostCard())) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
         return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+    }
+
+    /**
+     * Tataru Taru's shape: an opponent-targeted Draw sub that is the opponent's option
+     * (OptionalDecider$ Opponent) under our own untargeted Draw. Only Tataru Taru's DBDraw
+     * matches in cardsfolder (Phelddagrif, Questing Phelddagrif and Soldevi Heretic have
+     * the same sub under a non-Draw parent).
+     */
+    private static boolean isOwnDrawThenOptionalOpponentDraw(final SpellAbility sa) {
+        if (!sa.usesTargeting() || !"Opponent".equals(sa.getParam("OptionalDecider"))) {
+            return false;
+        }
+        final SpellAbility parent = sa.getParent();
+        return parent != null && parent.getApi() == ApiType.Draw && !parent.usesTargeting()
+                && "You".equals(parent.getParamOrDefault("Defined", "You"));
+    }
+
+    /**
+     * Tempo floor: on our turn, casting the host now would take the mana that a castable
+     * nonland mana source in hand needs (a 2-mana creature outranks a 2-mana rock in
+     * saComparator, so without this the draw creature displaces the rock on turn 2).
+     */
+    private static boolean castDisplacesManaSource(final Player ai, final Card host) {
+        if (host == null || !ai.getGame().getPhaseHandler().isPlayerTurn(ai)) {
+            return false;
+        }
+        // one per untapped source: getAvailableManaEstimate counts every token of Produced$
+        // ("Combo W B" = 3), so a dual land would read as 3 mana and the floor would never fire
+        final int available = ComputerUtilMana.getAvailableManaSources(ai, true).size();
+        final int hostCmc = host.getCMC();
+        for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+            if (c.getId() == host.getId() || c.isLand() || c.getManaAbilities().isEmpty()) {
+                continue;
+            }
+            final int cmc = c.getCMC();
+            if (cmc <= available && hostCmc + cmc > available) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
