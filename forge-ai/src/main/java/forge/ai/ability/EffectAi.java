@@ -379,6 +379,13 @@ public class EffectAi extends SpellAbilityAi {
             } else if (logic.equals("Burn")) {
                 SpellAbility burn = sa.getSubAbility();
                 return SpellApiToAi.Converter.get(burn).canPlayWithSubs(ai, burn).willingToPlay() ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            } else if (logic.equals("CracklingSpellslinger")) {
+                // Crackling Spellslinger's ETB storm grant. Routed after the randomReturn
+                // roll: the card has no RemoveDeck hint, so the stock engine evaluated this
+                // sub and drew here before refusing at the no-AILogic fallthrough.
+                // doTriggerNoCost skips its AILogic pre-call for this logic, so a consult
+                // still draws exactly once.
+                return SpecialCardAi.CracklingSpellslinger.consider(ai, sa) ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             } else if (logic.equals("CraftyCutpurse")) {
                 // Crafty Cutpurse's ETB. Routed after the randomReturn roll: the card has
                 // no RemoveDeck hint, so the stock engine evaluated this sub and drew here
@@ -680,7 +687,8 @@ public class EffectAi extends SpellAbilityAi {
         // CraftyCutpurse skips the pre-call: its checkApiLogic runs once, in
         // super.doTriggerNoCost below, drawing the one randomReturn roll the stock
         // no-AILogic consult drew (a declining pre-call would draw a second).
-        if (sa.hasParam("AILogic") && !"CraftyCutpurse".equals(sa.getParam("AILogic"))) {
+        if (sa.hasParam("AILogic") && !"CraftyCutpurse".equals(sa.getParam("AILogic"))
+                && !"CracklingSpellslinger".equals(sa.getParam("AILogic"))) { // same one-roll parity
             if (canPlay(aiPlayer, sa).willingToPlay()) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }

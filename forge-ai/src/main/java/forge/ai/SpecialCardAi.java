@@ -1231,6 +1231,111 @@ public class SpecialCardAi {
         }
     }
 
+    // Crackling Spellslinger
+    // "When Crackling Spellslinger enters, if you cast it, the next instant or sorcery
+    // spell you cast this turn has storm." Reached from EffectAi.checkApiLogic's
+    // AILogic$ CracklingSpellslinger branch (the ETB Effect sub that
+    // AiController.checkETBEffects consults before the cast) after the randomReturn
+    // roll, and EffectAi.doTriggerNoCost skips its AILogic pre-call for this logic, so
+    // each consult draws the one roll the stock no-AILogic refusal drew. The real
+    // trigger is mandatory at resolution, so this only decides the cast. Approves:
+    // a storm cast in our own main phase with an empty stack and a payable instant or
+    // sorcery follow-up; a body-only cast at the end step before our turn when no
+    // follow-up is in hand (the storm could never matter); a cast that saves the card
+    // from cleanup discard; an emergency blocker when the attack would kill us.
+    // Never at the opponent's upkeep, draw or main phase, and never in our own main
+    // phase without a follow-up. Draws no RNG: lifeInDanger rolls MyRandom, so
+    // lifeInSeriousDanger is used; and every approval first passes an RNG-free estimate
+    // of Spellslinger's own cost (mana count, red sources), because an approval goes on
+    // to canPayCost, whose mana-reservation roll (ComputerUtilMana.isManaSourceReserved)
+    // the stock veto never reached.
+    public static class CracklingSpellslinger {
+        public static boolean consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (ph.getPhase() == null) {
+                return false;
+            }
+            final int avail = ComputerUtilMana.getAvailableManaEstimate(ai, true); // untapped only, RNG-free
+            final int own = host.getCMC();
+            if (avail < own || !hasRedSources(ai, host)) {
+                return false;
+            }
+
+            // 1. Storm window: the follow-up fits in the untapped mana on top of this
+            //    creature, and gets at least one copy (this creature is on the storm count).
+            if (ph.isPlayerTurn(ai) && ph.getPhase().isMain() && game.getStack().isEmpty()
+                    && hasFollowUp(ai, avail - own)) {
+                return true;
+            }
+            // 2. Body-only windows with nothing else to spend the mana on.
+            if (!ph.isPlayerTurn(ai) && ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn())
+                    && !hasFollowUp(ai, -1)) {
+                return true; // no follow-up to storm, and the mana untaps next step anyway
+            }
+            if (ph.is(PhaseType.END_OF_TURN, ai) && !ai.isUnlimitedHandSize()
+                    && ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize()) {
+                return true; // would be discarded in cleanup otherwise
+            }
+            // 3. Emergency blocker, only when the attack would kill us.
+            final Combat combat = game.getCombat();
+            return combat != null && !ph.isPlayerTurn(ai) && ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                    && !combat.getAttackersOf(ai).isEmpty() && ComputerUtilCombat.lifeInSeriousDanger(ai, combat);
+        }
+
+        // An instant or sorcery in hand that the storm grant could copy: a real mana cost, no X
+        // (it can't be sized here), and not a counterspell (never cast proactively).
+        // budget < 0 accepts any cost.
+        private static boolean hasFollowUp(final Player ai, final int budget) {
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (!c.isInstant() && !c.isSorcery()) {
+                    continue; // Spellslinger itself is a creature and never counts
+                }
+                final ManaCost follow = c.getManaCost();
+                final SpellAbility first = c.getFirstSpellAbility();
+                if (follow == null || follow.isNoCost() || follow.countX() > 0
+                        || first == null || first.getApi() == ApiType.Counter) {
+                    continue;
+                }
+                if (budget < 0 || follow.getCMC() <= budget) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Enough red for Spellslinger's own red pips: floating red plus untapped sources whose
+        // printed production could be red. Reads only the Produced text (never mana(sa), which
+        // can run special-mana handling), so it errs optimistic.
+        private static boolean hasRedSources(final Player ai, final Card host) {
+            final ManaCost cost = host.getManaCost();
+            final int needed = cost == null ? 0 : cost.getShardCount(forge.card.mana.ManaCostShard.RED);
+            int red = ai.getManaPool().getAmountOfColor(MagicColor.RED);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (red >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("R") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        red++;
+                        break;
+                    }
+                }
+            }
+            return red >= needed;
+        }
+    }
+
     // Crafty Cutpurse
     // "When Crafty Cutpurse enters, each token that would be created under an
     // opponent's control this turn is created under your control instead."
