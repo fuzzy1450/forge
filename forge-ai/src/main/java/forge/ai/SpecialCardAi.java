@@ -2069,6 +2069,108 @@ public class SpecialCardAi {
         }
     }
 
+    // Mass Diminish
+    //
+    // Until our next turn, creatures target player controls have base power and
+    // toughness 1/1. AnimateAllAi.canPlay has no logic for it and never picks the
+    // required player target (AILogic$ Always would pay for the spell and then
+    // have MagicStack.add refuse it for failing to target). Target only an
+    // opponent, only on our own turn, and only when the shrink is worth a card:
+    // - Defensive: the creatures that can attack us next turn lose at least
+    //   MIN_POWER_REMOVED base power in total, and at least one of them loses
+    //   MIN_SINGLE_CUT or more (a board of 2/2 tokens is not worth it). The
+    //   effect lasts through their whole turn.
+    // - Offensive: before attackers, we have an attacker with power 2 or more,
+    //   and the opponent's non-deathtouch creatures that can block one of those
+    //   attackers (flying, reach, shadow and CantBlockBy statics included) in a
+    //   block that matters today lose at least MIN_TOUGHNESS_REMOVED toughness.
+    // Base P/T is read with getCurrentPower/getCurrentToughness, so counters and
+    // pumps, which the spell does not touch, are not counted. A creature already
+    // at 1/1 counts nothing, so a second cast or the flashback right after the
+    // first never fires.
+    public static class MassDiminish {
+        public static final int MIN_POWER_REMOVED = 4;
+        public static final int MIN_SINGLE_CUT = 2;
+        public static final int MIN_TOUGHNESS_REMOVED = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+
+            // Routing through AnimateAllAi.canPlay's name gate bypasses the base
+            // class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+
+            // Elsha of the Infinite lets this be cast from the top of the library
+            // as though it had flash; "until your next turn" cast on an opponent's
+            // turn expires before that turn's remaining combat, so only ever cast
+            // it on our own turn.
+            if (!ph.isPlayerTurn(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final CardCollection attackers = new CardCollection();
+            if (ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)) {
+                for (Card c : ai.getCreaturesInPlay()) {
+                    if (c.getNetPower() >= 2 && CombatUtil.canAttack(c)) {
+                        attackers.add(c);
+                    }
+                }
+            }
+
+            Player best = null;
+            int bestScore = 0;
+            for (Player opp : ai.getOpponents()) {
+                if (!sa.canTarget(opp)) {
+                    continue;
+                }
+                int powerRemoved = 0, biggestCut = 0, toughnessRemoved = 0;
+                for (Card c : opp.getCreaturesInPlay()) {
+                    if (ComputerUtilCombat.canAttackNextTurn(c, ai)) {
+                        // may be -1 for a 0-power body: it grows
+                        int cut = c.getCurrentPower() - 1;
+                        powerRemoved += cut;
+                        biggestCut = Math.max(biggestCut, cut);
+                    }
+                    if (!attackers.isEmpty() && !c.hasKeyword(Keyword.DEATHTOUCH) && blocksAnAttacker(c, attackers)) {
+                        toughnessRemoved += Math.max(0, c.getCurrentToughness() - 1);
+                    }
+                }
+                final boolean defensive = powerRemoved >= MIN_POWER_REMOVED && biggestCut >= MIN_SINGLE_CUT;
+                final boolean offensive = toughnessRemoved >= MIN_TOUGHNESS_REMOVED;
+                if (!defensive && !offensive) {
+                    continue;
+                }
+                final int score = Math.max(0, powerRemoved) + toughnessRemoved;
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = opp;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.resetTargets();
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // A block counts only if the blocker can legally block one of our
+        // attackers (CombatUtil.canBlock(attacker, blocker) also excludes tapped
+        // blockers) and the block matters today: it survives that attacker or
+        // kills it. Chump blockers that are already dead count nothing.
+        private static boolean blocksAnAttacker(final Card blocker, final CardCollection attackers) {
+            for (Card a : attackers) {
+                if (CombatUtil.canBlock(a, blocker)
+                        && (blocker.getNetToughness() > a.getNetPower() || blocker.getNetPower() >= a.getNetToughness())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Maze's End
     public static class MazesEnd {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
