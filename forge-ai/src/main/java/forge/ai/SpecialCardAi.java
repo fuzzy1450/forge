@@ -3220,6 +3220,60 @@ public class SpecialCardAi {
         }
     }
 
+    // Predators' Hour: until end of turn our creatures gain menace and
+    // "whenever this creature deals combat damage to a player, exile the top
+    // card of that player's library face down; you may look at and play it".
+    // All of its value is this turn's combat damage to players, so it is cast
+    // only before our own attack, and only when the AI's own attack plan has
+    // an untaxed attacker that connects even if the defender double-blocks.
+    public static class PredatorsHour {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+
+            // Routing through AnimateAllAi.canPlay's name gate bypasses the base
+            // class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            // Our turn, before attackers are declared, nothing on the stack.
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // No creatures, no attack. Decline before building the predicted
+            // combat, which can draw MyRandom; the stock refusal drew nothing.
+            if (ai.getCreaturesInPlay().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // The AI's own attack plan (cached per priority pass, and empty after
+            // declare-attackers because CombatUtil.canAttack refuses then).
+            final Combat predicted = ((PlayerControllerAi) ai.getController()).getAi().getPredictedCombat();
+            final Map<Player, Integer> swingsAt = new HashMap<>();
+            for (Card c : predicted.getAttackers()) {
+                GameEntity def = predicted.getDefenderByAttacker(c);
+                // The trigger needs combat damage to a PLAYER. Attackers facing an
+                // attack tax (Ghostly Prison, Propaganda, ...) are not counted: the
+                // prediction ignores attack costs, and our own 1B may be exactly
+                // the mana that would have paid the tax.
+                if (def instanceof Player p && c.getNetCombatDamage() > 0
+                        && CombatUtil.getAttackCost(game, c, p) == null) {
+                    swingsAt.merge(p, 1, Integer::sum);
+                }
+            }
+            for (Map.Entry<Player, Integer> e : swingsAt.entrySet()) {
+                int blockers = CardLists.count(e.getKey().getCreaturesInPlay(), c -> CombatUtil.canBlock(c));
+                // Menace: each attacker they stop costs them two blockers, so at
+                // least (attackers - blockers/2) connect whatever they do.
+                if (e.getValue() - blockers / 2 >= 1) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+    }
+
     // Price of Progress
     public static class PriceOfProgress {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

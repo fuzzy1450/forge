@@ -21,6 +21,13 @@ public class AnimateAllAi extends SpellAbilityAi {
         }
         String logic = sa.getParamOrDefault("AILogic", "");
 
+        if ("Predators' Hour".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Menace plus a steal-on-combat-damage trigger for our own team,
+            // judged against the AI's own attack plan. Every other AnimateAll
+            // card takes exactly the path it took before this branch.
+            return SpecialCardAi.PredatorsHour.consider(aiPlayer, sa);
+        }
+
         if ("CreatureAdvantage".equals(logic) && !aiPlayer.getCreaturesInPlay().isEmpty()) {
             // TODO: improve this or implement a better logic for abilities like Oko, the Trickster ultimate
             for (Card c : aiPlayer.getCreaturesInPlay()) {
