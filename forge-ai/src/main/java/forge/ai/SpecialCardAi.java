@@ -3119,6 +3119,13 @@ public class SpecialCardAi {
             if (gain.getNetPower() <= 0 || gain.getEnchantedBy().anyMatch(CardPredicates.isController(ai))) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
+            // A creature whose power or toughness is characteristic-defined by a count relative
+            // to its controller (Bronze Guardian / Master of Etherium: artifacts you control,
+            // Psychosis Crawler: cards in your hand, Rubblehulk: lands you control) is scored at
+            // the opponent's count and shrinks when it changes sides; the evaluator cannot see that.
+            if (hasControllerRelativePT(gain)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
             final int gainValue = ComputerUtilCard.evaluateCreature(gain);
             if (gainValue < MIN_GAIN_VALUE) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
@@ -3161,6 +3168,31 @@ public class SpecialCardAi {
                 }
                 for (final String part : affected.split(",")) {
                     if (!SELF_ONLY_AFFECTED.matcher(part.trim()).matches()) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // A power or toughness characteristic-defined by a count relative to the controller
+        // ("You"/"Opp" in the SetPower/SetToughness expression or its SVar) is read at the
+        // current controller's count, so the creature evaluator overprices it on the side
+        // that is about to lose it.
+        private static boolean hasControllerRelativePT(final Card c) {
+            for (final StaticAbility stAb : c.getStaticAbilities()) {
+                if (!stAb.isIntrinsic() || !stAb.isCharacteristicDefining()
+                        || !stAb.checkMode(forge.game.staticability.StaticAbilityMode.Continuous)) {
+                    continue;
+                }
+                for (final String param : new String[] {"SetPower", "SetToughness"}) {
+                    if (!stAb.hasParam(param)) {
+                        continue;
+                    }
+                    final String name = stAb.getParam(param);
+                    final String svar = c.getSVar(name);
+                    final String expr = svar == null || svar.isEmpty() ? name : svar;
+                    if (expr.contains("You") || expr.contains("Opp")) {
                         return true;
                     }
                 }
