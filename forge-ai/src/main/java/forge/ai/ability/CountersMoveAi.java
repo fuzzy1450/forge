@@ -143,6 +143,20 @@ public class CountersMoveAi extends SpellAbilityAi {
 
             final Card host = sa.getHostCard();
 
+            // "Move any number of +1/+1 counters from among <ValidSource> onto <Defined>" (Aetherborn
+            // Marauder). The count per source is picked at resolution by chooseNumber below, which may
+            // answer zero and never trades a source's life for the move, so running the trigger costs
+            // nothing. Refusing it (the no-target CantPlayAi at the end of this branch) made
+            // AiController.checkETBEffects veto the whole permanent with BadEtbEffects.
+            if (sa.hasParam("ValidSource") && "Any".equals(sa.getParam("CounterNum"))
+                    && "P1P1".equals(sa.getParam("CounterType"))) {
+                final List<Card> dests = AbilityUtils.getDefinedCards(host, sa.getParam("Defined"), sa);
+                if (!dests.isEmpty() && dests.get(0).getController().equals(ai)) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
             final String type = sa.getParam("CounterType");
             final CounterType cType = "Any".equals(type) ? null : CounterType.getType(type);
 
@@ -484,6 +498,43 @@ public class CountersMoveAi extends SpellAbilityAi {
     // used when selecting how many counters to move
     @Override
     public int chooseNumber(Player player, SpellAbility sa, int min, int max, Map<String, Object> params) {
+        // "Move any number of +1/+1 counters from among <ValidSource>" (Aetherborn Marauder): zero is a
+        // legal answer, so take counters from this source only while the pair's evaluation strictly
+        // improves, and never so many that the source dies now (marked damage, which LKI copies drop)
+        // or at cleanup (until-end-of-turn toughness boosts wear off). Gated on the script's own params,
+        // not the per-type map, so Slippery Bogbonder (CounterType$ All) keeps taking max.
+        if (sa.hasParam("ValidSource") && "Any".equals(sa.getParam("CounterNum"))
+                && "P1P1".equals(sa.getParam("CounterType")) && params != null
+                && params.get("CounterType") instanceof CounterType cType && cType.is(CounterEnumType.P1P1)
+                && params.get("Source") instanceof Card src && params.get("Target") instanceof Card dest) {
+            if (!src.isCreature() || !dest.isCreature()
+                    || !src.getController().equals(player) || !dest.getController().equals(player)) {
+                return min;
+            }
+            final int marked = src.getDamage();
+            final int tempT = src.getTempToughnessBoost();
+            final int base = ComputerUtilCard.evaluateCreature(src) + ComputerUtilCard.evaluateCreature(dest);
+            int best = min;
+            int bestGain = 0;
+            for (int n = Math.max(1, min); n <= max; n++) {
+                final Card srcCopy = CardCopyService.getLKICopy(src);
+                // can't use subtract on Copy
+                srcCopy.setCounters(cType, src.getCounters(cType) - n);
+                final int t = srcCopy.getNetToughness();
+                if (t <= marked || t - tempT <= 0) {
+                    break; // taking n kills the source now or at cleanup
+                }
+                final Card destCopy = CardCopyService.getLKICopy(dest);
+                destCopy.setCounters(cType, dest.getCounters(cType) + n);
+                final int gain = ComputerUtilCard.evaluateCreature(srcCopy)
+                        + ComputerUtilCard.evaluateCreature(destCopy) - base;
+                if (gain > bestGain) {
+                    best = n;
+                    bestGain = gain;
+                }
+            }
+            return best;
+        }
         // TODO improve logic behind it
         // like keeping the last counter on a 0/0 creature
         return max;
