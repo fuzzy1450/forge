@@ -2931,6 +2931,88 @@ public class SpecialCardAi {
         }
     }
 
+    // Imposing Grandeur
+    // Each player may discard their hand and draw cards equal to the greatest
+    // mana value of a commander they own on the battlefield or in the command
+    // zone. Symmetric, so: cast only when OUR refill is large (net +3 cards
+    // after discarding everything else in hand), we can draw all of it
+    // without decking, and no opponent who would sensibly accept nets as many
+    // cards as we do (our gain already excludes Grandeur itself, so a tie is
+    // a relative card loss). A vetoed cast is always CantPlayAi, never
+    // WaitForMain2. Each chooser (us included, at resolution) takes the wheel
+    // only for a net gain. Card-local SVar:AIPriorityModifier:-4 sorts it at
+    // 5 - 4 = 1, behind every creature and every spell of mana value 2 or
+    // more, so main 2 spends the mana first and the wheel is re-judged on
+    // the smaller hand.
+    public static class ImposingGrandeur {
+        public static final int MIN_CAST_GAIN = 3;
+        public static final int MIN_TAKE_GAIN = 1;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int ourDraw = commanderDraw(ai);
+            final int ourHand = handExcluding(ai, host);
+            final int ourGain = ourDraw - ourHand;
+            if (ourGain < MIN_CAST_GAIN || !canRefill(ai, ourDraw)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final Player opp : ai.getOpponents()) {
+                if (wouldTake(opp, host) && commanderDraw(opp) - handExcluding(opp, host) >= ourGain) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // Something else still in hand: give main 1 to it first (DrawAi's
+            // main-2 idiom), so the wheel does not throw away a spell we could cast.
+            if (ourHand > 0 && ai.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        public static SpellAbility chooseWheel(final Player chooser, final Card host, final List<SpellAbility> spells) {
+            SpellAbility yes = null, no = null;
+            for (final SpellAbility sp : spells) {
+                if (sp.hasParam("NoteCardsFor")) {
+                    yes = sp;
+                } else {
+                    no = sp;
+                }
+            }
+            if (yes == null || no == null) {
+                return spells.get(0); // unexpected script shape: stock behaviour
+            }
+            return wouldTake(chooser, host) ? yes : no;
+        }
+
+        static boolean wouldTake(final Player p, final Card host) {
+            final int draw = commanderDraw(p);
+            return draw - handExcluding(p, host) >= MIN_TAKE_GAIN && canRefill(p, draw);
+        }
+
+        // mirrors SVar:X (Count$ValidBattlefield,Command Card.IsCommander+RememberedPlayerOwn$GreatestCardManaCost)
+        static int commanderDraw(final Player p) {
+            int best = 0;
+            for (final Card c : p.getGame().getCardsIn(ZoneType.listValueOf("Battlefield,Command"))) {
+                if (c.isCommander() && p.equals(c.getOwner())) {
+                    best = Math.max(best, c.getCMC());
+                }
+            }
+            return best;
+        }
+
+        static int handExcluding(final Player p, final Card host) {
+            return CardLists.count(p.getCardsIn(ZoneType.Hand), c -> !c.equals(host));
+        }
+
+        // draws the whole amount (no Narset/Spirit-style cap) and survives the next draw step
+        static boolean canRefill(final Player p, final int draw) {
+            return draw > 0 && p.canDrawAmount(draw) && p.getCardsIn(ZoneType.Library).size() > draw;
+        }
+    }
+
     // Invert Polarity
     // Cast only in response to an opponent's spell in Commandeer's window
     // (untargeted anywhere in the chain, no "...All" api, CMC floor): winning

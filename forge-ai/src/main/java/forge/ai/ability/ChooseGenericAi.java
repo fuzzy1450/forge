@@ -66,6 +66,13 @@ public class ChooseGenericAi extends SpellAbilityAi {
             // card takes exactly the path it took before.
             return SpecialCardAi.SeizeTheSpotlight.consider(ai, sa);
         }
+        if ("Imposing Grandeur".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Symmetric "each player may wheel into their commander's MV", no AILogic,
+            // so the fallthrough below refused it outright. Judged whole in
+            // SpecialCardAi.ImposingGrandeur (our hand, library and the opponents' refill);
+            // every other GenericChoice card takes exactly the path it took before.
+            return SpecialCardAi.ImposingGrandeur.consider(ai, sa);
+        }
         if (sa.hasParam("AILogic")) {
             // This is equivalent to what was here before but feels bad
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
@@ -110,6 +117,11 @@ public class ChooseGenericAi extends SpellAbilityAi {
     @Override
     public SpellAbility chooseSingleSpellAbility(Player player, SpellAbility sa, List<SpellAbility> spells, Map<String, Object> params) {
         Card host = sa.getHostCard();
+        if ("Imposing Grandeur".equals(host.getName())) {
+            // Each player's own "discard my hand?" answer: yes only for a real refill
+            // (the logic == null fallthrough below answers "Discard" for every player, always).
+            return SpecialCardAi.ImposingGrandeur.chooseWheel(player, host, spells);
+        }
         final Game game = host.getGame();
         final String logic = sa.getParam("AILogic");
         if (logic == null) {
