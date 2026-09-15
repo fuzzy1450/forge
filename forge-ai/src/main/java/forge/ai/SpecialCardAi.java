@@ -332,6 +332,98 @@ public class SpecialCardAi {
         }
     }
 
+    // Borrowing 100,000 Arrows (and Theft of Dreams, the identical script)
+    // Draw a card for each tapped creature target opponent controls. We draw (Defined$ You); the
+    // target only sizes X, so target the opponent with the most tapped creatures, sizing each one
+    // through the engine's own X. Cast only when the draw leaves LIBRARY_MARGIN cards behind, at
+    // least MIN_KEPT of it survives cleanup's discard to hand size, and no draw thief or draw
+    // punisher at the table (ours included: an Ob Nixilis emblem can be ours) sees the draws.
+    public static class BorrowingArrows {
+        public static final int MIN_KEPT = 2;        // the spell itself is a card: 2 kept = +1 card
+        public static final int LIBRARY_MARGIN = 3;  // DrawAi's own margin
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final Card source = sa.getHostCard();
+            sa.resetTargets();
+            // draw-limit statics (Narset, Parter of Veils; Spirit of the Labyrinth) after our draw step
+            if (!ai.canDrawAmount(MIN_KEPT)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // size the draw per opponent exactly as resolution will: set the target, evaluate
+            // NumCards (Count$Valid Creature.tapped+TargetedPlayerCtrl), clear
+            Player best = null;
+            int bestN = 0;
+            for (final Player opp : ai.getOpponents()) {
+                if (!sa.canTarget(opp)) {
+                    continue; // hexproof / shroud players
+                }
+                sa.getTargets().add(opp);
+                final int n = AbilityUtils.calculateAmount(source, sa.getParam("NumCards"), sa);
+                sa.resetTargets();
+                if (n > bestN) {
+                    best = opp;
+                    bestN = n;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            // don't deck ourselves (DrawAi's library-3 margin)
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (bestN >= library.size() - LIBRARY_MARGIN && !ai.isCardInPlay("Laboratory Maniac")) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // count only cards we keep past our own cleanup (the sorcery leaves the hand when cast)
+            int kept = bestN;
+            if (!ai.isUnlimitedHandSize()) {
+                final int handAfterCast = ai.getCardsIn(ZoneType.Hand).size() - (source.isInZone(ZoneType.Hand) ? 1 : 0);
+                kept = Math.min(bestN, Math.max(0, ai.getMaxHandSize() - handAfterCast));
+            }
+            if (kept < MIN_KEPT) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // the top card stands in for the drawn cards; an empty library gets here only with Laboratory Maniac
+            final Card probe = library.isEmpty() ? source : library.getFirst();
+            if (drawIsStolenOrPunished(ai, game, probe)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // A draw thief (Notion Thief, Hullbreacher, Chains of Mephistopheles; Alms Collector is
+        // Event$ DrawCards) or draw punisher (Fate Unraveler, Nekusar, Spiteful Visions, Orcish
+        // Bowmasters, an Ob Nixilis Reignited emblem) on the battlefield or in the Command zone, under
+        // ANY controller, that works where it sits (zonesCheck: a commander waiting in the Command zone
+        // does not count) and whose ValidPlayer/ValidCard match us and our drawn card, tested the way
+        // ReplaceDraw/ReplaceDrawCards.canReplace and TriggerDrawn.performTest test (an absent param
+        // matches). An opponent's own Card.YouOwn draw trigger (Psychosis Crawler) does not match.
+        private static boolean drawIsStolenOrPunished(final Player ai, final Game game, final Card probe) {
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Drawn && t.zonesCheck(game.getZoneOf(c)) && t.requirementsCheck(game)
+                            && t.matchesValidParam("ValidCard", probe) && t.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.zonesCheck(game.getZoneOf(c)) && re.requirementsCheck(game)
+                            && re.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Brain in a Jar
     public static class BrainInAJar {
         public static boolean consider(final Player ai, final SpellAbility sa) {

@@ -57,6 +57,13 @@ public class DrawAi extends SpellAbilityAi {
             // refuses even that, so the spell could never be cast.
             return SpecialCardAi.TradeSecrets.consider(ai, sa);
         }
+        if (("Borrowing 100,000 Arrows".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                || "Theft of Dreams".equals(ComputerUtilAbility.getAbilitySourceName(sa))) && !(sa instanceof AbilitySub)) {
+            // WE draw (Defined$ You); the opponent target only sizes X. targetAI computes X before
+            // any target exists (always 0), never targets an opponent for a draw of ours, and the
+            // veto below refuses an opponent target anyway, so the spell could never be cast.
+            return SpecialCardAi.BorrowingArrows.consider(ai, sa);
+        }
         if (!targetAI(ai, sa, false)) {
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
