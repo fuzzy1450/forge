@@ -2096,6 +2096,67 @@ public class SpecialCardAi {
         }
     }
 
+    // Reverse the Sands
+    //
+    // LifeSetAi refuses every Redistribute SetLife outright; this is the cast
+    // decision for this one card, reached only in our own main 2 (LifeSetAi's
+    // phase gate runs first). Resolution is already right for the caster:
+    // AiController.chooseNumber (SetLife) takes the highest total for us and
+    // the lowest for opponents, and a total that became illegal is filtered
+    // out, so the worst resolution is keeping our own life.
+    public static class ReverseTheSands {
+        // An 8-mana sorcery: the swap must be worth a turn's development.
+        public static final int MIN_GAIN_ANY = 20;      // opponent far ahead: always worth it
+        public static final int MIN_GAIN = 10;          // with our life at or below half of starting life
+        public static final int MIN_GAIN_IN_DANGER = 5; // the swap outruns the next combat's life threat
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // Gaining must actually be gaining (canGainLife, Tainted Remedy-style
+            // LoseLife and Lich-style NoLife/LichDraw replacements); otherwise
+            // the redistribution strips our higher total and the spell is a
+            // no-op or worse.
+            if (!ComputerUtil.lifegainPositive(ai, sa.getHostCard())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Swap with the highest-life opponent whose life can go down (a
+            // Platinum Emperion-style "life total can't change" makes it illegal).
+            Player best = null;
+            for (Player opp : ai.getOpponents()) {
+                if (!opp.canLoseLife()) {
+                    continue;
+                }
+                if (best == null || opp.getLife() > best.getLife()) {
+                    best = opp;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final int myLife = ai.getLife();
+            final int gain = best.getLife() - myLife;
+            if (gain >= MIN_GAIN_ANY) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            if (gain >= MIN_GAIN && myLife <= ai.getStartingLife() / 2) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            // The deterministic branches come first: the danger check builds a
+            // predicted combat and draws RNG, so it runs only when the spell is
+            // affordable. aiLifeInDanger also fires on commander damage, poison
+            // and MustBeBlocked attackers, which a life swap does not answer, so
+            // the swapped total (modelled as a payment of -gain) must clear it.
+            if (gain >= MIN_GAIN_IN_DANGER
+                    && ComputerUtilCost.canPayCost(sa, ai, false)
+                    && ComputerUtil.aiLifeInDanger(ai, false, 0)
+                    && !ComputerUtil.aiLifeInDanger(ai, false, -gain)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+    }
+
     public static class SarkhanTheMad {
         public static AiAbilityDecision considerDig(final Player ai, final SpellAbility sa) {
             if (sa.getHostCard().getCounters(CounterEnumType.LOYALTY) == 1) {

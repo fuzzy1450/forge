@@ -31,6 +31,11 @@ public class LifeSetAi extends SpellAbilityAi {
 
         // TODO add AI logic for that
         if (sa.hasParam("Redistribute")) {
+            if ("Reverse the Sands".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // Judged in SpecialCardAi.ReverseTheSands; resolution already picks
+                // max-for-caster / min-for-opponents (AiController.chooseNumber, SetLife).
+                return SpecialCardAi.ReverseTheSands.consider(ai, sa);
+            }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
