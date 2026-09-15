@@ -41,12 +41,15 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.player.PlayerCollection;
 import forge.game.player.PlayerPredicates;
+import forge.game.replacement.ReplacementEffect;
+import forge.game.replacement.ReplacementType;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityPredicates;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.spellability.SpellPermanent;
 import forge.game.staticability.StaticAbility;
+import forge.game.staticability.StaticAbilityCantDraw;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
@@ -124,6 +127,90 @@ public class SpecialCardAi {
                 }
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+    }
+
+    // Biomantic Mastery
+    // Draw a card for each creature target player controls, then draw a card for each creature
+    // ANOTHER target player controls. Both draws go to us (Defined$ You); the two targets only
+    // measure the count, so target the two players with the most creatures. Cast only when seven
+    // mana buys real, keepable cards: no opposing draw thief or draw punisher sees the draws, the
+    // draw that actually arrives (after draw-limit statics) is at least MIN_TOTAL_DRAW, at least
+    // MIN_KEPT of it survives cleanup's discard to hand size, and LIBRARY_MARGIN cards stay behind.
+    public static class BiomanticMastery {
+        public static final int MIN_TOTAL_DRAW = 4;  // seven mana plus the card itself: net +3 or better
+        public static final int MIN_KEPT = 3;        // drawn cards that fit under the maximum hand size
+        public static final int LIBRARY_MARGIN = 10; // cards left in the library after the draw
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AbilitySub second = sa.getSubAbility();
+            if (!sa.usesTargeting() || second == null || second.getApi() != ApiType.Draw || !second.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.resetTargets();
+            second.resetTargets();
+
+            final Card host = sa.getHostCard();
+            if (drawIsStolenOrPunished(ai, host)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final List<Player> ranked = Lists.newArrayList(ai.getGame().getPlayers().filter(PlayerPredicates.isTargetableBy(sa)));
+            if (ranked.size() < 2) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed); // e.g. a hexproof opponent
+            }
+            ranked.sort((p1, p2) -> Integer.compare(p2.getCreaturesInPlay().size(), p1.getCreaturesInPlay().size()));
+            sa.getTargets().add(ranked.get(0));
+            if (!second.canTarget(ranked.get(1))) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            second.getTargets().add(ranked.get(1));
+
+            // the engine's own X for each half, now that each half has its target
+            final int total = AbilityUtils.calculateAmount(host, sa.getParam("NumCards"), sa)
+                    + AbilityUtils.calculateAmount(host, second.getParam("NumCards"), second);
+            // draw-limit statics (Narset, Parter of Veils; Leovold) cap what actually arrives
+            final int effective = StaticAbilityCantDraw.canDrawAmount(ai, total);
+            final int handAfterCast = ai.getCardsIn(ZoneType.Hand).size() - (host.isInZone(ZoneType.Hand) ? 1 : 0);
+            final int kept = ai.isUnlimitedHandSize() ? effective
+                    : Math.min(effective, ai.getMaxHandSize() - handAfterCast);
+            final int library = ai.getCardsIn(ZoneType.Library).size();
+
+            if (effective < MIN_TOTAL_DRAW || kept < MIN_KEPT || library - effective < LIBRARY_MARGIN) {
+                sa.resetTargets();
+                second.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // An opposing draw thief (Notion Thief, Hullbreacher, Alms Collector) or draw punisher
+        // (Sheoldred, the Apocalypse; Consecrated Sphinx; Orcish Bowmasters; Spiteful Visions) that
+        // would see our draws, tested the way ReplaceDraw/ReplaceDrawCards.canReplace and
+        // TriggerDrawn.performTest test (an absent param matches). The host stands in for the drawn
+        // cards: it is owned and controlled by us, so Card.OppOwn matches and an opponent's own
+        // Card.YouCtrl draw trigger (Chasm Skulker) does not.
+        private static boolean drawIsStolenOrPunished(final Player ai, final Card host) {
+            for (final Card c : ai.getGame().getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                if (controller == null || controller.equals(ai)) {
+                    continue;
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Drawn && t.matchesValidParam("ValidPlayer", ai)
+                            && t.matchesValidParam("ValidCard", host)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
     }
 

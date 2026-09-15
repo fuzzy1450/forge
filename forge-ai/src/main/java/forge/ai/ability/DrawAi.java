@@ -30,6 +30,7 @@ import forge.game.cost.*;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.*;
+import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
@@ -44,6 +45,12 @@ public class DrawAi extends SpellAbilityAi {
      */
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        if ("Biomantic Mastery".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Both targets only MEASURE the draw (Defined$ You draws both halves). targetAI
+            // computes X before any target exists (always 0) and never targets an opponent
+            // for a non-curse draw, so the spell could never be cast.
+            return SpecialCardAi.BiomanticMastery.consider(ai, sa);
+        }
         if (!targetAI(ai, sa, false)) {
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
@@ -174,6 +181,16 @@ public class DrawAi extends SpellAbilityAi {
 
     @Override
     public AiAbilityDecision chkDrawback(Player ai, SpellAbility sa) {
+        if ("Biomantic Mastery".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && sa.usesTargeting()) {
+            // "Another target player" was already chosen by SpecialCardAi.BiomanticMastery.consider
+            // together with the root's target; keep it instead of re-targeting generically
+            // (TargetUnique forbids the player the root took, and an opponent is never picked).
+            final SpellAbility parent = sa.getParent();
+            if (parent != null && !parent.getTargets().isEmpty() && sa.isTargetNumberValid()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
         if (targetAI(ai, sa, sa.isTrigger() && sa.getHostCard().isInPlay())) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
