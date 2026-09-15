@@ -45,6 +45,13 @@ public class DestroyAllAi extends SpellAbilityAi {
         if ("FellTheMighty".equals(aiLogic)) {
             return SpecialCardAi.FellTheMighty.consider(ai, sa);
         }
+        if ("Gaze of Granite".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // X is a free mana-value ceiling; the generic path below only ever
+            // evaluates (and pays) the MAX affordable X, sweeping our own board
+            // with theirs. Every other DestroyAll card takes exactly the path it
+            // took before this branch.
+            return SpecialCardAi.GazeOfGranite.consider(ai, sa);
+        }
 
         return doMassRemovalLogic(ai, sa);
     }

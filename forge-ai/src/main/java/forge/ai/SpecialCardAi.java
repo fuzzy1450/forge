@@ -1285,6 +1285,119 @@ public class SpecialCardAi {
         }
     }
 
+    // Gaze of Granite
+    // "X B B G: Destroy each nonland permanent with mana value X or less."
+    // DestroyAllAi.doMassRemovalLogic evaluates and pays only the MAX affordable
+    // X, so it either sweeps our own commander/rocks along with theirs or
+    // declines a one-sided wipe that a smaller X would give. Choose X here: the
+    // ceiling with the best net swing, smallest on ties, under a floor that the
+    // swing clears DestroyAllAi's own margin, never leaves us a card down, and
+    // never trades down on the creature board.
+    // The board is scanned first with no mana probes: ComputerUtilMana's test
+    // payments draw MyRandom (isManaSourceReserved), so they run only once some
+    // X is admissible on the board.
+    public static class GazeOfGranite {
+        private static final int MIN_NET = 4;       // DestroyAllAi's own margin: opp > ai + 3
+        private static final int MIN_OPP_CARDS = 2; // below LONE_NET: at least a 2-for-1 (counting Gaze)
+        private static final int LONE_NET = 6;      // ...or a swing this big (a bomb, a token swarm)
+
+        private static boolean destroyable(final Card c) {
+            return !(c.hasKeyword(Keyword.INDESTRUCTIBLE) || c.getCounters(CounterEnumType.SHIELD) > 0 || c.hasSVar("SacMe"));
+        }
+
+        private static int pieces(final Card c) { // a mutated pile dies as every card in it
+            return c.hasMergedCard() ? Math.max(1, c.getMergedCards().size()) : 1;
+        }
+
+        private static int value(final Iterable<Card> list) {
+            int v = 0;
+            for (Card c : list) {
+                if (CardPredicates.TOKEN.test(c) && !c.isCreature() && c.getCMC() == 0) {
+                    continue; // Treasure/Clue/Food: destroyed, but not a reason to cast
+                }
+                v += (c.getCMC() + 1) * pieces(c) + (c.isCommander() ? 2 : 0); // commander: + recast tax
+            }
+            return v;
+        }
+
+        private static int cards(final Iterable<Card> list) { // nontoken cards lost, piles counted whole
+            int n = 0;
+            for (Card c : list) {
+                if (!CardPredicates.TOKEN.test(c)) {
+                    n += pieces(c);
+                }
+            }
+            return n;
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card source = sa.getHostCard();
+            final String valid = sa.getParamOrDefault("ValidCards", "");
+
+            int cap = 0; // the lists only change at mana values present on the battlefield
+            for (Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isLand()) {
+                    cap = Math.max(cap, c.getCMC());
+                }
+            }
+
+            final int[] nets = new int[cap + 1];
+            final boolean[] ok = new boolean[cap + 1];
+            boolean any = false;
+            for (int x = 0; x <= cap; x++) { // board first: no mana probes (they draw MyRandom)
+                sa.setXManaCostPaid(x); // cmcLEX reads Count$xPaid from the root SA
+                CardCollection opp = CardLists.filter(CardLists.getValidCards(
+                        ai.getOpponents().getCardsIn(ZoneType.Battlefield), valid, source.getController(), source, sa), GazeOfGranite::destroyable);
+                CardCollection mine = CardLists.filter(CardLists.getValidCards(
+                        ai.getCardsIn(ZoneType.Battlefield), valid, source.getController(), source, sa), GazeOfGranite::destroyable);
+                if (opp.isEmpty()) {
+                    continue;
+                }
+                int net = value(opp) - value(mine);
+                if (net < MIN_NET) {
+                    continue;
+                }
+                // never a card down: opposing creature tokens count as half a card
+                int oppCards = cards(opp) + CardLists.count(opp, CardPredicates.TOKEN.and(CardPredicates.CREATURES)) / 2;
+                int myCards = cards(mine);
+                if (oppCards < Math.max(net >= LONE_NET ? 1 : MIN_OPP_CARDS, myCards + 1)) {
+                    continue;
+                }
+                // never lose a better creature board than we remove
+                if (ComputerUtilCard.evaluateCreatureList(CardLists.filter(mine, CardPredicates.CREATURES))
+                        > ComputerUtilCard.evaluateCreatureList(CardLists.filter(opp, CardPredicates.CREATURES))) {
+                    continue;
+                }
+                ok[x] = true;
+                nets[x] = net;
+                any = true;
+            }
+
+            if (!any) {
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final int maxX = ComputerUtilCost.setMaxXValue(sa, ai, false); // only now: RNG-consuming test payments
+            int bestX = -1;
+            int bestNet = Integer.MIN_VALUE;
+            for (int x = 0; x <= Math.min(cap, maxX); x++) {
+                if (ok[x] && nets[x] > bestNet) { // strict: ties keep the smaller X
+                    bestNet = nets[x];
+                    bestX = x;
+                }
+            }
+
+            if (bestX < 0) {
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+
+            sa.setXManaCostPaid(bestX);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Gideon Blackblade
     public static class GideonBlackblade {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
