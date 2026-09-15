@@ -3108,6 +3108,120 @@ public class SpecialCardAi {
         }
     }
 
+    // Legions to Ashes
+    // Exile target nonland permanent an opponent controls and every token that
+    // player controls with the same name (a Pump targeting shell; the exile is
+    // the ChangeZoneAll sub). Candidates: targetable opposing permanents, never
+    // a card we own, never an opponent's card carrying an Aura we control
+    // (ChangeZoneAi's battlefield-exile filter), minus creatures already dying.
+    // Fire, in order:
+    //  1. the highest-valued same-name group, when it is a real multi-for-one
+    //     (MIN_GROUP_SIZE+ permanents worth >= MIN_GROUP_VALUE);
+    //  2. otherwise the stock single-target pick (getBestRemovalTargetAI over the
+    //     candidates minus noncreature tokens), when the stock removal floor
+    //     useRemovalNow accepts it - at most one call per consult;
+    //  3. otherwise the best group that clears the multi-for-one bar, if any.
+    public static class LegionsToAshes {
+        public static final int MIN_GROUP_SIZE = 3;
+        public static final int MIN_GROUP_VALUE = 300;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            CardCollection candidates = CardLists.getTargetableCards(
+                    ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa);
+            candidates = CardLists.filter(candidates, c -> {
+                if (ai.equals(c.getOwner())) {
+                    return false;
+                }
+                for (Card aura : c.getEnchantedBy()) {
+                    if (c.getOwner().isOpponentOf(ai) && aura.getController().equals(ai)) {
+                        return false;
+                    }
+                }
+                return true;
+            });
+            candidates = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, candidates, sa);
+            if (candidates.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            // deterministic battlefield order; the first wins ties
+            Card bestGroup = null;
+            int bestGroupValue = Integer.MIN_VALUE;
+            int bestGroupSize = 0;
+            Card bestMulti = null;
+            int bestMultiValue = Integer.MIN_VALUE;
+            for (final Card c : candidates) {
+                final CardCollection group = exiledWith(c);
+                int value = 0;
+                for (final Card m : group) {
+                    value += removalValue(m);
+                }
+                if (value > bestGroupValue) {
+                    bestGroup = c;
+                    bestGroupValue = value;
+                    bestGroupSize = group.size();
+                }
+                if (isMultiForOne(group.size(), value) && value > bestMultiValue) {
+                    bestMulti = c;
+                    bestMultiValue = value;
+                }
+            }
+
+            if (isMultiForOne(bestGroupSize, bestGroupValue)) {
+                return target(sa, bestGroup);
+            }
+
+            final CardCollection singles = CardLists.filter(candidates,
+                    c -> c.isCreature() || !(c.isToken() || c.isTokenCard()));
+            final Card pick = ComputerUtilCard.getBestRemovalTargetAI(ai, singles);
+            if (pick != null && ComputerUtilCard.useRemovalNow(sa, pick, 0, ZoneType.Exile)) {
+                return target(sa, pick);
+            }
+
+            if (bestMulti != null) {
+                return target(sa, bestMulti);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        private static boolean isMultiForOne(final int size, final int value) {
+            return size >= MIN_GROUP_SIZE && value >= MIN_GROUP_VALUE;
+        }
+
+        private static AiAbilityDecision target(final SpellAbility sa, final Card t) {
+            sa.resetTargets();
+            sa.getTargets().add(t);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Mirrors the ChangeZoneAll sub: the target plus every token its
+        // controller controls that shares its name
+        // (TargetedCard.Self,Card.NotDefinedTargeted+token+sharesNameWith Targeted+ControlledBy TargetedController).
+        private static CardCollection exiledWith(final Card t) {
+            final CardCollection group = new CardCollection(t);
+            for (final Card m : t.getController().getCardsIn(ZoneType.Battlefield)) {
+                if (m != t && (m.isToken() || m.isTokenCard()) && m.sharesNameWith(t)) {
+                    group.add(m);
+                }
+            }
+            return group;
+        }
+
+        // ComputerUtilCard.evaluateRemovalTargetPriority's per-card term for a
+        // nonland permanent (that method is private and adds a per-controller
+        // board term that must not be summed once per group member).
+        private static int removalValue(final Card c) {
+            if (c.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(c);
+            }
+            int v = 50 + 30 * c.getCMC();
+            if (c.isPlaneswalker()) {
+                v += c.getCounters(CounterEnumType.LOYALTY) * 10;
+            }
+            return v;
+        }
+    }
+
     // Living Death (and other similar cards using AILogic LivingDeath or AILogic ReanimateAll)
     public static class LivingDeath {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

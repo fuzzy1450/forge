@@ -13,6 +13,7 @@ import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.player.PlayerActionConfirmMode;
+import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.TargetRestrictions;
 import forge.game.zone.ZoneType;
@@ -107,6 +108,15 @@ public class PumpAi extends PumpAiBase {
 
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        if ("Legions to Ashes".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // A Pump targeting shell with an OppCtrl target (the real effect is
+            // its ChangeZoneAll sub): the non-curse targeting below only offers
+            // our own creatures (PumpAiBase.getPumpCreatures), so it returned
+            // TargetingFailed on every consult. The evaluator chooses and floors
+            // the target itself; every other Pump card takes exactly the path it
+            // took before this branch.
+            return SpecialCardAi.LegionsToAshes.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final Card source = sa.getHostCard();
         final SpellAbility root = sa.getRootAbility();
