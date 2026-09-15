@@ -69,6 +69,20 @@ public class AttachAi extends SpellAbilityAi {
             if (!attachDecision.willingToPlay()) {
                 return attachDecision;
             }
+            if (sa.isSpell() && "Redemption Arc".equals(source.getName())) {
+                // Goad forces our own creature to attack every combat: never spend our
+                // last needed blocker on it. Mirrors EffectAi's main-1 idiom (:331).
+                final Card tgtCard = sa.getTargetCard();
+                if (tgtCard != null && tgtCard.getController().equals(ai)
+                        && !tgtCard.hasKeyword(Keyword.VIGILANCE)
+                        && ComputerUtilCombat.canAttackNextTurn(tgtCard)
+                        && CombatUtil.canBlock(tgtCard, true)
+                        && ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife()
+                        && ComputerUtil.predictNextCombatsRemainingLife(ai, false, false, 0, new CardCollection(tgtCard)) == Integer.MIN_VALUE) {
+                    sa.resetTargets();
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
         }
 
         boolean advancedFlash = AiProfileUtil.getBoolProperty(ai, AiProps.FLASH_ENABLE_ADVANCED_LOGIC);
