@@ -52,6 +52,15 @@ import java.util.Map;
 public class ControlGainAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision canPlay(final Player ai, final SpellAbility sa) {
+        if ("Dominate".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !sa.isCopied()) {
+            // X bounds the target's mana value (ValidTgts$ Creature.cmcLEX) and
+            // nothing below announces it, so every target would be read at X=0.
+            // Judged whole in SpecialCardAi.StealCreatureForX. A copy (Melek, an
+            // opponent's copy spell) keeps its X and takes the stock path, as
+            // does every other GainControl card.
+            return SpecialCardAi.StealCreatureForX.consider(ai, sa);
+        }
+
         final List<String> lose = Lists.newArrayList();
 
         if (sa.hasParam("LoseControl")) {

@@ -2394,6 +2394,114 @@ public class SpecialCardAi {
         }
     }
 
+    // Dominate
+    // "X 1 U U: gain control of target creature with mana value X or less" -
+    // ControlGainAi never announces this X, so ValidTgts$ Creature.cmcLEX reads
+    // X=0 and only mana-value-0 creatures are ever legal. Announce X ourselves
+    // as the chosen creature's mana value (the cheapest legal X), checking
+    // canTarget at that X per candidate. Windows: our own main phase, an
+    // opponent's end step with our turn next, or an opponent's declare-attackers
+    // or declare-blockers step against us (stealing an attacker removes it from
+    // combat). Never in response. Floor: a creature worth a card and a half
+    // (evaluateCreature >= 200), never one we own on the opponent's turn (it may
+    // only be borrowed); with lethal damage incoming after blocks, only an
+    // unblocked attacker whose steal leaves us alive.
+    public static class StealCreatureForX {
+        public static final int MIN_EVAL = 200;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // Routing from ControlGainAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            sa.resetTargets();
+
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean ownTurn = ph.isPlayerTurn(ai);
+            final boolean defensive = !ownTurn && combat != null
+                    && (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS))
+                    && !combat.getAttackersOf(ai).isEmpty();
+            final boolean oppEndStep = !ownTurn && ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn());
+            final boolean ownMain = ownTurn && ph.getPhase().isMain();
+            if (!defensive && !oppEndStep && !ownMain) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+
+            // Cheap pass first: no mana simulation and no RNG draw until a
+            // candidate exists (lifeInDanger would draw on every call).
+            final int remain = defensive && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) && !ai.cantLoseForZeroOrLessLife()
+                    ? ComputerUtilCombat.lifeThatWouldRemain(ai, combat) : Integer.MAX_VALUE;
+            final boolean lethal = remain < 1;
+            final CardCollection pool = defensive ? combat.getAttackersOf(ai) : ai.getOpponents().getCreaturesInPlay();
+            final CardCollection candidates = new CardCollection();
+            for (Card c : pool) {
+                if (!c.canBeControlledBy(ai) || c.hasSVar("EndOfTurnLeavePlay")
+                        || ComputerUtilCard.isCardRemAIDeck(c) || c.hasKeyword(Keyword.WARD)) {
+                    continue;
+                }
+                if (lethal) {
+                    // Only a steal that turns lethal into survivable; when none
+                    // exists the steal cannot change the outcome, keep the card.
+                    if (!combat.isBlocked(c)
+                            && remain + ComputerUtilCombat.damageIfUnblocked(c, ai, combat, false) >= 1) {
+                        candidates.add(c);
+                    }
+                    continue;
+                }
+                // Threaten / Act of Aggression on our own creature: it comes
+                // back at cleanup anyway.
+                if (!ownTurn && ai.equals(c.getOwner())) {
+                    continue;
+                }
+                if (ComputerUtilCard.evaluateCreature(c) >= MIN_EVAL) {
+                    candidates.add(c);
+                }
+            }
+            if (candidates.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.setXManaCostPaid(null);
+            final int maxX = ComputerUtilCost.setMaxXValue(sa, ai, false); // X = 0 is legal (tokens)
+            Card best = null;
+            int bestEval = Integer.MIN_VALUE;
+            for (Card c : candidates) {
+                final int mv = c.getCMC();
+                if (mv > maxX) {
+                    continue;
+                }
+                sa.setXManaCostPaid(mv);
+                if (!sa.canTarget(c)) {
+                    continue;
+                }
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                if (eval > bestEval) {
+                    best = c;
+                    bestEval = eval;
+                }
+            }
+            if (best == null) {
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.setXManaCostPaid(best.getCMC());
+            sa.getTargets().add(best);
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // The One Ring
     public static class TheOneRing {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
