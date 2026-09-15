@@ -1009,6 +1009,27 @@ public class AttachAi extends SpellAbilityAi {
                             .shouldApply(library.getFirst(), ai, manifest)) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
+        } else if ("Remembered".equals(sa.getParam("Defined")) && sa.getParent() != null
+            && sa.getParent().getApi() == ApiType.ChangeZone && sa.getParent().hasParam("RememberChanged")
+            && sa.getParent().usesTargeting()
+            && "Battlefield".equals(sa.getParent().getParam("Destination"))) {
+            // Pre-War Formalwear (the only script whose Attach hangs directly off
+            // a targeted ChangeZone->Battlefield with RememberChanged): "return
+            // target creature card from your graveyard, attach to it". The parent
+            // returns the attach target itself, so refusing for lack of a current
+            // one vetoes the whole permanent at AiController.checkETBEffects
+            // (BadEtbEffects). The parent's own AI (ChangeZoneAi.knownOriginTriggerAI
+            // -> isPreferredTarget) has already picked the card, and refuses an
+            // empty graveyard before this sub is asked. Accept only a useful,
+            // non-duplicate-legend creature card of ours still in the graveyard.
+            // Draws no random numbers, like the CantPlayAi return it replaces.
+            final Card returned = sa.getParent().getTargetCard();
+            if (returned != null && returned.isCreature() && ai.equals(returned.getOwner())
+                    && returned.isInZone(ZoneType.Graveyard)
+                    && !ComputerUtilCard.isUselessCreature(ai, returned)
+                    && !(returned.getType().isLegendary() && ai.isCardInPlay(returned.getName()))) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
         }
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
