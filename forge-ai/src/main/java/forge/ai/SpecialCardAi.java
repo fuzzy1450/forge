@@ -282,6 +282,159 @@ public class SpecialCardAi {
         }
     }
 
+    // Armed and Armored
+    // "Vehicles you control become artifact creatures until end of turn. Choose a Dwarf you
+    // control. Attach any number of Equipment you control to it." Routed from AnimateAllAi.canPlay;
+    // AttachAi.chkDrawback accepts the Attach sub by name, so this is the whole cast decision.
+    // Two windows, with the stack empty:
+    // - our beginning of combat (AnimateAi's instant-speed crew window): the Vehicles the stock
+    //   crew sweep left behind (crews cost 0 and sort first), counted only when the AI's own attack
+    //   simulation sends them and the crew line could not crew them anyway with weaker creatures;
+    //   cast for at least MIN_NEW_ATTACKERS new attackers or MIN_NEW_ATTACK_POWER new power;
+    // - an opponent's declare-attackers step, need-only: the AI's own blocks without the spell
+    //   leave its life in danger, and with the animated Vehicles as extra blockers one of them
+    //   blocks an attacker nothing blocked and the life that would remain goes up.
+    // Vehicles among the mana sources that would pay for the spell (Cultivator's Caravan taps for
+    // any colour) are not counted: they resolve tapped and can neither attack nor block.
+    // The Attach half resolves onto the WORST Dwarf with every Equipment we control
+    // (AttachAi.chooseUnpreferred, confirmAction always true), so with a Dwarf in play any
+    // Equipment already attached, or a creature Equipment (reconfigure), refuses the cast.
+    // Every RNG-free veto runs before the mana-source query and the combat simulations, which can
+    // draw random numbers; the RemoveDeck hint this replaces kept the card out of evaluation.
+    public static class ArmedAndArmored {
+        public static final int MIN_NEW_ATTACKERS = 2;
+        public static final int MIN_NEW_ATTACK_POWER = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Card host = sa.getHostCard();
+
+            // Routing through AnimateAllAi.canPlay's name gate bypasses the base
+            // class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Combat combat = game.getCombat();
+            final boolean attackWindow = ph.isPlayerTurn(ai) && ph.is(PhaseType.COMBAT_BEGIN);
+            final boolean blockWindow = !ph.isPlayerTurn(ai) && ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                    && combat != null && !combat.getAttackersOf(ai).isEmpty();
+            if (!attackWindow && !blockWindow) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Attach-half floor: never move worn Equipment, or a creature Equipment, onto the worst Dwarf.
+            final CardCollectionView bf = ai.getCardsIn(ZoneType.Battlefield);
+            if (!CardLists.getValidCards(bf, "Dwarf.YouCtrl", ai, host, sa).isEmpty()
+                    && CardLists.getValidCards(bf, "Equipment.YouCtrl", ai, host, sa)
+                            .anyMatch(c -> c.isEquipping() || c.isCreature())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final CardCollection vehicles = CardLists.filter(
+                    CardLists.getValidCards(bf, "Vehicle.YouCtrl", ai, host, sa),
+                    c -> !c.isCreature() && !c.isTapped() && (blockWindow || !c.hasSickness()));
+            if (vehicles.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // The same test-mode query AiController.reserveManaSources uses: a Vehicle that
+            // taps for this spell's mana is not a Vehicle the spell animates usefully.
+            final CardCollection payers = ComputerUtilMana.getManaSourcesToPayCost(
+                    ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false), sa, ai, false);
+            if (payers == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            vehicles.removeAll(payers);
+            if (vehicles.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            if (attackWindow) {
+                return considerAttack(ai, sa, vehicles);
+            }
+            return considerBlock(ai, sa, combat, vehicles);
+        }
+
+        private static AiAbilityDecision considerAttack(final Player ai, final SpellAbility sa,
+                final CardCollection vehicles) {
+            final CardCollection tappedCrew = new CardCollection();
+            int newAttackers = 0;
+            int newPower = 0;
+            for (final Card v : vehicles) {
+                final Card copy = AnimateAi.becomeAnimated(v, sa);
+                if (copy.getNetPower() <= 0 || !ComputerUtilCard.doesSpecifiedCreatureAttackAI(ai, copy)) {
+                    continue;
+                }
+                if (crewableAnyway(ai, v, tappedCrew)) {
+                    continue; // the stock crew line covers it
+                }
+                newAttackers++;
+                newPower += copy.getNetPower();
+                if (newAttackers >= MIN_NEW_ATTACKERS || newPower >= MIN_NEW_ATTACK_POWER) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.DoesntImpactCombat);
+        }
+
+        private static AiAbilityDecision considerBlock(final Player ai, final SpellAbility sa, final Combat combat,
+                final CardCollection vehicles) {
+            final Player attackingPlayer = combat.getAttackingPlayer();
+            final CardCollection attackers = combat.getAttackersOf(ai);
+
+            // The AI's own blocks without the spell. Read danger after blocks, once:
+            // lifeInDanger draws a random threshold.
+            final Combat without = new Combat(attackingPlayer);
+            for (final Card att : attackers) {
+                without.addAttacker(att, ai);
+            }
+            new AiBlockController(ai, false).assignBlockersForCombat(without);
+            if (!ComputerUtilCombat.lifeInDanger(ai, without)) {
+                return new AiAbilityDecision(0, AiPlayDecision.DoesntImpactCombat);
+            }
+
+            // The same attack with every animated Vehicle available as an extra blocker.
+            final CardCollection copies = new CardCollection();
+            for (final Card v : vehicles) {
+                copies.add(AnimateAi.becomeAnimated(v, sa));
+            }
+            final Combat with = new Combat(attackingPlayer);
+            for (final Card att : attackers) {
+                with.addAttacker(att, ai);
+            }
+            new AiBlockController(ai, false).assignAdditionalBlockers(with, copies);
+
+            boolean newBlock = false;
+            for (final Card att : attackers) {
+                if (without.getBlockers(att).isEmpty() && with.getBlockers(att).anyMatch(copies::contains)) {
+                    newBlock = true;
+                    break;
+                }
+            }
+            if (newBlock && ComputerUtilCombat.lifeThatWouldRemain(ai, with)
+                    > ComputerUtilCombat.lifeThatWouldRemain(ai, without)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.DoesntImpactCombat);
+        }
+
+        // Mirrors AiAttackController.getOpponentCreatures' crew test: a Vehicle the AI can
+        // crew right now with creatures weaker than it gains nothing from the spell.
+        private static boolean crewableAnyway(final Player ai, final Card vehicle, final CardCollection tappedCrew) {
+            for (final SpellAbility crew : IterableUtil.filter(vehicle.getSpellAbilities(), SpellAbility::isCrew)) {
+                crew.setActivatingPlayer(ai);
+                if (ComputerUtilCost.checkTapTypeCost(ai, crew.getPayCosts(), vehicle, crew, tappedCrew)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Biomantic Mastery
     // Draw a card for each creature target player controls, then draw a card for each creature
     // ANOTHER target player controls. Both draws go to us (Defined$ You); the two targets only

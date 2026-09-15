@@ -40,6 +40,14 @@ public class AnimateAllAi extends SpellAbilityAi {
             return SpecialCardAi.PredatorsHour.consider(aiPlayer, sa);
         }
 
+        if ("Armed and Armored".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Vehicles the stock crew line left behind, as new attackers on our
+            // turn or as needed blockers on theirs; the Attach sub is accepted by
+            // name in AttachAi.chkDrawback. Every other AnimateAll card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.ArmedAndArmored.consider(aiPlayer, sa);
+        }
+
         if ("CreatureAdvantage".equals(logic) && !aiPlayer.getCreaturesInPlay().isEmpty()) {
             // TODO: improve this or implement a better logic for abilities like Oko, the Trickster ultimate
             for (Card c : aiPlayer.getCreaturesInPlay()) {

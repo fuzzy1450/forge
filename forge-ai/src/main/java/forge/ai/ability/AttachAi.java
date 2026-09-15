@@ -1082,6 +1082,17 @@ public class AttachAi extends SpellAbilityAi {
                     return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
                 }
             }
+        } else if (!sa.isTrigger() && "Armed and Armored".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Armed and Armored's spell sub ("choose a Dwarf you control, attach any
+            // number of Equipment you control to it") is neither a trigger nor
+            // Remembered, so it fell through to the refusal below and vetoed the
+            // whole spell at SpellAbilityAi.canPlayWithSubs. The spell is judged
+            // whole in SpecialCardAi.ArmedAndArmored.consider, reached first from
+            // AnimateAllAi.canPlay: this half is a no-op without a Dwarf or an
+            // Equipment, and that floor refuses the board where resolution would
+            // move worn or creature Equipment onto the worst Dwarf. Draws no random
+            // numbers, like the CantPlayAi return it replaces.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
