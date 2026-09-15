@@ -3,6 +3,7 @@ package forge.ai.ability;
 import com.google.common.collect.Lists;
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.ComputerUtilAbility;
 import forge.ai.ComputerUtilCost;
 import forge.ai.SpellAbilityAi;
 import forge.game.ability.AbilityUtils;
@@ -115,6 +116,17 @@ public class CountersPutAllAi extends SpellAbilityAi {
 
     @Override
     public AiAbilityDecision chkDrawback(Player ai, SpellAbility sa) {
+        if ("Filigree Vector".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && sa.getParent() != null
+                && "Creature.IsRemembered".equals(sa.getParam("ValidCards"))) {
+            // Filigree Vector: ValidCards$ Creature.IsRemembered / ValidCards2$ Artifact.IsImprinted are
+            // filled at resolution by the two target-holder Pumps above it (RememberTargets /
+            // ImprintCards), so both lists in checkApiLogic are empty at decision time and
+            // "hList >= cList" (0 >= 0) refused every consult, vetoing the whole permanent at
+            // AiController.checkETBEffects (BadEtbEffects). The Pumps already chose, our own
+            // creatures and artifacts only, so nothing is left to decide here. The stock path drew
+            // no random number before that refusal, so skipping it keeps the draw count.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         return canPlay(ai, sa);
     }
     /* (non-Javadoc)

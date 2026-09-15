@@ -734,6 +734,16 @@ public class PumpAi extends PumpAiBase {
             if (pumpTgtAI(ai, sa, defense, attack, false, true)) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
+            if ("Filigree Vector".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    && sa.getParent() != null && sa.hasParam("ImprintCards") && sa.getMinTargets() == 0) {
+                // Filigree Vector's "a charge counter on each of any number of target artifacts" (a
+                // target-holder Pump; the counters are the PutCounterAll sub's). pumpTgtAI above keeps
+                // only our own artifacts (AITgts$ Artifact.YouCtrl, strict) and resets to zero targets
+                // when we control none but an opponent does. Zero is a legal choice for "any number",
+                // not a reason to veto the whole ETB at AiController.checkETBEffects (BadEtbEffects).
+                // The targets pumpTgtAI chose stand, and it made exactly the stock random draws.
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
 
