@@ -567,6 +567,16 @@ public class ComputerUtil {
             typeList = CardLists.filter(typeList, CardPredicates.hasSVar("AIDontSacToCasualty").negate());
         }
 
+        if (amount == 1 && !effect && SpecialCardAi.MomentousFall.handles(ability)) {
+            // pay with the creature MomentousFall.consider valued, not the worst one
+            final Card pick = SpecialCardAi.MomentousFall.chooseSacrifice(ai, typeList);
+            if (pick != null) {
+                return new CardCollection(pick);
+            }
+            // the board changed between decision and payment: fall through to the stock chooser
+            // rather than return null, which would strand the spell (handlePlayingSpellAbility)
+        }
+
         if (typeList.size() < amount) {
             return null;
         }

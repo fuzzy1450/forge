@@ -4223,6 +4223,108 @@ public class SpecialCardAi {
         }
     }
 
+    // Momentous Fall
+    // "As an additional cost to cast this spell, sacrifice a creature. You draw cards equal to the
+    // sacrificed creature's power, then you gain life equal to its toughness." Once AI:RemoveDeck is
+    // gone it hits Life's Legacy's gates (NumCards reads 0 before payment; the SacCost preference
+    // can't see a Destroy/Exile threat with a Draw saviour; the payment falls back to getWorstAI), but
+    // it is an instant, so its window is its own: cash in only a creature of ours that is leaving
+    // anyway - one a spell or ability on the stack will destroy, exile, steal for good, or burn or
+    // shrink to death, or one that dies in the current combat without taking anything with it. The
+    // board loses nothing it would have kept; four mana and the card buy MIN_POWER+ cards and the life.
+    // Draws no random numbers, so consider(), DrawAi.willPayCosts and the payment
+    // (ComputerUtil.chooseSacrificeType) land on the same creature.
+    public static class MomentousFall {
+        public static final int MIN_POWER = 2;
+
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && "Momentous Fall".equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (!ai.canDraw()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card pick = chooseSacrifice(ai, sa);
+            if (pick == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // don't deck ourselves (mirrors DrawAi.targetAI's library guard)
+            if (pick.getNetPower() >= ai.getCardsIn(ZoneType.Library).size() - 3) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        public static Card chooseSacrifice(final Player ai, final SpellAbility sa) {
+            return chooseSacrifice(ai, CardLists.filter(ai.getCreaturesInPlay(),
+                    CardPredicates.canBeSacrificedBy(sa, false)));
+        }
+
+        public static Card chooseSacrifice(final Player ai, final Iterable<Card> candidates) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean combatWindow = combat != null
+                    && (ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) || ph.is(PhaseType.COMBAT_FIRST_STRIKE_DAMAGE));
+            if (game.getStack().isEmpty() && !combatWindow) {
+                return null; // nothing can be leaving
+            }
+            final Set<Card> stackVerdictIgnored = stackThreatsToIgnore(game);
+
+            Card best = null;
+            for (final Card c : candidates) {
+                if (!c.isCreature() || !ai.equals(c.getController()) || c.getNetPower() < MIN_POWER) {
+                    continue;
+                }
+                // Saviour null keeps predictThreatenedObjects' Destroy / Exile / GainControl branches live
+                // (with this Draw spell as saviour it skips them); nonCombatOnly returns the stack verdict
+                // alone, under the profile's DONT_EVAL_KILLSPELLS_ON_STACK_WITH_PERMISSION guard, so a
+                // removal spell or wrath that a counterspell above it will stop is not "leaving".
+                boolean leaving = !stackVerdictIgnored.contains(c)
+                        && ComputerUtil.predictCreatureWillDieThisTurn(ai, c, null, true);
+                if (!leaving && combatWindow
+                        && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                        && !ComputerUtilCombat.willOpposingCreatureDieInCombat(ai, c, combat)
+                        && !ComputerUtilCombat.isDangerousToSacInCombat(ai, c, combat)) {
+                    leaving = true; // dies in this combat without trading, and no trampler behind it
+                }
+                if (!leaving) {
+                    continue;
+                }
+                // highest power, then highest toughness, then lowest card id
+                if (best == null || c.getNetPower() > best.getNetPower()
+                        || (c.getNetPower() == best.getNetPower() && (c.getNetToughness() > best.getNetToughness()
+                        || (c.getNetToughness() == best.getNetToughness() && c.getId() < best.getId())))) {
+                    best = c;
+                }
+            }
+            return best;
+        }
+
+        // Creatures whose stack verdict does not count as leaving: the targets of an until-end-of-turn
+        // steal (a GainControl part with LoseControl, e.g. Threaten or Act of Treason - they come back,
+        // so sacrificing them is a loss, not a save), and the targets of divided damage
+        // (predictThreatenedObjects charges the full NumDmg to every target of a DividedAsYouChoose
+        // DealDamage, so an Arc Lightning split three ways reads as lethal on a 3/3).
+        private static Set<Card> stackThreatsToIgnore(final Game game) {
+            final Set<Card> out = new HashSet<>();
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                for (SpellAbility part = si.getSpellAbility(); part != null; part = part.getSubAbility()) {
+                    if (part.getApi() == ApiType.GainControl && part.hasParam("LoseControl")) {
+                        part.getTargets().getTargetCards().forEach(out::add);
+                        if (part.hasParam("Defined")) {
+                            out.addAll(AbilityUtils.getDefinedCards(part.getHostCard(), part.getParam("Defined"), part));
+                        }
+                    } else if (part.getApi() == ApiType.DealDamage && part.hasParam("DividedAsYouChoose")) {
+                        part.getTargets().getTargetCards().forEach(out::add);
+                    }
+                }
+            }
+            return out;
+        }
+    }
+
     // Momir Vig, Simic Visionary Avatar
     public static class MomirVigAvatar {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
