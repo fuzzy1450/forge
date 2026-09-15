@@ -54,6 +54,11 @@ public class DrawAi extends SpellAbilityAi {
         if (!targetAI(ai, sa, false)) {
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
+        if ("Witch's Mark".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && !SpecialCardAi.WitchsMark.doesSomething(ai, sa)) {
+            // never a blank: a card we will rummage away, or a creature to wear the Role
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
 
         if (sa.usesTargeting()) {
             final Player player = sa.getTargets().getFirstTargetedPlayer();
@@ -679,6 +684,11 @@ public class DrawAi extends SpellAbilityAi {
 
     @Override
     public boolean willPayUnlessCost(Player payer, SpellAbility sa, Cost cost, boolean alreadyPaid, FCollectionView<Player> payers) {
+        if ("Witch's Mark".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && !SpecialCardAi.WitchsMark.willRummage(payer, sa)) {
+            // every Zada, Hedron Grinder copy asks again: stop before decking us or feeding punishers
+            return false;
+        }
         final Card host = sa.getHostCard();
         final String aiLogic = sa.getParam("UnlessAI");
 

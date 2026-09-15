@@ -245,6 +245,29 @@ public class TokenAi extends SpellAbilityAi {
     }
 
     @Override
+    public AiAbilityDecision chkDrawback(final Player ai, final SpellAbility sa) {
+        // Witch's Mark: "create a Wicked Role token attached to up to one target creature you
+        // control" rides as a targeted sub of a Draw spell. The inherited SpellAbilityAi.chkDrawback
+        // vetoes every targeted sub, so the spell was never cast. Reuse the Role targeting that
+        // checkApiLogic and doTriggerNoCost already use. The name check comes first: spawnToken
+        // advances game.nextCardId(), so no other card may reach it from here.
+        if (sa.usesTargeting() && "Witch's Mark".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            final Card actualToken = spawnToken(ai, sa);
+            sa.resetTargets();
+            if (tgtRoleAura(ai, sa, actualToken, false)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            if (sa.getMinTargets() == 0) {
+                // no creature of ours without a Role of ours: resolve with zero targets, and the
+                // Role is simply not created (CR 303.4i, TokenEffectBase)
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+        return super.chkDrawback(ai, sa);
+    }
+
+    @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
         Card actualToken = spawnToken(ai, sa);
 

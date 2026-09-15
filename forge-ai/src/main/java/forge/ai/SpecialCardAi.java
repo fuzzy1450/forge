@@ -5742,6 +5742,59 @@ public class SpecialCardAi {
         }
     }
 
+    // Witch's Mark
+    // "You may discard a card. If you do, draw two cards. Create a Wicked Role token attached to
+    // up to one target creature you control." Its Role sub targets through TokenAi.chkDrawback;
+    // these floors keep the cast from being a blank, and keep Zada, Hedron Grinder's copy fan-out
+    // (every copy re-asks the unless cost) from decking us or feeding an opponent's draw or
+    // discard punishers once per copy.
+    public static class WitchsMark {
+        // Cast only when it does something: another card to rummage away while a rummage is safe,
+        // or a creature of ours that TokenAi.tgtRoleAura would give the Role (no Role of ours on it).
+        public static boolean doesSomething(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (ai.getCardsIn(ZoneType.Hand).anyMatch(c -> !c.equals(host)) && willRummage(ai, sa)) {
+                return true;
+            }
+            final SpellAbility sub = sa.getSubAbility();
+            if (sub == null || !sub.usesTargeting()) {
+                return false;
+            }
+            final CardCollection homes = CardLists.filterControlledBy(CardUtil.getValidCardsToTarget(sub), ai.getYourTeam());
+            return homes.anyMatch(c -> !c.getAttachedCards().anyMatch(att ->
+                    att.getController() == ai && att.getType().hasSubtype("Role")));
+        }
+
+        // Pay "discard a card: draw N" only while we can draw N (Narset, Parter of Veils), it cannot
+        // deck us (DrawAi.targetAI's numCards >= library - 3 floor), and no opponent's permanent
+        // steals or punishes the draw or the discard (Notion Thief, Alms Collector, Orcish
+        // Bowmasters, Spiteful Visions, Waste Not). The Roles still land when this says no.
+        public static boolean willRummage(final Player payer, final SpellAbility sa) {
+            final int n = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParamOrDefault("NumCards", "1"), sa);
+            if (!payer.canDrawAmount(n)) {
+                return false;
+            }
+            if (n >= payer.getCardsIn(ZoneType.Library).size() - 3 && !payer.isCardInPlay("Laboratory Maniac")) {
+                return false;
+            }
+            for (final Player opp : payer.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final ReplacementEffect re : c.getReplacementEffects()) {
+                        if (re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards) {
+                            return false;
+                        }
+                    }
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.Drawn || t.getMode() == TriggerType.Discarded) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
     // Yawgmoth's Bargain
     public static class YawgmothsBargain {
         public static boolean consider(final Player ai, final SpellAbility sa) {
