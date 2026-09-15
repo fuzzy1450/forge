@@ -4,6 +4,7 @@ import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtilCard;
 import forge.ai.ComputerUtilCost;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.Game;
 import forge.game.ability.AbilityUtils;
@@ -12,6 +13,7 @@ import forge.game.card.CardCollection;
 import forge.game.card.CardLists;
 import forge.game.card.CardPredicates;
 import forge.game.cost.Cost;
+import forge.game.cost.CostFlipCoin;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
 import forge.game.player.PlayerActionConfirmMode;
@@ -209,6 +211,11 @@ public class SacrificeAi extends SpellAbilityAi {
 
     @Override
     public boolean willPayUnlessCost(Player payer, SpellAbility sa, Cost cost, boolean alreadyPaid, FCollectionView<Player> payers) {
+        // Cumulative upkeep paid in coin flips (Karplusan Minotaur): every lost flip is a ping of the opponent's choice
+        if (sa.isCumulativeUpkeep() && cost.hasSpecificCostType(CostFlipCoin.class)) {
+            return SpecialCardAi.KarplusanMinotaur.willPayUpkeep(payer, sa);
+        }
+
         // Icy Prison
         if (payers.size() > 1) {
             final Player p = sa.getActivatingPlayer();

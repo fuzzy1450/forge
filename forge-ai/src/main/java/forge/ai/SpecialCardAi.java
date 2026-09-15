@@ -2799,6 +2799,26 @@ public class SpecialCardAi {
         }
     }
 
+    // Karplusan Minotaur
+    // Its cumulative upkeep is paid in coin flips, and every lost flip deals 1
+    // damage to a target of the opponent's choice. Stock SpellAbilityAi pays
+    // any FlipCoin cost forever, so bound the worst case (every flip lost,
+    // every ping at our face): keep a buffer that grows with the flips, capped
+    // at the danger threshold. Age 1 pays at life >= 3, age 2 at >= 5, age 3 at
+    // >= 7, age n >= 4 at >= n + 5; life after the worst case is always >= 1.
+    public static class KarplusanMinotaur {
+        public static boolean willPayUpkeep(final Player ai, final SpellAbility sa) {
+            if (!ai.canLoseLife() || ai.cantLoseForZeroOrLessLife()) {
+                return true;
+            }
+            AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            int lifeInDanger = aic.getIntProperty(AiProps.AI_IN_DANGER_THRESHOLD);
+            // SacrificeEffect adds this upkeep's AGE counter before asking, so counters == flips about to be paid
+            int flips = sa.getHostCard().getCounters(CounterEnumType.AGE);
+            return ai.getLife() > flips + Math.min(flips, lifeInDanger);
+        }
+    }
+
     // Living Death (and other similar cards using AILogic LivingDeath or AILogic ReanimateAll)
     public static class LivingDeath {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
