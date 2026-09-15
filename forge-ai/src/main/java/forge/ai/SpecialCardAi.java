@@ -4956,6 +4956,312 @@ public class SpecialCardAi {
         }
     }
 
+    // Ghostly Flicker
+    // "Exile two target artifacts, creatures, and/or lands you control, then return those cards
+    // to the battlefield under your control." Reached from ChangeZoneAi.checkApiLogic's name
+    // branch for the cast from hand: the stock blink targeting (isPreferredTarget) runs only for
+    // single-target blinks and otherwise keeps opponents' permanents, which this card cannot
+    // target. Picks and targets both permanents itself, in one of two windows.
+    // RESCUE: an opponent's spell or ability on top of the stack aims at our permanent (a target
+    // anywhere in its chain) and the shared predictor marks it lost; the returned card is a new
+    // object, so the threat loses that target (a sweeper would still hit it, so only aimed
+    // threats count). Or, at declare blockers with an empty stack, a combatant of ours would die
+    // where taking it out of combat costs nothing: the only blocker of one attacker without
+    // trample that it cannot kill (a chump: the attacker stays blocked), or an attacker none of
+    // whose blockers would die. Worth saving: a creature that is not useless (or our commander),
+    // an artifact, a nonbasic land.
+    // VALUE, empty stack only: our own main 2 with two re-used enters triggers, or the end step
+    // of the opponent whose turn precedes ours with one plus a harmless filler. A value pick is a
+    // nonland permanent that sheds an opponent's aura or has its own enters trigger and is not a
+    // useless creature; no enters chain on it holds a Sacrifice, Discard or ...All api (evoke's
+    // own sacrifice trigger aside), and AiController.checkETBEffects must not decline its own
+    // enters triggers now (Mist Raven with no opposing creature, Meteor Golem with no target).
+    // The second target never costs anything: another rescue, a value pick, or a filler with no
+    // enters trigger or replacement (tapped land first, creatures last). Never a value pick or
+    // filler: a card carrying our aura, equipment or net-positive counters, one attached to
+    // something, a face-down, transformed or cloned card, one with a leaves-the-battlefield link
+    // (Angel of Serenity's Self trigger, exiled-with cards, an until-it-leaves exile), or a
+    // creature in combat or still able to attack this turn. Never targeted: tokens, cards we do
+    // not both own and control, cards that could not re-enter (isETBprevented).
+    // AI:RemoveDeck:All stripped the card before any handler ran, so the stock path drew no
+    // random numbers for it. Every check here is RNG-free - mana first, since an unpayable
+    // approval would reach canPayCost's reservation roll - except checkETBEffects, whose
+    // handlers can roll: it runs last, lazily, best candidate first, and only after an RNG-free
+    // count shows the window can still be filled.
+    public static class GhostlyFlicker {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final Card host = sa.getHostCard();
+
+            sa.resetTargets();
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, true) < host.getCMC() || !hasBlueSources(ai, host)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            CardCollection mine = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa);
+            mine = ComputerUtil.filterAITgts(sa, ai, mine, true);
+            // a token never comes back; a card that can't enter stays exiled
+            mine = CardLists.filter(mine, c -> !c.isToken() && ai.equals(c.getOwner())
+                    && ai.equals(c.getController()) && !ComputerUtil.isETBprevented(c));
+            if (mine.size() < 2) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final CardCollection picks = new CardCollection();
+            if (!game.getStack().isEmpty()) {
+                final SpellAbility top = game.getStack().peekAbility();
+                if (top != null && top.getActivatingPlayer() != null && top.getActivatingPlayer().isOpponentOf(ai)) {
+                    final Set<Card> aimed = new HashSet<>();
+                    for (SpellAbility part = top; part != null; part = part.getSubAbility()) {
+                        if (part.usesTargeting()) {
+                            aimed.addAll(part.getTargets().getTargetCards());
+                        }
+                    }
+                    if (!aimed.isEmpty()) {
+                        final List<GameObject> threatened = ComputerUtil.predictThreatenedObjects(ai, sa, true);
+                        addBest(picks, CardLists.filter(mine, c -> aimed.contains(c) && threatened.contains(c)
+                                && worthSaving(ai, c)));
+                    }
+                }
+            } else if (ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) && combat != null) {
+                addBest(picks, CardLists.filter(mine, c -> c.isCreature() && c.getShieldCount() == 0
+                        && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                        && freeToLeaveCombat(ai, c, combat) && worthSaving(ai, c)));
+            }
+            final boolean rescue = !picks.isEmpty();
+
+            final boolean oppEndStep = ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn());
+            if (!rescue && (!game.getStack().isEmpty() || !(oppEndStep || ph.is(PhaseType.MAIN2, ai)))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // without a rescue: two value picks in our main 2, one plus a filler at their end step
+            final int needValue = rescue ? 0 : oppEndStep ? 1 : 2;
+
+            final boolean attackAhead = ph.isPlayerTurn(ai) && ph.getPhase() != null
+                    && ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS);
+            final CardCollection value = CardLists.filter(mine, c -> !picks.contains(c)
+                    && isValueCandidate(ai, c, combat, attackAhead));
+            final CardCollection filler = CardLists.filter(mine, c -> !picks.contains(c)
+                    && isHarmlessFiller(ai, c, combat, attackAhead));
+            // RNG-free bound before any enters trigger is judged
+            if (value.size() < needValue || value.size() + filler.size() < 2 - picks.size()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            int valuePicks = 0;
+            AiController aic = null;
+            while (picks.size() < 2 && !value.isEmpty()) {
+                final Card best = ComputerUtilCard.getBestAI(value);
+                value.remove(best);
+                if (hasOwnEtb(best)) {
+                    if (aic == null) {
+                        aic = ((PlayerControllerAi) ai.getController()).getAi();
+                    }
+                    if (!aic.checkETBEffects(best, sa, null)) {
+                        continue;
+                    }
+                }
+                picks.add(best);
+                valuePicks++;
+            }
+            if (valuePicks < needValue) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            if (picks.size() < 2) {
+                filler.removeAll(picks);
+                if (!filler.isEmpty()) {
+                    picks.add(Collections.min(filler, Comparator.comparingInt(GhostlyFlicker::fillerRank)));
+                }
+            }
+            if (picks.size() < 2) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final Card c : picks) {
+                if (!sa.canTarget(c)) {
+                    sa.resetTargets();
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+                sa.getTargets().add(c);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static void addBest(final CardCollection picks, final CardCollection pool) {
+            while (picks.size() < 2 && !pool.isEmpty()) {
+                final Card best = ComputerUtilCard.getBestAI(pool);
+                picks.add(best);
+                pool.remove(best);
+            }
+        }
+
+        // Taking this combatant out of combat costs nothing. A blocker must be the only blocker of
+        // its one attacker, which has no trample (a blocked band with no blockers left deals its
+        // damage only through trample) and which it cannot kill (no trade undone). An attacker
+        // must have no blocker it would kill.
+        private static boolean freeToLeaveCombat(final Player ai, final Card c, final Combat combat) {
+            if (combat.isBlocking(c)) {
+                final CardCollection attackers = combat.getAttackersBlockedBy(c);
+                if (attackers.size() != 1) {
+                    return false;
+                }
+                final Card attacker = attackers.getFirst();
+                return combat.getBlockers(attacker).size() == 1 && !attacker.hasKeyword(Keyword.TRAMPLE)
+                        && !ComputerUtilCombat.canDestroyAttacker(ai, attacker, c, combat, false);
+            }
+            if (combat.isAttacking(c)) {
+                for (final Card blocker : combat.getBlockers(c)) {
+                    if (ComputerUtilCombat.canDestroyBlocker(ai, blocker, c, combat, false)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            return false;
+        }
+
+        private static boolean worthSaving(final Player ai, final Card c) {
+            if (c.isCreature()) {
+                return !ComputerUtilCard.isUselessCreature(ai, c) || c.isCommander();
+            }
+            if (c.isLand()) {
+                return !c.isBasicLand();
+            }
+            return true; // artifacts: a mana rock is worth a card
+        }
+
+        // Leaving and coming back loses nothing and breaks no link.
+        private static boolean losesNothing(final Player ai, final Card c, final Combat combat, final boolean attackAhead) {
+            if (c.isFaceDown() || c.isTransformed() || c.isCloned() || c.isAttachedToEntity() || hasLeaveLink(c)) {
+                return false;
+            }
+            for (final Card attached : c.getAttachedCards()) {
+                if (ai.equals(attached.getController())) {
+                    return false; // our own aura or equipment falls off
+                }
+            }
+            if (c.isCreature() && ((combat != null && (combat.isAttacking(c) || combat.isBlocking(c)))
+                    || (attackAhead && CombatUtil.canAttack(c)))) {
+                return false; // removed from combat, or summoning sick for this turn's attack
+            }
+            int total = 0;
+            int negative = 0;
+            for (final CounterType type : c.getCounters().elementSet()) {
+                final int n = c.getCounters().count(type);
+                total += n;
+                if (ComputerUtil.isNegativeCounter(type, c)) {
+                    negative += n;
+                }
+            }
+            return total == 0 || negative * 2 > total;
+        }
+
+        // A Self trigger that fires on leaving for exile (Angel of Serenity returns what it exiled,
+        // Arcane Artisan exiles its tokens), cards exiled with it, or an until-it-leaves exile
+        // (Banisher Priest's Duration$ UntilHostLeavesPlay, which is no trigger).
+        private static boolean hasLeaveLink(final Card c) {
+            if (!c.getExiledCards().isEmpty() || !c.getUntilLeavesBattlefield().isEmpty()) {
+                return true;
+            }
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone || !tr.hasParam("ValidCard")
+                        || !tr.getParam("ValidCard").contains("Self")) {
+                    continue;
+                }
+                final String origin = tr.hasParam("Origin") ? tr.getParam("Origin") : "";
+                final String destination = tr.hasParam("Destination") ? tr.getParam("Destination") : "";
+                if (origin.contains("Battlefield") && (destination.isEmpty()
+                        || destination.contains("Any") || destination.contains("Exile"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // An enters trigger of its own, evoke's sacrifice trigger aside.
+        private static boolean hasOwnEtb(final Card c) {
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() == TriggerType.ChangesZone && "Battlefield".equals(tr.getParam("Destination"))
+                        && !tr.isKeyword(Keyword.EVOKE)
+                        && (!tr.hasParam("ValidCard") || tr.getParam("ValidCard").contains("Self"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // RNG-free part of a value pick; checkETBEffects is asked later, lazily.
+        private static boolean isValueCandidate(final Player ai, final Card c, final Combat combat, final boolean attackAhead) {
+            if (c.isLand() || !losesNothing(ai, c, combat, attackAhead)) {
+                return false;
+            }
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone || !"Battlefield".equals(tr.getParam("Destination"))
+                        || tr.isKeyword(Keyword.EVOKE)) {
+                    continue;
+                }
+                for (SpellAbility part = tr.ensureAbility(); part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    if (api == ApiType.Sacrifice || api == ApiType.SacrificeAll || api == ApiType.Discard
+                            || api == ApiType.DestroyAll || api == ApiType.DamageAll || api == ApiType.ChangeZoneAll) {
+                        return false;
+                    }
+                }
+            }
+            if (c.isCreature()) {
+                for (final Card attached : c.getAttachedCards()) {
+                    if (attached.isAura() && attached.getController().isOpponentOf(ai)) {
+                        return true; // the returned creature sheds it
+                    }
+                }
+            }
+            return hasOwnEtb(c) && !ComputerUtilCard.isUselessCreature(ai, c);
+        }
+
+        // No enters trigger or replacement (enters-tapped lands, bounce lands) and nothing to lose.
+        private static boolean isHarmlessFiller(final Player ai, final Card c, final Combat combat, final boolean attackAhead) {
+            return !c.hasETBTrigger(false) && !c.hasETBReplacement() && losesNothing(ai, c, combat, attackAhead);
+        }
+
+        // tapped lands and rocks first (they come back untapped), creatures last
+        private static int fillerRank(final Card c) {
+            final int rank = c.isLand() ? 0 : c.isArtifact() && !c.isCreature() ? 2 : 4;
+            return c.isTapped() ? rank : rank + 1;
+        }
+
+        // Enough blue for the blue pips: floating blue plus untapped sources whose printed
+        // production could be blue (Electric Seaweed's check, read from the Produced text only).
+        private static boolean hasBlueSources(final Player ai, final Card host) {
+            final ManaCost cost = host.getManaCost();
+            final int needed = cost == null ? 0 : cost.getShardCount(forge.card.mana.ManaCostShard.BLUE);
+            final SpellAbility spell = host.getFirstSpellAbility();
+            int blue = ai.getManaPool().getAmountOfColor(MagicColor.BLUE);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (blue >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (spell != null && !ma.getManaPart().meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("U") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        blue++;
+                        break;
+                    }
+                }
+            }
+            return blue >= needed;
+        }
+    }
+
     // Gideon Blackblade
     public static class GideonBlackblade {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

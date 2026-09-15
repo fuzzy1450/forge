@@ -203,6 +203,17 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.WakeTheDead.consider(aiPlayer, sa);
         }
 
+        if ("Ghostly Flicker".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Picks and targets two of our own permanents itself: the stock
+            // blink targeting in isPreferredTarget runs only for single-target
+            // blinks (minTargets <= 1) and otherwise keeps opponents'
+            // permanents, which this card cannot target. AI:RemoveDeck:All
+            // stripped the card before any handler ran, so the stock path drew
+            // no random numbers for it. Every other ChangeZone card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.GhostlyFlicker.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
