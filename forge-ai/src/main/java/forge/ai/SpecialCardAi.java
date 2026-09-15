@@ -296,6 +296,130 @@ public class SpecialCardAi {
         }
     }
 
+    // Brokers Confluence
+    // "Choose three. You may choose the same mode more than once." CharmAi's multi-mode picker
+    // (chooseMultipleOptionsAi) ignores CanRepeatModes and needs three distinct modes that each pass
+    // canPlaySa on their own, and PhasesAi never targets (phasesPrefTargeting is a stub), so it could
+    // never fill three slots and the card was never cast. Build the list here instead: fill the slots
+    // with Proliferate (CharmEffect.chainAbilities clones a repeated entry), and only when those
+    // proliferates buy something real - a poison kill, or counters worth growing on our side of the
+    // table in a window where the mana is not wanted for anything else.
+    public static class BrokersConfluence {
+        // per proliferate, on CountersProliferateAi's own scale: three of them (>= 6) cover the 5 mana
+        public static final int MIN_PROLIFERATE_VALUE = 2;
+        private static final int VALUE_OWN_PLANESWALKER = 3;
+        private static final int VALUE_OWN_POSITIVE_COUNTERS = 1;
+        private static final int VALUE_OPP_NEGATIVE_COUNTERS = 1;
+        private static final int VALUE_OPP_POISON = 2;
+
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa,
+                                                   final List<AbilitySub> choices, final int num) {
+            final List<AbilitySub> chosen = Lists.newArrayList();
+            final Game game = ai.getGame();
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+
+            // RNG parity: the stock picker ran canPlaySa on every offered mode, in this order, and
+            // CounterAi can draw there (MyRandom.percentTrue against a 1-3 mana ability). Replay that
+            // pass with its verdicts ignored, so a held Confluence consumes exactly the draws it did.
+            AbilitySub prolif = null;
+            for (final AbilitySub sub : choices) {
+                sub.setActivatingPlayer(ai);
+                aic.canPlaySa(sub);
+                if (sub.usesTargeting()) {
+                    sub.resetTargets(); // no stale targets from that pass or an earlier priority
+                }
+                if (sub.getApi() == ApiType.Proliferate) {
+                    prolif = sub;
+                }
+            }
+            if (prolif == null || num <= 0) {
+                return chosen; // script drifted: stay out
+            }
+
+            final int proliferates = num;
+            for (int i = 0; i < proliferates; i++) {
+                chosen.add(prolif);
+            }
+
+            // the floor: a poison kill at any time ...
+            if (proliferateKills(ai, proliferates)) {
+                return chosen;
+            }
+            // ... otherwise real value, on an empty stack, at the opponent's end step before our turn
+            // or in our own main 2 (the script's AIActivateLast$ True lets every other play go first)
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean window = game.getStack().isEmpty()
+                    && ((ph.is(PhaseType.END_OF_TURN) && !ph.isPlayerTurn(ai) && ai.equals(ph.getNextTurn()))
+                        || ph.is(PhaseType.MAIN2, ai));
+            if (window && proliferateValue(ai) >= MIN_PROLIFERATE_VALUE) {
+                return chosen;
+            }
+            chosen.clear();
+            return chosen;
+        }
+
+        // What one proliferate gives the resolution-time chooser (CountersProliferateAi.chooseSingleEntity),
+        // on CountersProliferateAi's weights, counting only what that chooser really improves: never a
+        // land (charge counters on a Vivid land, a graft counter on Llanowar Reborn) or a battle, and on
+        // our side only a Positive counter (ComputerUtil.getCounterCategory) with no Negative one beside
+        // it, so Neutral keyword counters count for nothing.
+        static int proliferateValue(final Player ai) {
+            int value = 0;
+            for (final Player p : ai.getYourTeam()) {
+                for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
+                    if (c.isLand() || c.isBattle() || !c.hasCounters()) {
+                        continue;
+                    }
+                    if (c.isPlaneswalker()) {
+                        value += VALUE_OWN_PLANESWALKER;
+                        continue;
+                    }
+                    boolean positive = false;
+                    boolean negative = false;
+                    for (final CounterType ct : c.getCounters().elementSet()) {
+                        if (c.getCounters(ct) < 1) {
+                            continue;
+                        }
+                        final CounterAiCategory category = ComputerUtil.getCounterCategory(ct, c);
+                        positive |= category == CounterAiCategory.Positive;
+                        negative |= category == CounterAiCategory.Negative;
+                    }
+                    if (positive && !negative) {
+                        value += VALUE_OWN_POSITIVE_COUNTERS;
+                    }
+                }
+            }
+            boolean opponentPoison = false;
+            for (final Player o : ai.getOpponents()) {
+                opponentPoison |= o.getPoisonCounters() > 0 && o.canReceiveCounters(CounterEnumType.POISON);
+                for (final Card c : o.getCardsIn(ZoneType.Battlefield)) {
+                    if (!c.isCreature() || c.isLand() || c.isPlaneswalker() || !c.hasCounters()) {
+                        continue;
+                    }
+                    for (final CounterType ct : c.getCounters().elementSet()) {
+                        if (c.getCounters(ct) >= 1 && ComputerUtil.isNegativeCounter(ct, c)) {
+                            value += VALUE_OPP_NEGATIVE_COUNTERS;
+                            break;
+                        }
+                    }
+                }
+            }
+            return value + (opponentPoison ? VALUE_OPP_POISON : 0);
+        }
+
+        // an opponent who already has poison, can get more and can lose to it reaches 10 within n proliferates
+        static boolean proliferateKills(final Player ai, final int n) {
+            for (final Player o : ai.getOpponents()) {
+                final int poison = o.getPoisonCounters();
+                if (poison > 0 && poison + n >= 10 && o.canReceiveCounters(CounterEnumType.POISON)
+                        && !o.cantLoseCheck(forge.game.player.GameLossReason.Poisoned)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Cascade shells: Throes of Chaos, Into the Time Vortex (AILogic$ CascadeShell)
     // Spells whose only effect is the Cascade cast trigger (plus Retrace / Rebound), scripted as a
     // no-op SP$ Pump. All the value is the free cascade hit, and that hit is still judged, optionally,
