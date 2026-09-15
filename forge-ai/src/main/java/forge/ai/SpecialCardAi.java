@@ -1346,6 +1346,153 @@ public class SpecialCardAi {
         }
     }
 
+    // Cosmic Intervention
+    // "If a permanent you control would be put into a graveyard from the battlefield this
+    // turn, exile it instead. Return it to the battlefield under its owner's control at the
+    // beginning of the next end step." Reached from EffectAi.checkApiLogic's AILogic$
+    // CosmicIntervention branch after the randomReturn roll, for the hand cast and the
+    // foretold cast alike, and EffectAi.doTriggerNoCost skips its AILogic pre-call for this
+    // logic, so every consult draws the one roll the stock no-AILogic refusal drew. Draws no
+    // RNG itself. One window, safe by construction: an OPPONENT's spell or ability on top of
+    // the stack whose effect chain puts our own permanents into the graveyard (destroy, lethal
+    // damage, -X/-X, sacrifice-all). Resolving then can only turn those deaths into a
+    // temporary exile. Declined when any link of that chain exiles, bounces, steals or
+    // attaches instead (the shared predictor counts those; this card saves from none of them).
+    // Counted: permanents we control AND own, non-token (tokens cease to exist in exile), not a
+    // commander (903.9a offers the command zone from exile too). Floor: two or more nonland
+    // permanents saved, three or more lands, or one premium nonland (a creature at
+    // CreatureEvaluator 200+, a planeswalker, or another nonland at CMC 4+). Divided damage is
+    // re-checked per target against its own allocation (the predictor applies the whole NumDmg
+    // to every target), and stolen permanents this would hand back to their owners are netted
+    // out of the count and veto the single-card branch.
+    public static class CosmicIntervention {
+        public static final int MIN_SAVED = 2;               // two cards saved: card advantage vs. the removal
+        public static final int SINGLE_CREATURE_VALUE = 200; // ~ a non-token 3/3 with an ability
+        public static final int SINGLE_NONCREATURE_CMC = 4;  // real artifacts and enchantments
+        public static final int MIN_LANDS = 3;               // land wipes
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty() || alreadyActive(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility top = game.getStack().peekAbility();
+            if (top == null || top.getActivatingPlayer() == null || !top.getActivatingPlayer().isOpponentOf(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility threat = top instanceof forge.game.trigger.WrappedAbility w ? w.getWrappedAbility() : top;
+            if (!routesToGraveyard(threat)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final Set<Card> threatened = new LinkedHashSet<>();
+            for (final Object o : ComputerUtil.predictThreatenedObjects(ai, null, true)) {
+                if (o instanceof Card c) {
+                    threatened.add(c);
+                }
+            }
+            threatened.removeAll(survivesDividedDamage(threat));
+            threatened.addAll(sacrificeAllVictims(ai, threat));
+
+            final CardCollection saved = new CardCollection();
+            final CardCollection givenBack = new CardCollection();
+            for (final Card c : threatened) {
+                if (!c.isInPlay() || !ai.equals(c.getController()) || c.isToken()) {
+                    continue;
+                }
+                if (!ai.equals(c.getOwner())) {
+                    givenBack.add(c); // returns under its owner's control: to an opponent
+                } else if (!c.isRealCommander()) {
+                    saved.add(c);
+                }
+            }
+            return passesFloor(saved, givenBack)
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        private static boolean passesFloor(final CardCollection saved, final CardCollection givenBack) {
+            final CardCollection nonland = CardLists.filter(saved, c -> !c.isLand());
+            final int lands = saved.size() - nonland.size();
+            final int back = givenBack.size();
+            if (nonland.size() - back >= MIN_SAVED || lands - back >= MIN_LANDS) {
+                return true;
+            }
+            if (nonland.size() == 1 && back == 0) {
+                final Card c = nonland.getFirst();
+                return c.isCreature() ? ComputerUtilCard.evaluateCreature(c) >= SINGLE_CREATURE_VALUE
+                        : c.isPlaneswalker() || c.getCMC() >= SINGLE_NONCREATURE_CMC;
+            }
+            return false;
+        }
+
+        // A second copy this turn adds nothing. The effect card's name embeds the host's view
+        // string, so match on the effect source rather than isCardInCommand(name).
+        private static boolean alreadyActive(final Player ai) {
+            return ai.getCardsIn(ZoneType.Command).anyMatch(c -> c.getEffectSource() != null
+                    && "Cosmic Intervention".equals(c.getEffectSource().getName()));
+        }
+
+        // False when any link of the threat chain removes battlefield permanents by a route this
+        // card does not replace (exile, bounce, library, control change, auras).
+        private static boolean routesToGraveyard(final SpellAbility threat) {
+            for (SpellAbility cur = threat; cur != null; cur = cur.getSubAbility()) {
+                final ApiType api = cur.getApi();
+                if (api == ApiType.ChangeZone || api == ApiType.ChangeZoneAll) {
+                    final String origin = cur.getParamOrDefault("Origin", "");
+                    if ((origin.isEmpty() || origin.contains("Battlefield"))
+                            && !"Graveyard".equals(cur.getParam("Destination"))) {
+                        return false;
+                    }
+                } else if (api == ApiType.GainControl || api == ApiType.ExchangeControl || api == ApiType.Attach) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Targets of a DividedAsYouChoose DealDamage link whose own allocation does not kill them
+        // (a missing allocation counts as no damage). Removing them can only lower the count.
+        private static CardCollection survivesDividedDamage(final SpellAbility threat) {
+            final CardCollection out = new CardCollection();
+            for (SpellAbility cur = threat; cur != null; cur = cur.getSubAbility()) {
+                if (cur.getApi() != ApiType.DealDamage || !cur.isDividedAsYouChoose()) {
+                    continue;
+                }
+                for (final Card c : cur.getTargets().getTargetCards()) {
+                    final Integer dmg = cur.getDividedValue(c);
+                    if (dmg == null || ComputerUtilCombat.predictDamageTo(c, dmg, cur.getHostCard(), false)
+                            < ComputerUtilCombat.getDamageToKill(c, false)) {
+                        out.add(c);
+                    }
+                }
+            }
+            return out;
+        }
+
+        // The predictor has no SacrificeAll branch. Mirror SacrificeAllEffect's own list (the
+        // battlefield filtered by ValidCards, then canBeSacrificedBy) for an unconditional sweep;
+        // Defined/Controller variants are left out, which can only under-count.
+        private static CardCollection sacrificeAllVictims(final Player ai, final SpellAbility threat) {
+            final CardCollection out = new CardCollection();
+            for (SpellAbility cur = threat; cur != null; cur = cur.getSubAbility()) {
+                if (cur.getApi() != ApiType.SacrificeAll || cur.hasParam("Defined") || cur.hasParam("Controller")) {
+                    continue;
+                }
+                CardCollectionView list = ai.getGame().getCardsIn(ZoneType.Battlefield);
+                if (cur.hasParam("ValidCards")) {
+                    list = AbilityUtils.filterListByType(list, cur.getParam("ValidCards"), cur);
+                }
+                for (final Card c : list) {
+                    if (c.canBeSacrificedBy(cur, true)) {
+                        out.add(c);
+                    }
+                }
+            }
+            return out;
+        }
+    }
+
     // Crackling Spellslinger
     // "When Crackling Spellslinger enters, if you cast it, the next instant or sorcery
     // spell you cast this turn has storm." Reached from EffectAi.checkApiLogic's

@@ -398,6 +398,13 @@ public class EffectAi extends SpellAbilityAi {
                 // before refusing at the no-AILogic fallthrough. doTriggerNoCost runs this
                 // logic's consult once, so a consult still draws exactly once.
                 return SpecialCardAi.ElectricSeaweed.consider(ai, sa);
+            } else if (logic.equals("CosmicIntervention")) {
+                // Cosmic Intervention, hand and foretold casts alike (the foretold SA is a
+                // copy that keeps AILogic). Routed after the randomReturn roll: the card has
+                // no RemoveDeck hint, so the stock engine evaluated it and drew here before
+                // refusing at the no-AILogic fallthrough. doTriggerNoCost skips its AILogic
+                // pre-call for this logic, so a free-cast consult still draws exactly once.
+                return SpecialCardAi.CosmicIntervention.consider(ai, sa);
             } else if (logic.equals("YawgmothsWill")) {
                 return SpecialCardAi.YawgmothsWill.consider(ai, sa) ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             } else if (logic.startsWith("NeedCreatures")) {
@@ -688,7 +695,8 @@ public class EffectAi extends SpellAbilityAi {
         // super.doTriggerNoCost below, drawing the one randomReturn roll the stock
         // no-AILogic consult drew (a declining pre-call would draw a second).
         if (sa.hasParam("AILogic") && !"CraftyCutpurse".equals(sa.getParam("AILogic"))
-                && !"CracklingSpellslinger".equals(sa.getParam("AILogic"))) { // same one-roll parity
+                && !"CracklingSpellslinger".equals(sa.getParam("AILogic")) // same one-roll parity
+                && !"CosmicIntervention".equals(sa.getParam("AILogic"))) { // same, for free casts
             if (canPlay(aiPlayer, sa).willingToPlay()) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
