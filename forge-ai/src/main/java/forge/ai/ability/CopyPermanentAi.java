@@ -230,7 +230,19 @@ public class CopyPermanentAi extends SpellAbilityAi {
 
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
-    
+
+    @Override
+    public AiAbilityDecision chkDrawback(Player aiPlayer, SpellAbility sa) {
+        if ("Here Comes a New Hero!".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && sa.usesTargeting()) {
+            // The inherited SpellAbilityAi.chkDrawback refuses every targeted sub
+            // (CantPlayAi with candidates, TargetingFailed without), so the "copy up
+            // to one target creature" rider vetoed the whole Draw X spell. Every other
+            // CopyPermanent sub takes exactly the path it took before this override.
+            return SpecialCardAi.HereComesANewHero.considerCopy(aiPlayer, sa);
+        }
+        return super.chkDrawback(aiPlayer, sa);
+    }
+
     /* (non-Javadoc)
      * @see forge.card.ability.SpellAbilityAi#confirmAction(forge.game.player.Player, forge.card.spellability.SpellAbility, forge.game.player.PlayerActionConfirmMode, java.lang.String)
      */

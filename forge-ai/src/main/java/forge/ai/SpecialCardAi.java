@@ -2593,6 +2593,105 @@ public class SpecialCardAi {
         }
     }
 
+    // Here Comes a New Hero!
+    // "Target player draws X cards. Then create a token that's a copy of up to
+    // one target creature with mana value X or less." DrawAi approves the Draw X
+    // root (main 2, self target) and sets X on it; the DBCopy sub then reached
+    // the inherited SpellAbilityAi.chkDrawback, which refuses every targeted sub,
+    // so the whole spell was vetoed. Reached from CopyPermanentAi.chkDrawback's
+    // name gate, after DrawAi.targetAI set the root's X. Draws no random numbers,
+    // like the base chkDrawback it replaces.
+    public static class HereComesANewHero {
+        // Draw alone must be at least this many cards (5 mana, Stroke of Genius at X=2).
+        private static final int MIN_X_WITHOUT_COPY = 2;
+        // A vanilla non-token 1-mana 1/1 scores 130 tapped; below that a copy is chaff.
+        private static final int MIN_COPY_VALUE = 130;
+
+        public static AiAbilityDecision considerCopy(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Integer xPaid = sa.getRootAbility().getXManaCostPaid();
+            final int x = xPaid == null ? 0 : xPaid;
+            // DrawAi's hand-size clamp can leave X at 0 or below: never pay 3 to draw nothing.
+            if (x < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // For X draws DrawAi.targetAI raises X toward library - 1 once it reaches library - 3.
+            if (x > ai.getCardsIn(ZoneType.Library).size() - 3) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Frost Titan, Unsettled Mariner, Kira-granted triggers counter the whole spell
+            // (draw included) when an opponent's creature is targeted, and
+            // ComputerUtilCost.canPayCost cannot see them: then copy only our own.
+            final boolean onlyOwn = opponentPunishesTargeting(ai);
+
+            Card best = null;
+            int bestValue = MIN_COPY_VALUE - 1;
+            // Creature.cmcLEX reads X through the root's getXManaCostPaid.
+            for (final Card c : CardUtil.getValidCardsToTarget(sa)) {
+                if (!sa.canTarget(c)) {
+                    continue;
+                }
+                final boolean ours = ai.equals(c.getController());
+                if (!ours && onlyOwn) {
+                    continue;
+                }
+                // canPayCost adds an opponent's ward cost after DrawAi spent every mana
+                // on X: CantAfford, then the same X and the same target every pass.
+                if (!ours && c.hasKeyword(Keyword.WARD)) {
+                    continue;
+                }
+                // The legend rule would bin the token or the original.
+                if (ours && c.getType().isLegendary()) {
+                    continue;
+                }
+                // The token copies base P/T and no counters: Steelbane Hydra (0/0) dies on
+                // arrival, Voracious Hydra (0/1) fights for nothing.
+                if (c.getBasePower() <= 0 || c.getBaseToughness() <= 0) {
+                    continue;
+                }
+                // Leveler, Phyrexian Dreadnought: copies that hurt their new controller.
+                if (ComputerUtilCard.isCardRemAIDeck(c) || ComputerUtilCard.isCardRemRandomDeck(c)) {
+                    continue;
+                }
+                final int v = copyValue(c);
+                if (v > bestValue) {
+                    best = c;
+                    bestValue = v;
+                }
+            }
+
+            if (best != null) {
+                sa.getTargets().add(best);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            // "Up to one": zero targets, the draw alone, once it is worth the mana.
+            if (x >= MIN_X_WITHOUT_COPY) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        private static boolean opponentPunishesTargeting(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.BecomesTarget || t.getMode() == TriggerType.BecomesTargetOnce) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // What the TOKEN will be: copiable base P/T, not counters or pumps on the original.
+        private static int copyValue(final Card c) {
+            return ComputerUtilCard.evaluateCreature(c, false, true)
+                    + 15 * c.getBasePower() + 10 * c.getBaseToughness();
+        }
+    }
+
     // Heroic Sacrifice
     // "Choose target creature you control. The next time a source would deal
     // combat damage to you or another creature you control this turn, that
