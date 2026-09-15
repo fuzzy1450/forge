@@ -5725,6 +5725,118 @@ public class SpecialCardAi {
         }
     }
 
+    // Mizzix's Mastery
+    // "Exile target card that's an instant or sorcery from your graveyard. For
+    // each card exiled this way, copy it, and you may cast the copy without
+    // paying its mana cost." ChangeZoneAi's generic graveyard-exile targeting
+    // keeps only opponents' cards, so the normal mode never had a target, and
+    // the untargeted Overload mode would reach knownOriginCanPlayAI's WillPlay
+    // with any instant or sorcery in the graveyard. The pick is approved by the
+    // chooser the resolution itself runs (PlayAi.chooseSingleCard on the DBPlay
+    // sub: the copy's own doTriggerNoCost judgment, a valid target count, a
+    // payable extra cost, no X), so a card the AI would decline is never exiled
+    // for nothing. That free-trigger judgment is blind in places, so the pool is
+    // first limited to cards whose every part - root, sub chain and charm
+    // choices, on both faces of a modal card - is safe to offer it: no "...All"
+    // api (Living Death's ChangeZoneAll approves without its checkApiLogic
+    // evaluator), none of the apis whose handlers refuse or turn respond-only
+    // while any spell is on the stack (Mastery still is when the copy is
+    // judged), no Mana api (a ritual's hand scan re-enters this evaluator), no
+    // CannotPlayAi handler, and no AI:RemoveDeck:All hint (Windfall, Faithless
+    // Looting). Floor: mana value >= MIN_PICK_CMC, the mana paid back.
+    // Overload is refused: at resolution it casts every exiled card the chooser
+    // approves, not the pool filtered here. The prediction runs other cards'
+    // handlers, so it is guarded against re-entry, and a throw from one of them
+    // is a decline instead of an AI that plays nothing this priority pass.
+    public static class MizzixsMastery {
+        public static final int MIN_PICK_CMC = 4;
+
+        private static final EnumSet<ApiType> UNSAFE_TO_OFFER = EnumSet.of(ApiType.Mana, ApiType.Pump,
+                ApiType.PutCounter, ApiType.Fog, ApiType.Debuff, ApiType.Regenerate, ApiType.PreventDamage);
+        private static final ThreadLocal<Boolean> PREDICTING = ThreadLocal.withInitial(() -> false);
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (PREDICTING.get()) {
+                // re-entered from a candidate's own handler (a hand or graveyard scan)
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card host = sa.getHostCard();
+            final AbilitySub play = sa.getSubAbility();
+            if (host == null || play == null || play.getApi() != ApiType.Play) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!ComputerUtilCost.canPayCost(sa, ai, false)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (!sa.usesTargeting()) { // Overload
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.resetTargets();
+            final CardCollection pool = new CardCollection();
+            for (Card c : CardLists.getValidCards(ai.getCardsIn(ZoneType.Graveyard),
+                    "Instant.YouOwn,Sorcery.YouOwn", ai, host, sa)) {
+                if (!"Mizzix's Mastery".equals(c.getName()) && c.getCMC() >= MIN_PICK_CMC && sa.canTarget(c)
+                        && !ComputerUtilCard.isCardRemAIDeck(c) && safeToOffer(c)) {
+                    pool.add(c);
+                }
+            }
+            if (pool.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            Card pick;
+            PREDICTING.set(true);
+            try {
+                pick = SpellApiToAi.Converter.get(play).chooseSingleCard(ai, play, pool, false, null, null);
+            } catch (RuntimeException e) {
+                pick = null;
+            } finally {
+                PREDICTING.remove();
+            }
+            if (pick == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Every spell the chooser can offer from this card (the current face,
+        // plus the back of a modal card, as AbilityUtils.getSpellsFromPlayEffect
+        // collects them) and every part of each.
+        static boolean safeToOffer(final Card c) {
+            final List<SpellAbility> spells = new ArrayList<>(c.getBasicSpells());
+            if (c.isModal() && c.hasState(forge.card.CardStateName.Backside)) {
+                spells.addAll(c.getBasicSpells(c.getState(forge.card.CardStateName.Backside)));
+            }
+            if (spells.isEmpty()) {
+                return false;
+            }
+            for (SpellAbility s : spells) {
+                if (!partsSafe(s)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean partsSafe(final SpellAbility root) {
+            for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+                final ApiType api = part.getApi();
+                if (api == null || api.name().endsWith("All") || UNSAFE_TO_OFFER.contains(api)
+                        || SpellApiToAi.Converter.get(api) instanceof forge.ai.ability.CannotPlayAi) {
+                    return false;
+                }
+                for (AbilitySub choice : part.getAdditionalAbilityList("Choices")) {
+                    if (!partsSafe(choice)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
     // Momentous Fall
     // "As an additional cost to cast this spell, sacrifice a creature. You draw cards equal to the
     // sacrificed creature's power, then you gain life equal to its toughness." Once AI:RemoveDeck is

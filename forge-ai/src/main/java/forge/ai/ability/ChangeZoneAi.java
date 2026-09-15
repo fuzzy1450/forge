@@ -155,6 +155,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.GuffRewritesHistory.consider(aiPlayer, sa);
         }
 
+        if ("Mizzix's Mastery".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Both root spells route here. The normal mode picks and targets
+            // our own graveyard card itself (the generic graveyard-exile
+            // targeting keeps only opponents' cards), approved by the chooser
+            // its resolution uses; the untargeted Overload mode is refused
+            // instead of reaching knownOriginCanPlayAI's WillPlay with any
+            // instant or sorcery in the graveyard. AI:RemoveDeck:All stripped
+            // the card before any handler ran, so the stock path drew no
+            // random numbers for it. Every other ChangeZone card takes exactly
+            // the path it took before this branch.
+            return SpecialCardAi.MizzixsMastery.consider(aiPlayer, sa);
+        }
+
         if ("Unfinished Business".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
             // Picks the creature and up to two Aura/Equipment cards together:
             // the sub's AttachedTo$ ParentTarget is read as a card type by
