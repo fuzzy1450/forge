@@ -290,6 +290,12 @@ public class ChangeZoneAllAi extends SpellAbilityAi {
             boolean result = ai.getOpponents().getCardsIn(origin).anyMatch(CardPredicates.CREATURES);
             return result ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
+        if (!mandatory && "Day of the Dragons".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Only reached from AiController.checkETBEffects before the cast (the real trigger is
+            // mandatory). The generic Battlefield branch below matches Creature.YouCtrl against the
+            // opponents' cards - always empty - and so vetoes the cast unconditionally.
+            return SpecialCardAi.DayOfTheDragons.consider(ai, sa);
+        }
         CardCollectionView humanType = ai.getOpponents().getCardsIn(origin);
         humanType = AbilityUtils.filterListByType(humanType, sa.getParam("ChangeType"), sa);
         CardCollectionView computerType = ai.getCardsIn(origin);

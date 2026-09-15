@@ -913,6 +913,47 @@ public class SpecialCardAi {
         }
     }
 
+    // Day of the Dragons - judged from its ETB exile trigger (ChangeZoneAllAi.doTriggerNoCost,
+    // non-mandatory only): trade our creatures for the same number of 5/5 flying Dragons
+    // only when that is a clear upgrade. Reads game state only: no token prototype (TokenDb
+    // draws from the seeded RNG and consumes a card id) and no random draw.
+    public static class DayOfTheDragons {
+        // CreatureEvaluator on the r_5_5_dragon_flying token: 80 base + 0 (token) + 5*15 power
+        // + 5*10 toughness + 0 cmc + 5*10 flying + 1 untapped = 256.
+        private static final int DRAGON_TOKEN_VALUE = 256;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            // The Dragons are summoning sick: never convert creatures that could still attack this turn.
+            if (ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.MAIN2)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TimingRestrictions);
+            }
+            // Exactly what the trigger will exile; never fire for nothing.
+            final CardCollectionView ours = AbilityUtils.filterListByType(
+                    ai.getCardsIn(ZoneType.Battlefield), sa.getParam("ChangeType"), sa);
+            final int n = ours.size();
+            if (n < 2) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // A creature holding cards it exiled (Angel of Serenity, Banisher Priest) would hand them back.
+            if (ours.anyMatch(c -> c.hasExiledCard())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int gain = n * DRAGON_TOKEN_VALUE - ComputerUtilCard.evaluateCreatureList(ours);
+            if (gain < AiProfileUtil.getIntProperty(ai, AiProps.BOUNCE_ALL_ELSEWHERE_CREAT_EVAL_DIFF)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // Affordability pre-filter (an overestimate: tapped sources count). A WillPlay here sends
+            // the cast on to ComputerUtilCost.canPayCost, whose mana-source reservation check draws
+            // from the seeded RNG; without this, every unaffordable pass would draw where the
+            // stock veto drew nothing.
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, false) < sa.getHostCard().getCMC()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Deathgorge Scavenger
     public static class DeathgorgeScavenger {
         public static boolean consider(final Player ai, final SpellAbility sa) {
