@@ -1132,6 +1132,105 @@ public class SpecialCardAi {
         }
     }
 
+    // Crafty Cutpurse
+    // "When Crafty Cutpurse enters, each token that would be created under an
+    // opponent's control this turn is created under your control instead."
+    // Reached from EffectAi.checkApiLogic's AILogic$ CraftyCutpurse branch (the
+    // ETB Effect sub that AiController.checkETBEffects consults before the cast)
+    // after the randomReturn roll, and EffectAi.doTriggerNoCost skips its AILogic
+    // pre-call for this logic, so each consult draws the one roll the stock
+    // no-AILogic refusal drew. The flash 2/2 is only worth four mana in response
+    // to an opponent's spell or ability already on the stack that will create a
+    // token under an opponent's control, and never before our own end step (an
+    // opponent's token trigger in our combat would tap us out of main 2 for one
+    // Treasure). Not counted: optional triggers and Optional, OptionalDecider or
+    // UnlessCost parts (we would pay an unless-cost ourselves and stop the very
+    // token), unmet conditions, a Token amount of 0. Creators follow each effect's
+    // own player rule. No RNG of its own; a part that throws on an unresolved
+    // stack item counts as no token, so the Game AI Eval task never fails here.
+    public static class CraftyCutpurse {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (ph.isPlayerTurn(ai) && (ph.getPhase() == null || ph.getPhase().isBefore(PhaseType.END_OF_TURN))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility item = si.getSpellAbility();
+                if (item == null || item.isOptionalTrigger()) {
+                    continue;
+                }
+                final Player activator = item.getActivatingPlayer();
+                if (activator == null || !activator.isOpponentOf(ai)) {
+                    continue;
+                }
+                // A trigger on the stack is a WrappedAbility, which does not delegate
+                // its conditions: judge the wrapped ability instead.
+                final SpellAbility root = item instanceof forge.game.trigger.WrappedAbility
+                        ? ((forge.game.trigger.WrappedAbility) item).getWrappedAbility() : item;
+                for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+                    if (createsTokensForOpponent(ai, part)) {
+                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                    }
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        private static boolean createsTokensForOpponent(final Player ai, final SpellAbility part) {
+            final ApiType api = part.getApi();
+            if (api != ApiType.Token && api != ApiType.CopyPermanent
+                    && api != ApiType.Investigate && api != ApiType.Incubate) {
+                return false; // Amass excluded: its counters can land on an Army already in play
+            }
+            if (part.hasParam("Optional") || part.hasParam("OptionalDecider") || part.hasParam("UnlessCost")) {
+                return false;
+            }
+            try {
+                final Card host = part.getHostCard();
+                if (host == null || !part.metConditions()) {
+                    return false;
+                }
+                if (api == ApiType.Token
+                        && AbilityUtils.calculateAmount(host, part.getParamOrDefault("TokenAmount", "1"), part) <= 0) {
+                    return false;
+                }
+                final List<Player> creators = Lists.newArrayList();
+                if (api == ApiType.CopyPermanent) {
+                    // CopyPermanentEffect.resolve: Controller, else a ChosenMap's players, else the activator
+                    if (part.hasParam("Controller")) {
+                        creators.addAll(AbilityUtils.getDefinedPlayers(host, part.getParam("Controller"), part));
+                    } else if ("ChosenMap".equals(part.getParam("Defined"))) {
+                        creators.addAll(host.getChosenMap().keySet());
+                    }
+                    if (creators.isEmpty()) {
+                        creators.add(part.getActivatingPlayer());
+                    }
+                } else {
+                    // SpellAbilityEffect.getPlayers: Token reads TokenOwner defined-first;
+                    // Investigate and Incubate read Defined, and targets win whenever they target
+                    final boolean definedFirst = api == ApiType.Token;
+                    final String param = definedFirst ? "TokenOwner" : "Defined";
+                    if (part.usesTargeting() && (!definedFirst || !part.hasParam(param))) {
+                        part.getTargets().getTargetPlayers().forEach(creators::add);
+                    } else {
+                        for (final String d : part.getParamOrDefault(param, "You").split(" & ")) {
+                            creators.addAll(AbilityUtils.getDefinedPlayers(host, d, part));
+                        }
+                    }
+                }
+                for (final Player p : creators) {
+                    if (p != null && p.isOpponentOf(ai)) {
+                        return true;
+                    }
+                }
+                return false;
+            } catch (final RuntimeException e) {
+                return false;
+            }
+        }
+    }
+
     // Crawling Barrens
     public static class CrawlingBarrens {
         public static boolean consider(final Player ai, final SpellAbility sa) {
