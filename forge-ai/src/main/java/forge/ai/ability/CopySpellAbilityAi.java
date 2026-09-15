@@ -166,10 +166,21 @@ public class CopySpellAbilityAi extends SpellAbilityAi {
                 if (payer.getLandsInPlay().size() < 3) {
                     return false;
                 }
-                // TODO make better logic in to pick which opponent
-                if (payer.getOpponents().getCreaturesInPlay().size() < 0) {
+                // A land is a permanent resource: super runs the land-sacrifice rule only for a payer
+                // who did not cast the spell, so apply it to the caster's own copy here (once).
+                if (payer.equals(sa.getActivatingPlayer())
+                        && !ComputerUtilCost.checkSacrificeCost(payer, cost, sa.getHostCard(), sa)) {
                     return false;
                 }
+                if (!super.willPayUnlessCost(payer, sa, cost, alreadyPaid, payers)) {
+                    return false;
+                }
+                // Pay only for a copy its own retarget wants: ask the ChangeZone AI, from the payer's
+                // seat and non-mandatory, whether the copy has a preferred target (targetable, worth
+                // bouncing, not our own aura's host, combatants only in combat). Otherwise the mandatory
+                // retarget falls back to any valid target, our own permanents included, or fizzles.
+                final SpellAbility probe = sa.getRootAbility().copy(payer);
+                return SpellApiToAi.Converter.get(probe).doTriggerNoCostWithSubs(payer, probe, false).willingToPlay();
             }
         }
         return super.willPayUnlessCost(payer, sa, cost, alreadyPaid, payers);
