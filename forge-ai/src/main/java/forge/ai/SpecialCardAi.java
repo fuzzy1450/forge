@@ -10914,6 +10914,91 @@ public class SpecialCardAi {
         }
     }
 
+    // Sudden Substitution
+    // "Exchange control of target noncreature spell and target creature." The one exchange
+    // worth four mana and a card: an opponent's haymaker for our most expendable creature, in
+    // Commandeer's window - opponent-cast (not a teammate's), no chosen targets anywhere in its
+    // chain (the AI cannot choose new targets: PlayerControllerAi.chooseNewTargetsFor is a stub,
+    // so a stolen targeted spell would resolve against its original targets), no "...All" api
+    // (symmetric wraths resolve the same, controller-relative ones flip onto us), CMC >= 5
+    // counting announced X, and no LosesGame SVar on the host (Lich's Mastery, Forbidden Crypt).
+    // The creature goes over permanently, so only a face-up, unattached, non-land, non-commander
+    // creature with at most 2 power and worth no more than an untapped vanilla 2/2 for 2 is ever
+    // handed over, and only one the caster can legally control; no such creature, no cast.
+    // Split second: once the swap is on the stack nobody can answer it. The root is a Pump shell
+    // (PumpAi.checkApiLogic routes here); this chooses both targets, and PumpAi.chkDrawback and
+    // ControlSpellAi.chkDrawback accept the subs instead of re-targeting or vetoing them.
+    // Reads the board only: no random draws.
+    public static class SuddenSubstitution {
+        public static final int MIN_STOLEN_CMC = 5;
+        // CreatureEvaluator of an untapped vanilla 2/2 for 2: 80 + 20 + 30 + 20 + 10 + 1.
+        public static final int MAX_GIVEN_VALUE = 161;
+        public static final int MAX_GIVEN_POWER = 2;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final AbilitySub creatureSub = sa.getSubAbility();
+            sa.resetTargets();
+            if (creatureSub == null || !creatureSub.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // script shape changed
+            }
+            creatureSub.resetTargets();
+
+            if (game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final SpellAbility topSA = ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+            if (topSA == null || !topSA.isSpell() || topSA.getHostCard() == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final Player caster = topSA.getActivatingPlayer();
+            if (caster == null || !caster.isOpponentOf(ai) || ai.getYourTeam().contains(caster)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (SpellAbility part = topSA; part != null; part = part.getSubAbility()) {
+                if (part.usesTargeting() && !part.getTargets().isEmpty()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                if (part.getApi() != null && part.getApi().name().endsWith("All")) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            int tgtCMC = 0;
+            if (topSA.getPayCosts() != null && topSA.getPayCosts().getTotalMana() != null) {
+                tgtCMC = topSA.getPayCosts().getTotalMana().getCMC();
+                if (topSA.getPayCosts().getTotalMana().countX() > 0) {
+                    tgtCMC += topSA.getXManaCostPaid() != null ? topSA.getXManaCostPaid() : 3;
+                }
+            }
+            if (tgtCMC < MIN_STOLEN_CMC) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // A card that can make its controller lose the game is never ours to take.
+            for (String svar : topSA.getHostCard().getSVars().values()) {
+                if (svar.contains("LosesGame")) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            if (!sa.canTargetSpellAbility(topSA)) { // TargetType$ Spell + ValidTgts$ Card.nonCreature
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            final CardCollection fodder = CardLists.filter(ai.getCreaturesInPlay(), c ->
+                    !c.isCommander() && !c.isFaceDown() && !c.isLand() && !c.hasCardAttachments()
+                    && c.getNetPower() <= MAX_GIVEN_POWER
+                    && ComputerUtilCard.evaluateCreature(c) <= MAX_GIVEN_VALUE
+                    && c.canBeControlledBy(caster)
+                    && creatureSub.canTarget(c));
+            if (fodder.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card given = ComputerUtilCard.getWorstCreatureAI(fodder);
+
+            sa.getTargets().add(topSA);
+            creatureSub.getTargets().add(given);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
     // Synthetic Destiny
     // "Exile all creatures you control. At the beginning of the next end step, reveal cards
     // from the top of your library until you reveal that many creature cards, put all creature

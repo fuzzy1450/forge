@@ -126,6 +126,14 @@ public class PumpAi extends PumpAiBase {
             // the path it took before this branch.
             return SpecialCardAi.SinisterWaltz.consider(ai, sa);
         }
+        if ("Sudden Substitution".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // A Pump targeting shell on an opponent's spell (the real effect is the exchange in its
+            // subs): with a spell on the stack the non-curse branch below only looks for our own
+            // battlefield creatures to save (canPumpAgainstRemoval) and can never choose a spell.
+            // The evaluator chooses and floors both targets itself; every other Pump card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.SuddenSubstitution.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final Card source = sa.getHostCard();
         final SpellAbility root = sa.getRootAbility();
@@ -701,6 +709,15 @@ public class PumpAi extends PumpAiBase {
 
     @Override
     public AiAbilityDecision chkDrawback(Player ai, SpellAbility sa) {
+        if ("Sudden Substitution".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Judged whole in SpecialCardAi.SuddenSubstitution.consider, which already chose the
+            // creature: pumpTgtAI below would reset that target and pick our best creature
+            // (ComputerUtilCard.getBestAI) or fail. The untargeted remember sub passes as before.
+            if (sa.usesTargeting() && !sa.isTargetNumberValid()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         final SpellAbility root = sa.getRootAbility();
         final Card source = sa.getHostCard();
 
