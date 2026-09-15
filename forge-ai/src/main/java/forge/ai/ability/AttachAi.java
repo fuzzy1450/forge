@@ -61,6 +61,12 @@ public class AttachAi extends SpellAbilityAi {
             return new AiAbilityDecision(0, AiPlayDecision.WouldDestroyLegend);
         }
 
+        if (isAuraSpell(sa) && "Warbriar Blessing".equals(source.getName())) {
+            // Cast it as removal or not at all: the stock pump preference would spend it as a
+            // bare +0/+2 on the best unenchanted attacker (see SpecialCardAi.WarbriarBlessing).
+            return SpecialCardAi.WarbriarBlessing.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {

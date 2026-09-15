@@ -5203,6 +5203,145 @@ public class SpecialCardAi {
         }
     }
 
+    // Warbriar Blessing
+    // An Aura whose ETB makes the enchanted creature fight up to one target creature
+    // we don't control. Stock AI never cast it: AiController.checkETBEffects judges
+    // that fight before the Aura is attached, Defined$ Enchanted is empty there,
+    // FightAi.checkApiLogic answers MissingNeededCards and the whole cast is
+    // BadEtbEffects. Cast it only as removal - on the creature that kills a real
+    // opposing creature and survives - and at resolution take a no-loss fight or
+    // none ("up to one": zero targets is always legal and fights nothing).
+    public static class WarbriarBlessing {
+        // AttachAi.acceptableChoice's "good enough creature" line: a 2/2 token or
+        // any real 1-drop clears it, 1/1 and 0/x tokens do not.
+        public static final int MIN_VICTIM_EVAL = 130;
+
+        // AttachAi.checkApiLogic name gate: choose the creature to enchant, or don't cast.
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card aura = sa.getHostCard();
+            final SpellAbility fight = getEtbFight(aura);
+            if (fight == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility fightSa = fight.copy(ai); // the copy AiController.checkETBEffects makes
+            final int pow = getEnchantBonus(aura, "AddPower");
+            final int tgh = getEnchantBonus(aura, "AddToughness");
+
+            Card bestFighter = null;
+            Card bestVictim = null;
+            int bestVictimEval = 0;
+            for (final Card f : ai.getCreaturesInPlay()) {
+                // AttachAi's own exclusions (getSafeTargets, EndOfTurnLeavePlay)
+                if (!sa.canTarget(f) || !f.canBeAttached(aura, sa) || f.hasSVar("EndOfTurnLeavePlay")
+                        || "Dies".equals(f.getSVar("Targeting")) || "Counter".equals(f.getSVar("Targeting"))) {
+                    continue;
+                }
+                final Card v = getBestVictim(ai, fightSa, f, pow, tgh, MIN_VICTIM_EVAL, true, true);
+                if (v == null) {
+                    continue;
+                }
+                final int vEval = ComputerUtilCard.evaluateCreature(v);
+                if (bestVictim == null || vEval > bestVictimEval
+                        || (v.equals(bestVictim) && ComputerUtilCard.evaluateCreature(f) > ComputerUtilCard.evaluateCreature(bestFighter))) {
+                    bestFighter = f;
+                    bestVictim = v;
+                    bestVictimEval = vEval;
+                }
+            }
+            if (bestFighter == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.resetTargets();
+            sa.getTargets().add(bestFighter);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // FightAi.doTriggerNoCost name gate: the ETB fight itself.
+        public static AiAbilityDecision considerFight(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Card fighter = sa.getHostCard().getEnchantingCard();
+            if (fighter == null) {
+                // Pre-cast AiController.checkETBEffects (or the Aura fell off): nothing is
+                // attached to judge. "Up to one" can always resolve as no fight, and
+                // consider() already judged the cast (the handler runs before saSideEffects).
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            // On the stack the Aura's bonuses are already in the fighter's net P/T. The card
+            // is spent, so any no-loss kill is pure gain: no evaluation floor. Prefer a victim
+            // without ward (an unpaid ward counters the fight); otherwise no fight at all.
+            Card victim = getBestVictim(ai, sa, fighter, 0, 0, 0, false, true);
+            if (victim == null) {
+                victim = getBestVictim(ai, sa, fighter, 0, 0, 0, false, false);
+            }
+            if (victim != null) {
+                sa.getTargets().add(victim);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static Card getBestVictim(final Player ai, final SpellAbility fightSa, final Card fighter, final int pow,
+                final int tgh, final int minEval, final boolean castTime, final boolean skipWard) {
+            final CardCollection victims = CardLists.filter(
+                    CardLists.getTargetableCards(ai.getOpponents().getCreaturesInPlay(), fightSa),
+                    v -> (!skipWard || !v.hasKeyword(Keyword.WARD))
+                            && ComputerUtilCard.evaluateCreature(v) >= minEval
+                            && FightAi.canKill(fighter, v, pow)
+                            && survivesFight(fighter, v, tgh, castTime));
+            return ComputerUtilCard.getBestCreatureAI(victims);
+        }
+
+        // FightAi.shouldFight's survive idiom (the toughness bonus taken off the victim's
+        // power), plus the cases that idiom hides.
+        private static boolean survivesFight(final Card fighter, final Card victim, final int tgh, final boolean castTime) {
+            if (FightAi.canKill(victim, fighter, -tgh)) {
+                return false;
+            }
+            if (victim.getNetPower() > 0) {
+                // -tgh hides deathtouch
+                if (victim.hasKeyword(Keyword.DEATHTOUCH) && !fighter.hasKeyword(Keyword.INDESTRUCTIBLE)) {
+                    return false;
+                }
+                // any damage destroys it (getDamageToKill's 1), which -tgh hides too
+                if (fighter.hasSVar("DestroyWhenDamaged")) {
+                    return false;
+                }
+            }
+            if (castTime && ComputerUtil.canRegenerate(fighter.getController(), fighter)) {
+                // canKill trusts regeneration, counting mana the Aura itself is about to
+                // spend: before the cast, judge survival on toughness alone.
+                final int damage = victim.getNetPower() - tgh;
+                if (damage > 0 && ComputerUtilCombat.getEnoughDamageToKill(fighter, damage, victim, false) <= damage) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static SpellAbility getEtbFight(final Card aura) {
+            for (final Trigger t : aura.getTriggers()) {
+                if (t.getMode() != TriggerType.ChangesZone || !"Battlefield".equals(t.getParam("Destination"))) {
+                    continue;
+                }
+                final SpellAbility s = t.ensureAbility();
+                if (s != null && s.getApi() == ApiType.Fight && "Enchanted".equals(s.getParam("Defined"))) {
+                    return s;
+                }
+            }
+            return null;
+        }
+
+        private static int getEnchantBonus(final Card aura, final String param) {
+            int total = 0;
+            for (final StaticAbility st : aura.getStaticAbilities()) {
+                if (st.checkMode(forge.game.staticability.StaticAbilityMode.Continuous) && st.hasParam(param)
+                        && st.getParamOrDefault("Affected", "").contains("EnchantedBy")) {
+                    total += AbilityUtils.calculateAmount(aura, st.getParam(param), st);
+                }
+            }
+            return total;
+        }
+    }
+
     // Yawgmoth's Bargain
     public static class YawgmothsBargain {
         public static boolean consider(final Player ai, final SpellAbility sa) {

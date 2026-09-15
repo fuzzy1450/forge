@@ -118,6 +118,11 @@ public class FightAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        if ("Warbriar Blessing".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // The Aura's ETB fight: approved with no target before the cast (nothing is attached
+            // yet), a no-loss fight or none once it resolves; never the mandatory fallback below.
+            return SpecialCardAi.WarbriarBlessing.considerFight(ai, sa);
+        }
         final String aiLogic = sa.getParamOrDefault("AILogic", "");
         if (aiLogic.equals("Grothama")) {
             if (mandatory) {
