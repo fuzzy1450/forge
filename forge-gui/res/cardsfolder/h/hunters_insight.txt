@@ -5,5 +5,4 @@ A:SP$ Effect | ValidTgts$ Creature.YouCtrl | Triggers$ TrigDamage | RememberObje
 SVar:TrigDamage:Mode$ DamageDone | ValidSource$ Creature.IsRemembered | ValidTarget$ Player,Planeswalker | Execute$ TrigDraw | CombatDamage$ True | TriggerDescription$ Whenever that creature deals combat damage to a player or planeswalker this turn, draw that many cards.
 SVar:TrigDraw:DB$ Draw | Defined$ You | NumCards$ X
 SVar:X:TriggerCount$DamageAmount
-AI:RemoveDeck:All
 Oracle:Choose target creature you control. Whenever that creature deals combat damage to a player or planeswalker this turn, draw that many cards.

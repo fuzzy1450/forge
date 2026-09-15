@@ -38,6 +38,14 @@ import java.util.Set;
 public class EffectAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision checkApiLogic(final Player ai, final SpellAbility sa) {
+        if ("Hunter's Insight".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Combat-damage card draw on an unblocked attacker. Routed before the
+            // randomReturn roll: the card used to carry AI:RemoveDeck:All, so the
+            // stock engine never evaluated it and never drew for it, and a
+            // declining evaluation here draws no RNG either. Every other Effect
+            // card takes exactly the path it took before this branch.
+            return SpecialCardAi.HuntersInsight.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final PhaseHandler phase = game.getPhaseHandler();
         boolean randomReturn = MyRandom.getRandom().nextFloat() <= .6667;

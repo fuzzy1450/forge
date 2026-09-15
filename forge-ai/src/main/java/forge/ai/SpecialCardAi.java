@@ -1856,6 +1856,152 @@ public class SpecialCardAi {
         }
     }
 
+    // Hunter's Insight
+    // "Choose target creature you control. Whenever that creature deals combat
+    // damage to a player or planeswalker this turn, draw that many cards."
+    // Cast only once blocks are locked in on our own turn (declare-blockers
+    // step, empty stack), on the unblocked attacker we control that is
+    // predicted to deal the most combat damage to the player or planeswalker
+    // it attacks (prevention and double strike counted, activated pumps not
+    // assumed, infect = 0), and only for at least MIN_CARDS cards.
+    // The draw is mandatory, so the library floor bounds every draw the cast
+    // can cause. Each copy of the spell is another whole draw trigger, and an
+    // AI copy is re-aimed at our WORST targetable creature (setupTargets ->
+    // EffectAi.doTriggerNoCost), not at the chosen attacker, so the floor uses
+    // the most damage ANY attacker of ours is predicted to deal, blocked or
+    // not, plus one per effect for copy-grown attackers (Kalamax's SpellCopy
+    // counter): library >= effects * (maxDamage + effects) + LIBRARY_MARGIN.
+    // Vetoes: an opponent's draw punisher (a Draw/DrawCards replacement or a
+    // Drawn trigger that can see our draws: Notion Thief, Hullbreacher, Alms
+    // Collector, Orcish Bowmasters, Sheoldred), and a static that grants our
+    // spells conspire, replicate or casualty (the AI pays those whenever it
+    // can: Wort, the Raidmother would tap our untapped blockers for a copy
+    // that draws nothing).
+    public static class HuntersInsight {
+        public static final int MIN_CARDS = 2;
+        public static final int LIBRARY_MARGIN = 5;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final Combat combat = game.getCombat();
+            if (!game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS, ai)
+                    || !game.getStack().isEmpty() || combat == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!ai.canDraw()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (opponentPunishesDraws(ai) || grantsCopyKeyword(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int effects = effectsPerCast(ai);
+
+            Card best = null;
+            int bestDmg = 0;
+            int maxDmgAll = 0;
+            for (final Card attacker : combat.getAttackers()) {
+                if (!ai.equals(attacker.getController())) {
+                    continue;
+                }
+                final GameEntity defender = combat.getDefenderByAttacker(attacker);
+                final int dmg = ComputerUtilCombat.damageIfUnblocked(attacker, defender, combat, true);
+                maxDmgAll = Math.max(maxDmgAll, dmg); // a copy can land on any of our attackers
+                if (combat.isBlocked(attacker) || !sa.canTarget(attacker)) {
+                    continue;
+                }
+                if (!(defender instanceof Player) && !(defender instanceof Card && ((Card) defender).isPlaneswalker())) {
+                    continue; // a battle is not "a player or planeswalker"
+                }
+                if (dmg >= MIN_CARDS && dmg > bestDmg) {
+                    best = attacker;
+                    bestDmg = dmg;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int library = ai.getCardsIn(ZoneType.Library).size();
+            if (library < effects * (maxDmgAll + effects) + LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.resetTargets();
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // An opponent's card that steals or punishes our draws: a Draw/DrawCards
+        // replacement not limited to its own controller (ValidPlayer other than
+        // exactly You), or a Drawn trigger whose ValidCard is not limited to its
+        // own controller's cards (no YouCtrl/YouOwn).
+        static boolean opponentPunishesDraws(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield, ZoneType.Command)) {
+                    for (final ReplacementEffect re : c.getReplacementEffects()) {
+                        if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                                && !"You".equals(re.getParam("ValidPlayer"))) {
+                            return true;
+                        }
+                    }
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() != TriggerType.Drawn) {
+                            continue;
+                        }
+                        final String valid = t.hasParam("ValidCard") ? t.getParam("ValidCard") : "";
+                        if (!valid.contains("YouCtrl") && !valid.contains("YouOwn")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // A static on our battlefield granting our spells a copy keyword the AI
+        // pays whenever it can afford it.
+        static boolean grantsCopyKeyword(final Player ai) {
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (!st.hasParam("AddKeyword")) {
+                        continue;
+                    }
+                    final String kw = st.getParam("AddKeyword");
+                    if (kw.contains("Conspire") || kw.contains("Replicate") || kw.contains("Casualty")) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // How many copies of the draw trigger one cast can create: the spell,
+        // plus one per cast trigger of ours that copies it (Kalamax, Swarm
+        // Intelligence, Melek; over-counts conditional ones, which is
+        // conservative), doubled by a CopySpell replacement (Twinning Staff).
+        // At least 2, which covers a single copy from any other source.
+        static int effectsPerCast(final Player ai) {
+            int copyTriggers = 0;
+            boolean copyAddsOne = false;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() != TriggerType.SpellCast && t.getMode() != TriggerType.SpellCastOrCopy) {
+                        continue;
+                    }
+                    final SpellAbility tsa = t.ensureAbility();
+                    if (tsa != null && tsa.getApi() == ApiType.CopySpellAbility) {
+                        copyTriggers++;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.CopySpell) {
+                        copyAddsOne = true;
+                    }
+                }
+            }
+            return Math.max(2, 1 + copyTriggers * (copyAddsOne ? 2 : 1));
+        }
+    }
+
     // Invert Polarity
     // Cast only in response to an opponent's spell in Commandeer's window
     // (untargeted anywhere in the chain, no "...All" api, CMC floor): winning
