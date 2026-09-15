@@ -2437,6 +2437,82 @@ public class SpecialCardAi {
         }
     }
 
+    // Thief of Blood
+    // "As it enters, remove all counters from all permanents; it enters with a
+    // +1/+1 counter for each counter removed." Symmetric and mandatory, so the
+    // floor is a ledger over every permanent's removable counters: an
+    // opponent's useful counters and our own harmful ones are gain; our own
+    // useful counters and an opponent's harmful ones are loss. Hard vetoes: the
+    // strip would kill one of our permanents (a planeswalker's loyalty, a
+    // creature whose toughness - or survival of damage already marked - is its
+    // counters), unlock an opponent's Dark Depths, or defeat an opponent's
+    // battle (they cast its back face for free). Otherwise only when the gain
+    // clears a floor and beats the loss. Reads the board only: no random draws.
+    public static class ThiefOfBlood {
+        public static final int MIN_GAIN = 3;    // at least a 4/4 flier for six, bought by stripping the opponent
+        public static final int KILL_BONUS = 3;  // an opposing permanent that dies to the strip
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            int gain = 0;
+            int loss = 0;
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (c.equals(host) || !c.hasCounters()) {
+                    continue;
+                }
+                final boolean ours = !c.getController().isOpponentOf(ai);
+                boolean strips = false;
+                for (final CounterType ct : c.getCounters().elementSet()) {
+                    if (!c.canRemoveCounters(ct)) {
+                        continue;
+                    }
+                    strips = true;
+                    if (ct.is(CounterEnumType.DEFENSE) && c.isBattle()) {
+                        continue; // a battle's defense is judged as a defeat below, never counted
+                    }
+                    final CounterAiCategory cat = ComputerUtil.getCounterCategory(ct, c);
+                    if (cat == CounterAiCategory.Neutral || ct.is(CounterEnumType.LORE)) {
+                        continue; // no effect / a stripped saga just replays its chapters
+                    }
+                    final boolean harmful = cat == CounterAiCategory.Negative;
+                    if (ours == harmful) {
+                        gain += c.getCounters(ct);
+                    } else {
+                        loss += c.getCounters(ct);
+                    }
+                }
+                if (!ours && c.isBattle() && c.getCounters(CounterEnumType.DEFENSE) > 0
+                        && c.canRemoveCounters(CounterEnumType.DEFENSE)) {
+                    // stripping every defense counter defeats it for them: its back face, cast free
+                    // (our own battle's defeat benefits us, but stays out of the ledger)
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                if (!ours && "Dark Depths".equals(c.getName()) && c.getCounters(CounterEnumType.ICE) > 0
+                        && c.canRemoveCounters(CounterEnumType.ICE)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // hands them Marit Lage
+                }
+                if (!strips) {
+                    continue;
+                }
+                final int toughAfter = c.getNetToughness() - c.getToughnessBonusFromCounters();
+                final boolean dies = (c.isPlaneswalker() && c.getCurrentLoyalty() > 0
+                            && c.canRemoveCounters(CounterEnumType.LOYALTY))
+                        || (c.isCreature() && (toughAfter <= 0
+                            || (c.getDamage() > 0 && c.getDamage() >= toughAfter && !c.hasKeyword(Keyword.INDESTRUCTIBLE))));
+                if (dies) {
+                    if (ours) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                    gain += KILL_BONUS;
+                }
+            }
+            if (gain < MIN_GAIN || gain <= loss) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Timetwister
     public static class Timetwister {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

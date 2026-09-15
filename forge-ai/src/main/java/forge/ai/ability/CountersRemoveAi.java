@@ -4,8 +4,10 @@ import com.google.common.collect.Iterables;
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtil;
+import forge.ai.ComputerUtilAbility;
 import forge.ai.ComputerUtilCard;
 import forge.ai.ComputerUtilCost;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.Game;
 import forge.game.GameEntity;
@@ -332,6 +334,14 @@ public class CountersRemoveAi extends SpellAbilityAi {
     protected AiAbilityDecision doTriggerNoCost(Player aiPlayer, SpellAbility sa, boolean mandatory) {
         if (sa.usesTargeting()) {
             return doTgt(aiPlayer, sa, mandatory);
+        }
+        if (!mandatory && "Thief of Blood".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Only reached from AiController.checkETBEffects' pre-cast look at
+            // the ETB replacement (at resolution the replacement is mandatory and
+            // the answer is ignored). The flat refusal below vetoed the whole
+            // creature as BadEtbEffects; weigh the counter ledger instead. Every
+            // other untargeted RemoveCounter keeps the refusal.
+            return SpecialCardAi.ThiefOfBlood.consider(aiPlayer, sa);
         }
         return mandatory ? new AiAbilityDecision(100, AiPlayDecision.MandatoryPlay)
                          : new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
