@@ -37,6 +37,7 @@ import forge.game.cost.CostExile;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostPartMana;
 import forge.game.cost.CostSacrifice;
+import forge.game.cost.CostTap;
 import forge.game.keyword.Keyword;
 import forge.game.mana.ManaCostBeingPaid;
 import forge.game.phase.PhaseHandler;
@@ -4374,6 +4375,91 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
+    // Steward of the Harvest
+    // Its ETB exiles up to three land cards from our own graveyard, and our
+    // creatures gain every activated ability of the exiled lands. The generic
+    // graveyard-exile targeting aims only at opponents' cards
+    // (ChangeZoneAi.isPreferredTarget without AITgtOwnCards), so the trigger
+    // read as unrunnable and checkETBEffects vetoed every cast.
+    // Floor: exile only lands whose every battlefield activated ability is a
+    // mana ability paid with nothing but {T} and mana, and that have at least
+    // one mana ability the AI's payment code can use. A granted "{T}, Sacrifice
+    // this: search" fetch (ChangeZoneAi.willPayCosts skips checkSacrificeCost
+    // for Destination$ Battlefield) or "Sacrifice a creature: Add {B}{B}" would
+    // spend our own creatures; a {1},{T} filter land is skipped by
+    // ComputerUtilMana.getAIPlayableMana and grants nothing. Greedy color
+    // cover: after the first pick a land is added only for a color the chosen
+    // lands do not make yet, so graveyard lands the deck spends (Loam, Multani,
+    // delve) are not exiled for nothing. No RNG: stable sort, graveyard order.
+    public static class StewardOfTheHarvest {
+        public static boolean chooseTargets(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            final Map<Card, Integer> colors = new HashMap<>();
+            final List<Card> lands = new ArrayList<>();
+            for (Card c : CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa)) {
+                if (c.isLand() && grantsOnlySafeManaAbilities(c)) {
+                    colors.put(c, colorMask(c));
+                    lands.add(c);
+                }
+            }
+            // most colors first; List.sort is stable, ties keep graveyard order
+            lands.sort((a, b) -> Integer.compare(Integer.bitCount(colors.get(b)), Integer.bitCount(colors.get(a))));
+
+            final Set<String> names = new HashSet<>();
+            int covered = 0;
+            for (Card c : lands) {
+                if (!sa.canAddMoreTarget()) {
+                    break;
+                }
+                final int mask = colors.get(c);
+                if (names.contains(c.getName()) || (!sa.getTargets().isEmpty() && (mask & ~covered) == 0)) {
+                    continue;
+                }
+                if (!sa.canTarget(c)) {
+                    continue;
+                }
+                sa.getTargets().add(c);
+                names.add(c.getName());
+                covered |= mask;
+            }
+            // mandatory (the real trigger): "up to three", zero targets is legal
+            return mandatory || !sa.getTargets().isEmpty();
+        }
+
+        private static boolean grantsOnlySafeManaAbilities(final Card land) {
+            for (SpellAbility ab : land.getSpellAbilities()) {
+                if (!ab.isActivatedAbility()) {
+                    continue; // play-land; GainsAbilitiesOf copies activated abilities only
+                }
+                final ZoneType zone = ab.getRestrictions() == null ? null : ab.getRestrictions().getZone();
+                if (zone != null && zone != ZoneType.Battlefield) {
+                    continue; // cycling, graveyard abilities: a creature never uses them
+                }
+                if (!ab.isManaAbility() || ab.getPayCosts() == null) {
+                    return false; // fetch, animate, draw/discard, sacrifice-for-value
+                }
+                for (CostPart part : ab.getPayCosts().getCostParts()) {
+                    if (!(part instanceof CostTap) && !(part instanceof CostPartMana)) {
+                        return false; // any sacrifice, life, exile, discard or return cost
+                    }
+                }
+            }
+            return !ComputerUtilMana.getAIPlayableMana(land).isEmpty();
+        }
+
+        private static int colorMask(final Card land) {
+            int mask = 0;
+            for (SpellAbility ma : ComputerUtilMana.getAIPlayableMana(land)) {
+                for (byte color : MagicColor.WUBRG) {
+                    if (ma.canProduce(MagicColor.toShortString(color))) {
+                        mask |= color;
+                    }
+                }
+            }
+            return mask;
         }
     }
 
