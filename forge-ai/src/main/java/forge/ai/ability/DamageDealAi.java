@@ -114,6 +114,15 @@ public class DamageDealAi extends DamageAiBase {
             return SpecialCardAi.Rile.consider(ai, sa);
         }
 
+        if ("Fire Covenant".equals(sourceName)) {
+            // X is LIFE here (PayLife<X>), divided among creature targets. The
+            // generic path below maximizes that non-mana X to the whole life
+            // total, so checkLifeCost always vetoes it, and its divided
+            // targeting never trims X to the damage it assigns. Every other
+            // DamageDeal card takes exactly the path it took before this branch.
+            return SpecialCardAi.FireCovenant.consider(ai, sa);
+        }
+
         final String damage = sa.getParam("NumDmg");
         int dmg = calculateDamageAmount(sa, source, damage);
 

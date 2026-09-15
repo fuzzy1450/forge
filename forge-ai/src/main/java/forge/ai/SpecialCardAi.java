@@ -4515,6 +4515,184 @@ public class SpecialCardAi {
         }
     }
 
+    // Fire Covenant
+    // "As an additional cost to cast this spell, pay X life. Fire Covenant deals X damage divided
+    // as you choose among any number of target creatures." The stock DamageDealAi path maximizes
+    // this non-mana X to the whole life total (setMaxXValue -> CostPayLife.getMaxAmountX), so
+    // checkLifeCost always vetoes it, and its divided targeting never trims X to the damage it
+    // assigns. Pay exactly the damage that kills the chosen creatures and nothing more: greedy
+    // best-first kills of opponents' creatures, each costing at most evaluateCreature/30 life,
+    // inside a budget that keeps max(AI_IN_DANGER_MAX_THRESHOLD, startingLife/4) life after the
+    // payment AND after the combat damage already on its way to us; the weakest kills are dropped
+    // while the payment would leave us in danger of the next combat. Never targeted: ward (an
+    // unpaid ward counters the whole spell after the life is paid), power 0 or less, SacMe,
+    // undying/persist, regenerators, creatures that die this turn anyway, damage punishers (a
+    // damage-dealt trigger on the creature itself) and death punishers (a leaves-the-battlefield
+    // trigger on any opposing permanent, the creature included, whose chain loses life, deals
+    // damage or sacrifices). Floor: two or more kills worth 320, one kill worth 220, or an opposing
+    // commander; otherwise decline, which leaves the card in hand exactly as before. The card was
+    // AI:RemoveDeck:All, so the stock path never evaluated it and drew no RNG for it; the danger
+    // checks below (ComputerUtilCombat.lifeInDanger) can draw while it is held in its window.
+    public static class FireCovenant {
+        public static final int LIFE_PER_VALUE = 30;     // a kill may cost at most evaluateCreature/30 life
+        public static final int MULTI_KILL_VALUE = 320;  // two nontoken 2/2s, or four 1/1 tokens
+        public static final int SINGLE_KILL_VALUE = 220; // about a nontoken vanilla 4/4
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // Routing from DamageDealAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            sa.resetTargets();
+            sa.setXManaCostPaid(null);
+
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.StackNotEmpty);
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean window = ph.isPlayerTurn(ai)
+                    ? ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)    // clear blockers first
+                    : !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS); // attackers committed, or their end step
+            if (!window) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!ai.canPayLife(1, false, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            // The danger model re-blocks a hypothetical next combat and never subtracts the combat
+            // on the table, so charge the damage already coming at us against the budget.
+            final int life = ai.getLife();
+            int effLife = life;
+            final Combat combat = game.getCombat();
+            if (combat != null && !combat.getAttackersOf(ai).isEmpty()) {
+                effLife = Math.min(life, ComputerUtilCombat.lifeThatWouldRemain(ai, combat));
+            }
+            final int incoming = life - effLife;
+            final int reserve = Math.max(AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD),
+                    ai.getStartingLife() / 4);
+            final int budget = effLife - reserve;
+            if (budget <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.LifeInDanger);
+            }
+
+            final Card source = sa.getHostCard();
+            CardCollection cands = new CardCollection();
+            for (final Card c : ai.getOpponents().getCreaturesInPlay()) {
+                if (c.getNetPower() <= 0 || c.hasKeyword(Keyword.WARD) || c.hasSVar("SacMe") || !sa.canTarget(c)
+                        || ComputerUtilCard.hasActiveUndyingOrPersist(c) || punishesDamage(c, source)
+                        || punishesDeath(ai, c) || ComputerUtil.canRegenerate(ai, c)) {
+                    continue;
+                }
+                cands.add(c);
+            }
+            cands = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, cands, sa);
+            ComputerUtilCard.sortByEvaluateCreature(cands); // best first
+
+            final Map<Card, Integer> alloc = new LinkedHashMap<>();
+            final Map<Card, Integer> worth = new HashMap<>();
+            int x = 0;
+            int value = 0;
+            for (final Card c : cands) {
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                final int cap = Math.min(budget - x, v / LIFE_PER_VALUE);
+                if (cap < 1) {
+                    continue;
+                }
+                final int k = ComputerUtilCombat.getEnoughDamageToKill(c, cap, source, false, false);
+                if (k < 1 || k > cap) {
+                    continue; // indestructible or shielded, prevention, or more life than the body is worth
+                }
+                alloc.put(c, k);
+                worth.put(c, v);
+                x += k;
+                value += v;
+            }
+            if (alloc.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // already in danger before paying anything: every kill would be dropped below
+            if (ComputerUtil.aiLifeInDanger(ai, false, incoming)) {
+                return new AiAbilityDecision(0, AiPlayDecision.LifeInDanger);
+            }
+
+            // don't pay into a lethal next combat: drop the weakest kills first
+            final List<Card> order = new ArrayList<>(alloc.keySet());
+            while (!alloc.isEmpty() && ComputerUtil.aiLifeInDanger(ai, false, x + incoming)) {
+                final Card weakest = order.remove(order.size() - 1);
+                x -= alloc.remove(weakest);
+                value -= worth.get(weakest);
+            }
+
+            final boolean floor = (alloc.size() >= 2 && value >= MULTI_KILL_VALUE)
+                    || (alloc.size() == 1 && (value >= SINGLE_KILL_VALUE || order.get(0).isCommander()));
+            if (!floor || x < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.setXManaCostPaid(x);
+            for (final Map.Entry<Card, Integer> e : alloc.entrySet()) {
+                sa.getTargets().add(e.getKey());
+                sa.addDividedAllocation(e.getKey(), e.getValue());
+            }
+            if (!sa.isTargetNumberValid() || sa.getTotalDividedValue() != x) {
+                sa.resetTargets();
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Phyrexian Obliterator, Boros Reckoner, Spitemare: damage dealt to the creature punishes us.
+        private static boolean punishesDamage(final Card c, final Card source) {
+            for (final Trigger t : c.getTriggers()) {
+                final TriggerType mode = t.getMode();
+                if ((mode == TriggerType.DamageDone || mode == TriggerType.DamageDoneOnce)
+                        && t.hasParam("ValidTarget") && t.matchesValidParam("ValidTarget", c)
+                        && t.matchesValidParam("ValidSource", source)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Bastion of Remembrance, Zulaport Cutthroat, Blood Artist, Butcher of Malakir, Nadier's
+        // Nightblade: the creature leaving the battlefield drains, damages or edicts us. Any
+        // opposing permanent's trigger that may fire on its death counts, YouCtrl resolved
+        // against the trigger's host; over-excluding only costs a cast.
+        private static boolean punishesDeath(final Player ai, final Card c) {
+            for (final Card host : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : host.getTriggers()) {
+                    final String valid;
+                    if (t.getMode() == TriggerType.ChangesZone) {
+                        valid = "ValidCard";
+                    } else if (t.getMode() == TriggerType.ChangesZoneAll) {
+                        valid = "ValidCards";
+                    } else {
+                        continue;
+                    }
+                    final String origin = t.getParamOrDefault("Origin", "Any");
+                    final String destination = t.getParamOrDefault("Destination", "Any");
+                    if (!("Any".equals(origin) || origin.contains("Battlefield"))
+                            || !("Any".equals(destination) || destination.contains("Graveyard"))
+                            || !t.matchesValidParam(valid, c)) {
+                        continue;
+                    }
+                    for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                        final ApiType api = part.getApi();
+                        if (api == ApiType.LoseLife || api == ApiType.DealDamage || api == ApiType.DamageAll
+                                || api == ApiType.Sacrifice || api == ApiType.SacrificeAll) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Force of Will
     public static class ForceOfWill {
         public static boolean consider(final Player ai, final SpellAbility sa) {
