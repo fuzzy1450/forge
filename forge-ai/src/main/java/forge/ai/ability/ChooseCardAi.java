@@ -31,6 +31,13 @@ public class ChooseCardAi extends SpellAbilityAi {
             // Every other ChooseCard card takes exactly the path it took before.
             return SpecialCardAi.HuntedByTheFamily.consider(ai, sa);
         }
+        if ("Mandate of Abaddon".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Targets a creature we control, whose power is the DestroyAll
+            // sub's threshold: the generic branch below only looks for
+            // targetable opponents and can never build that target.
+            // Every other ChooseCard card takes exactly the path it took before.
+            return SpecialCardAi.MandateOfAbaddon.consider(ai, sa);
+        }
         if (sa.usesTargeting()) {
             sa.resetTargets();
             // search targetable Opponents

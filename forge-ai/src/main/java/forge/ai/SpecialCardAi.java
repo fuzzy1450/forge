@@ -3018,6 +3018,73 @@ public class SpecialCardAi {
         }
     }
 
+    // Mandate of Abaddon
+    // "Choose target creature you control. Destroy all creatures with power less
+    // than that creature's power." ChooseCardAi's generic branch only targets
+    // opponent players, which ValidTgts$ Creature.YouCtrl never matches, so the
+    // card was never cast. The target only sets X (Targeted$CardPower) for the
+    // DestroyAll sub and always survives it. A threshold qualifies only if it
+    // clears the sub's own Main-1 margin against the FIRST opponent, the only one
+    // DestroyAllAi.doMassRemovalLogic judges (200 / opponents): that opponent's
+    // destroyable creatures below it must be worth more than ours below it plus
+    // the margin. The sub then approves on its Main-1 check, so its survival
+    // branch - built for a full wrath, blind to the big attacker surviving a
+    // threshold wrath, and tripped by any commander near 21 damage - is never the
+    // reason for a cast. Among qualifying thresholds, keep the best net value
+    // over all opponents.
+    public static class MandateOfAbaddon {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final AbilitySub sub = sa.getSubAbility();
+            if (!sa.usesTargeting() || sub == null || sub.getApi() != ApiType.DestroyAll) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final PlayerCollection opps = ai.getOpponents();
+            final Player first = opps.getFirst();
+            if (first == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int margin = 200 / opps.size(); // DestroyAllAi's CREATURE_EVAL_THRESHOLD for an untargeted sub
+
+            final CardCollectionView ours = ai.getCreaturesInPlay();
+            final CardCollectionView firstCreatures = first.getCreaturesInPlay();
+            final CardCollectionView theirs = opps.getCreaturesInPlay();
+            Card best = null;
+            int bestNet = Integer.MIN_VALUE;
+            for (final Card c : ours) {
+                if (!sa.canTarget(c)) {
+                    continue;
+                }
+                final int power = c.getNetPower();
+                final CardCollection firstLoses = CardLists.filter(firstCreatures, x -> x.getNetPower() < power && destroyable(x));
+                if (firstLoses.isEmpty()) {
+                    continue;
+                }
+                final int weLose = ComputerUtilCard.evaluateCreatureList(
+                        CardLists.filter(ours, x -> x.getNetPower() < power && destroyable(x)));
+                if (weLose + margin >= ComputerUtilCard.evaluateCreatureList(firstLoses)) {
+                    continue; // the sub's Main-1 margin fails for this threshold
+                }
+                final int net = ComputerUtilCard.evaluateCreatureList(
+                        CardLists.filter(theirs, x -> x.getNetPower() < power && destroyable(x))) - weLose;
+                if (net > bestNet) {
+                    bestNet = net;
+                    best = c;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // DestroyAllAi's private predicate (DestroyAllAi.java:20), mirrored.
+        private static boolean destroyable(final Card c) {
+            return !(c.hasKeyword(Keyword.INDESTRUCTIBLE) || c.getCounters(CounterEnumType.SHIELD) > 0 || c.hasSVar("SacMe"));
+        }
+    }
+
     // Mass Diminish
     //
     // Until our next turn, creatures target player controls have base power and
