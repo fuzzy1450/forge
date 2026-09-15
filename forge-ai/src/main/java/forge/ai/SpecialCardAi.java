@@ -108,6 +108,48 @@ import java.util.stream.Collectors;
  */
 public class SpecialCardAi {
 
+    // Aethersnatch
+    // Commandeer's window (an opponent's spell on top, no chosen targets anywhere
+    // in its chain, no "...All" api, CMC >= 5 counting announced X), which the card
+    // itself widens to creature spells. A stolen permanent spell enters under our
+    // control, so it must also pass what the AI asks before taking control of a
+    // permanent: nothing it cannot use (AI:RemoveDeck, as ControlGainAi's filter),
+    // nothing that leaves play at end of turn (EndOfTurnLeavePlay, the same
+    // filter), no second copy of a legend we already control, and no ETB the AI
+    // would refuse to run as its controller (Phage's "you lose the game"), judged
+    // with the same checkETBEffects call it makes on its own permanent spells.
+    // Commandeer itself is untouched: its target restriction never reaches
+    // creatures.
+    public static class Aethersnatch {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AiAbilityDecision window = Commandeer.consider(ai, sa);
+            if (!window.willingToPlay()) {
+                return window;
+            }
+            final SpellAbility topSA = ComputerUtilAbility.getTopSpellAbilityOnStack(ai.getGame(), sa);
+            final Card stolen = topSA == null ? null : topSA.getHostCard();
+            if (stolen != null && stolen.isPermanent()) {
+                boolean refuse = ComputerUtilCard.isCardRemAIDeck(stolen)
+                        || stolen.hasSVar("EndOfTurnLeavePlay")
+                        || (stolen.getType().isLegendary()
+                            && ai.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.nameEquals(stolen.getName())));
+                // The ETB check judges a copy of the spell with us as activator
+                // (the copy takes a spell ability id), so run it only once the
+                // cast is otherwise affordable; an unaffordable cast is refused
+                // later by canPlayAndPayForFace's own canPayCost.
+                if (!refuse && ComputerUtilCost.canPayCost(sa, ai, false)) {
+                    final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+                    refuse = !aic.checkETBEffects(stolen, topSA.copy(ai), null);
+                }
+                if (refuse) {
+                    sa.resetTargets();
+                    return new AiAbilityDecision(0, AiPlayDecision.BadEtbEffects);
+                }
+            }
+            return window;
+        }
+    }
+
     // Archangel of Strife
     // "As this enters, each player chooses war or peace." Every AI chooser takes the first choice
     // (ChooseGenericAi.chooseSingleSpellAbility -> War), and a human opponent is modelled the same
