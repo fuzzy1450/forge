@@ -5685,6 +5685,121 @@ public class SpecialCardAi {
         }
     }
 
+    // Trade Secrets
+    // Target opponent draws two, we draw up to four, and the OPPONENT chooses how often to repeat.
+    // Forge's chooser for that (AiController "RepeatDraw") picks (maxHand - hand + rand{0..2}) / 2
+    // from the hand the opponent holds AFTER the root's two cards; ours ("OptionalDraw") stops at
+    // maxHand + 2. So it is a refill: cast only when the first four fit under our maximum hand size
+    // and the fullest-handed targetable opponent already holds at least HAND_GAP more cards than we
+    // do (their refill is small, ours is the full four: never behind on cards in any branch of
+    // their roll), our library survives the most we could draw across every repeat they pick, and
+    // no draw thief or draw punisher at the table sees the draws. An opponent the first two cards
+    // deck is worth it whatever the hands hold.
+    public static class TradeSecrets {
+        public static final int DRAW = 4;           // our draw per pass
+        public static final int OPP_DRAW = 2;       // the target's draw per pass
+        public static final int HAND_GAP = 3;       // target's hand minus ours (the spell excluded)
+        public static final int LIBRARY_MARGIN = 3; // cards left after the most we can draw
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final Card host = sa.getHostCard();
+            sa.resetTargets();
+
+            // draw-limit statics (Narset, Parter of Veils) count the draws already made this turn
+            if (!ai.canDraw() || StaticAbilityCantDraw.canDrawAmount(ai, DRAW) < DRAW) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            int hand = ai.getCardsIn(ZoneType.Hand).size();
+            if (host != null && host.isInZone(ZoneType.Hand)) {
+                hand--; // the spell itself is spent
+            }
+            final int maxHand = ai.getMaxHandSize();
+
+            // OptionalDraw caps our hand at maxHand + 2 (and at the library size) over every repeat
+            // the opponent picks; never let that empty our library
+            final int mostWeDraw = Math.max(DRAW, maxHand + 2 - hand);
+            if (ai.getCardsIn(ZoneType.Library).size() < mostWeDraw + LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            if (tableStealsOrPunishesDraws(ai, game)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            Player best = null;
+            boolean decksThem = false;
+            for (final Player opp : ai.getOpponents()) {
+                if (!sa.canTarget(opp) || opp.isCardInPlay("Laboratory Maniac")) {
+                    continue;
+                }
+                if (opp.canDraw() && !opp.cantLoseCheck(forge.game.player.GameLossReason.Milled)
+                        && opp.getCardsIn(ZoneType.Library).size() < OPP_DRAW) {
+                    best = opp; // the first pass decks them
+                    decksThem = true;
+                    break;
+                }
+                // fullest hand = fewest repeats = smallest refill; game order on ties
+                if (best == null || opp.getCardsIn(ZoneType.Hand).size() > best.getCardsIn(ZoneType.Hand).size()) {
+                    best = opp;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            if (!decksThem) {
+                // the full first four without a cleanup discard (the stock own-turn draw floor)
+                if (!ai.isUnlimitedHandSize() && hand + DRAW > maxHand) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                // we are low and they are near full: their refill is smaller than ours
+                if (best.getCardsIn(ZoneType.Hand).size() < hand + HAND_GAP) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Draw thieves and draw punishers on the battlefield or in the Command zone (an emblem),
+        // counted only where they work (zonesCheck: a commander waiting in the Command zone does
+        // not count). Any opponent's Drawn trigger or Draw replacement is a veto: every card either
+        // of us draws can feed it. One of ours (or an emblem we own) is a veto when it is symmetric:
+        // a Drawn trigger whose ValidCard and ValidPlayer name no side (Spiteful Visions, Phyrexian
+        // Tyranny, Ob Nixilis Reignited's emblem), or a Draw replacement not limited to opponents
+        // (Chains of Mephistopheles, Uba Mask). Our own payoffs still pass: Psychosis Crawler
+        // (Card.YouOwn), Consecrated Sphinx (Card.OppOwn), Notion Thief (ValidPlayer$ Opponent).
+        private static boolean tableStealsOrPunishesDraws(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                final boolean theirs = controller != null && controller.isOpponentOf(ai);
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Drawn && t.zonesCheck(game.getZoneOf(c))
+                            && (theirs || (!namesASide(t.getParam("ValidCard")) && !namesASide(t.getParam("ValidPlayer"))))) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.zonesCheck(game.getZoneOf(c))) {
+                        final String validPlayer = re.getParam("ValidPlayer");
+                        if (theirs || validPlayer == null || !validPlayer.contains("Opp")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean namesASide(final String valid) {
+            return valid != null && (valid.contains("You") || valid.contains("Opp"));
+        }
+    }
+
     // Unfinished Business
     // Return a creature card from our graveyard, then up to two Aura and/or
     // Equipment cards from our graveyard attached to it. The generic ChangeZone

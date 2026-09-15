@@ -51,6 +51,12 @@ public class DrawAi extends SpellAbilityAi {
             // for a non-curse draw, so the spell could never be cast.
             return SpecialCardAi.BiomanticMastery.consider(ai, sa);
         }
+        if ("Trade Secrets".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // The targeted opponent really draws (the price of our draw-four) and then chooses the
+            // repeats. targetAI only puts a draw on an opponent to mill them, and the veto below
+            // refuses even that, so the spell could never be cast.
+            return SpecialCardAi.TradeSecrets.consider(ai, sa);
+        }
         if (!targetAI(ai, sa, false)) {
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
