@@ -3331,6 +3331,59 @@ public class SpecialCardAi {
         }
     }
 
+    // Hua Tuo, Honored Physician
+    // "{T}: Put target creature card from your graveyard on top of your
+    // library. Activate only during your turn, before attackers are declared."
+    // Without an AILogic the whole activation window lies before MAIN2, where
+    // ChangeZoneAi's Graveyard->Library phase veto always refuses. Act only in
+    // our own upkeep, with an empty stack and a draw step that will happen, so
+    // the pick is drawn this same turn; the script's AIActivateLast$ True lets
+    // every other upkeep activation (a library shuffle included) go first.
+    // Floors: a creature card clearly better than Hua Tuo itself (the
+    // BetterThanSource idiom), one the AI would cast (no RemoveDeck hint) and
+    // can cast this turn, and never while the random draw is a land we need.
+    public static class HuaTuo {
+        static final int BETTER_THAN_SOURCE = 30;   // a vanilla 3/3 three-drop scores exactly Hua Tuo + 30
+        static final int MIN_LANDS_WITHOUT_LAND_IN_HAND = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Card source = sa.getHostCard();
+
+            // The pick must replace THIS turn's draw.
+            if (!ph.is(PhaseType.UPKEEP, ai) || !game.getStack().isEmpty()
+                    || game.getReplacementHandler().wouldPhaseBeSkipped(ai, PhaseType.DRAW)
+                    || !ai.canDraw()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+
+            final boolean landInHand = ai.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.LANDS_PRODUCING_MANA);
+            // A random draw is often a land; don't trade it away while short on lands.
+            if (!landInHand && ai.getLandsInPlay().size() < MIN_LANDS_WITHOUT_LAND_IN_HAND) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+
+            // Value floor: clearly better than Hua Tuo, not hinted away, and
+            // castable this turn off current sources (or by mana value with the
+            // land drop), so the replaced draw is never dead.
+            final int floor = ComputerUtilCard.evaluateCreature(source) + BETTER_THAN_SOURCE;
+            final int mana = ComputerUtilMana.getAvailableManaEstimate(ai, false) + (landInHand ? 1 : 0);
+            final CardCollection picks = CardLists.filter(
+                    CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa),
+                    c -> c.isCreature() && !ComputerUtilCard.isCardRemAIDeck(c)
+                            && ComputerUtilCard.evaluateCreature(c) > floor
+                            && (ComputerUtilMana.hasEnoughManaSourcesToCast(c.getFirstSpellAbility(), ai)
+                                || (landInHand && c.getCMC() <= mana)));
+            if (picks.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.resetTargets();
+            sa.getTargets().add(ComputerUtilCard.getBestCreatureAI(picks));
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Hunted by The Family
     // "Choose up to four target creatures you don't control. For each of them,
     // that creature's controller faces a villainous choice: it becomes a 1/1

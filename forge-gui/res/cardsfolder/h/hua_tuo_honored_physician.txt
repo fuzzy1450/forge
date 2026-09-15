@@ -2,6 +2,5 @@ Name:Hua Tuo, Honored Physician
 ManaCost:1 G G
 Types:Legendary Creature Human
 PT:1/2
-A:AB$ ChangeZone | Cost$ T | TgtPrompt$ Choose target creature card in your graveyard | ValidTgts$ Creature.YouCtrl | Origin$ Graveyard | Destination$ Library | PlayerTurn$ True | ActivationPhases$ Upkeep->BeginCombat | ActivationFirstCombat$ True | SpellDescription$ Put target creature card from your graveyard on top of your library. Activate only during your turn, before attackers are declared.
-AI:RemoveDeck:All
+A:AB$ ChangeZone | Cost$ T | TgtPrompt$ Choose target creature card in your graveyard | ValidTgts$ Creature.YouCtrl | Origin$ Graveyard | Destination$ Library | PlayerTurn$ True | ActivationPhases$ Upkeep->BeginCombat | ActivationFirstCombat$ True | AILogic$ HuaTuo | AIActivateLast$ True | SpellDescription$ Put target creature card from your graveyard on top of your library. Activate only during your turn, before attackers are declared.
 Oracle:{T}: Put target creature card from your graveyard on top of your library. Activate only during your turn, before attackers are declared.

@@ -201,6 +201,8 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 multipleCardsToChoose = SpecialCardAi.Intuition.considerMultiple(aiPlayer, sa);
             } else if (aiLogic.equals("MazesEnd")) {
                 return SpecialCardAi.MazesEnd.consider(aiPlayer, sa);
+            } else if (aiLogic.equals("HuaTuo")) {
+                return SpecialCardAi.HuaTuo.consider(aiPlayer, sa);
             } else if (aiLogic.equals("Pongify")) {
                 if (sa.isTargetNumberValid()) {
                     // Pre-targeted in checkAiLogic
@@ -834,6 +836,12 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return true;
         } else if (aiLogic.equals("BeforeCombat")) {
             return !ai.getGame().getPhaseHandler().getPhase().isAfter(PhaseType.COMBAT_BEGIN);
+        } else if (aiLogic.equals("HuaTuo")) {
+            // Hua Tuo's window (own turn, upkeep..begin combat) lies wholly
+            // before MAIN2, where the Graveyard->Library veto below always
+            // refuses; our own upkeep is the one moment the pick replaces
+            // this turn's draw (SpecialCardAi.HuaTuo).
+            return ph.is(PhaseType.UPKEEP, ai);
         }
 
         if (sa.isHidden()) {
