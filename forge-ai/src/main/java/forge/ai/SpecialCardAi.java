@@ -3611,6 +3611,47 @@ public class SpecialCardAi {
         }
     }
 
+    // Predict
+    // "Choose a card name, then target player mills a card. If a card with the
+    // chosen name was milled this way, you draw two cards. Otherwise, you draw
+    // a card." A cantrip at worst, so it only spends mana nothing else wants:
+    // the end step right before our own turn, or our main 2 when it is the last
+    // card in hand. The name comes from the script's MostProminentInHumanDeck
+    // logic (the opponent's library), so the mill must be able to hit one.
+    public static class Predict {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // It draws one or two (and MillAi may mill ourselves): never into a
+            // thin library.
+            if (!ai.canDraw() || ai.getCardsIn(ZoneType.Library).size() <= 4) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // No response value; leave the stack alone.
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.StackNotEmpty);
+            }
+            // With no opponent a legal mill target with cards left, MillAi's
+            // mandatory fallback targets us: a name guessed from the opponent's
+            // library then mills our own top card (often one we set up) for a
+            // flat draw one.
+            final SpellAbility mill = sa.findSubAbilityByType(ApiType.Mill);
+            if (mill == null || !ai.getOpponents().anyMatch(o -> mill.canTarget(o) && !o.getCardsIn(ZoneType.Library).isEmpty())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // The end step right before our own turn: the mana is unused this
+            // turn cycle.
+            if (ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn())) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            // Nothing else to spend the mana on: our main 2, last card in hand.
+            if (ph.is(PhaseType.MAIN2, ai) && ai.getCardsIn(ZoneType.Hand).size() <= 1) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.WaitForEndOfTurn);
+        }
+    }
+
     // Price of Progress
     public static class PriceOfProgress {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
