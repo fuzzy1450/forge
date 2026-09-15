@@ -252,6 +252,14 @@ public class ChangeZoneAi extends SpellAbilityAi {
             }
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
+        if ("Path of the Schemer".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa instanceof AbilitySub && sa.isHidden()) {
+            // The hidden reanimate half approves unconditionally in
+            // hiddenOriginPlayDrawbackAI; Schemer costs five mana, so require
+            // the creature its resolution will take to be worth it. Every
+            // other ChangeZone card is unchanged.
+            return SpecialCardAi.PathOfTheSchemer.consider(aiPlayer, sa);
+        }
         if (sa.isHidden()) {
             return hiddenOriginPlayDrawbackAI(aiPlayer, sa);
         }

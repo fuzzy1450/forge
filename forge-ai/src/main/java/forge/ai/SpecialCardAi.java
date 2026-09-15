@@ -4189,6 +4189,57 @@ public class SpecialCardAi {
         }
     }
 
+    // Path of the Schemer
+    // Each player mills two, then we put a creature card from ANY graveyard
+    // onto the battlefield under our control (the Will of the Planeswalkers
+    // vote does nothing outside Planechase). The hidden reanimate sub approves
+    // unconditionally in ChangeZoneAi.hiddenOriginPlayDrawbackAI, so without a
+    // floor five mana buys "each player mills two". Floor: the creature the
+    // resolution will take from the graveyards as they stand
+    // (ChangeZoneAi.chooseCardToHiddenOriginChangeZone: the best-evaluated
+    // creature, skipping legends we already control) must be a real body,
+    // must not be a card the AI is told never to play (AI:RemoveDeck:All -
+    // Cataclysmic Gearhulk would sacrifice our own go-wide board, Worldgorger
+    // Dragon exile it), and must not make us lose the game on entering (Phage).
+    public static class PathOfTheSchemer {
+        public static final int MIN_PICK_VALUE = 200; // the "real creature" line of ChangeZoneAi / DestroyAi
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // RNG parity: the stock hiddenOriginPlayDrawbackAI this replaces
+            // calls choosePreferredDefenderPlayer first, which draws from
+            // MyRandom (Aggregates.random) with two or more opponents.
+            AiAttackController.choosePreferredDefenderPlayer(ai);
+
+            CardCollection pool = CardLists.getValidCards(ai.getGame().getCardsIn(ZoneType.Graveyard),
+                    sa.getParamOrDefault("ChangeType", "Creature"), ai, sa.getHostCard(), sa);
+            pool = CardLists.filter(pool, c -> !c.getType().isLegendary() || !ai.isCardInPlay(c.getName()));
+            if (pool.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card pick = ComputerUtilCard.getBestCreatureAI(pool);
+            if (pick == null || ComputerUtilCard.isCardRemAIDeck(pick)
+                    || ComputerUtilCard.evaluateCreature(pick) < MIN_PICK_VALUE || losesOnEntering(pick)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Phage the Untouchable shape: a self-ETB trigger whose chain makes its controller lose.
+        private static boolean losesOnEntering(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() != TriggerType.ChangesZone || !"Battlefield".equals(t.getParam("Destination"))) {
+                    continue;
+                }
+                for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                    if (part.getApi() == ApiType.LosesGame && "You".equals(part.getParamOrDefault("Defined", "You"))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Phyrexian Dreadnought
     public static class PhyrexianDreadnought {
         public static CardCollection reviseCreatureSacList(final Player ai, final SpellAbility sa, final CardCollection choices) {
