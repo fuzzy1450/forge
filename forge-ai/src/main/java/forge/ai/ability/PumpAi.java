@@ -117,6 +117,15 @@ public class PumpAi extends PumpAiBase {
             // took before this branch.
             return SpecialCardAi.LegionsToAshes.consider(ai, sa);
         }
+        if ("Sinister Waltz".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // A Pump targeting shell over our own graveyard (the real effect is its ChangeZone
+            // sub): the non-curse targeting below only reads battlefield creatures
+            // (canTgtCreature() is true for "Creature..." whatever TgtZone says), so it returned
+            // TargetingFailed in Main 1 and was vetoed as a post-combat pump in Main 2. The
+            // evaluator chooses and floors the targets itself; every other Pump card takes exactly
+            // the path it took before this branch.
+            return SpecialCardAi.SinisterWaltz.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final Card source = sa.getHostCard();
         final SpellAbility root = sa.getRootAbility();

@@ -7570,6 +7570,106 @@ public class SpecialCardAi {
         }
     }
 
+    // Sinister Waltz
+    // Two of the three targets return to the battlefield at random and the third goes to the bottom
+    // of the library. The script uses Pump as a targeting shell, and PumpAi's generic targeting only
+    // enumerates creatures on the battlefield (canTgtCreature() is true for "Creature..." whatever
+    // TgtZone says), so the graveyard was never looked at. This picks the three highest mana value
+    // creature cards that are safe to return, and fires only when the worst random pair still repays
+    // the spell's own mana. The stock refusal drew no random numbers, so everything that cannot draw
+    // runs first: the mana estimate keeps an unaffordable WillPlay out of canPayCost's per-source
+    // reservation roll, and the floor pre-check keeps checkETBEffects (whose trigger evaluation can
+    // draw) off graveyards that could never clear the floor.
+    public static class SinisterWaltz {
+        public static final int PICKS = 3;
+        public static final int MIN_PICK_CMC = 2;
+        // Two of the three return at random, so the worst case is the two lowest mana values;
+        // it must at least repay the spell's own five mana.
+        public static final int MIN_WORST_PAIR_CMC = 5;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            sa.resetTargets();
+
+            // Post-combat: our own attacks fill the graveyard first, and a returned creature has no
+            // haste to use this turn anyway.
+            if (game.getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2)
+                    && !ComputerUtil.castSpellInMain1(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            // Colours ignored, so this declines a little less often than strictly needed, never more.
+            if (ComputerUtilMana.getAvailableManaEstimate(ai) < sa.getPayCosts().getTotalMana().getCMC()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            final CardCollection pool = CardLists.filter(ai.getCardsIn(ZoneType.Graveyard), c ->
+                    c.isCreature()
+                    && sa.canTarget(c)
+                    && c.getCMC() >= MIN_PICK_CMC
+                    && !ComputerUtilCard.isUselessCreature(ai, c)          // can't attack or block, detained
+                    && !c.hasSVar("EndOfTurnLeavePlay")                     // temporary bodies
+                    && !(c.getType().isLegendary() && !c.ignoreLegendRule() && ai.isCardInPlay(c.getName()))
+                    && !ComputerUtil.isETBprevented(c));                    // Grafdigger's Cage and kin
+            if (pool.size() < PICKS) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+
+            // Highest mana value first (the stock reanimation pick), creature value breaking ties.
+            // The top three by mana value maximise the worst-case pair over every legal triple, so if
+            // any triple clears the floor, this one does.
+            final List<Card> ranked = new ArrayList<>(pool);
+            ranked.sort((a, b) -> a.getCMC() != b.getCMC() ? b.getCMC() - a.getCMC()
+                    : ComputerUtilCard.evaluateCreature(b) - ComputerUtilCard.evaluateCreature(a));
+            // Dropping cards can only lower the top three, so a pool that fails here fails after the
+            // ETB check too.
+            if (ranked.get(1).getCMC() + ranked.get(2).getCMC() < MIN_WORST_PAIR_CMC) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // The same ETB veto the AI applies before casting the creature from hand, taken in rank
+            // order until three pass: the same picks as filtering the whole pool first.
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            final List<Card> picks = new ArrayList<>(PICKS);
+            for (final Card c : ranked) {
+                if (aic.checkETBEffects(c, sa, null)) {
+                    picks.add(c);
+                    if (picks.size() == PICKS) {
+                        break;
+                    }
+                }
+            }
+            if (picks.size() < PICKS) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            if (picks.get(1).getCMC() + picks.get(2).getCMC() < MIN_WORST_PAIR_CMC) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Opponents' punisher triggers on creatures entering: never walk into lethal.
+            int etbDamage = 0;
+            for (final Card c : picks) {
+                etbDamage += ComputerUtil.getDamageFromETB(ai, c);
+            }
+            if (etbDamage > 0 && ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife()
+                    && etbDamage >= ai.getLife()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            for (final Card c : picks) {
+                if (!sa.canTarget(c)) {
+                    sa.resetTargets();
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+                sa.getTargets().add(c);
+            }
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Song of Inspiration
     // Both d20 results return the targets, so this is a five-mana instant Regrowth for up to two
     // permanent cards (15+ also gains life equal to their total mana value). The script uses Pump as
