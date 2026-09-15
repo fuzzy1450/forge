@@ -7518,6 +7518,58 @@ public class SpecialCardAi {
         }
     }
 
+    // Sin, Unending Cataclysm
+    // "As Sin enters, remove all counters from any number of artifacts, creatures, and
+    // enchantments. Sin enters with X +1/+1 counters, where X is twice the number removed."
+    // The choice is optional (min 0) and AiController.chooseCardsForEffect keeps asking until
+    // this returns null, so only sources that are pure gain to strip are ever returned:
+    // - our own permanent only when every counter on it hurts us (-1/-1, stun, age...), so our
+    //   +1/+1, charge and lore counters stay put even though Sin would gain twice what it takes;
+    // - an opponent's only when no counter on it hurts them, none is a scripted custom type the
+    //   engine rates Positive by default (a vow counter is our Promise of Loyalty's "can't attack
+    //   you"), it is not a Saga (zero lore counters replays its chapters), it is not an undying
+    //   creature holding its +1/+1 counter (stripping re-arms undying, as CountersRemoveAi.doTgt
+    //   avoids), and it has no time counter unless it has vanishing (impending: stripping makes
+    //   it a creature at once; vanishing: stripping sacrifices it).
+    // Reads the board only: no random draws, like the first-option pick it replaces.
+    public static class SinUnendingCataclysm {
+        public static Card chooseCounterSource(final Player ai, final Iterable<Card> options) {
+            final CardCollection pureGain = new CardCollection();
+            for (final Card c : options) {
+                if (c == null || !c.hasCounters()) {
+                    continue;
+                }
+                boolean anyNegative = false;
+                boolean allNegative = true;
+                boolean anyCustom = false;
+                for (final CounterType ct : c.getCounters().elementSet()) {
+                    final boolean neg = ComputerUtil.isNegativeCounter(ct, c);
+                    anyNegative |= neg;
+                    allNegative &= neg;
+                    anyCustom |= ct instanceof CounterCustomType;
+                }
+                final Player controller = c.getController();
+                if (ai.equals(controller)) {
+                    if (allNegative) {
+                        pureGain.add(c);
+                    }
+                } else if (controller != null && controller.isOpponentOf(ai)) {
+                    if (anyNegative || anyCustom || c.isSaga()) {
+                        continue;
+                    }
+                    if (c.hasKeyword(Keyword.UNDYING) && c.getCounters(CounterEnumType.P1P1) > 0) {
+                        continue;
+                    }
+                    if (c.getCounters(CounterEnumType.TIME) > 0 && !c.hasKeyword(Keyword.VANISHING)) {
+                        continue;
+                    }
+                    pureGain.add(c);
+                }
+            }
+            return pureGain.isEmpty() ? null : ComputerUtilCard.getBestAI(pureGain);
+        }
+    }
+
     // Song of Inspiration
     // Both d20 results return the targets, so this is a five-mana instant Regrowth for up to two
     // permanent cards (15+ also gains life equal to their total mana value). The script uses Pump as

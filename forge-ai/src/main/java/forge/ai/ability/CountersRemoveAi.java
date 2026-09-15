@@ -434,4 +434,16 @@ public class CountersRemoveAi extends SpellAbilityAi {
 
         return super.chooseCounterType(options, sa, params);
     }
+
+    @Override
+    protected Card chooseSingleCard(Player ai, SpellAbility sa, Iterable<Card> options, boolean isOptional,
+            Player targetedPlayer, Map<String, Object> params) {
+        if ("Sin, Unending Cataclysm".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // "Remove all counters from any number of artifacts, creatures, and enchantments": the
+            // inherited first-option pick, asked again until the pool is empty, strips every permanent
+            // with counters, our own included. Every other Choices-based RemoveCounter keeps it.
+            return SpecialCardAi.SinUnendingCataclysm.chooseCounterSource(ai, options);
+        }
+        return super.chooseSingleCard(ai, sa, options, isOptional, targetedPlayer, params);
+    }
 }
