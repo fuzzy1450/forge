@@ -2,7 +2,9 @@ package forge.ai.ability;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.ComputerUtilAbility;
 import forge.ai.ComputerUtilCard;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.Game;
 import forge.game.ability.AbilityUtils;
@@ -18,6 +20,19 @@ import java.util.List;
 import java.util.Map;
 
 public class CloneAi extends SpellAbilityAi {
+
+    @Override
+    protected AiAbilityDecision canPlay(final Player ai, final SpellAbility sa) {
+        if ("Nanogene Conversion".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Sorcery-speed mass copy, judged whole in SpecialCardAi.NanogeneConversion:
+            // checkPhaseRestrictions below only opens the opponent's declare-attackers
+            // step (a sorcery never sees it) and cloneTgtAI never picks a target without
+            // AILogic CloneBestCreature. Every other Clone card takes exactly the path it
+            // took before this branch.
+            return SpecialCardAi.NanogeneConversion.consider(ai, sa);
+        }
+        return super.canPlay(ai, sa);
+    }
 
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {

@@ -18,6 +18,7 @@
 package forge.ai;
 
 import com.google.common.collect.Lists;
+import com.google.common.collect.Table;
 import forge.StaticData;
 import forge.ai.ability.AnimateAi;
 import forge.ai.ability.FightAi;
@@ -35,6 +36,7 @@ import forge.game.ability.ApiType;
 import forge.game.card.*;
 import forge.game.combat.Combat;
 import forge.game.combat.CombatUtil;
+import forge.game.combat.GlobalAttackRestrictions;
 import forge.game.cost.CostDiscard;
 import forge.game.cost.CostExile;
 import forge.game.cost.CostPart;
@@ -5365,6 +5367,320 @@ public class SpecialCardAi {
             }
 
             return false;
+        }
+    }
+
+    // Nanogene Conversion
+    // One window: our precombat main phase with the stack empty. Every other
+    // creature (both sides) becomes a nonlegendary copy of the target until end of
+    // turn, so the spell converts creature COUNT into damage. Fire only when that
+    // turns an attack that cannot already kill some opponent (generous upper bound)
+    // into one that does (strict lower bound under AiAttackController.doAssault's
+    // own blocking model, so the attack AI then swings all in), with a template that
+    // hands nothing multiplicative to either side (triggers, activations,
+    // replacement effects, non-trivial statics, lifelink/infect/defender) and kills
+    // none of our creatures. Draw-free: nothing below reaches MyRandom or
+    // ComputerUtilCost.canPayCost (whose mana test can roll the main-2 reservation
+    // chance), so a declined evaluation leaves the game exactly where the stock
+    // path (CloneAi.checkPhaseRestrictions -> MissingPhaseRestrictions) left it.
+    public static class NanogeneConversion {
+        private static final Set<String> STATIC_KEYS = Set.of("Mode", "Affected", "AddPower",
+                "AddToughness", "AddKeyword", "Description", "EffectZone", "Secondary");
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+
+            // Routing through CloneAi.canPlay's name gate bypasses the base
+            // class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            if (!ph.is(PhaseType.MAIN1, ai) || !game.getStack().isEmpty() || ai.cantWin()) {
+                return no;
+            }
+            // Any attack cap on the board breaks the count model.
+            final GlobalAttackRestrictions restrict =
+                    GlobalAttackRestrictions.getGlobalRestrictions(ai, CombatUtil.getAllPossibleDefenders(ai));
+            if (restrict.getMax() != null || !restrict.getDefenderMax().isEmpty()) {
+                return no;
+            }
+
+            final CardCollection templates = CardLists.filter(CardUtil.getValidCardsToTarget(sa),
+                    t -> inertTemplate(t) && !killsOneOfOurs(ai, t));
+            if (templates.isEmpty()) {
+                return no;
+            }
+
+            Card best = null;
+            int bestMargin = -1;
+            for (Player opp : ai.getOpponents()) {
+                if (opp.getLife() <= 0 || opp.cantLose() || opp.cantLoseForZeroOrLessLife()
+                        || !opp.canLoseLife() || visibleFog(opp, ai) || hasMultiBlocker(opp)) {
+                    continue;
+                }
+                final int life = opp.getLife();
+                if (attackUpperBoundNow(ai, opp) >= life) {
+                    continue; // may already be lethal without spending the card
+                }
+                final int blockers = blockersAfterCopy(opp);
+                for (Card t : templates) {
+                    final int margin = attackLowerBoundAfterCopy(ai, opp, t, blockers) - life;
+                    if (margin >= 0 && margin > bestMargin) {
+                        best = t;
+                        bestMargin = margin;
+                    }
+                }
+            }
+            if (best == null) {
+                return no;
+            }
+            sa.resetTargets();
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Nothing on the template may scale with the number of copies, arm the
+        // opponent's copies, or dodge the life-damage math.
+        private static boolean inertTemplate(final Card t) {
+            if (t.isFaceDown() || !t.getCurrentState().getType().isCreature()
+                    || t.getPTIterable().iterator().hasNext()          // no set-P/T layer on the template
+                    || t.getBasePower() < 1 || t.getBaseToughness() < 1
+                    || t.hasSVar("EndOfTurnLeavePlay")
+                    || t.hasKeyword(Keyword.DEFENDER) || t.hasKeyword(Keyword.LIFELINK)
+                    || t.hasKeyword(Keyword.INFECT) || t.hasKeyword(Keyword.TOXIC)
+                    || t.hasKeyword(Keyword.POISONOUS)
+                    || !ComputerUtilCombat.canAttackNextTurn(t)) {      // "can't attack" riders
+                return false;
+            }
+            // Opposing copies inherit damage prevention/redirection (Guardian Seraph,
+            // Palisade Giant) that the pre-copy damage prediction cannot see.
+            if (!t.getReplacementEffects().isEmpty()) {
+                return false;
+            }
+            if (!t.getManaAbilities().isEmpty()) {
+                return false;                                           // mana dorks for the opponent
+            }
+            for (SpellAbility ab : t.getSpellAbilities()) {
+                // Battlefield activations only (restriction zone defaults to Battlefield):
+                // cycling/ninjutsu/channel live in the hand and never reach a copy;
+                // Suspend is an AbilityStatic (isActivatedAbility() == false).
+                if (ab.isActivatedAbility() && ab.getRestrictions() != null
+                        && ab.getRestrictions().getZone() == ZoneType.Battlefield) {
+                    return false;                                       // instant-speed tools for the opponent
+                }
+            }
+            for (Trigger tr : t.getTriggers()) {                        // includes keyword triggers
+                final Set<ZoneType> zones = tr.getActiveZone();
+                if (zones != null && !zones.isEmpty() && !zones.contains(ZoneType.Battlefield)) {
+                    continue;                                           // e.g. Suspend's exile-only triggers
+                }
+                if (TriggerType.ChangesZone.equals(tr.getMode())
+                        && "Battlefield".equals(tr.getParam("Destination"))
+                        && "Card.Self".equals(tr.getParam("ValidCard"))) {
+                    continue;                                           // own ETB: copies never enter
+                }
+                return false;
+            }
+            for (StaticAbility st : t.getStaticAbilities()) {
+                if (!harmlessStatic(st)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Allowlist: a Continuous buff/keyword grant to itself or to its controller's
+        // team, numerically non-negative, granting nothing that changes who can attack
+        // or what damage does. Everything else (AttackRestrict, CantBlockBy,
+        // CanBlockAny/CanBlockAmount, lords with SVar X, ...) is out.
+        private static boolean harmlessStatic(final StaticAbility st) {
+            final Set<ZoneType> zones = st.getActiveZone();
+            if (zones != null && !zones.isEmpty() && !zones.contains(ZoneType.Battlefield)) {
+                return true;
+            }
+            if (!st.checkMode(StaticAbilityMode.Continuous)) {
+                return false;
+            }
+            final String affected = st.getParamOrDefault("Affected", "");
+            final boolean self = "Card.Self".equals(affected) || "Creature.Self".equals(affected);
+            final boolean team = affected.contains("YouCtrl") && !affected.contains("Opp");
+            if (!self && !team) {
+                return false;
+            }
+            if (!STATIC_KEYS.containsAll(st.getMapParams().keySet())) {
+                return false;
+            }
+            for (String key : List.of("AddPower", "AddToughness")) {
+                if (st.hasParam(key) && !st.getParam(key).matches("\\+?\\d+")) {
+                    return false;
+                }
+            }
+            final String kw = st.getParamOrDefault("AddKeyword", "");
+            return !(kw.contains("Defender") || kw.contains("can't") || kw.contains("Lifelink")
+                    || kw.contains("Infect") || kw.contains("Toxic") || kw.contains("Poisonous"));
+        }
+
+        // ComputerUtil.hasAFogEffect's card set (battlefield, external activatable
+        // zones, revealed hand cards) without its canPayCost test, which can draw:
+        // any Fog there declines, payable or not.
+        private static boolean visibleFog(final Player opp, final Player ai) {
+            final CardCollection all = new CardCollection(opp.getCardsIn(ZoneType.Battlefield));
+            all.addAll(opp.getCardsActivatableInExternalZones(true));
+            final Set<Card> revealed = AiCardMemory.getMemorySet(ai, AiCardMemory.MemorySet.REVEALED_CARDS);
+            if (revealed != null) {
+                for (Card c : revealed) {
+                    if (c.isInZone(ZoneType.Hand) && c.getOwner() == opp) {
+                        all.add(c);
+                    }
+                }
+            }
+            for (Card c : all) {
+                for (SpellAbility ab : c.getSpellAbilities()) {
+                    if (ab.getApi() == ApiType.Fog) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // doAssault lets a blocker that can block any number of (or additional)
+        // creatures stop several attackers; the count model cannot, so decline.
+        private static boolean hasMultiBlocker(final Player opp) {
+            for (Card b : opp.getCreaturesInPlay()) {
+                if (b.canBlockAny() || b.canBlockAdditional() > 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Every untapped opposing creature (a copy too: evasion shared, no death
+        // credit), plus every untapped noncreature permanent that
+        // AiAttackController.getOpponentCreatures may add as a blocker (a self-Animate
+        // incl. Crew, or a SetState), counted without its cost test and without
+        // AnimateAi.becomeAnimated (which takes a game timestamp), plus Peacewalker
+        // Colossus's extra vehicles.
+        private static int blockersAfterCopy(final Player opp) {
+            int blockers = CardLists.count(opp.getCreaturesInPlay(), b -> b.isUntapped() && !b.isPhasedOut());
+            for (Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isTapped() || c.isCreature() || c.isPlaneswalker()) {
+                    continue;
+                }
+                for (SpellAbility ab : c.getSpellAbilities()) {
+                    if (ab.getApi() == ApiType.SetState
+                            || (ab.getApi() == ApiType.Animate && !ab.usesTargeting()
+                                && "Self".equals(ab.getParamOrDefault("Defined", "Self")))) {
+                        blockers++;
+                        break;
+                    }
+                }
+            }
+            if (opp.isCardInPlay("Peacewalker Colossus")
+                    && CardLists.count(opp.getLandsInPlay(), CardPredicates.UNTAPPED) > 0) {
+                blockers += CardLists.count(CardLists.getNotType(opp.getCardsIn(ZoneType.Battlefield), "Creature"),
+                        CardPredicates.isType("Vehicle").and(CardPredicates.UNTAPPED));
+            }
+            return blockers;
+        }
+
+        // Until-end-of-turn pumps (static id 0) survive a copy in full; a static
+        // boost may come from a creature that is about to lose its abilities, so only
+        // its negative part is kept.
+        private static int persistingBoost(final Card c, final boolean power) {
+            int sum = 0;
+            for (Table.Cell<Long, Long, Pair<Integer, Integer>> cell : c.getPTBoostTable().cellSet()) {
+                final int v = power ? cell.getValue().getLeft() : cell.getValue().getRight();
+                sum += cell.getColumnKey() == 0L ? v : Math.min(0, v);
+            }
+            return sum;
+        }
+
+        // No creature of ours may drop to 0 toughness / lethal marked damage as a copy.
+        private static boolean killsOneOfOurs(final Player ai, final Card t) {
+            for (Card c : ai.getCreaturesInPlay()) {
+                if (c.equals(t)) {
+                    continue;
+                }
+                final int tough = (c.getPTIterable().iterator().hasNext()
+                        ? Math.min(t.getBaseToughness(), c.getCurrentToughness()) : t.getBaseToughness())
+                        + persistingBoost(c, false) + c.getToughnessBonusFromCounters();
+                if (tough - c.getDamage() < 1) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Generous: every creature that can attack now; tramplers, menace and creatures
+        // the defender cannot block count in full; each opposing creature that can
+        // block at least one of the rest stops only the SMALLEST remaining one.
+        // withoutAbilities: the pump-ability scan pays through canPayCost, which can draw.
+        private static int attackUpperBoundNow(final Player ai, final Player opp) {
+            final CardCollection attackers = CardLists.filter(ai.getCreaturesInPlay(), c -> CombatUtil.canAttack(c, opp));
+            final CardCollection oppCreatures = opp.getCreaturesInPlay();
+            int sum = 0;
+            final List<Integer> rest = new ArrayList<>();
+            for (Card c : attackers) {
+                final int d = ComputerUtilCombat.damageIfUnblocked(c, opp, null, true);
+                if (c.hasKeyword(Keyword.TRAMPLE) || c.hasKeyword(Keyword.MENACE)
+                        || !CombatUtil.canBeBlocked(c, oppCreatures, null)) {
+                    sum += d;
+                } else {
+                    rest.add(d);
+                }
+            }
+            Collections.sort(rest);
+            final int blockers = CardLists.count(oppCreatures,
+                    b -> CombatUtil.canBlock(b) && CombatUtil.canBlockAtLeastOne(b, attackers));
+            for (int i = Math.min(blockers, rest.size()); i < rest.size(); i++) {
+                sum += rest.get(i);
+            }
+            return sum;
+        }
+
+        // Strict: the template itself if it can attack now, plus every other creature
+        // of ours that is untapped, under our control since the turn began (haste not
+        // credited), free of attack taxes and of "can't attack" riders, hitting for the
+        // template's base power + counters + persisting boosts (the template itself:
+        // no more than that either, since a lord's anthem on it may be about to vanish).
+        // Each counted blocker stops the BIGGEST remaining attacker. Trample, double
+        // strike, menace and positive static anthems are not credited.
+        private static int attackLowerBoundAfterCopy(final Player ai, final Player opp, final Card t, final int blockers) {
+            final Game game = ai.getGame();
+            final List<Integer> hits = new ArrayList<>();
+            for (Card c : ai.getCreaturesInPlay()) {
+                if (CombatUtil.getAttackCost(game, c, opp) != null) {
+                    continue;
+                }
+                int pow;
+                if (c.equals(t)) {
+                    if (!CombatUtil.canAttack(c, opp)) {
+                        continue;
+                    }
+                    pow = Math.min(t.getNetCombatDamage(),
+                            t.getCurrentPower() + persistingBoost(t, true) + t.getPowerBonusFromCounters());
+                } else {
+                    if (c.isTapped() || c.isPhasedOut() || c.isFirstTurnControlled()
+                            || !CombatUtil.canAttackNextTurn(c, opp)) {
+                        continue;
+                    }
+                    pow = (c.getPTIterable().iterator().hasNext()
+                            ? Math.min(t.getBasePower(), c.getCurrentPower()) : t.getBasePower())
+                            + persistingBoost(c, true) + c.getPowerBonusFromCounters();
+                }
+                if (pow > 0) {
+                    hits.add(ComputerUtilCombat.predictDamageTo(opp, pow, t, true));
+                }
+            }
+            hits.sort(Collections.reverseOrder());
+            int sum = 0;
+            for (int i = blockers; i < hits.size(); i++) {
+                sum += hits.get(i);
+            }
+            return sum;
         }
     }
 
