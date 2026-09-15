@@ -139,9 +139,10 @@ public class CopyPermanentAi extends SpellAbilityAi {
             CardCollection list = CardUtil.getValidCardsToTarget(sa);
 
             if ("Espers to Magicite".equals(sourceName)) {
-                // The reflexive copy picks with the screen the cast was judged by. "Up to one": with
-                // no safe pick the trigger resolves with no target and makes no token.
-                final Card pick = SpecialCardAi.EspersToMagicite.bestPick(list);
+                // The reflexive copy picks with the screen the cast was judged by, re-read against the
+                // board as it is now. "Up to one": with no safe pick the trigger resolves with no
+                // target and makes no token.
+                final Card pick = SpecialCardAi.EspersToMagicite.bestPick(aiPlayer, list);
                 if (pick != null && sa.canTarget(pick)) {
                     sa.getTargets().add(pick);
                 }

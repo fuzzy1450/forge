@@ -2104,19 +2104,27 @@ public class SpecialCardAi {
                     || (ph.is(PhaseType.END_OF_TURN) && ph.getPlayerTurn().isOpponentOf(ai)))) {
                 return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
             }
-            if (bestPick(oppGraveyards) == null) {
+            if (bestPick(ai, oppGraveyards) == null) {
                 return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            // canPlayAndPayForFace runs canPayCost only after a WillPlay, and its test payment draws
+            // MyRandom (ComputerUtilMana.isManaSourceReserved). The stock path never reached it for
+            // this card (its ImmediateTrigger sub vetoed first), so an unaffordable WillPlay desynced
+            // B from A (game 412278). This estimate draws nothing.
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, false) < sa.getHostCard().getCMC()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
         // Highest mana value (the proxy for what an enters trigger is worth) among the screened
-        // creature cards; null when none passes.
-        public static Card bestPick(final Iterable<Card> cards) {
+        // creature cards; null when none passes. Judged against ai's current board, so the
+        // reflexive copy re-checks what the cast saw.
+        public static Card bestPick(final Player ai, final Iterable<Card> cards) {
             final CardCollection ok = new CardCollection();
             for (final Card c : cards) {
                 if (c.isCreature() && !c.isCommander() && !ComputerUtilCard.isCardRemAIDeck(c)
-                        && hasValueAsArtifact(c) && !hasHarm(c)) {
+                        && hasValueAsArtifact(ai, c) && !hasHarm(ai, c)) {
                     ok.add(c);
                 }
             }
@@ -2124,10 +2132,11 @@ public class SpecialCardAi {
         }
 
         // Its own non-keyword enters trigger (not one that needs the card to have been cast, and not
-        // a fight, which a noncreature cannot do), or a lord static naming our side. Battlefield
-        // activations and phase/cast triggers do not count: they admit self-pumps, regeneration and
-        // drawback upkeeps, which are blank or worse on a noncreature artifact.
-        private static boolean hasValueAsArtifact(final Card c) {
+        // a fight, which a noncreature cannot do) that would do something on this board, or a lord
+        // static naming our side. Battlefield activations and phase/cast triggers do not count: they
+        // admit self-pumps, regeneration and drawback upkeeps, which are blank or worse on a
+        // noncreature artifact.
+        private static boolean hasValueAsArtifact(final Player ai, final Card c) {
             for (final Trigger t : c.getTriggers()) {
                 if (t.getKeyword() != null || t.isSecondary() || t.getMode() != TriggerType.ChangesZone
                         || !"Battlefield".equals(t.getParam("Destination"))) {
@@ -2135,7 +2144,7 @@ public class SpecialCardAi {
                 }
                 final String valid = t.getParamOrDefault("ValidCard", "");
                 if (valid.contains("Self") && !CAST_ONLY_ETB.matcher(valid).find()
-                        && !ApiType.Fight.name().equalsIgnoreCase(rootApi(t))) {
+                        && !ApiType.Fight.name().equalsIgnoreCase(rootApi(t)) && etbLive(ai, c, t)) {
                     return true;
                 }
             }
@@ -2155,8 +2164,25 @@ public class SpecialCardAi {
         // (script and keyword triggers, except Evoke's, which only fires for an evoked cast; Echo and
         // cumulative upkeep stay in), and a static that is neither characteristic-defining nor
         // self-only must name our side (YouCtrl), which refuses symmetric hosers such as Thalia,
-        // Collector Ouphe, Magus of the Moon and Hushbringer.
-        private static boolean hasHarm(final Card c) {
+        // Collector Ouphe, Magus of the Moon and Hushbringer. A mandatory enters target with no
+        // opposing candidate is harm too: the forced target lands on our side or on the token.
+        private static boolean hasHarm(final Player ai, final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getKeyword() != null || t.isSecondary() || t.getMode() != TriggerType.ChangesZone
+                        || !"Battlefield".equals(t.getParam("Destination"))
+                        || !t.getParamOrDefault("ValidCard", "").contains("Self")
+                        || t.hasParam("OptionalDecider")) {
+                    continue;
+                }
+                final Map<String, String> p = rootParams(t);
+                if (p == null || !p.containsKey("ValidTgts") || "0".equals(p.get("TargetMin"))
+                        || p.get("ValidTgts").contains("YouCtrl")) {
+                    continue;
+                }
+                if (!hasLiveTarget(ai, c, p)) {
+                    return true; // Shriekmaw with no nonblack, nonartifact opposing creature (game 412131)
+                }
+            }
             for (final Trigger t : c.getTriggers()) {
                 if (!t.isKeyword(Keyword.EVOKE) && chainHasHarm(t)) {
                     return true;
@@ -2185,6 +2211,60 @@ public class SpecialCardAi {
                 if (!SELF_ONLY.matcher(part.trim()).matches()) {
                     return false;
                 }
+            }
+            return true;
+        }
+
+        // The params of a trigger's root ability, read the same way as rootApi (never built here).
+        private static Map<String, String> rootParams(final Trigger t) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                return built.getMapParams();
+            }
+            final String text = t.hasParam("Execute") ? t.getSVar(t.getParam("Execute")) : "";
+            return text.isEmpty() ? null : FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+        }
+
+        // A target the token's new controller would actually want on this board: an opposing player,
+        // or a candidate on the side the restriction names (YouCtrl = ours, else an opponent's).
+        // TgtZone is read as a list, so a multi-zone script cannot throw here.
+        private static boolean hasLiveTarget(final Player ai, final Card c, final Map<String, String> p) {
+            final String vt = p.get("ValidTgts");
+            for (final String part : vt.split(",")) {
+                final String s = part.trim();
+                if (s.equals("Any") || s.startsWith("Player") || s.startsWith("Opponent")) {
+                    return true;
+                }
+            }
+            final List<ZoneType> zones = p.containsKey("TgtZone")
+                    ? ZoneType.listValueOf(p.get("TgtZone")) : List.of(ZoneType.Battlefield);
+            final boolean ownSide = vt.contains("YouCtrl");
+            for (final Card k : CardLists.getValidCards(ai.getGame().getCardsIn(zones), vt.split(","), ai, c, null)) {
+                if (ownSide ? ai.equals(k.getController()) : k.getController().isOpponentOf(ai)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // An enters trigger counts as value only if it would do something now: no intervening "if"
+        // (Knight of the White Orchid), a live target (Angel of the Ruins with no opposing artifact
+        // or enchantment is blank), and a library search that can find something (Wood Elves in a
+        // deck with no Forest card is blank).
+        private static boolean etbLive(final Player ai, final Card c, final Trigger t) {
+            if (t.hasParam("CheckSVar")) {
+                return false;
+            }
+            final Map<String, String> p = rootParams(t);
+            if (p == null) {
+                return false;
+            }
+            if (p.containsKey("ValidTgts")) {
+                return hasLiveTarget(ai, c, p);
+            }
+            if (ApiType.ChangeZone.name().equalsIgnoreCase(apiOf(p)) && p.getOrDefault("Origin", "").contains("Library")) {
+                return !CardLists.getValidCards(ai.getCardsIn(ZoneType.Library),
+                        p.getOrDefault("ChangeType", "Card").split(","), ai, c, null).isEmpty();
             }
             return true;
         }
