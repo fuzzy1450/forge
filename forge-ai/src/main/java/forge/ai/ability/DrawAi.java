@@ -224,6 +224,15 @@ public class DrawAi extends SpellAbilityAi {
             }
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
+        if (sa.getParent() != null && sa.usesTargeting()
+                && "KnollspineDragon".equals(sa.getRootAbility().getParam("AILogic"))) {
+            // "Target opponent" was already chosen by SpecialCardAi.KnollspineDragon.consider on the
+            // root Discard; keep it instead of re-targeting the lowest-life opponent in targetAI.
+            if (sa.isTargetNumberValid()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
         if (targetAI(ai, sa, sa.isTrigger() && sa.getHostCard().isInPlay())) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }

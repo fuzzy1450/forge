@@ -3975,6 +3975,103 @@ public class SpecialCardAi {
         }
     }
 
+    // Knollspine Dragon
+    // "When it enters, you may discard your hand and draw cards equal to the damage dealt to target
+    // opponent this turn." The target lives on the Draw sub; the "may" is asked at resolution
+    // (PlayerControllerAi.confirmTrigger -> doTrigger(sa, false)), where the stock chain
+    // (DiscardAi.doTriggerNoCost's unconditional WillPlay, then DrawAi's mandatory targetAI) accepted
+    // every time, even at X = 0. Both the stack-time call (mandatory) and the resolution call pick the
+    // same target here; only the resolution call decides, with the floor below. RNG-free.
+    public static class KnollspineDragon {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            final AbilitySub draw = sa.getSubAbility();
+            if (draw == null || draw.getApi() != ApiType.Draw || !draw.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Target: the targetable opponent dealt the most damage this turn, the same
+            // getAssignedDamage sum X's TargetedPlayer$DamageThisTurn reads; game order on ties.
+            draw.resetTargets();
+            Player best = null;
+            int bestDamage = -1;
+            for (final Player opp : ai.getOpponents()) {
+                if (!draw.canTarget(opp)) {
+                    continue;
+                }
+                final int damage = opp.getAssignedDamage();
+                if (damage > bestDamage) {
+                    best = opp;
+                    bestDamage = damage;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            draw.getTargets().add(best);
+
+            if (mandatory) {
+                // Putting the trigger on the stack: only the target is decided here.
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+
+            // Draws actually allowed (CantDraw statics), and never within DrawAi's decking margin.
+            final int drawn = StaticAbilityCantDraw.canDrawAmount(ai, bestDamage);
+            if (drawn <= 0 || drawn >= ai.getCardsIn(ZoneType.Library).size() - 3) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (drawOrDiscardIsPunished(ai, sa.getHostCard())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // Floor: cards kept (draws capped at max hand size) against the whole hand thrown away;
+            // strictly ahead on an empty hand, at least two cards ahead otherwise.
+            final int hand = ai.getCardsIn(ZoneType.Hand).size();
+            final int kept = ai.isUnlimitedHandSize() ? drawn : Math.min(drawn, ai.getMaxHandSize());
+            if (kept < hand + (hand == 0 ? 1 : 2)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // An opponent's draw thief (Notion Thief, Alms Collector) or draw punisher (Orcish Bowmasters,
+        // Consecrated Sphinx, Spiteful Visions, Fate Unraveler, Nekusar) that would see these draws, or
+        // discard punisher (Waste Not, Megrim) that would see a card of this hand, on the battlefield or
+        // in the Command zone and working where it sits (zonesCheck), tested the way
+        // ReplaceDraw/ReplaceDrawCards.canReplace, TriggerDrawn and TriggerDiscarded test (an absent
+        // param matches). The host stands in for the drawn cards: it is ours, so Card.OppOwn matches.
+        // Over-declines (a symmetric beneficial Drawn trigger) are fine: declining keeps the 7/5 flyer.
+        private static boolean drawOrDiscardIsPunished(final Player ai, final Card host) {
+            final Game game = ai.getGame();
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                if (controller == null || !controller.isOpponentOf(ai)) {
+                    continue;
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.zonesCheck(game.getZoneOf(c)) && re.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (!t.zonesCheck(game.getZoneOf(c)) || !t.matchesValidParam("ValidPlayer", ai)) {
+                        continue;
+                    }
+                    if (t.getMode() == TriggerType.Drawn && t.matchesValidParam("ValidCard", host)) {
+                        return true;
+                    }
+                    if (t.getMode() == TriggerType.Discarded) {
+                        for (final Card h : ai.getCardsIn(ZoneType.Hand)) {
+                            if (t.matchesValidParam("ValidCard", h)) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Last Night Together
     // "Choose two target creatures. Untap them, put two +1/+1 counters on each,
     // they gain vigilance, indestructible and haste until end of turn. After this

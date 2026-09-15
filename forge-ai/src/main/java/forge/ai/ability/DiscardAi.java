@@ -167,6 +167,11 @@ public class DiscardAi extends SpellAbilityAi {
         if (!mandatory && "Path of the Pyromancer".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             return SpecialCardAi.PathOfThePyromancer.consider(ai, sa, true);
         }
+        if ("KnollspineDragon".equals(sa.getParam("AILogic"))) {
+            // Knollspine Dragon's optional ETB: pick the Draw sub's target and, at resolution, apply
+            // the kept-cards floor and punisher scan. Every other Discard trigger is unchanged.
+            return SpecialCardAi.KnollspineDragon.consider(ai, sa, mandatory);
+        }
         if (sa.usesTargeting()) {
             PlayerCollection targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa));
             Player opp = targetableOpps.min(PlayerPredicates.compareByLife());
