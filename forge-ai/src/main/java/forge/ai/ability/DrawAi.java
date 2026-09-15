@@ -302,6 +302,11 @@ public class DrawAi extends SpellAbilityAi {
         if ("YawgmothsBargain".equals(logic)) {
             return SpecialCardAi.YawgmothsBargain.consider(ai, sa);
         }
+        if ("CommandersInsight".equals(logic)) {
+            // NumCards$ Z (commander casts Plus X): the xPaid branch above is keyed on a
+            // literal NumCards$ X, so X was never announced and numCards read 0.
+            return SpecialCardAi.CommandersInsight.consider(ai, sa, mandatory);
+        }
 
         // Generic logic for all cards that do not need any special handling
 

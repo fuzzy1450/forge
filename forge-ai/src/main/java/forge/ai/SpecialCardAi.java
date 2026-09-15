@@ -653,6 +653,130 @@ public class SpecialCardAi {
         }
     }
 
+    // Commander's Insight
+    // "Target player draws X cards plus an additional card for each time they've cast a
+    // commander from the command zone this game." The script says NumCards$ Z (SVar$Y/Plus.X),
+    // and DrawAi.targetAI announces X only for a literal NumCards$ X, so X was never chosen,
+    // Z read 0 (no target yet, X unpaid) and the draw of nothing was declined. Announce X here,
+    // target only ourselves, and draw only what we keep. Floor: at least MIN_DRAW cards in
+    // total; at most half of the library above LIBRARY_MARGIN (an X-spell copy such as Unbound
+    // Flourishing's resolves the same draw again); no cleanup discard on our own turn (one card
+    // of slack on an opponent's turn, ahead of our untap and land drop); the whole draw
+    // survives draw-limit statics (Narset, Parter of Veils; Spirit of the Labyrinth; Leovold);
+    // no opposing draw punisher or draw thief. Every RNG-free check runs before setMaxXValue,
+    // whose test payments draw MyRandom (ComputerUtilMana.isManaSourceReserved).
+    public static class CommandersInsight {
+        public static final int MIN_DRAW = 3;
+        public static final int LIBRARY_MARGIN = 3;
+
+        public static boolean consider(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            final Game game = ai.getGame();
+            final Card source = sa.getHostCard();
+            final SpellAbility root = sa.getRootAbility();
+            final boolean xFixed = sa.isCopied(); // a copy keeps the original's X
+            sa.resetTargets();
+
+            final int bonus = ai.getTotalCommanderCast(); // Y as it will read with us targeted
+            int hand = ai.getCardsIn(ZoneType.Hand).size();
+            if (source.isInZone(ZoneType.Hand)) {
+                hand--; // the Insight itself is spent
+            }
+            final int library = ai.getCardsIn(ZoneType.Library).size();
+
+            int capTotal = (library - LIBRARY_MARGIN) / 2;
+            if (!ai.isUnlimitedHandSize()) {
+                // our turn: nothing over max hand size at cleanup; an opponent's turn: +1 for
+                // the untap and land drop before our own cleanup
+                final int room = ai.getMaxHandSize() - hand + (game.getPhaseHandler().isPlayerTurn(ai) ? 0 : 1);
+                capTotal = Math.min(capTotal, room);
+            }
+
+            // Necessary conditions of the accept test below, checked RNG-free first:
+            // total >= MIN_DRAW, total >= bonus and total <= capTotal, canDrawAmount(total).
+            if (sa.canTarget(ai) && ai.canDraw() && capTotal >= Math.max(MIN_DRAW, bonus)
+                    && !opposingDrawPunisher(ai)) {
+                int x;
+                if (xFixed) {
+                    x = root.getXManaCostPaid() == null ? 0 : root.getXManaCostPaid();
+                } else {
+                    root.setXManaCostPaid(null); // drop a stale value from an earlier window
+                    x = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger()); // leftover after U U U
+                    x = Math.max(0, Math.min(x, capTotal - bonus));
+                }
+                final int total = x + bonus;
+                if (total >= MIN_DRAW && total <= capTotal && ai.canDrawAmount(total)) {
+                    if (!xFixed) {
+                        root.setXManaCostPaid(x);
+                    }
+                    sa.getTargets().add(ai);
+                    return true;
+                }
+            }
+            if (!mandatory) {
+                if (!xFixed) {
+                    root.setXManaCostPaid(null);
+                }
+                return false;
+            }
+
+            // forced (a cast or copy that must complete): the cheapest X, the least harmful target
+            int forcedX = 0;
+            if (xFixed) {
+                forcedX = root.getXManaCostPaid() == null ? 0 : root.getXManaCostPaid();
+            } else {
+                root.setXManaCostPaid(0);
+            }
+            if (sa.canTarget(ai) && forcedX + bonus < library) {
+                sa.getTargets().add(ai);
+                return true;
+            }
+            for (final Player opp : ai.getOpponents()) {
+                if (sa.canTarget(opp)) {
+                    sa.getTargets().add(opp);
+                    return true;
+                }
+            }
+            if (sa.canTarget(ai)) {
+                sa.getTargets().add(ai); // last resort: the forced draw must go somewhere
+                return true;
+            }
+            return false;
+        }
+
+        // An opposing "whenever an opponent draws a card" trigger (Nekusar, the Mindrazer;
+        // Orcish Bowmasters; Kederekt Parasite; Fate Unraveler): Mode$ Drawn on an opponent's
+        // permanent whose ValidCard names opponents (Card.OppOwn, Card.OppCtrl), an owner, or
+        // nothing at all. Or an opposing draw replacement that applies to us (Notion Thief,
+        // Hullbreacher, Alms Collector, Chains of Mephistopheles).
+        private static boolean opposingDrawPunisher(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() != TriggerType.Drawn) {
+                            continue;
+                        }
+                        final String valid = t.getParamOrDefault("ValidCard", "Card");
+                        if (valid.contains("Opp") || valid.equals("Card") || valid.contains("OwnedBy")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (ai.equals(c.getController())) {
+                    continue;
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Crawling Barrens
     public static class CrawlingBarrens {
         public static boolean consider(final Player ai, final SpellAbility sa) {
