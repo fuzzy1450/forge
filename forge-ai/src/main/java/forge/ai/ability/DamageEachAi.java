@@ -3,6 +3,7 @@ package forge.ai.ability;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.ComputerUtilAbility;
 import forge.ai.SpecialCardAi;
 import forge.game.ability.AbilityUtils;
 import forge.game.player.Player;
@@ -17,6 +18,14 @@ public class DamageEachAi extends DamageAiBase {
      */
     @Override
     protected AiAbilityDecision canPlay(Player ai, SpellAbility sa) {
+        if ("Wave of Reckoning".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // NumDmg$ Count$CardPower is read per creature at resolution
+            // (EachToItself); the generic path below reads the sorcery's own
+            // power (0) and only knows "burn a player", so it always refused.
+            // Every other EachDamage card takes exactly the path it took before.
+            return SpecialCardAi.WaveOfReckoning.consider(ai, sa);
+        }
+
         final String logic = sa.getParam("AILogic");
 
         PlayerCollection targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa));

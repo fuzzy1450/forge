@@ -9649,6 +9649,192 @@ public class SpecialCardAi {
         }
     }
 
+    // Wave of Reckoning
+    // "Each creature deals damage to itself equal to its power": a wipe of every
+    // creature whose power reaches its toughness. DamageEachAi evaluated NumDmg on
+    // the sorcery (power 0) and only considered burning a face, so it always
+    // refused. Mirror DamageEachEffect.resolve instead - ValidCards on the
+    // battlefield, each creature the source of its own damage - and cast only when
+    // opponents lose clearly more creature value than we do, at least one kill is
+    // worth a card, and nothing on the opponents' side punishes the damage or the
+    // deaths (enrage payoffs, Blood Artist/Butcher watchers, Flaming Tyrannosaurus
+    // style bodies whose own death hurts us).
+    public static class WaveOfReckoning {
+        public static final int MARGIN = 200;
+
+        private static final EnumSet<ApiType> HARMFUL_DIES_APIS = EnumSet.of(
+                ApiType.DealDamage, ApiType.DamageAll, ApiType.EachDamage, ApiType.LoseLife,
+                ApiType.Sacrifice, ApiType.SacrificeAll, ApiType.Destroy, ApiType.DestroyAll,
+                ApiType.ChangeZone, ApiType.ChangeZoneAll, ApiType.Charm, ApiType.Pump,
+                ApiType.PumpAll, ApiType.Discard, ApiType.GainControl);
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // Routing from DamageEachAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final Card source = sa.getHostCard();
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.StackNotEmpty);
+            }
+
+            final String num = sa.getParamOrDefault("NumDmg", "X");
+            final CardCollection hit = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield),
+                    sa.getParamOrDefault("ValidCards", "Creature"), ai, source, sa);
+            final CardCollectionView oppCards = ai.getOpponents().getCardsIn(ZoneType.Battlefield);
+
+            final CardCollection dying = new CardCollection();
+            for (final Card c : hit) {
+                // As at resolution: the creature is the source of its own damage.
+                final int dmg = AbilityUtils.calculateAmount(c, num, sa);
+                if (dmg <= 0 || ComputerUtilCombat.predictDamageTo(c, dmg, c, false) <= 0) {
+                    continue;
+                }
+                // Checked before the dies test: a survivor still feeds enrage.
+                if (opponentPunishesDamageTo(oppCards, c)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                // indestructible/shield survive unless wither, deathtouch kills, prevention predicted
+                if (ComputerUtilCombat.getEnoughDamageToKill(c, dmg, c, false) <= dmg) {
+                    dying.add(c);
+                }
+            }
+
+            // Death-trigger scan over every dying creature, both sides.
+            final CardCollection noValueKills = new CardCollection();
+            for (final Card h : oppCards) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (!isDeathTrigger(t)) {
+                        continue;
+                    }
+                    for (final Card d : dying) {
+                        if (!t.matchesValidParam("ValidCard", d) || !t.matchesValidParam("ValidCards", d)) {
+                            continue;
+                        }
+                        // A watcher of other creatures' deaths (Butcher of Malakir,
+                        // Blood Artist, Syr Konrad, Grave Pact), or a body whose own
+                        // death hurts us (Flaming Tyrannosaurus, Ashen Rider, Junji).
+                        if (!h.equals(d) || deathTriggerHarmsUs(t)) {
+                            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                        }
+                        // Its own death leaves value behind (Triplicate Titan, Solemn
+                        // Simulacrum, Rekindling Phoenix): not a kill.
+                        noValueKills.add(d);
+                    }
+                }
+            }
+
+            final CardCollection aiLosses = new CardCollection();
+            final CardCollection oppKills = new CardCollection();
+            for (final Card d : dying) {
+                final Player controller = d.getController();
+                if (ai.equals(controller) || ai.equals(d.getOwner())) {
+                    // No credit for our own regeneration/undying: the AI passes
+                    // priority on its own spell, so it never shields in response.
+                    // Owned counts too: a creature an opponent borrowed (Reins of
+                    // Power) comes back to us.
+                    aiLosses.add(d);
+                } else if (ai.isOpponentOf(controller)
+                        && !noValueKills.contains(d)
+                        && !ComputerUtil.canRegenerate(controller, d)
+                        && !ComputerUtilCard.hasActiveUndyingOrPersist(d)
+                        && !d.hasSVar("SacMe")) {
+                    oppKills.add(d);
+                }
+            }
+
+            // Worth a card: at least one real body dies (the Meteor Blast filter).
+            boolean worthACard = false;
+            for (final Card k : oppKills) {
+                if ((!k.isToken() && k.getCMC() >= 2) || k.getNetPower() >= 3) {
+                    worthACard = true;
+                    break;
+                }
+            }
+            if (!worthACard) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // DestroyAllAi's creature-only wrath margin, flat: kills are summed
+            // across every opponent, so it is not divided by their number.
+            if (ComputerUtilCard.evaluateCreatureList(oppKills)
+                    <= ComputerUtilCard.evaluateCreatureList(aiLosses) + MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // Our doomed creatures swing first.
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!aiLosses.isEmpty() && ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.MAIN2)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Noncombat damage-received (DamageDone/DamageDoneOnce: enrage, Brash
+        // Taunter, Hercules) or damage-dealt (DamageDealtOnce: Spirit Link style)
+        // triggers on the opponents' side that the creature hurting itself fires.
+        private static boolean opponentPunishesDamageTo(final CardCollectionView oppCards, final Card victim) {
+            for (final Card h : oppCards) {
+                for (final Trigger t : h.getTriggers()) {
+                    if ("True".equalsIgnoreCase(t.getParam("CombatDamage"))) {
+                        continue; // Wave's damage is noncombat
+                    }
+                    final TriggerType mode = t.getMode();
+                    if (mode == TriggerType.DamageDone || mode == TriggerType.DamageDoneOnce) {
+                        if (!t.matchesValidParam("ValidTarget", victim)) {
+                            continue;
+                        }
+                        // DamageDone also filters the source, which is the creature itself.
+                        if (mode == TriggerType.DamageDone && !t.matchesValidParam("ValidSource", victim)) {
+                            continue;
+                        }
+                        return true;
+                    }
+                    if (mode == TriggerType.DamageDealtOnce && t.matchesValidParam("ValidSource", victim)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // ChangesZone into the graveyard (or Any; an absent Destination is Any to
+        // TriggerChangesZone) from the battlefield (or Any/absent Origin), or
+        // ChangesZoneAll into the graveyard.
+        private static boolean isDeathTrigger(final Trigger t) {
+            if (t.getMode() == TriggerType.ChangesZone) {
+                return zoneListMatches(t.getParam("Destination"), "Graveyard")
+                        && zoneListMatches(t.getParam("Origin"), "Battlefield");
+            }
+            if (t.getMode() == TriggerType.ChangesZoneAll) {
+                return zoneListMatches(t.getParam("Destination"), "Graveyard");
+            }
+            return false;
+        }
+
+        private static boolean zoneListMatches(final String zones, final String zone) {
+            if (zones == null) {
+                return true;
+            }
+            for (final String z : zones.split(",")) {
+                final String s = z.trim();
+                if (s.equals(zone) || s.equals("Any")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean deathTriggerHarmsUs(final Trigger t) {
+            for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                if (part.usesTargeting() || (part.getApi() != null && HARMFUL_DIES_APIS.contains(part.getApi()))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Witch's Mark
     // "You may discard a card. If you do, draw two cards. Create a Wicked Role token attached to
     // up to one target creature you control." Its Role sub targets through TokenAi.chkDrawback;
