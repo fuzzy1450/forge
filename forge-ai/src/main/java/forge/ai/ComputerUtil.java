@@ -325,6 +325,11 @@ public class ComputerUtil {
             }
         }
         if (pref.contains("SacCost")) {
+            if (SpecialCardAi.LifesLegacy.handles(activate)) {
+                // its draw decision priced exactly one creature; sacrifice that one (this line serves
+                // both DrawAi.willPayCosts and the payment's chooseSacrificeType)
+                return SpecialCardAi.LifesLegacy.chooseSacrifice(ai, activate, typeList);
+            }
             // search for permanents with SacMe. priority 1 is the lowest, priority 5 the highest
             for (int ip = 0; ip < 6; ip++) {
                 final int priority = 6 - ip;

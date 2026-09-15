@@ -3688,6 +3688,143 @@ public class SpecialCardAi {
         }
     }
 
+    // Life's Legacy
+    // "As an additional cost to cast this spell, sacrifice a creature. Draw cards equal to the
+    // sacrificed creature's power." Three generic gates keep it dead once AI:RemoveDeck is gone:
+    // NumCards Sacrificed$CardPower reads 0 before payment (DrawAi.targetAI's "draws nothing" veto),
+    // the SacCost preference finds no creature under the Default profile (willPayCosts), and the
+    // payment's fallback is getWorstAI - the lowest-power body, which draws nothing. One chooser
+    // answers all three: DrawAi.checkApiLogic routes the decision here and
+    // ComputerUtil.getCardPreference("SacCost") asks chooseSacrifice for this card's own cost, so the
+    // creature the decision priced is the creature the payment sacrifices.
+    // Only bodies that are leaving or free anyway are cashed in: blitzed creatures and tokens with an
+    // end-of-turn leave, SacMe creatures, active undying/persist, useless creatures (2+ useful draws),
+    // and other tokens (3+). A real nontoken body is never sacrificed. Own main 2 only, after combat.
+    // The chooser draws no random numbers: its blocker-safety test sums unblocked damage instead of
+    // asking AiBlockController, whose random trade and gang blocks could flip the verdict between the
+    // decision and the payment and sacrifice the 0/1 the decision meant to avoid.
+    public static class LifesLegacy {
+        static final int FREE_FLOOR = 2;  // useful draws for a body that is leaving or free anyway
+        static final int TOKEN_FLOOR = 3; // useful draws for any other token
+
+        public static boolean handles(final Card source) {
+            return source != null && "Life's Legacy".equals(source.getName());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card source = sa.getHostCard();
+            if (!ai.canDraw()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // attack first: blitzed bodies swing with haste, then become cards before the end-step sacrifice
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            final CostSacrifice sac = sa.getPayCosts() == null ? null
+                    : sa.getPayCosts().getCostPartByType(CostSacrifice.class);
+            if (sac == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection options = CardLists.filter(
+                    CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), sac.getType().split(";"), ai, source, sa),
+                    CardPredicates.canBeSacrificedBy(sa, false));
+            return chooseSacrifice(ai, source, options) == null
+                    ? new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable)
+                    : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Called at the decision (consider, then willPayCosts) and again at the payment
+        // (chooseSacrificeType), both through getCardPreference after the first: a function of the board
+        // alone, so it returns the same creature each time. Every cost decision is taken before any mana
+        // is tapped (AiCostDecision.paysRightAfterDecision is false); the only move in between is this
+        // spell going from hand to stack, which the hand count accounts for.
+        public static Card chooseSacrifice(final Player ai, final Card source, final Iterable<Card> options) {
+            int hand = ai.getCardsIn(ZoneType.Hand).size();
+            if (source.isInZone(ZoneType.Hand)) {
+                hand--; // decision time: the spell itself leaves the hand (at payment it is on the stack)
+            }
+            final int library = ai.getCardsIn(ZoneType.Library).size();
+            final int room = ai.isUnlimitedHandSize() ? Integer.MAX_VALUE : Math.max(0, ai.getMaxHandSize() - hand);
+            // "can't draw more than N cards each turn" caps what the spell really draws
+            final int drawCap = StaticAbilityCantDraw.canDrawAmount(ai, Integer.MAX_VALUE);
+            Boolean safe = null; // survivesUnblocked, computed at most once per call
+
+            Card best = null;
+            int bestTier = 0, bestUseful = 0, bestEval = 0;
+            for (final Card c : options) {
+                if (!c.isCreature()) {
+                    continue;
+                }
+                final int power = c.getNetPower();
+                if (power <= 0 || power > library - 3) {
+                    continue; // draws nothing / would deck us
+                }
+                // cards past max hand size are discarded at cleanup
+                final int useful = Math.min(power, Math.min(room, drawCap));
+                // "leaving anyway": blitz sacrifices it at the end step (and draws a card when it dies);
+                // a token with any end-of-turn leave ceases to exist. Nontoken Dash/Warp/AtEOT are NOT
+                // free - those can return to hand or be recast from exile.
+                final boolean leaving = "Blitz".equals(c.getSVar("EndOfTurnLeavePlay"))
+                        || (c.isToken() && c.hasSVar("EndOfTurnLeavePlay"));
+                final int tier, floor;
+                if (leaving || c.hasSVar("SacMe") || ComputerUtilCard.hasActiveUndyingOrPersist(c)
+                        || ComputerUtilCard.isUselessCreature(ai, c)) {
+                    tier = 0;
+                    floor = FREE_FLOOR;
+                } else if (c.isToken()) {
+                    tier = 1;
+                    floor = TOKEN_FLOOR;
+                } else {
+                    continue; // a real nontoken body is never cashed in
+                }
+                if (useful < floor) {
+                    continue;
+                }
+                if (!leaving) {
+                    if (c.isCommander()) {
+                        continue; // it would come back only for commander tax
+                    }
+                    if (safe == null) {
+                        safe = survivesUnblocked(ai);
+                    }
+                    if (!safe) {
+                        continue; // it may be a blocker we need
+                    }
+                }
+                // lowest tier, then most useful draws, then the least valuable body, then card id
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                if (best == null || tier < bestTier
+                        || (tier == bestTier && (useful > bestUseful
+                        || (useful == bestUseful && (eval < bestEval
+                        || (eval == bestEval && c.getId() < best.getId())))))) {
+                    best = c;
+                    bestTier = tier;
+                    bestUseful = useful;
+                    bestEval = eval;
+                }
+            }
+            return best;
+        }
+
+        // Deterministic next-turn safety: the AI survives every opponent's next attack even if nothing
+        // blocks, so no creature it cashes in was a needed blocker. Independent of the candidate.
+        private static boolean survivesUnblocked(final Player ai) {
+            if (ai.cantLose()) {
+                return true;
+            }
+            int damage = 0, poison = 0;
+            for (final Player opp : ai.getOpponents()) {
+                final CardCollection attackers = CardLists.filter(opp.getCreaturesInPlay(),
+                        c -> ComputerUtilCombat.canAttackNextTurn(c, ai));
+                damage += ComputerUtilCombat.sumDamageIfUnblocked(attackers, ai);
+                poison += ComputerUtilCombat.sumPoisonIfUnblocked(attackers, ai);
+            }
+            final boolean lifeSafe = ai.cantLoseForZeroOrLessLife()
+                    || ai.getLife() - damage >= AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_THRESHOLD);
+            return lifeSafe && ai.getPoisonCounters() + poison < 7;
+        }
+    }
+
     // Living Death (and other similar cards using AILogic LivingDeath or AILogic ReanimateAll)
     public static class LivingDeath {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

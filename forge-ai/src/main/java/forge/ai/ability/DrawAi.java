@@ -64,6 +64,11 @@ public class DrawAi extends SpellAbilityAi {
             // veto below refuses an opponent target anyway, so the spell could never be cast.
             return SpecialCardAi.BorrowingArrows.consider(ai, sa);
         }
+        if (SpecialCardAi.LifesLegacy.handles(sa.getHostCard()) && !(sa instanceof AbilitySub)) {
+            // NumCards is Sacrificed$CardPower, which reads 0 until the cost is paid (targetAI's
+            // "draws nothing" veto); the shared sacrifice chooser prices the draw instead.
+            return SpecialCardAi.LifesLegacy.consider(ai, sa);
+        }
         if (!targetAI(ai, sa, false)) {
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
