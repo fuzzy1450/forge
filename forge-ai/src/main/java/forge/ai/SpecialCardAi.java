@@ -9607,6 +9607,109 @@ public class SpecialCardAi {
         }
     }
 
+    // Synthetic Destiny
+    // "Exile all creatures you control. At the beginning of the next end step, reveal cards
+    // from the top of your library until you reveal that many creature cards, put all creature
+    // cards revealed this way onto the battlefield." ChangeZoneAllAi's generic check compares
+    // our Creature.YouCtrl list with an opponent list the same filter always empties, so it
+    // could only decline, or (its life-in-danger branch) exile our own blockers mid-attack.
+    // One window, never proactive: an opponent's spell or ability on top of the stack is about
+    // to kill at least two of our creatures, and those are at least half of our creatures by
+    // count and by CreatureEvaluator value. Doing nothing loses them; casting keeps the same
+    // number of bodies. Declines when any link of the threat carries a Condition* param (the
+    // predictor counts kicker, infusion and X-threshold branches as happening) or a temporary
+    // steal (LoseControl). An undying or persist creature that would come back counts as spared.
+    // With anything spared, declines for a spared commander (our own spell would send it to the
+    // command zone) and whenever a spared blocker would miss a combat before the return: an
+    // opponent's turn until its combat damage is dealt, and any end step or cleanup. Needs a
+    // library creature for every creature exiled and LIBRARY_MARGIN cards left after them.
+    // Reads the board only: no random draws.
+    public static class SyntheticDestiny {
+        public static final int MIN_DOOMED = 2;
+        public static final int LIBRARY_MARGIN = 5;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            // ChangeZoneAllAi overrides canPlay, so mirror the base restriction check.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            if (game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility top = game.getStack().peekAbility();
+            if (top == null || top.getActivatingPlayer() == null || !top.getActivatingPlayer().isOpponentOf(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility threat = top instanceof forge.game.trigger.WrappedAbility w ? w.getWrappedAbility() : top;
+            for (SpellAbility s = threat; s != null; s = s.getSubAbility()) {
+                if (s.hasParam("LoseControl")) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // the steal ends by itself
+                }
+                for (final String k : s.getMapParams().keySet()) {
+                    if (k.startsWith("Condition")) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // the predictor ignores it
+                    }
+                }
+            }
+
+            // Exactly what the spell will exile.
+            final CardCollectionView ours = AbilityUtils.filterListByType(
+                    ai.getCardsIn(ZoneType.Battlefield), sa.getParam("ChangeType"), sa);
+            if (ours.size() < MIN_DOOMED) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Null saviour: our own ChangeZoneAll would match none of the predictor's Destroy branch.
+            // Top only: it resolves right after us.
+            final CardCollection doomed = new CardCollection();
+            for (final Object o : ComputerUtil.predictThreatenedObjects(ai, null, true)) {
+                if (o instanceof Card c && ours.contains(c) && !returnsByItself(c)) {
+                    doomed.add(c);
+                }
+            }
+            if (doomed.size() < MIN_DOOMED || doomed.size() * 2 < ours.size()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (ComputerUtilCard.evaluateCreatureList(doomed) * 2 < ComputerUtilCard.evaluateCreatureList(ours)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final CardCollection spared = new CardCollection(ours);
+            spared.removeAll(doomed);
+            if (!spared.isEmpty()) {
+                for (final Card c : spared) {
+                    if (c.isCommander()) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                }
+                // The creatures return at the NEXT end step: spared blockers are lost for every
+                // combat before then.
+                final PhaseHandler ph = game.getPhaseHandler();
+                final boolean missesACombat = ph.is(PhaseType.END_OF_TURN) || ph.is(PhaseType.CLEANUP)
+                        || (!ph.isPlayerTurn(ai) && !ph.getPhase().isAfter(PhaseType.COMBAT_DAMAGE));
+                if (missesACombat) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+
+            // A replacement for every creature exiled (DigUntil Valid$ Creature.YouOwn), and a
+            // library that survives giving them up.
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (CardLists.count(library, CardPredicates.CREATURES) < ours.size()
+                    || library.size() - ours.size() < LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Undying without a +1/+1 counter, or persist without a -1/-1 counter: it dies and comes back.
+        private static boolean returnsByItself(final Card c) {
+            return (c.hasKeyword(Keyword.UNDYING) && c.getCounters(CounterEnumType.P1P1) == 0)
+                    || (c.hasKeyword(Keyword.PERSIST) && c.getCounters(CounterEnumType.M1M1) == 0);
+        }
+    }
+
     // The Mimeoplasm
     // Its optional "as it enters" copy effect is a ChooseCard chain whose copy
     // chooser picks from the two cards the first chooser exiles mid-resolution.

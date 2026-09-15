@@ -44,6 +44,13 @@ public class ChangeZoneAllAi extends SpellAbilityAi {
             }
         }
 
+        if ("Synthetic Destiny".equals(sourceName)) {
+            // Answers an opponent's sweep on the stack only. Ahead of the run-away roll below:
+            // AI:RemoveDeck:All kept this card out of every evaluation until now, so the gate
+            // must draw no random number, and the evaluator draws none.
+            return SpecialCardAi.SyntheticDestiny.consider(ai, sa);
+        }
+
         // prevent run-away activations - first time will always return true
         boolean chance = MyRandom.getRandom().nextFloat() <= Math.pow(.6667, sa.getActivationsThisTurn());
 
