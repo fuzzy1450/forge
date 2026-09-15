@@ -24,6 +24,7 @@ import forge.ai.ability.AnimateAi;
 import forge.ai.ability.FightAi;
 import forge.ai.ability.TokenAi;
 import forge.card.CardFacePredicates;
+import forge.card.CardType;
 import forge.card.ColorSet;
 import forge.card.ICardFace;
 import forge.card.MagicColor;
@@ -7375,6 +7376,199 @@ public class SpecialCardAi {
         // DestroyAllAi's private predicate (DestroyAllAi.java:20), mirrored.
         private static boolean destroyable(final Card c) {
             return !(c.hasKeyword(Keyword.INDESTRUCTIBLE) || c.getCounters(CounterEnumType.SHIELD) > 0 || c.hasSVar("SacMe"));
+        }
+    }
+
+    // March from Velis Vel
+    //
+    // Each land we control of a chosen nonbasic type becomes a hasty copy of
+    // target creature we control until end of turn. ChooseTypeAi refuses a
+    // ChooseType with no AILogic, CloneAi.cloneTgtAI never picks a target without
+    // AILogic CloneBestCreature, and PlayerControllerAi's type fallback takes the
+    // first element of a HashSet ("Sphere"), so the whole spell is judged here:
+    // routed from ChooseTypeAi.canPlay and its optional doTriggerNoCost, accepted
+    // by name in CloneAi.chkDrawback, and the type picked again at resolution by
+    // ComputerUtil.chooseSomeType through chooseLandType. Own turn, before
+    // combat, stack empty. Two windows:
+    // - Lethal (one opponent only): our ready attackers plus the copies, after
+    //   each untapped creature that can block is assumed to stop our biggest
+    //   remaining attacker, deal at least the opponent's life.
+    // - Safe pressure: 2+ copies of a 3+ base-power creature adding 6+ power;
+    //   each copy's base toughness beats the two largest untapped blockers'
+    //   combat damage together (double strike doubled: AiBlockController
+    //   gang-blocks and reinforces blocks to kill), no deathtouch blocker, and
+    //   more attackers than untapped blockers, counted across all opponents.
+    // Floors in both: target not a land, nonlegendary (the legend rule would bin
+    // every copied land), base power and toughness at least 1 (copiable values:
+    // Hydroid Krasis and Ulvenwald Hydra copies die at once), no Defender, no
+    // EndOfTurnLeavePlay. The copied lands are held out of the spell's own
+    // payment (HELD_MANA_SOURCES_FOR_NEXT_SPELL) so the copies arrive untapped;
+    // the spell is declined, and the holds released, when it can't be paid
+    // without them. No RNG and no clock: no choosePreferredDefenderPlayer (its
+    // pod tie-break is random) and no attack simulation (its 5 s budget).
+    public static class MarchFromVelisVel {
+        public static final int MIN_COPY_POWER = 3;
+        public static final int MIN_ADDED_POWER = 6;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final AbilitySub clone = sa.getSubAbility();
+            if (clone == null || clone.getApi() != ApiType.Clone || !clone.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // Every decline below leaves the sub untargeted, so CloneAi.chkDrawback's
+            // name gate never accepts a target this call did not choose.
+            clone.resetTargets();
+
+            // Routing through ChooseTypeAi's name gate bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isBefore(PhaseType.COMBAT_BEGIN)
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final String type = chooseLandType(ai, CardType.getNonBasicTypes());
+            final CardCollection copied = type.isEmpty() ? new CardCollection() : readyLandsOfType(ai, type);
+            final PlayerCollection opps = ai.getOpponents();
+            if (copied.isEmpty() || opps.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Untapped creatures that could block, across all opponents.
+            final CardCollection blockers = CardLists.filter(opps.getCreaturesInPlay(),
+                    c -> c.isUntapped() && CombatUtil.canBlock(c));
+            int top1 = 0;
+            int top2 = 0;
+            boolean deathtouch = false;
+            for (final Card b : blockers) {
+                final int dmg = b.getNetCombatDamage() * (b.hasDoubleStrike() ? 2 : 1);
+                if (dmg > top1) {
+                    top2 = top1;
+                    top1 = dmg;
+                } else if (dmg > top2) {
+                    top2 = dmg;
+                }
+                deathtouch |= b.hasKeyword(Keyword.DEATHTOUCH);
+            }
+
+            final Player single = opps.size() == 1 ? opps.getFirst() : null;
+            final boolean canKill = single != null && single.canLoseLife() && !single.cantLoseForZeroOrLessLife();
+            final List<Integer> readyVsSingle = new ArrayList<>();
+            int readyAny = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (c.getNetCombatDamage() <= 0) {
+                    continue;
+                }
+                if (CombatUtil.canAttack(c)) {
+                    readyAny++;
+                }
+                if (canKill && CombatUtil.canAttack(c, single)) {
+                    readyVsSingle.add(c.getNetCombatDamage());
+                }
+            }
+
+            final int n = copied.size();
+            Card best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (final Card t : CardLists.getTargetableCards(ai.getCreaturesInPlay(), clone)) {
+                if (t.isLand() || t.getType().isLegendary() || t.hasKeyword(Keyword.DEFENDER)
+                        || t.hasSVar("EndOfTurnLeavePlay")) {
+                    continue;
+                }
+                final int p = t.getBasePower(); // copiable values: no counters or pumps
+                final int tough = t.getBaseToughness();
+                if (p < 1 || tough < 1) {
+                    continue;
+                }
+                boolean lethal = false;
+                if (canKill) {
+                    final List<Integer> powers = new ArrayList<>(readyVsSingle);
+                    for (int i = 0; i < n; i++) {
+                        powers.add(p);
+                    }
+                    powers.sort(Comparator.reverseOrder());
+                    int through = 0;
+                    for (int i = Math.min(blockers.size(), powers.size()); i < powers.size(); i++) {
+                        through += powers.get(i);
+                    }
+                    lethal = through >= single.getLife();
+                }
+                final boolean pressure = n >= 2 && p >= MIN_COPY_POWER && n * p >= MIN_ADDED_POWER
+                        && tough > top1 + top2 && !deathtouch && readyAny + n > blockers.size();
+                if (!lethal && !pressure) {
+                    continue;
+                }
+                final int score = (lethal ? 100000 : 0) + n * p * 1000 + ComputerUtilCard.evaluateCreature(t) / 10;
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = t;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // AiController.saSideEffects runs after this decision and declines a spell
+            // whose cast triggers would kill us; mirror it before holding any land, so
+            // that decline cannot leave the holds behind.
+            if (!ai.cantLoseForZeroOrLessLife() && ai.canLoseLife()
+                    && ComputerUtil.getDamageForPlaying(ai, sa) >= ai.getLife()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CurseEffects);
+            }
+
+            clone.getTargets().add(best);
+            final List<Card> held = new ArrayList<>();
+            for (final Card land : copied) {
+                if (!AiCardMemory.isRememberedCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                    AiCardMemory.rememberCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+                    held.add(land);
+                }
+            }
+            if (!ComputerUtilCost.canPayCost(sa, ai, false)) {
+                for (final Card land : held) {
+                    AiCardMemory.forgetCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+                }
+                clone.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The nonbasic type with the most untapped noncreature lands we control; ties
+        // go to the first type name in sorted order (never HashSet order). Falls back
+        // to counting tapped lands too, then "" (PlayerControllerAi's arbitrary
+        // fallback then copies nothing of ours anyway). Stable from judgment to
+        // resolution: the held type's untapped count cannot drop while paying.
+        public static String chooseLandType(final Player ai, final Collection<String> validTypes) {
+            final List<String> types = new ArrayList<>(validTypes);
+            Collections.sort(types);
+            String chosen = "";
+            int most = 0;
+            for (final String t : types) {
+                final int k = readyLandsOfType(ai, t).size();
+                if (k > most) {
+                    most = k;
+                    chosen = t;
+                }
+            }
+            if (chosen.isEmpty()) {
+                for (final String t : types) {
+                    final int k = CardLists.count(ai.getLandsInPlay(), c -> c.getType().hasStringType(t));
+                    if (k > most) {
+                        most = k;
+                        chosen = t;
+                    }
+                }
+            }
+            return chosen;
+        }
+
+        private static CardCollection readyLandsOfType(final Player ai, final String type) {
+            return CardLists.filter(ai.getLandsInPlay(),
+                    c -> c.isUntapped() && !c.isCreature() && c.getType().hasStringType(type));
         }
     }
 

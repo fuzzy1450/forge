@@ -2560,6 +2560,14 @@ public class ComputerUtil {
                 chosen = "Island";
             }
         }
+        else if (kindOfType.equals("Nonbasic Land")) {
+            if ("March from Velis Vel".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // The same pick SpecialCardAi.MarchFromVelisVel.consider judged the cast
+                // on, made again at resolution so a land lost in response is counted.
+                // Any other chooser of this kind keeps PlayerControllerAi's fallback.
+                chosen = SpecialCardAi.MarchFromVelisVel.chooseLandType(ai, validTypes);
+            }
+        }
         return chosen;
     }
 

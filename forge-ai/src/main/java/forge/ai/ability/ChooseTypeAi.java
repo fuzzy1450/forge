@@ -21,6 +21,13 @@ import java.util.Set;
 public class ChooseTypeAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision canPlay(Player aiPlayer, SpellAbility sa) {
+        if ("March from Velis Vel".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // No AILogic (MissingLogic below), and its Clone sub's target, the land
+            // type and the value floor only make sense together: judged whole in
+            // SpecialCardAi.MarchFromVelisVel. Every other ChooseType card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.MarchFromVelisVel.consider(aiPlayer, sa);
+        }
         String aiLogic = sa.getParamOrDefault("AILogic", "");
 
         if (aiLogic.isEmpty()) {
@@ -115,6 +122,12 @@ public class ChooseTypeAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        if (!mandatory && "March from Velis Vel".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Optional effect casts (cascade, play effects) get the same floor, which
+            // declines off an empty stack and clears the Clone sub's target, so no
+            // stale target rides through CloneAi.chkDrawback. Mandatory is unchanged.
+            return SpecialCardAi.MarchFromVelisVel.consider(ai, sa);
+        }
         boolean isCurse = sa.isCurse();
 
         if (sa.usesTargeting()) {

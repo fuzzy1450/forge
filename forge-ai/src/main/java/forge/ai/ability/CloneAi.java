@@ -93,6 +93,13 @@ public class CloneAi extends SpellAbilityAi {
 
     @Override
     public AiAbilityDecision chkDrawback(Player aiPlayer, SpellAbility sa) {
+        if ("March from Velis Vel".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Target chosen whole in SpecialCardAi.MarchFromVelisVel.consider (routed
+            // from ChooseTypeAi), which clears it on every decline; cloneTgtAI's
+            // default below would refuse any target.
+            return sa.isTargetNumberValid() ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
         // AI should only activate this during Human's turn
         boolean chance = true;
 
