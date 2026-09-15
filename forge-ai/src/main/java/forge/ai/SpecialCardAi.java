@@ -8996,6 +8996,190 @@ public class SpecialCardAi {
         }
     }
 
+    // Overcharged Amalgam
+    // Flash, flying, exploit: "When this exploits a creature, counter target spell, activated
+    // ability, or triggered ability" - a counterspell that leaves a 3/3 flyer, paid for with a
+    // cheap creature. Cast it into a worthy counter window only while we control fodder the
+    // exploit will actually take; otherwise hold it and flash it in as a flyer at the end step
+    // before our turn (or when about to discard or to die in combat), where the exploit declines
+    // because nothing worthy is on the stack. The same worthiness test decides the exploit at
+    // resolution and picks the counter's target, so a creature is only ever sacrificed for a
+    // worthy counter, and never once this Amalgam has left the battlefield. Draws no random
+    // numbers: the card was never evaluated before (AI:RemoveDeck:All).
+    public static class OverchargedAmalgam {
+        public static final String NAME = "Overcharged Amalgam";
+        // mirrors ComputerUtil.choosePermanentsToSacrifice's exploit sacThreshold
+        private static final int EXPLOIT_SAC_THRESHOLD = 190;
+        // an opponent's spell with no hostile aim is worth a creature from this mana value up
+        public static final int MIN_SPELL_CMC = 3;
+        private static final EnumSet<ApiType> MASS_HOSTILE = EnumSet.of(
+                ApiType.DestroyAll, ApiType.DamageAll, ApiType.SacrificeAll, ApiType.ChangeZoneAll);
+
+        // PermanentCreatureAi.checkPhaseRestrictions name gate
+        public static boolean considerCastTiming(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!game.getStack().isEmpty()) {
+                // a counter window (our own top of stack never reaches here:
+                // AiController.getSpellAbilityToPlay returns early on it)
+                return isWorthCountering(ai, null, game.getStack().peekAbility(), true) && hasExploitFodder(ai, sa);
+            }
+            // empty stack, no counter to be had: stock "use it now" cases, else the end-step flyer
+            final Combat combat = game.getCombat();
+            final boolean willDieNow = combat != null && ComputerUtilCombat.lifeInSeriousDanger(ai, combat);
+            final boolean willDiscardNow = ph.is(PhaseType.END_OF_TURN, ai) && !ai.isUnlimitedHandSize()
+                    && ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize();
+            final boolean isEOTBeforeMyTurn = ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn());
+            return willDieNow || willDiscardNow || isEOTBeforeMyTurn;
+        }
+
+        // fodder that ComputerUtil's exploit filter will actually sacrifice
+        static boolean hasExploitFodder(final Player ai, final SpellAbility sa) {
+            final Card self = sa.getHostCard();
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (c.equals(self) || !c.canBeSacrificedBy(sa, true)) {
+                    continue;
+                }
+                if (c.hasSVar("SacMe") || ComputerUtilCard.hasActiveUndyingOrPersist(c)
+                        || ComputerUtilCard.evaluateCreature(c) < EXPLOIT_SAC_THRESHOLD) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // VALUE FLOOR: an opponent's counterable spell or ability worth a creature.
+        // strict (cast time and the exploit decision): a card of ours counts only while it is on
+        // the battlefield; relaxed for the trigger's target, since the removal's target may be
+        // the creature just exploited and must still win over whatever else is on the stack.
+        public static boolean isWorthCountering(final Player ai, final SpellAbility counterSa, SpellAbility tgt, final boolean strict) {
+            if (tgt == null) {
+                return false;
+            }
+            if (tgt.isWrapper()) {
+                tgt = ((WrappedAbility) tgt).getWrappedAbility();
+            }
+            final Player caster = tgt.getActivatingPlayer();
+            if (caster == null || !caster.isOpponentOf(ai) || ai.getYourTeam().contains(caster)) {
+                return false;
+            }
+            if (tgt.isSpell() && !tgt.isCounterableBy(counterSa)) {
+                return false;
+            }
+            boolean hasTargets = false;
+            boolean onlyThirdParty = true;
+            for (SpellAbility part = tgt; part != null; part = part.getSubAbility()) {
+                for (final GameObject o : part.getTargets()) {
+                    if (o instanceof Card c) {
+                        hasTargets = true;
+                        if (ai.equals(c.getController())) {
+                            onlyThirdParty = false;
+                            if ((!strict || c.isInPlay()) && isHostileTo(part, c)) {
+                                return true; // removal, theft, bounce or a lethal hit on our permanent
+                            }
+                        } else if (caster.equals(c.getController())) {
+                            onlyThirdParty = false;
+                        }
+                    } else if (o instanceof SpellAbility s) {
+                        hasTargets = true;
+                        if (ai.equals(s.getActivatingPlayer())) {
+                            return true; // e.g. a counterspell on our spell
+                        }
+                        if (caster.equals(s.getActivatingPlayer())) {
+                            onlyThirdParty = false;
+                        }
+                    }
+                }
+                final ApiType api = part.getApi();
+                if (api != null && MASS_HOSTILE.contains(api)
+                        && (api != ApiType.ChangeZoneAll || part.getParamOrDefault("Origin", "").contains("Battlefield"))) {
+                    return true; // wraths, mass bounce or exile from the battlefield
+                }
+            }
+            // taps, can't-block, small pings and graveyard hate are not worth a creature; nor are
+            // untargeted abilities and triggers
+            if (!tgt.isSpell() || tgt.getHostCard() == null) {
+                return false;
+            }
+            if (hasTargets && onlyThirdParty) {
+                return false; // multiplayer: one opponent's spell aimed only at another opponent
+            }
+            return tgt.getHostCard().getCMC() >= MIN_SPELL_CMC; // stack CMC counts announced X
+        }
+
+        private static boolean isHostileTo(final SpellAbility part, final Card c) {
+            final ApiType api = part.getApi();
+            if (api == null) {
+                return false;
+            }
+            final Card host = part.getHostCard();
+            switch (api) {
+                case Destroy:
+                case Sacrifice:
+                case GainControl:
+                case ExchangeControl:
+                case Fight:
+                    return true;
+                case Attach:
+                    return part.isCurse();
+                case ChangeZone:
+                    return !"Battlefield".equals(part.getParam("Destination"))
+                            && (!part.hasParam("Origin") || part.getParam("Origin").contains("Battlefield"));
+                case DealDamage: {
+                    final int dmg = AbilityUtils.calculateAmount(host, part.getParamOrDefault("NumDmg", "0"), part);
+                    return dmg > 0 && dmg >= c.getLethalDamage();
+                }
+                case PutCounter: {
+                    if (!"M1M1".equals(part.getParam("CounterType"))) {
+                        return false;
+                    }
+                    final int num = AbilityUtils.calculateAmount(host, part.getParamOrDefault("CounterNum", "1"), part);
+                    return num > 0 && num >= c.getLethalDamage();
+                }
+                case Pump: {
+                    if (!part.hasParam("NumDef")) {
+                        return false;
+                    }
+                    final int def = AbilityUtils.calculateAmount(host, part.getParam("NumDef"), part);
+                    return def < 0 && -def >= c.getLethalDamage();
+                }
+                default:
+                    return false;
+            }
+        }
+
+        // CounterAi.doTriggerNoCost name gate: the exploit decision (non-mandatory) and the
+        // Exploited trigger's target (mandatory). null = mandatory with nothing worthy -> stock chooser.
+        public static AiAbilityDecision chooseCounterTarget(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            if (!mandatory) {
+                // no Exploited trigger follows unless this Amalgam is still ours on the battlefield
+                // (killed, bounced, flickered or stolen in response): never sacrifice into nothing
+                final Card host = sa.getHostCard();
+                final Card live = host == null ? null : game.getCardState(host, null);
+                if (live == null || !live.isInPlay() || !ai.equals(live.getController())
+                        || !live.equalsWithGameTimestamp(host)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // spells first, then abilities and triggers: a death trigger stacked above the removal
+            // spell we mean to answer must not take the counter
+            for (final boolean spells : new boolean[] {true, false}) {
+                final Iterator<SpellAbilityStackInstance> it = game.getStack().iterator();
+                while (it.hasNext()) {
+                    final SpellAbility tgt = it.next().getSpellAbility();
+                    if (tgt.isSpell() == spells && sa.canTargetSpellAbility(tgt)
+                            && isWorthCountering(ai, sa, tgt, !mandatory)) {
+                        sa.getTargets().add(tgt);
+                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                    }
+                }
+            }
+            return mandatory ? null : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+    }
+
     // Path of the Pyromancer
     // "Discard all the cards in your hand. Add {R} for each card discarded this
     // way, then draw that many cards plus one." Card-neutral by construction

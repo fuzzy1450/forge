@@ -42,6 +42,15 @@ public class SacrificeAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        if (!mandatory && sa.isKeyword(Keyword.EXPLOIT) && sa.getHostCard() != null
+                && SpecialCardAi.OverchargedAmalgam.NAME.equals(sa.getHostCard().getName())) {
+            // Overcharged Amalgam: the optional exploit is decided again at resolution, where
+            // ComputerUtil.choosePermanentsToSacrifice asks the counter trigger (CounterAi's name
+            // gate), which accepts only a worthy target. Judged here, from
+            // AiController.checkETBEffects at cast time, it vetoed the whole creature whenever we
+            // controlled no creature evaluating <= 135. Timing is gated in PermanentCreatureAi.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         AiAbilityDecision decision = sacrificeTgtAI(ai, sa, mandatory);
         if (decision.willingToPlay()) {
             return decision;

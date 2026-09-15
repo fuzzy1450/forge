@@ -230,6 +230,15 @@ public class CounterAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        if (sa.usesTargeting() && SpecialCardAi.OverchargedAmalgam.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Overcharged Amalgam: non-mandatory is its exploit decision (ComputerUtil's exploit
+            // branch), mandatory is the Exploited trigger's target. Both take only a worthy
+            // opponent spell or ability; null = mandatory with nothing worthy -> stock chooser.
+            final AiAbilityDecision amalgam = SpecialCardAi.OverchargedAmalgam.chooseCounterTarget(ai, sa, mandatory);
+            if (amalgam != null) {
+                return amalgam;
+            }
+        }
         final Game game = ai.getGame();
 
         if (sa.usesTargeting()) {

@@ -64,6 +64,13 @@ public class PermanentCreatureAi extends PermanentAi {
             return false;
         }
 
+        if (SpecialCardAi.OverchargedAmalgam.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()) {
+            // a counterspell on a body: a worthy counter window while we hold exploit fodder, else
+            // an end-step flyer (doAdvancedFlashLogic's ETB branch cast it in our own main phase,
+            // wasting the counter). Draws no random numbers.
+            return SpecialCardAi.OverchargedAmalgam.considerCastTiming(ai, sa);
+        }
+
         // Flash logic
         boolean advancedFlash = AiProfileUtil.getBoolProperty(ai, AiProps.FLASH_ENABLE_ADVANCED_LOGIC);
         if (card.hasKeyword(Keyword.FLASH) || (!ai.canCastSorcery() && sa.canCastTiming(ai) && !sa.isCastFromPlayEffect())) {
