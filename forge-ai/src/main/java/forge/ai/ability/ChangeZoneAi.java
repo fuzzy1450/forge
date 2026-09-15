@@ -347,6 +347,20 @@ public class ChangeZoneAi extends SpellAbilityAi {
         if (type != null && type.contains("X")) {
             ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger());
         }
+        // A Charm mode is evaluated on its own (CharmAi), unlinked from the root's sub-ability chain, and
+        // "TargetedPlayer" reads SpellAbility.getAllTargetChoices(), which walks root -> subs: it cannot see
+        // the player this mode has just targeted, so "TargetedPlayerOwn" rejected every card (Obscura
+        // Confluence's Return mode). When this mode targets exactly the AI and that lookup comes back empty,
+        // read it as the AI's own cards; linked sub-abilities still resolve through the chain as before.
+        String validType = type;
+        if (type != null && type.contains("TargetedPlayerOwn") && sa instanceof AbilitySub
+                && ai.equals(source.getController())) {
+            final java.util.List<Player> ownTgts = com.google.common.collect.Lists.newArrayList(sa.getTargets().getTargetPlayers());
+            if (ownTgts.size() == 1 && ownTgts.get(0).equals(ai)
+                    && AbilityUtils.getDefinedPlayers(source, "TargetedPlayer", sa).isEmpty()) {
+                validType = type.replace("TargetedPlayerOwn", "YouOwn");
+            }
+        }
 
         for (final Player p : pDefined) {
             CardCollectionView list = p.getCardsIn(origin);
@@ -358,7 +372,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
 
             if (type != null && p == ai) {
                 // AI only "knows" about his information
-                list = CardLists.getValidCards(list, type, source.getController(), source, sa);
+                list = CardLists.getValidCards(list, validType, source.getController(), source, sa);
                 list = CardLists.filter(list, c -> {
                     if (c.getType().isLegendary()) {
                         return !ai.isCardInPlay(c.getName());
@@ -369,7 +383,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
             // TODO: prevent ai searching its own library when Ob Nixilis, Unshackled is in play
             if (origin != null && origin.size() == 1 && origin.get(0).isKnown()) {
                 // FIXME: make this properly interact with several origin zones
-                list = CardLists.getValidCards(list, type, source.getController(), source, sa);
+                list = CardLists.getValidCards(list, validType, source.getController(), source, sa);
             }
 
             if (!activateForCost && list.isEmpty()) {
