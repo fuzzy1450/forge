@@ -185,6 +185,12 @@ public class PermanentCreatureAi extends PermanentAi {
         }
 
         final Card card = sa.getHostCard();
+        if (SpecialCardAi.TheMimeoplasm.NAME.equals(card.getName())
+                && !SpecialCardAi.TheMimeoplasm.worthCasting(ai)) {
+            // Value floor for its graveyard copy plan (the ETB chain's own answers only
+            // ask whether a surviving copy exists). Draws no random numbers.
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
         final ManaCost mana = card.getManaCost();
         final Game game = ai.getGame();
 

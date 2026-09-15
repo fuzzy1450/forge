@@ -51,6 +51,7 @@ import forge.game.player.Player;
 import forge.game.player.PlayerCollection;
 import forge.game.player.PlayerPredicates;
 import forge.game.replacement.ReplacementEffect;
+import forge.game.replacement.ReplacementLayer;
 import forge.game.replacement.ReplacementType;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
@@ -7188,6 +7189,162 @@ public class SpecialCardAi {
                 }
             }
             return mask;
+        }
+    }
+
+    // The Mimeoplasm
+    // Its optional "as it enters" copy effect is a ChooseCard chain whose copy
+    // chooser picks from the two cards the first chooser exiles mid-resolution.
+    // Before the cast (and at the Optional replacement's accept-or-decline) no
+    // card is remembered yet, so the stock "Clone" scan finds nothing and the
+    // permanent is vetoed at AiController.checkETBEffects (BadEtbEffects). One
+    // plan drives the cast floor, both ETB answers and the real picks: copy the
+    // graveyard creature card worth the most as a copy, fed by the highest-power
+    // other card's +1/+1 counters. Draws no random numbers; its own trigger scan
+    // reads Execute text rather than calling Trigger.ensureAbility (the stock
+    // evaluateCreature still builds a graveyard card's upkeep trigger).
+    public static class TheMimeoplasm {
+        public static final String NAME = "The Mimeoplasm";
+        // CreatureEvaluator prices +1 power at 15 and +1 toughness at 10.
+        private static final int COUNTER_VALUE = 25;
+        // Pre-cast floor, evaluateCreature units: about a vanilla 4/4 for five
+        // (2/2 cmc2 copy + 2 counters = 210; 1/1 cmc1 + 1 = 155; 3/3 cmc3 + 1 = 215).
+        public static final int CAST_FLOOR = 200;
+
+        private static CardCollection pool(final Player ai) {
+            return CardLists.filter(ai.getGame().getCardsIn(ZoneType.Graveyard), CardPredicates.CREATURES);
+        }
+
+        // Can this card be the copy at all?
+        private static boolean copyable(final Player ai, final Card c) {
+            if (c.getType().isLegendary() && ai.isCardInPlay(c.getName())) {
+                return false; // legend rule would bin one of them
+            }
+            if (c.hasSVar("EndOfTurnLeavePlay")) {
+                return false; // cast after combat (PermanentAi waits for Main 2), sacrificed unused
+            }
+            for (ReplacementEffect re : c.getReplacementEffects()) {
+                if (re.getLayer() == ReplacementLayer.Copy) {
+                    return false; // clone-of-a-clone: see CloneAi's runaway guard
+                }
+            }
+            for (Trigger t : c.getTriggers()) {
+                // A copied enters trigger sees OUR cast (from hand, mana spent):
+                // Deathbringer Regent's wrath would hit our own board.
+                if (t.getMode() == TriggerType.ChangesZone && "Battlefield".equals(t.getParam("Destination"))) {
+                    final String api = rootApi(t);
+                    if ("DestroyAll".equals(api) || "SacrificeAll".equals(api)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // The trigger's root api, read from its Execute text when it is not built yet.
+        private static String rootApi(final Trigger t) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                return built.getApi() == null ? null : built.getApi().name();
+            }
+            final String text = t.hasParam("Execute") ? t.getSVar(t.getParam("Execute")) : "";
+            if (text.isEmpty()) {
+                return null;
+            }
+            final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+            final String api = params.get("DB");
+            if (api != null) {
+                return api;
+            }
+            return params.containsKey("AB") ? params.get("AB") : params.get("SP");
+        }
+
+        // Value of entering as `copy` with `donor`'s power in +1/+1 counters; MIN_VALUE = unsafe.
+        public static int outcome(final Player ai, final Card copy, final Card donor) {
+            if (copy == null || donor == null || copy.equals(donor) || !copyable(ai, copy)) {
+                return Integer.MIN_VALUE;
+            }
+            final int counters = Math.max(0, donor.getNetPower());
+            if (copy.getNetToughness() + counters <= 0) {
+                return Integer.MIN_VALUE; // dies to state-based actions
+            }
+            return ComputerUtilCard.evaluateCreature(copy) + counters * COUNTER_VALUE;
+        }
+
+        // Best plan over every graveyard: {copy, donor}, or null when no copy survives.
+        // The best donor for a copy is the highest-power other card (it maximises both
+        // value and survival), so this is O(n). Ties keep graveyard iteration order.
+        public static Pair<Card, Card> plan(final Player ai) {
+            final CardCollection pool = pool(ai);
+            if (pool.size() < 2) {
+                return null;
+            }
+            Card p1 = null, p2 = null; // the two highest powers
+            for (Card c : pool) {
+                if (p1 == null || c.getNetPower() > p1.getNetPower()) {
+                    p2 = p1;
+                    p1 = c;
+                } else if (p2 == null || c.getNetPower() > p2.getNetPower()) {
+                    p2 = c;
+                }
+            }
+            Pair<Card, Card> best = null;
+            int bestVal = Integer.MIN_VALUE;
+            for (Card c : pool) {
+                final Card donor = c.equals(p1) ? p2 : p1;
+                final int v = outcome(ai, c, donor);
+                if (v > bestVal) {
+                    bestVal = v;
+                    best = Pair.of(c, donor);
+                }
+            }
+            return best;
+        }
+
+        public static int planValue(final Player ai) {
+            final Pair<Card, Card> p = plan(ai);
+            return p == null ? Integer.MIN_VALUE : outcome(ai, p.getLeft(), p.getRight());
+        }
+
+        // ChooseCardAi.checkAiLogic: the pre-cast ETB check AND the Optional-replacement confirm.
+        public static boolean considerChoice(final Player ai, final SpellAbility sa) {
+            if ("Exile".equals(sa.getParam("ChoiceZone"))) {
+                return true; // copy chooser: its choices are the parent's exiled pair, which do not exist yet
+            }
+            return plan(ai) != null; // any surviving copy beats declining (a dead 0/0)
+        }
+
+        // PermanentCreatureAi.checkApiLogic: the value floor, pre-cast only.
+        public static boolean worthCasting(final Player ai) {
+            return planValue(ai) >= CAST_FLOOR;
+        }
+
+        // ChooseCardAi.chooseSingleCard: make resolution execute the judged plan.
+        public static Card chooseCard(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            final CardCollection opts = new CardCollection(options);
+            if (opts.isEmpty()) {
+                return null;
+            }
+            if ("Exile".equals(sa.getParam("ChoiceZone"))) {
+                if (opts.size() == 2) {
+                    final Card a = opts.get(0), b = opts.get(1);
+                    return outcome(ai, a, b) >= outcome(ai, b, a) ? a : b;
+                }
+                return ComputerUtilCard.getBestCreatureAI(opts);
+            }
+            // Graveyard picks: nothing moves between the two picks (the exile happens
+            // later), so the plan recomputes identically; take whichever planned card
+            // is still offered.
+            final Pair<Card, Card> p = plan(ai);
+            if (p != null) {
+                if (opts.contains(p.getLeft())) {
+                    return p.getLeft();
+                }
+                if (opts.contains(p.getRight())) {
+                    return p.getRight();
+                }
+            }
+            return ComputerUtilCard.getBestCreatureAI(opts);
         }
     }
 

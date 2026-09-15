@@ -85,6 +85,13 @@ public class ChooseCardAi extends SpellAbilityAi {
         } else if (aiLogic.equals("AtLeast2") || aiLogic.equals("BestBlocker")) {
             return choices.size() >= 2;
         } else if (aiLogic.equals("Clone")) {
+            if (SpecialCardAi.TheMimeoplasm.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // Its copy chooser picks from cards the parent exiles mid-resolution, so the
+                // generic scan below finds nothing before the cast (and at the Optional
+                // replacement's accept-or-decline) and vetoes the whole permanent at
+                // AiController.checkETBEffects. Every other Clone card takes the path below.
+                return SpecialCardAi.TheMimeoplasm.considerChoice(ai, sa);
+            }
             final String filter = "Permanent.YouDontCtrl,Permanent.nonLegendary";
             choices = CardLists.getValidCards(choices, filter, host.getController(), host, sa);
             return !choices.isEmpty();
@@ -194,6 +201,10 @@ public class ChooseCardAi extends SpellAbilityAi {
             }
             choice = ComputerUtilCard.getBestCreatureAI(options);
         } else if ("Clone".equals(logic)) {
+            if (SpecialCardAi.TheMimeoplasm.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // Resolution plays the plan its cast floor judged (best copy + biggest donor).
+                return SpecialCardAi.TheMimeoplasm.chooseCard(ai, sa, options);
+            }
             final String filter = "Permanent.YouDontCtrl,Permanent.nonLegendary";
             CardCollection newOptions = CardLists.getValidCards(options, filter, ctrl, host, sa);
             if (!newOptions.isEmpty()) {
