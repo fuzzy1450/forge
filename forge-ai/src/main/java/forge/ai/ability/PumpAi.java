@@ -136,6 +136,11 @@ public class PumpAi extends PumpAiBase {
             // whose amount counts that opponent's artifacts. The generic non-curse branch below
             // cannot target an opponent player and never checks the sub's X.
             return SpecialCardAi.CuriousHerd.consider(ai, sa);
+        } else if ("SongOfInspiration".equals(aiLogic)) {
+            // Song of Inspiration: a Pump shell targeting our graveyard. The generic targeting below
+            // only reads battlefield creatures (canTgtCreature() is true for "Permanent..."), so it never
+            // finds a target, and the stack branch only protects threatened permanents.
+            return SpecialCardAi.SongOfInspiration.consider(ai, sa);
         } else if ("MoveCounter".equals(aiLogic)) {
             final SpellAbility moveSA = sa.findSubAbilityByType(ApiType.MoveCounter);
 

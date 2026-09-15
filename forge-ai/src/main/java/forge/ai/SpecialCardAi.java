@@ -4547,6 +4547,61 @@ public class SpecialCardAi {
         }
     }
 
+    // Song of Inspiration
+    // Both d20 results return the targets, so this is a five-mana instant Regrowth for up to two
+    // permanent cards (15+ also gains life equal to their total mana value). The script uses Pump as
+    // a targeting shell, and PumpAi's generic targeting only enumerates creatures on the battlefield
+    // (TargetRestrictions.canTgtCreature() is true for "Permanent..." whatever TgtZone says), so the
+    // graveyard was never looked at. This picks and targets the cards itself. No random draws: the
+    // stock path it replaces drew none either.
+    public static class SongOfInspiration {
+        public static final int MIN_TOTAL_CMC = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            sa.resetTargets();
+
+            // Not a response, never on our own turn: the opponent's end step right before our turn,
+            // when the mana would otherwise go unused and the returned cards are castable next turn.
+            if (!game.getStack().isEmpty() || !ph.is(PhaseType.END_OF_TURN) || !ai.equals(ph.getNextTurn())) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForEndOfTurn);
+            }
+
+            CardCollection pool = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa);
+            pool = CardLists.filter(pool, c -> !c.isLand()
+                    && !(c.getType().isLegendary() && !c.ignoreLegendRule() && ai.isCardInPlay(c.getName())));
+
+            // Highest mana value first, to match the floor below (getBestAI ranks an all-creature pool
+            // by evaluateCreature and could miss a pair that clears it).
+            final CardCollection picks = new CardCollection();
+            while (picks.size() < sa.getMaxTargets() && !pool.isEmpty()) {
+                final Card best = ComputerUtilCard.getMostExpensivePermanentAI(pool);
+                pool.remove(best);
+                picks.add(best);
+            }
+            if (picks.isEmpty() || Aggregates.sum(picks, Card::getCMC) < MIN_TOTAL_CMC) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Don't pull back cards we would only discard.
+            final int handAfter = ai.getCardsIn(ZoneType.Hand).size()
+                    - (sa.getHostCard().isInZone(ZoneType.Hand) ? 1 : 0) + picks.size();
+            if (!ai.isUnlimitedHandSize() && handAfter > ai.getMaxHandSize()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            for (final Card c : picks) {
+                if (!sa.canTarget(c)) {
+                    sa.resetTargets();
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+                sa.getTargets().add(c);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Sorin, Vengeful Bloodlord
     public static class SorinVengefulBloodlord {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
