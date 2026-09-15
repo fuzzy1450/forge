@@ -3048,6 +3048,66 @@ public class SpecialCardAi {
         }
     }
 
+    // Launch the Fleet
+    // "Strive {1}: until end of turn, any number of target creatures each gain
+    // 'Whenever this creature attacks, create a 1/1 Soldier token tapped and
+    // attacking.'" Target only our own creatures that the AI's own attack plan
+    // (AiController.getPredictedCombat, already built by AnimateAi.checkAiLogic)
+    // sends in, so no creature attacks because of this spell. Stop adding targets
+    // at the first one Strive makes unaffordable, and cast only for at least
+    // MIN_TOKENS tokens. Decline while any predicted attacker faces an attack tax
+    // (Propaganda, Ghostly Prison): the prediction budgets taxes against main-1
+    // mana this spell would spend, and the real declaration drops attackers it
+    // can no longer pay for. Skip creatures with mana abilities, which the payment
+    // could tap. Every board-only exit runs before the first canPayCost, whose
+    // test payment draws MyRandom; the stock refusal drew nothing.
+    public static class LaunchTheFleet {
+        public static final int MIN_TOKENS = 2;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // checkAiLogic added every predicted attacker; start from none.
+            sa.resetTargets();
+
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Combat predicted = ((PlayerControllerAi) ai.getController()).getAi().getPredictedCombat();
+            for (final Card a : predicted.getAttackers()) {
+                if (CombatUtil.getAttackCost(game, a, predicted.getDefenderByAttacker(a)) != null) {
+                    return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+                }
+            }
+            final List<Card> candidates = Lists.newArrayList();
+            for (final Card c : CardLists.getTargetableCards(ai.getCreaturesInPlay(), sa)) {
+                if (predicted.isAttacking(c) && c.getManaAbilities().isEmpty()) {
+                    candidates.add(c);
+                }
+            }
+            if (candidates.size() < MIN_TOKENS) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            for (final Card c : candidates) {
+                if (!sa.canAddMoreTarget()) {
+                    break;
+                }
+                sa.getTargets().add(c);
+                // Strive: each target beyond the first costs {1} more
+                if (!ComputerUtilCost.canPayCost(sa, ai, false)) {
+                    sa.getTargets().remove(c);
+                    break;
+                }
+            }
+            if (sa.getTargets().size() < MIN_TOKENS) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Living Death (and other similar cards using AILogic LivingDeath or AILogic ReanimateAll)
     public static class LivingDeath {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

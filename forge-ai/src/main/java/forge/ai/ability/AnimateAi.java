@@ -161,6 +161,14 @@ public class AnimateAi extends SpellAbilityAi {
             ComputerUtilCost.setMaxXValue(sa, aiPlayer, sa.isTrigger());
         }
 
+        if ("Attacking".equals(sa.getParam("AILogic"))) {
+            // Launch the Fleet, the only script with this logic. checkAiLogic picks
+            // the predicted attackers, but the generic targeting below resets them and
+            // has no branch for a trigger-granting targeted Animate, so it always
+            // returned CantPlayAi. Every other Animate card takes the path it took before.
+            return SpecialCardAi.LaunchTheFleet.consider(aiPlayer, sa);
+        }
+
         if (sa.usesTargeting()) {
             sa.resetTargets();
             return animateTgtAI(sa);
