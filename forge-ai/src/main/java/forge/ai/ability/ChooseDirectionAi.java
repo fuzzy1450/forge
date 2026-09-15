@@ -2,6 +2,8 @@ package forge.ai.ability;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.ComputerUtilAbility;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.Direction;
 import forge.game.Game;
@@ -38,6 +40,12 @@ public class ChooseDirectionAi extends SpellAbilityAi {
                 if (aiValue <= leftValue && aiValue <= rightValue) {
                     return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
                 }
+            } else if ("GainControl".equals(logic)
+                    && "Order of Succession".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // AiController.chooseDirection already keys on this logic for the
+                // direction pick; the name keeps any other ChooseDirection script
+                // on exactly the path it took before.
+                return SpecialCardAi.OrderOfSuccession.consider(ai, sa);
             }
         }
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);

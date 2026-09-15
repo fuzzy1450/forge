@@ -2904,6 +2904,99 @@ public class SpecialCardAi {
         }
     }
 
+    // Order of Succession
+    // Resolution is predictable under AI choosers: ControlGainVariantAi.chooseSingleCard
+    // is getBestCreatureAI over the next player's creatures, so we gain the best creature
+    // of the next player in the chosen direction, and the player whose "next" we are takes
+    // our best creature. The direction mirrors AiController.chooseDirection's GainControl
+    // branch (in 1v1 both directions reach the one opponent). Cast only when the steal is
+    // worth a card, a swap is clearly up, and nothing that changes sides with our creature
+    // (an anthem, our commander) or stays behind (our own Aura on theirs) spoils the trade.
+    public static class OrderOfSuccession {
+        // ~a 4/4 for 4 (220) or a 3/3 flyer; never a 3/3 for 3 (190), a 2/2 (160) or a 1/1 token (105)
+        public static final int MIN_GAIN_VALUE = 200;
+        // stock ControlExchangeAi asks +40 for a best-for-WORST swap; this one is best-for-best
+        public static final int MIN_SWAP_MARGIN = 60;
+        private static final Pattern SELF_ONLY_AFFECTED = Pattern.compile("[A-Za-z]+\\.Self(\\+.*)?");
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+
+            // ChooseDirectionAi overrides canPlay wholesale, so mirror the base
+            // class's restriction check.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+
+            final CardCollection creats = CardLists.filter(game.getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES);
+            final Player left = game.getNextPlayerAfter(ai, forge.game.Direction.Left);
+            final Player right = game.getNextPlayerAfter(ai, forge.game.Direction.Right);
+            final CardCollection neighbours = CardLists.filterControlledBy(creats, left);
+            if (right != null && !right.equals(left)) {
+                neighbours.addAll(CardLists.filterControlledBy(creats, right));
+            }
+            if (neighbours.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final Card gain = ComputerUtilCard.getBestCreatureAI(neighbours);
+            if (gain == null || !gain.getController().isOpponentOf(ai) || !gain.canBeControlledBy(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            // A creature neutralised by our own Aura (Darksteel Mutation keeps its mana
+            // value, so it can outscore a real body) is no steal.
+            if (gain.getNetPower() <= 0 || gain.getEnchantedBy().anyMatch(CardPredicates.isController(ai))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int gainValue = ComputerUtilCard.evaluateCreature(gain);
+            if (gainValue < MIN_GAIN_VALUE) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final CardCollection ours = ai.getCreaturesInPlay();
+            if (!ours.isEmpty()) {
+                // The hand-over happens on resolution: pre-combat it takes an attacker
+                // from us and gives them a blocker, and what we gain is summoning sick.
+                if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+                }
+                final Card loss = ComputerUtilCard.getBestCreatureAI(ours); // what their chooser takes
+                if (loss != null) {
+                    if (loss.isCommander() && ai.equals(loss.getOwner())) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                    if (affectsBeyondItself(loss)) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                    if (gainValue < ComputerUtilCard.evaluateCreature(loss) + MIN_SWAP_MARGIN) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // An intrinsic continuous static that reaches past its own card (an anthem or
+        // lord such as Kongming's "Creature.Other+YouCtrl") changes sides with it, and the
+        // creature evaluator does not price it.
+        private static boolean affectsBeyondItself(final Card c) {
+            for (final StaticAbility stAb : c.getStaticAbilities()) {
+                if (!stAb.isIntrinsic() || !stAb.checkMode(forge.game.staticability.StaticAbilityMode.Continuous)) {
+                    continue;
+                }
+                final String affected = stAb.getParam("Affected");
+                if (affected == null) {
+                    continue;
+                }
+                for (final String part : affected.split(",")) {
+                    if (!SELF_ONLY_AFFECTED.matcher(part.trim()).matches()) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Phyrexian Dreadnought
     public static class PhyrexianDreadnought {
         public static CardCollection reviseCreatureSacList(final Player ai, final SpellAbility sa, final CardCollection choices) {
