@@ -199,6 +199,18 @@ public class DestroyAi extends SpellAbilityAi {
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
             }
 
+            // Dregs of Sorrow: X is the TARGET COUNT (TargetMin$ X). setMaxXValue capped it at
+            // every valid target on the battlefield - our own nonblack creatures and the
+            // opponents' creatures the filters above just dropped included - so the loop below
+            // could never reach X and the whole cast failed. Announce X as the number of targets
+            // that survived the filters instead. Every other Destroy card takes exactly the path
+            // it took before this branch.
+            if (maxTargets > list.size()
+                    && "Dregs of Sorrow".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                maxTargets = list.size();
+                sa.getRootAbility().setXManaCostPaid(maxTargets);
+            }
+
             // target loop
             // TODO use can add more Targets
             while (sa.getTargets().size() < maxTargets) {
