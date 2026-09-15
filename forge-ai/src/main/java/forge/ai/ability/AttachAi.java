@@ -1044,6 +1044,38 @@ public class AttachAi extends SpellAbilityAi {
                     && !(returned.getType().isLegendary() && ai.isCardInPlay(returned.getName()))) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
+        } else if ("Remembered".equals(sa.getParam("Defined")) && sa.getParent() != null
+            && sa.getParent().getApi() == ApiType.PutCounter && !sa.getParent().usesTargeting()
+            && "Remembered".equals(sa.getParent().getParam("Defined"))
+            && "P1P1".equals(sa.getParent().getParam("CounterType"))
+            && sa.getParent().getParent() != null
+            && sa.getParent().getParent().getApi() == ApiType.Token
+            && sa.getParent().getParent().hasParam("RememberTokens")
+            && sa.getParent().getParent().hasParam("TokenScript")) {
+            // Fractal Harness (the only script of this chain): "create a 0/0
+            // token, put X +1/+1 counters on it, attach to it". Living
+            // Weapon-shaped with the counters placed between the Token
+            // grandparent and this Attach - the Token creates the attach target,
+            // so refusing for lack of one vetoes the whole permanent at
+            // AiController.checkETBEffects (BadEtbEffects). Floor: the token must
+            // come out a real body, toughness at least 2 once its counters land,
+            // so a minimum-X cast never buys a 1/1 or a 0/0 that dies at once.
+            // X reads the announced value (Count$xPaid through the LKI castSA).
+            // Counters count only when the token can receive them (an opposing
+            // Blightbeetle or Solemnity leaves a 0/0), as AmassAi checks on its
+            // proto token. Draws no random numbers, like the CantPlayAi return
+            // it replaces.
+            final SpellAbility putCounter = sa.getParent();
+            final Card proto = TokenAi.spawnToken(ai, putCounter.getParent());
+            if (proto != null) {
+                final int counters = proto.canReceiveCounters(CounterEnumType.P1P1)
+                        ? AbilityUtils.calculateAmount(putCounter.getHostCard(),
+                                putCounter.getParamOrDefault("CounterNum", "1"), putCounter)
+                        : 0;
+                if (proto.getNetToughness() + counters >= 2) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
         }
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
