@@ -8,6 +8,8 @@ import forge.ai.SpellAbilityAi;
 import forge.game.Game;
 import forge.game.ability.ApiType;
 import forge.game.combat.Combat;
+import forge.game.phase.PhaseHandler;
+import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 
@@ -36,7 +38,17 @@ public class EndTurnAi extends SpellAbilityAi  {
                 && sa.getApi() == ApiType.EndCombatPhase) {
             final Game game = aiPlayer.getGame();
             final Combat combat = game.getCombat();
-            if (combat != null && !game.getPhaseHandler().isPlayerTurn(aiPlayer)
+            final PhaseHandler ph = game.getPhaseHandler();
+            // An extra combat queued after this one (Hexplate Wallbreaker, Scourge of the Throne,
+            // Combat Celebrant): endCombatPhaseByEffect advances into it without onPhaseBegin, so no
+            // Combat object exists and COMBAT_DECLARE_ATTACKERS throws (PhaseHandler:306). Hold the
+            // card for the last combat instead.
+            for (PhaseType step : PhaseType.PHASE_GROUPS.get(2)) {
+                if (ph.hasExtraPhaseAfter(PhaseType.COMBAT_END, step)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            if (combat != null && !ph.isPlayerTurn(aiPlayer)
                     && !combat.getAttackersOf(aiPlayer).isEmpty()) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
