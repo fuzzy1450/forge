@@ -1148,7 +1148,7 @@ public class SpecialCardAi {
         }
     }
 
-    // Sudden Spoiling
+    // Sudden Spoiling, Polymorphist's Jest
     // A combat trick for "until end of turn, creatures target player controls lose all abilities
     // and have base power and toughness N/M". Cast only after blocks are locked in (declare-blockers
     // step, stack empty, combat damage not already prevented) and only with at least the spell's
@@ -1166,7 +1166,7 @@ public class SpecialCardAi {
     // pay-checks through a MyRandom-reading mana reservation. The swing's destroy predictors draw
     // only while a Regenerate ability is on the battlefield.
     public static class CombatShrinkAll {
-        public static final Set<String> NAMES = Set.of("Sudden Spoiling");
+        public static final Set<String> NAMES = Set.of("Sudden Spoiling", "Polymorphist's Jest");
         public static final int MIN_SWING_VALUE = 250;     // evaluateCreature: a vanilla 5/5, or two real creatures
         public static final int MIN_PREVENTED_DAMAGE = 8;  // and at least life/4 (10 at 40 life)
 
@@ -1218,6 +1218,13 @@ public class SpecialCardAi {
                 final CardCollectionView affected = AbilityUtils.filterListByType(
                         victim.getCardsIn(ZoneType.Battlefield), valid, sa);
                 final int defuse = ourAttack ? 0 : defuseLevel(ai, combat, affected, bp);
+                // No-grow veto: a base power above a victim combatant's current combat damage (a
+                // base-0 power creature, or one that assigns no combat damage) hands it more damage
+                // than it deals now. Cast into that only when the hit on us is lethal and the
+                // spell makes it survivable. A grown toughness is priced by the swing's loss terms.
+                if (defuse < 2 && growsPower(combat, affected, bp)) {
+                    continue;
+                }
                 final int swing = swing(ai, combat, affected, bp, bt);
                 if (defuse == 0 && swing < MIN_SWING_VALUE) {
                     continue;
@@ -1398,6 +1405,21 @@ public class SpecialCardAi {
                 }
             }
             return value;
+        }
+
+        // Some victim combatant would deal more combat damage after the spell than it does now.
+        private static boolean growsPower(final Combat combat, final CardCollectionView affected, final int bp) {
+            for (final Card c : combat.getAttackers()) {
+                if (affected.contains(c) && postPower(c, bp) > Math.max(0, c.getNetCombatDamage())) {
+                    return true;
+                }
+            }
+            for (final Card c : combat.getAllBlockers()) {
+                if (affected.contains(c) && postPower(c, bp) > Math.max(0, c.getNetCombatDamage())) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         // Our blockers kill a shrunk attacker: enough damage for its new toughness, or deathtouch.
