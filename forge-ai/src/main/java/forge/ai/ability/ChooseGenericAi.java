@@ -33,6 +33,11 @@ public class ChooseGenericAi extends SpellAbilityAi {
             }
         } else if ("Always".equals(aiLogic)) {
             return true;
+        } else if ("ArchangelOfStrife".equals(aiLogic)) {
+            // Archangel of Strife, judged whole in SpecialCardAi. Only the pre-cast ETB dry
+            // run asks (AiController.checkETBEffects); the replacement is mandatory, so
+            // resolution never does, and chooseSingleSpellAbility keeps spells.get(0) (War).
+            return SpecialCardAi.ArchangelOfStrife.consider(ai, sa);
         } else if (namedChoice(sa.getAdditionalAbilityList("Choices"), aiLogic) != null) {
             // "As this enters, choose A or B" with AILogic naming the preferred mode
             // (Battle of Hoover Dam: Legion). The choice itself is free; refusing it

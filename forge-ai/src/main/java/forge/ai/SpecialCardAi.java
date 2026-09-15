@@ -91,6 +91,94 @@ import java.util.stream.Collectors;
  */
 public class SpecialCardAi {
 
+    // Archangel of Strife
+    // "As this enters, each player chooses war or peace." Every AI chooser takes the first choice
+    // (ChooseGenericAi.chooseSingleSpellAbility -> War), and a human opponent is modelled the same
+    // way, so the cast hands every opponent's creatures +3/+0 along with ours. The body is always
+    // worth its seven mana on the unchanged creature path; the one self-harming moment is when that
+    // symmetric +3 turns the opponents' next swing into a lethal one. Blockers are only our creatures
+    // that will be untapped on their turn (ours do not untap first; before our own attack, any that
+    // can attack is assumed to), matched greedily per attacker with the engine's own block legality
+    // (flying, reach, menace, can't-be-blocked), the Archangel itself as one more flier. Decline iff
+    // that swing reaches our life and exceeds the swing we face without the cast. Reads game state
+    // only: no random draw, no targets, no card mutation (also asked from getPossibleETBCounters).
+    public static class ArchangelOfStrife {
+        public static final int WAR_POWER = 3;
+
+        public static boolean consider(final Player ai, final SpellAbility sa) {
+            if (ai.cantLose() || ai.cantLoseForZeroOrLessLife() || !ai.canLoseLife()) {
+                return true;
+            }
+            final int life = ai.getLife();
+            final List<List<Card>> attackers = new ArrayList<>();
+            final Map<Card, Integer> nowDmg = new HashMap<>();
+            final Map<Card, Integer> warDmg = new HashMap<>();
+            int warTotal = 0;
+            for (final Player opp : ai.getOpponents()) {
+                final List<Card> atts = new ArrayList<>();
+                for (final Card att : opp.getCreaturesInPlay()) {
+                    if (!ComputerUtilCombat.canAttackNextTurn(att, ai)) {
+                        continue;
+                    }
+                    final int dmg = ComputerUtilCombat.damageIfUnblocked(att, ai, null, false);
+                    final int war = dmg + WAR_POWER * (att.hasDoubleStrike() ? 2 : 1);
+                    atts.add(att);
+                    nowDmg.put(att, dmg);
+                    warDmg.put(att, war);
+                    warTotal += war;
+                }
+                attackers.add(atts);
+            }
+            // cheap exit: even with no block at all the War swing is not lethal
+            if (warTotal < life) {
+                return true;
+            }
+
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            final boolean beforeOurAttack = ph.isPlayerTurn(ai) && ph.getPhase() != null
+                    && ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS);
+            final List<Card> blockers = CardLists.filter(ai.getCreaturesInPlay(), c -> CombatUtil.canBlock(c)
+                    && (!beforeOurAttack || c.hasKeyword(Keyword.VIGILANCE) || !CombatUtil.canAttack(c)));
+
+            int before = 0, after = 0;
+            for (final List<Card> atts : attackers) {
+                before += unblocked(atts, nowDmg, blockers, null, ai);
+                after += unblocked(atts, warDmg, blockers, sa.getHostCard(), ai);
+            }
+            // floor: the War buff must not create (or deepen) a lethal board
+            return !(after >= life && after > before);
+        }
+
+        // damage that gets through when the biggest hitters are blocked first; the least capable
+        // blockers are spent first, so a flier or reach blocker is kept for evasive attackers
+        private static int unblocked(final List<Card> atts, final Map<Card, Integer> dmg,
+                final List<Card> blockers, final Card extraBlocker, final Player ai) {
+            final List<Card> order = new ArrayList<>(atts);
+            order.sort((a, b) -> dmg.get(b) - dmg.get(a));
+            final List<Card> free = new ArrayList<>(blockers);
+            free.sort(Comparator.comparingInt(c -> c.hasKeyword(Keyword.FLYING) || c.hasKeyword(Keyword.REACH) ? 1 : 0));
+            if (extraBlocker != null) {
+                free.add(extraBlocker);
+            }
+            int sum = 0;
+            for (final Card att : order) {
+                final int need = Math.max(1, CombatUtil.getMinNumBlockersForAttacker(att, ai));
+                final List<Card> pick = new ArrayList<>();
+                for (final Card b : free) {
+                    if (pick.size() < need && CombatUtil.canBlock(att, b, true)) {
+                        pick.add(b);
+                    }
+                }
+                if (pick.size() >= need) {
+                    free.removeAll(pick);
+                } else {
+                    sum += dmg.get(att);
+                }
+            }
+            return sum;
+        }
+    }
+
     // Arena and Magus of the Arena
     public static class Arena {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
