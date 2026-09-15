@@ -2078,6 +2078,235 @@ public class SpecialCardAi {
         }
     }
 
+    // Espers to Magicite
+    // "Exile each opponent's graveyard. When you do, choose up to one target creature card exiled
+    // this way. Create a token that's a copy of that card, except it's an artifact and it loses all
+    // other card types." The token is a NONCREATURE artifact under our control, so two kinds of
+    // printed text reliably pay off on it: its own enters trigger, and a lord static for our side.
+    // The cast is judged here (ChangeZoneAllAi.canPlay, after both of that path's random draws; the
+    // ImmediateTrigger sub is AILogic$ Always and trusts this), and the reflexive copy picks with the
+    // same screen (CopyPermanentAi.doTriggerNoCost), so it never falls back to an unscreened pick.
+    public static class EspersToMagicite {
+        private static final Pattern CAST_ONLY_ETB = Pattern.compile("(?<!!)(evoked|kicked|wasCast)");
+        private static final Pattern SELF_ONLY = Pattern.compile("(Card|Creature|Permanent)\\.Self(\\+[^,]*)?");
+        private static final String[] SELECTORS = {"Affected", "ValidCard", "ValidCreature", "ValidAttacker", "ValidTarget"};
+        private static final String[] BRANCHES = {"SubAbility", "Execute", "TrueSubAbility", "FalseSubAbility",
+                "WinSubAbility", "LoseSubAbility", "RepeatSubAbility"};
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final CardCollectionView oppGraveyards) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // after our own development (main 2) or at an opponent's end step
+            if (!(ph.is(PhaseType.MAIN2, ai)
+                    || (ph.is(PhaseType.END_OF_TURN) && ph.getPlayerTurn().isOpponentOf(ai)))) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (bestPick(oppGraveyards) == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Highest mana value (the proxy for what an enters trigger is worth) among the screened
+        // creature cards; null when none passes.
+        public static Card bestPick(final Iterable<Card> cards) {
+            final CardCollection ok = new CardCollection();
+            for (final Card c : cards) {
+                if (c.isCreature() && !c.isCommander() && !ComputerUtilCard.isCardRemAIDeck(c)
+                        && hasValueAsArtifact(c) && !hasHarm(c)) {
+                    ok.add(c);
+                }
+            }
+            return ok.isEmpty() ? null : ComputerUtilCard.getMostExpensivePermanentAI(ok);
+        }
+
+        // Its own non-keyword enters trigger (not one that needs the card to have been cast, and not
+        // a fight, which a noncreature cannot do), or a lord static naming our side. Battlefield
+        // activations and phase/cast triggers do not count: they admit self-pumps, regeneration and
+        // drawback upkeeps, which are blank or worse on a noncreature artifact.
+        private static boolean hasValueAsArtifact(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getKeyword() != null || t.isSecondary() || t.getMode() != TriggerType.ChangesZone
+                        || !"Battlefield".equals(t.getParam("Destination"))) {
+                    continue;
+                }
+                final String valid = t.getParamOrDefault("ValidCard", "");
+                if (valid.contains("Self") && !CAST_ONLY_ETB.matcher(valid).find()
+                        && !ApiType.Fight.name().equalsIgnoreCase(rootApi(t))) {
+                    return true;
+                }
+            }
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (st.getKeyword() != null || st.isSecondary() || st.isCharacteristicDefining()) {
+                    continue;
+                }
+                final String affected = st.getParam("Affected");
+                if (affected != null && affected.contains("YouCtrl") && !isSelfOnly(affected)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Anything the token's text would do against its new controller. Every trigger chain is read
+        // (script and keyword triggers, except Evoke's, which only fires for an evoked cast; Echo and
+        // cumulative upkeep stay in), and a static that is neither characteristic-defining nor
+        // self-only must name our side (YouCtrl), which refuses symmetric hosers such as Thalia,
+        // Collector Ouphe, Magus of the Moon and Hushbringer.
+        private static boolean hasHarm(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (!t.isKeyword(Keyword.EVOKE) && chainHasHarm(t)) {
+                    return true;
+                }
+            }
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (st.getKeyword() != null || st.isSecondary() || st.isCharacteristicDefining()) {
+                    continue;
+                }
+                String selector = null;
+                for (final String key : SELECTORS) {
+                    if (st.hasParam(key)) {
+                        selector = st.getParam(key);
+                        break;
+                    }
+                }
+                if (selector == null || !(isSelfOnly(selector) || selector.contains("YouCtrl"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean isSelfOnly(final String selector) {
+            for (final String part : selector.split(",")) {
+                if (!SELF_ONLY.matcher(part.trim()).matches()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // A trigger's chain is read without building it: an ability not built yet is read from its
+        // SVar text, because building one allocates a SpellAbility id (ids feed
+        // SpellAbility.hashCode) and this runs on every look at an opponent's graveyard, cast or not.
+        private static String rootApi(final Trigger t) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                return built.getApi() == null ? null : built.getApi().name();
+            }
+            final String text = t.hasParam("Execute") ? t.getSVar(t.getParam("Execute")) : "";
+            return text.isEmpty() ? null : apiOf(FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR));
+        }
+
+        private static boolean chainHasHarm(final Trigger t) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                return builtHasHarm(built, 0);
+            }
+            final Deque<String> todo = new ArrayDeque<>();
+            final Set<String> seen = new HashSet<>();
+            if (t.hasParam("Execute")) {
+                todo.add(t.getParam("Execute"));
+            }
+            while (!todo.isEmpty()) {
+                final String svar = todo.poll();
+                if (!seen.add(svar)) {
+                    continue;
+                }
+                final String text = t.getSVar(svar);
+                if (text.isEmpty()) {
+                    continue;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                if (isHarmfulPart(apiOf(params), params)) {
+                    return true;
+                }
+                for (final String key : BRANCHES) {
+                    if (params.containsKey(key)) {
+                        todo.add(params.get(key));
+                    }
+                }
+                if (params.containsKey("Choices")) {
+                    for (final String choice : params.get("Choices").split(",")) {
+                        todo.add(choice.trim());
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean builtHasHarm(final SpellAbility sa, final int depth) {
+            if (sa == null || depth > 12) {
+                return false;
+            }
+            if (isHarmfulPart(sa.getApi() == null ? null : sa.getApi().name(), sa.getMapParams())
+                    || builtHasHarm(sa.getSubAbility(), depth + 1)) {
+                return true;
+            }
+            for (final SpellAbility extra : sa.getAdditionalAbilities().values()) {
+                if (builtHasHarm(extra, depth + 1)) {
+                    return true;
+                }
+            }
+            for (final List<AbilitySub> choices : sa.getAdditionalAbilityLists().values()) {
+                for (final AbilitySub choice : choices) {
+                    if (builtHasHarm(choice, depth + 1)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static String apiOf(final Map<String, String> params) {
+            final String api = params.get("DB");
+            if (api != null) {
+                return api;
+            }
+            return params.containsKey("AB") ? params.get("AB") : params.get("SP");
+        }
+
+        private static boolean isHarmfulPart(final String api, final Map<String, String> params) {
+            if (api == null) {
+                return false;
+            }
+            if (api.endsWith("All") || ApiType.Sacrifice.name().equalsIgnoreCase(api)
+                    || ApiType.LosesGame.name().equalsIgnoreCase(api) || ApiType.SkipTurn.name().equalsIgnoreCase(api)) {
+                return true;
+            }
+            final String defined = params.get("Defined");
+            final String validTgts = params.get("ValidTgts");
+            if (ApiType.Token.name().equalsIgnoreCase(api)) {
+                // tokens for anyone but us (Hunted Dragon, Goblin Spymaster, Skyclave Apparition)
+                final String owner = params.get("TokenOwner");
+                return (owner != null && !"You".equals(owner)) || validTgts != null;
+            }
+            if (ApiType.GainControl.name().equalsIgnoreCase(api)) {
+                // handing a permanent to anyone but us (Akroan Horse)
+                final String newController = params.get("NewController");
+                return newController != null && !"You".equals(newController);
+            }
+            if (ApiType.Draw.name().equalsIgnoreCase(api) || ApiType.GainLife.name().equalsIgnoreCase(api)
+                    || ApiType.PutCounter.name().equalsIgnoreCase(api)) {
+                return (defined != null && (defined.contains("Opponent") || defined.contains("Player") || defined.startsWith("Triggered")))
+                        || (validTgts != null && validTgts.contains("Opponent"));
+            }
+            if (ApiType.LoseLife.name().equalsIgnoreCase(api) || ApiType.DealDamage.name().equalsIgnoreCase(api)
+                    || ApiType.Discard.name().equalsIgnoreCase(api) || ApiType.Mill.name().equalsIgnoreCase(api)
+                    || ApiType.Poison.name().equalsIgnoreCase(api)) {
+                if (defined == null) {
+                    // untargeted life loss, discard, mill and poison fall on the controller
+                    return validTgts == null && !ApiType.DealDamage.name().equalsIgnoreCase(api);
+                }
+                return defined.contains("You") || "Player".equals(defined);
+            }
+            return false;
+        }
+    }
+
     // Excise the Imperfect
     // "Exile target nonland permanent. Its controller incubates X, where X is its mana value."
     // The exile half is Utter End's (ChangeZoneAi picks and sets the target with the stock removal

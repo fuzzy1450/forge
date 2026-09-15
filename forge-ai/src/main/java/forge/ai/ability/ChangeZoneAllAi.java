@@ -240,6 +240,12 @@ public class ChangeZoneAllAi extends SpellAbilityAi {
             }
         }
         boolean result = ((MyRandom.getRandom().nextFloat() < .8) || sa.isTrigger()) && chance;
+        if ("Espers to Magicite".equals(sourceName) && !sa.isTrigger()) {
+            // The coin above is no floor for exiling each opponent's graveyard; this card's value is
+            // the reflexive copy (its ImmediateTrigger sub is AILogic$ Always and trusts this). After
+            // both of this path's random draws, so a decline consumes exactly the draws it did before.
+            return SpecialCardAi.EspersToMagicite.consider(ai, sa, oppType);
+        }
         return result ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
 

@@ -138,6 +138,16 @@ public class CopyPermanentAi extends SpellAbilityAi {
 
             CardCollection list = CardUtil.getValidCardsToTarget(sa);
 
+            if ("Espers to Magicite".equals(sourceName)) {
+                // The reflexive copy picks with the screen the cast was judged by. "Up to one": with
+                // no safe pick the trigger resolves with no target and makes no token.
+                final Card pick = SpecialCardAi.EspersToMagicite.bestPick(list);
+                if (pick != null && sa.canTarget(pick)) {
+                    sa.getTargets().add(pick);
+                }
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+
             if (aiLogic.equals("Different")) {
                 // TODO: possibly improve the check, currently only checks if the name is the same
                 // Possibly also check if the card is threatened, and then allow to copy (this will, however, require a bit
