@@ -131,6 +131,11 @@ public class PumpAi extends PumpAiBase {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         } else if ("GideonBlackblade".equals(aiLogic)) {
             return SpecialCardAi.GideonBlackblade.consider(ai, sa);
+        } else if ("CuriousHerd".equals(aiLogic)) {
+            // Curious Herd: the Pump only chooses the opponent; the real effect is the Token sub,
+            // whose amount counts that opponent's artifacts. The generic non-curse branch below
+            // cannot target an opponent player and never checks the sub's X.
+            return SpecialCardAi.CuriousHerd.consider(ai, sa);
         } else if ("MoveCounter".equals(aiLogic)) {
             final SpellAbility moveSA = sa.findSubAbilityByType(ApiType.MoveCounter);
 

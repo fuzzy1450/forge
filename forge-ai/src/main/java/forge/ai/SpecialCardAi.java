@@ -20,6 +20,7 @@ package forge.ai;
 import com.google.common.collect.Lists;
 import forge.ai.ability.AnimateAi;
 import forge.ai.ability.FightAi;
+import forge.ai.ability.TokenAi;
 import forge.card.ColorSet;
 import forge.card.MagicColor;
 import forge.card.mana.ManaCost;
@@ -964,6 +965,79 @@ public class SpecialCardAi {
             boolean isValuableBlocker = combat != null && combat.getDefendingPlayers().contains(ai) && ComputerUtilCard.doesSpecifiedCreatureBlock(ai, animated);
 
             return isOppEOT || isValuableAttacker || isValuableBlocker;
+        }
+    }
+
+    // Curious Herd
+    // "Choose target opponent. You create X 3/3 green Beast creature tokens, where X is the
+    // number of artifacts that player controls." Routed from PumpAi.checkApiLogic by
+    // AILogic$ CuriousHerd: the generic non-curse Pump branch cannot target an opponent player,
+    // and the Token sub's inherited chkDrawback never checks X. Pick the opponent whose artifacts
+    // give the most tokens - measured with the script's own X, with that target set - and cast
+    // only for at least two 3/3s, at instant speed into an empty stack: an opponent's end step,
+    // an opponent's declare-attackers step when we are attacked (surprise blockers), or our own
+    // main 2 as the fallback. Never main 1 (tokens without haste gain nothing there).
+    public static class CuriousHerd {
+        public static final int MIN_TOKENS = 2;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Card source = sa.getHostCard();
+            final AbilitySub tokenSa = sa.getSubAbility();
+            if (source == null || tokenSa == null || tokenSa.getApi() != ApiType.Token
+                    || !tokenSa.hasParam("TokenScript")) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+
+            final boolean oppTurn = ph.getPlayerTurn().isOpponentOf(ai);
+            final Combat combat = game.getCombat();
+            final boolean window = (oppTurn && ph.is(PhaseType.END_OF_TURN))
+                    || (oppTurn && ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                        && combat != null && combat.isPlayerAttacked(ai))
+                    || ph.is(PhaseType.MAIN2, ai);
+            if (!window) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+
+            // Turn order; strict > keeps the first opponent on a tie.
+            Player best = null;
+            int bestX = 0;
+            for (final Player opp : ai.getOpponents()) {
+                if (!sa.canTarget(opp)) {
+                    continue;
+                }
+                sa.resetTargets();
+                sa.getTargets().add(opp);
+                // TokenAmount$ X reads TargetedPlayer$ through the sub's parent: exactly what
+                // resolution will count against this opponent.
+                final int x = AbilityUtils.calculateAmount(source,
+                        tokenSa.getParamOrDefault("TokenAmount", "1"), tokenSa);
+                if (x > bestX) {
+                    best = opp;
+                    bestX = x;
+                }
+            }
+            sa.resetTargets();
+            if (best == null || bestX < MIN_TOKENS) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // A static toughness debuff that would kill the tokens on arrival makes it a blank.
+            final Card token = TokenAi.spawnToken(ai, tokenSa);
+            if (token == null || !token.isCreature() || token.getNetToughness() < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.getTargets().add(best);
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
     }
 
