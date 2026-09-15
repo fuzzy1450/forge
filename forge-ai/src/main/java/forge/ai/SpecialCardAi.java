@@ -340,6 +340,118 @@ public class SpecialCardAi {
         }
     }
 
+    // Borderland Explorer
+    // "When this enters, each player may discard a card. Each player who discarded a card this
+    // way may search their library for a basic land card, reveal it, put it into their hand."
+    // ChooseGenericAi asks once per AI chooser at resolution (the caster and every AI opponent).
+    // Discard only when the card the resolution's own picker takes is card-neutral to lose: a
+    // land traded for a basic (a nonbasic only while another land stays in hand), or a card that
+    // wants the graveyard (DiscardMe; DiscardMeByOpp when an opponent's Explorer asks). A castable
+    // spell is never traded for a land, and with no basic sure to be fetched the answer is No.
+    public static class BorderlandExplorer {
+        // Pre-cast ETB dry run (ChooseGenericAi.checkAiLogic; the real trigger is mandatory and
+        // never asks). The choice costs its controller nothing, but approving it lets the cast go
+        // on to ComputerUtilCost.canPayCost, whose shard payment rolls MyRandom in
+        // ComputerUtilMana.isManaSourceReserved - a roll the stock BadEtbEffects refusal never
+        // reached. So approve only when untapped mana covers the mana value and a green source is
+        // there for the pip: an unaffordable window stays refused exactly as before, drawing nothing.
+        public static boolean considerEtb(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null
+                    && ComputerUtilMana.getAvailableManaEstimate(ai, true) >= host.getCMC() // untapped only, RNG-free
+                    && hasGreenSources(ai, host);
+        }
+
+        // Floating green plus untapped sources whose printed production could be green (the
+        // Crackling Spellslinger red check, for G). Reads only the Produced text, never mana(sa).
+        private static boolean hasGreenSources(final Player ai, final Card host) {
+            final ManaCost cost = host.getManaCost();
+            final int needed = cost == null ? 0 : cost.getShardCount(forge.card.mana.ManaCostShard.GREEN);
+            int green = ai.getManaPool().getAmountOfColor(MagicColor.GREEN);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (green >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("G") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        green++;
+                        break;
+                    }
+                }
+            }
+            return green >= needed;
+        }
+
+        public static SpellAbility chooseDiscardOrNo(final Player chooser, final SpellAbility sa,
+                                                     final List<SpellAbility> spells) {
+            SpellAbility discard = null, no = null;
+            for (final SpellAbility sp : spells) {
+                if (sp.hasParam("NoteCardsFor")) {
+                    discard = sp;
+                } else {
+                    no = sp;
+                }
+            }
+            if (discard == null || no == null) {
+                return spells.get(0); // unexpected script shape: stock behaviour
+            }
+            return wantsToDiscard(chooser, sa) ? discard : no;
+        }
+
+        static boolean wantsToDiscard(final Player chooser, final SpellAbility sa) {
+            final CardCollectionView hand = chooser.getCardsIn(ZoneType.Hand);
+            if (hand.isEmpty() || !(chooser.getController() instanceof PlayerControllerAi)) {
+                return false;
+            }
+            final SpellAbility discardSa = sa.getSubAbility();                                  // DBDiscard
+            final SpellAbility searchSa = discardSa == null ? null : discardSa.getSubAbility(); // DBSearch
+            if (discardSa == null || searchSa == null
+                    || !chooser.canDiscardBy(discardSa, true)
+                    || !chooser.canSearchLibraryWith(searchSa, chooser)
+                    || chooser.hasKeyword("LimitSearchLibrary") // Aven Mindcensor: the top cards may hold no basic
+                    || !chooser.getCardsIn(ZoneType.Library).anyMatch(Card::isBasicLand)) {
+                return false; // no basic sure to be fetched: the discard would be pure card loss
+            }
+            // The picker below draws RNG in two places, and each would hand this floor a card it
+            // refuses, so answer No before calling it (the prediction stays RNG-free and equal to
+            // the real pick): a hand of nothing but DoNotDiscardIfAble cards (its last-resort
+            // Aggregates.random), and two or more flashback/escape/disturb cards (the DiscardCost
+            // roll among them in ComputerUtil.getCardPreference). The second also declines the
+            // rare such hand where a DiscardMe card or a land-rich land pick would have come first.
+            if (hand.allMatch(c -> c.hasSVar("DoNotDiscardIfAble"))
+                    || CardLists.count(hand, c -> c.hasKeyword(Keyword.FLASHBACK) || c.hasKeyword(Keyword.ESCAPE)
+                            || c.hasKeyword(Keyword.DISTURB)) >= 2) {
+                return false;
+            }
+            // Predict the exact card the resolution's picker takes: DiscardEffect (Mode$ TgtChoose,
+            // the chooser discards) -> PlayerControllerAi.chooseCardsToDiscardFrom -> this same
+            // method with this same SpellAbility, on the chooser's hand in hand order. A copy, since
+            // the picker removes from its list; no hand changes between this choice and the discard.
+            final AiController aic = ((PlayerControllerAi) chooser.getController()).getAi();
+            final CardCollection pick = aic.getCardsToDiscard(1, 1, new CardCollection(hand), discardSa);
+            if (pick == null || pick.isEmpty()) {
+                return false;
+            }
+            final Card c = pick.getFirst();
+            if (c.hasSVar("DoNotDiscardIfAble")) {
+                return false;
+            }
+            if (c.isLand()) {
+                // a basic for a basic; a nonbasic (Command Tower, a bounce land) only while another land stays in hand
+                return c.isBasicLand() || CardLists.count(hand, CardPredicates.LANDS) >= 2;
+            }
+            final Player activator = sa.getActivatingPlayer();
+            return c.hasSVar("DiscardMe")
+                    || (c.hasSVar("DiscardMeByOpp") && activator != null && activator.isOpponentOf(chooser));
+        }
+    }
+
     // Borrowing 100,000 Arrows (and Theft of Dreams, the identical script)
     // Draw a card for each tapped creature target opponent controls. We draw (Defined$ You); the
     // target only sizes X, so target the opponent with the most tapped creatures, sizing each one

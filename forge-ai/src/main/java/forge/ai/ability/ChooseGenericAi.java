@@ -38,6 +38,13 @@ public class ChooseGenericAi extends SpellAbilityAi {
             // run asks (AiController.checkETBEffects); the replacement is mandatory, so
             // resolution never does, and chooseSingleSpellAbility keeps spells.get(0) (War).
             return SpecialCardAi.ArchangelOfStrife.consider(ai, sa);
+        } else if ("BorderlandExplorer".equals(aiLogic)) {
+            // Borderland Explorer: "each player may discard a card". Every chooser, us included,
+            // may answer No at resolution (chooseSingleSpellAbility -> SpecialCardAi), so the ETB
+            // never costs us a card; refusing it here vetoed the whole 3/1 at
+            // AiController.checkETBEffects (BadEtbEffects). Only the pre-cast dry run asks: the
+            // real trigger is mandatory. SpecialCardAi keeps an unaffordable window refused.
+            return SpecialCardAi.BorderlandExplorer.considerEtb(ai, sa);
         } else if (namedChoice(sa.getAdditionalAbilityList("Choices"), aiLogic) != null) {
             // "As this enters, choose A or B" with AILogic naming the preferred mode
             // (Battle of Hoover Dam: Legion). The choice itself is free; refusing it
@@ -329,6 +336,9 @@ public class ChooseGenericAi extends SpellAbilityAi {
             // TODO: implement a better way to check for possible benefits in each case. If made generic, replace
             // fixed spells.get(N) with a way to detect which SA creates which token
             return ComputerUtil.aiLifeInDanger(player, false, 0) ? spells.get(0) : spells.get(1);
+        } else if ("BorderlandExplorer".equals(logic)) {
+            // each chooser's own answer; the fallback below would answer Discard for everyone, always
+            return SpecialCardAi.BorderlandExplorer.chooseDiscardOrNo(player, sa, spells);
         }
         // AILogic naming one of the choices: take that mode (see checkAiLogic)
         final SpellAbility named = namedChoice(spells, logic);
