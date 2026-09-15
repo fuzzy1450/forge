@@ -122,6 +122,14 @@ public class EffectAi extends SpellAbilityAi {
                 if (!fogAi.canPlay(ai, sa).willingToPlay()) {
                     return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
+                // Take the Bait hands the attacker a second combat: attack triggers,
+                // annihilator and unpreventable damage all run again, so a fog that
+                // leaves us at 1-3 life can turn survival into death. Only take it when
+                // this combat would kill us. Draws no RNG; false without a combat.
+                if ("Take the Bait".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                        && !ComputerUtilCombat.lifeInSeriousDanger(ai, game.getCombat())) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
 
                 final TargetRestrictions tgt = sa.getTargetRestrictions();
                 if (tgt != null) {
