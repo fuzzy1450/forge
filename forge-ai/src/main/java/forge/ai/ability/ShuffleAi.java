@@ -2,6 +2,7 @@ package forge.ai.ability;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -26,6 +27,9 @@ public class ShuffleAi extends SpellAbilityAi {
             } else {
                 return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
             }
+        } else if (logic.equals("DanceWithCalamity")) {
+            // Dance with Calamity: the shuffle is a preamble; judged whole in SpecialCardAi
+            return SpecialCardAi.DanceWithCalamity.consider(aiPlayer, sa, false);
         }
 
         // not really sure when the compy would use this; maybe only after a human
@@ -52,6 +56,10 @@ public class ShuffleAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player aiPlayer, SpellAbility sa, boolean mandatory) {
+        if (!mandatory && "DanceWithCalamity".equals(sa.getParam("AILogic"))) {
+            // Dance with Calamity cast free by another effect (e.g. Creative Technique)
+            return SpecialCardAi.DanceWithCalamity.consider(aiPlayer, sa, true);
+        }
         return shuffleTargetAI(sa);
     }  
 

@@ -43,6 +43,10 @@ public class RepeatAi extends SpellAbilityAi {
     
     @Override
     public boolean confirmAction(Player player, SpellAbility sa, PlayerActionConfirmMode mode, String message, Map<String, Object> params) {
+        if ("DanceWithCalamity".equals(sa.getParam("AILogic"))) {
+            // Dance with Calamity: exile another card only while the stopping model says it pays
+            return SpecialCardAi.DanceWithCalamity.exileAnother(player, sa);
+        }
       //TODO add logic to have computer make better choice (ArsenalNut)
         return false;
     }

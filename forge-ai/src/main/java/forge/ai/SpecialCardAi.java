@@ -2983,6 +2983,126 @@ public class SpecialCardAi {
         }
     }
 
+    // Dance with Calamity - push-your-luck exile: spells among the exiled cards are cast free
+    // only if the exiled cards' total mana value is 13 or less. The AI knows its library's
+    // contents (not their order: the card shuffles first), so optimal stopping over the
+    // library's mana-value histogram (drawn with replacement) is fair play. Reads game state
+    // only: no random draw, so a held and declined Dance keeps the game's RNG stream.
+    public static class DanceWithCalamity {
+        private static final int LIMIT = 13;
+        private static final int MIN_LIBRARY_TO_CAST = 20;
+        private static final int MIN_LIBRARY_TO_CONTINUE = 10;
+        private static final double MIN_EXPECTED_FREE_MV = 8.0; // its own mana value
+        private static final double CONTINUE_MARGIN = 0.5;
+
+        // cont[t]: expected mana value cast free if we exile one more card at running total t
+        // and then stop optimally. Cards above LIMIT are bust mass; 0-MV cards (lands) do not
+        // move the total, so the next exile is conditioned on a card that does.
+        private static double[] continueValues(final CardCollectionView library) {
+            final int[] count = new int[LIMIT + 1];
+            for (final Card c : library) {
+                final int mv = c.getCMC();
+                if (mv <= LIMIT) {
+                    count[mv]++;
+                }
+            }
+            final int moving = library.size() - count[0];
+            final double[] value = new double[LIMIT + 1];
+            final double[] cont = new double[LIMIT + 1];
+            for (int t = LIMIT; t >= 0; t--) {
+                double c = 0;
+                if (moving > 0) {
+                    for (int k = 1; t + k <= LIMIT; k++) {
+                        c += count[k] * value[t + k];
+                    }
+                    c /= moving;
+                }
+                cont[t] = c;
+                value[t] = Math.max(t, c);
+            }
+            return cont;
+        }
+
+        // free: cast by another effect without paying its mana cost (nothing to tap, nothing
+        // crowded out), so only the library floors and the stopping model apply.
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean free) {
+            if (!free) {
+                // Decline an unaffordable Dance here rather than let a WillPlay run on into
+                // ComputerUtilCost.canPayCost, which can draw random numbers while it is only held.
+                final int mana = ComputerUtilMana.getAvailableManaEstimate(ai);
+                if (mana < sa.getHostCard().getCMC()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+                if (crowdsOutAnAnswer(ai, sa, mana)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (library.size() < MIN_LIBRARY_TO_CAST) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection spells = CardLists.filter(library,
+                    c -> !c.isLand() && c.getCMC() >= 1 && c.getCMC() <= LIMIT);
+            if (spells.size() < 3 || Aggregates.sum(spells, Card::getCMC) < MIN_EXPECTED_FREE_MV) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            return continueValues(library)[0] >= MIN_EXPECTED_FREE_MV
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // Tapping out for a random draw is wrong when the next combat can kill us and the hand
+        // holds another affordable spell. Deliberately not ComputerUtil.aiLifeInDanger: that runs
+        // AiBlockController and ComputerUtilCombat.lifeInDanger, which draw MyRandom on a cache
+        // miss (AiCache is cleared at every chooseSpellAbilityToPlay). This reads the board
+        // instead: the opponents' creatures that can attack us next turn are lethal unblocked.
+        private static boolean crowdsOutAnAnswer(final Player ai, final SpellAbility sa, final int mana) {
+            final Card host = sa.getHostCard();
+            boolean alternative = false;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (!c.equals(host) && !c.isLand() && c.getCMC() <= mana) {
+                    alternative = true;
+                    break;
+                }
+            }
+            if (!alternative || ai.cantLose() || ai.cantLoseForZeroOrLessLife()) {
+                return false;
+            }
+            int incoming = 0;
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card att : opp.getCreaturesInPlay()) {
+                    if (ComputerUtilCombat.canAttackNextTurn(att, ai)) {
+                        incoming += att.getNetCombatDamage();
+                    }
+                }
+            }
+            return incoming >= ai.getLife();
+        }
+
+        // RepeatAi.confirmAction: exile another card?
+        public static boolean exileAnother(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            Card host = sa.getHostCard();
+            if (!host.hasRemembered()) {
+                host = game.getCardState(host);
+            }
+            int total = 0; // mirrors SVar X = Remembered$CardManaCost (AbilityUtils.calculateAmount)
+            for (final Object o : host.getRemembered()) {
+                if (o instanceof Card c) {
+                    total += game.getCardState(c).getCMC();
+                }
+            }
+            if (total >= LIMIT) {
+                return false; // nothing left to gain, or already bust
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (library.size() <= MIN_LIBRARY_TO_CONTINUE) {
+                return false;
+            }
+            return continueValues(library)[total] >= total + CONTINUE_MARGIN;
+        }
+    }
+
     // Day of the Dragons - judged from its ETB exile trigger (ChangeZoneAllAi.doTriggerNoCost,
     // non-mandatory only): trade our creatures for the same number of 5/5 flying Dragons
     // only when that is a clear upgrade. Reads game state only: no token prototype (TokenDb
