@@ -62,6 +62,13 @@ public class ChooseCardNameAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
         String aiLogic = sa.getParamOrDefault("AILogic", "");
+        if ("PhyrexianRevoker".equals(aiLogic) && !mandatory) {
+            // Phyrexian Revoker names a card as it enters, so
+            // AiController.checkETBEffects asks here whether that name is worth
+            // choosing. The stock fall-through below answered CantPlayAi to every
+            // non-mandatory ask and vetoed the cast with BadEtbEffects.
+            return SpecialCardAi.PhyrexianRevoker.consider(ai, sa);
+        }
         if ("PithingNeedle".equals(aiLogic)) {
             // Make sure there's something in play worth Needlings.
             // Planeswalker or equipment or something

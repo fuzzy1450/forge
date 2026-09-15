@@ -18,6 +18,7 @@
 package forge.ai;
 
 import com.google.common.collect.Lists;
+import forge.StaticData;
 import forge.ai.ability.AnimateAi;
 import forge.ai.ability.FightAi;
 import forge.ai.ability.TokenAi;
@@ -59,6 +60,7 @@ import forge.game.spellability.SpellPermanent;
 import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityCantDraw;
 import forge.game.staticability.StaticAbilityFlipCoinMod;
+import forge.game.staticability.StaticAbilityMode;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
@@ -4936,6 +4938,83 @@ public class SpecialCardAi {
             }
 
             return new CardCollection(toKeep);
+        }
+    }
+
+    // Phyrexian Revoker
+    // As it enters, the AI names a card; activated abilities of sources with that
+    // name can't be activated. The lock is symmetric and, unlike Pithing Needle's,
+    // stops mana abilities too. So the name is only ever an opponent's real nonland
+    // card with an activated ability of its own: never a name the AI holds with an
+    // activated ability (any zone), never a token or face-down name (not a legal
+    // card name, and it would lock every token of that name), never a name a
+    // permanent already stops. consider() and chooseCard() share one chooser, so
+    // the cast decision and the name picked at resolution agree. No random draw.
+    public static class PhyrexianRevoker {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            return chooseCard(ai, sa) != null
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // null = nothing worth naming
+        public static String chooseCard(final Player ai, final SpellAbility sa) {
+            final Set<String> excluded = new HashSet<>();
+            for (final Card c : ai.getAllCards()) {
+                if (hasActivatedAbility(c)) {
+                    excluded.add(c.getName());
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (!c.hasNamedCard()) {
+                    continue;
+                }
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (st.checkMode(StaticAbilityMode.CantBeActivated)) {
+                        excluded.addAll(c.getNamedCards());
+                        break;
+                    }
+                }
+            }
+
+            final Map<String, Integer> nameToScore = new LinkedHashMap<>();
+            for (final Player opp : ai.getOpponents()) {
+                final List<String> keyCards = opp.getRegisteredPlayer() == null
+                        ? List.of() : opp.getRegisteredPlayer().getDeck().getKeyCards();
+                for (final Card c : opp.getAllCards()) {
+                    if (c.isLand() || c.isToken() || c.isFaceDown() || !hasActivatedAbility(c)) {
+                        continue;
+                    }
+                    final String name = c.getName();
+                    if (excluded.contains(name) || StaticData.instance().getCommonCards().getFaceByName(name) == null) {
+                        continue;
+                    }
+                    int score = PithingNeedle.scoreCardAbilities(c, false);
+                    if (c.isInZone(ZoneType.Battlefield) || c.isInZone(ZoneType.Command)) {
+                        score += 10;
+                    }
+                    if (keyCards.contains(name)) {
+                        score += 100;
+                    }
+                    nameToScore.merge(name, score, Integer::sum);
+                }
+            }
+
+            // Every candidate scores > 0 (each activated ability adds at least 15);
+            // strict > keeps the first-seen name on a tie.
+            String best = null;
+            int bestScore = 0;
+            for (final Map.Entry<String, Integer> e : nameToScore.entrySet()) {
+                if (e.getValue() > bestScore) {
+                    best = e.getKey();
+                    bestScore = e.getValue();
+                }
+            }
+            return best;
+        }
+
+        private static boolean hasActivatedAbility(final Card c) {
+            return c.getSpellAbilities().anyMatch(SpellAbility::isActivatedAbility);
         }
     }
 
