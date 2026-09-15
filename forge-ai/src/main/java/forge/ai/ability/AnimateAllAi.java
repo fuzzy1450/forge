@@ -25,6 +25,12 @@ public class AnimateAllAi extends SpellAbilityAi {
             // took before this branch.
             return SpecialCardAi.CombatShrinkAll.consider(aiPlayer, sa);
         }
+        if ("Biomass Mutation".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // A combat trick with an announced X, judged in the declare-blockers
+            // step; every other AnimateAll card takes exactly the path it took
+            // before this branch.
+            return SpecialCardAi.BiomassMutation.consider(aiPlayer, sa);
+        }
         String logic = sa.getParamOrDefault("AILogic", "");
 
         if ("Predators' Hour".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {

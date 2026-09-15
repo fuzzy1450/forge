@@ -323,6 +323,322 @@ public class SpecialCardAi {
         }
     }
 
+    // Biomass Mutation
+    // "Creatures you control have base power and toughness X/X until end of turn." AnimateAllAi has
+    // no logic for it and nothing announces X, so a generic enable would pay X=0 and kill our own
+    // board. Judged only as a combat trick: the declare-blockers step, the stack empty, a creature of
+    // ours attacking or blocking, so the blocks are locked. X is bounded below by exact arithmetic on
+    // the real cards (a base set replaces only the current P/T; boosts, counters and anthems stay on
+    // top): no combatant of ours loses power or toughness, on an opponent's turn no creature of ours
+    // loses toughness, and none drops to toughness 0 or to its marked damage. Above that bound the
+    // declared combat is re-run with LKI copies of our combatants animated at X
+    // (AnimateAi.becomeAnimated keeps face-down state, changed types and keywords) and compared with
+    // the real combat, judged once. Floor: lethal on our own turn, or a kill or save of a card worth
+    // one (face-down, mana value 2+ or power 3+, not indestructible), or MIN_EXTRA_DAMAGE more combat
+    // damage to players on our own turn. Belts: the model having a creature of ours newly die, or an
+    // opposing combatant newly live, declines that X. Casts for the smallest X that reaches the
+    // max-X tier. The restriction mirror and the empty-stack check are load-bearing: they are what
+    // declines a copy of a Biomass Mutation on the stack (CopySpellAbilityAi) and a free cast during
+    // a resolution, so neither may be relaxed.
+    public static class BiomassMutation {
+        public static final int MIN_X = 2;
+        public static final int MIN_EXTRA_DAMAGE = 6;
+        // Combatants plus our creatures. Every X judged copies our combatants and builds a Combat
+        // (AttackConstraints is quadratic in the attacker's creatures), and every combatant judged
+        // rescans the battlefield's triggers, all inside the AI's 5 s decision budget.
+        public static final int MAX_BOARD = 30;
+
+        private static final int TIER_DAMAGE = 1;
+        private static final int TIER_GAINS = 2;
+        private static final int TIER_LETHAL = 3;
+
+        private static final class Outcome {
+            private boolean lethal;
+            private int gains;
+            private int extraDamage;
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // Routing through AnimateAllAi.canPlay's name gate bypasses the base
+            // class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            if (!ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) || combat == null || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final CardCollection ours = CardLists.getValidCards(ai.getCreaturesInPlay(),
+                    sa.getParamOrDefault("ValidCards", "Creature.YouCtrl"), ai, sa.getHostCard(), sa);
+            final CardCollection ourCombatants = new CardCollection();
+            for (final Card c : ours) {
+                if (!combat.isAttacking(c) && !combat.isBlocking(c)) {
+                    continue;
+                }
+                // Neither kind of card copy carries marked damage, so the model would
+                // keep a damaged combatant alive where it dies.
+                if (c.getDamage() > 0 || c.getTotalAssignedDamage() > 0) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                ourCombatants.add(c);
+            }
+            if (ourCombatants.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection board = new CardCollection(ours);
+            board.addAll(combat.getAttackers());
+            board.addAll(combat.getAllBlockers());
+            if (board.size() > MAX_BOARD) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // The smallest X that shrinks nothing it must not, exact on the real cards:
+            // after the set, net P/T = X + (temporary boosts + counters).
+            final boolean ourTurn = ph.isPlayerTurn(ai);
+            int xMin = MIN_X;
+            for (final Card c : ours) {
+                final Card.StatBreakdown power = c.getNetPowerBreakdown();
+                final Card.StatBreakdown toughness = c.getNetToughnessBreakdown();
+                if (ourCombatants.contains(c)) {
+                    xMin = Math.max(xMin, Math.max(power.currentValue, toughness.currentValue));
+                }
+                if (!ourTurn) {
+                    xMin = Math.max(xMin, toughness.currentValue);
+                }
+                final int onTop = toughness.tempBoost + toughness.bonusFromCounters;
+                final int marked = c.hasKeyword(Keyword.INDESTRUCTIBLE) ? 0 : c.getDamage() + c.getTotalAssignedDamage();
+                xMin = Math.max(xMin, marked - onTop + 1);
+            }
+
+            // setMaxXValue test-pays the cost, where mana-source reservation can roll MyRandom
+            // (ComputerUtilMana.isManaSourceReserved). The stock refusal drew nothing, so first rule
+            // out an X that the RNG-free estimate of untapped mana cannot reach (X counts 0 in the CMC).
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, true) < xMin + sa.getHostCard().getCMC()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+            sa.setXManaCostPaid(null);
+            final int maxX = ComputerUtilCost.setMaxXValue(sa, ai, false);
+            if (maxX < xMin) {
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+
+            // The fights our creatures are in: an attacker of ours, or an attacker a creature of
+            // ours blocks, each with all of its blockers. Every other fight is the same either way.
+            final CardCollection fights = new CardCollection();
+            for (final Card a : combat.getAttackers()) {
+                boolean involved = ourCombatants.contains(a);
+                for (final Card b : combat.getBlockers(a)) {
+                    involved |= ourCombatants.contains(b);
+                }
+                if (involved) {
+                    fights.add(a);
+                }
+            }
+            // Judged once, on the real cards and the real combat.
+            final Map<Card, Boolean> diesBefore = new HashMap<>();
+            for (final Card a : fights) {
+                diesBefore.put(a, ComputerUtilCombat.attackerWouldBeDestroyed(a.getController(), a, combat));
+                for (final Card b : combat.getBlockers(a)) {
+                    if (!diesBefore.containsKey(b)) {
+                        diesBefore.put(b, ComputerUtilCombat.blockerWouldBeDestroyed(b.getController(), b, combat));
+                    }
+                }
+            }
+            final Map<Player, Integer> damageBefore = new HashMap<>();
+            if (ourTurn) {
+                for (final Player opp : ai.getOpponents()) {
+                    damageBefore.put(opp, damageToPlayer(opp, combat, Collections.emptyMap()));
+                }
+            }
+
+            if (Thread.currentThread().isInterrupted()) {
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Outcome best = evaluate(ai, sa, combat, ourCombatants, fights, diesBefore, damageBefore, ourTurn, maxX);
+            final int tier;
+            if (best == null) {
+                tier = 0;
+            } else if (best.lethal) {
+                tier = TIER_LETHAL;
+            } else if (best.gains > 0) {
+                tier = TIER_GAINS;
+            } else if (ourTurn && best.extraDamage >= MIN_EXTRA_DAMAGE) {
+                tier = TIER_DAMAGE;
+            } else {
+                tier = 0;
+            }
+            if (tier == 0) {
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Outcomes only grow with X once nothing of ours shrinks: binary-search the smallest X
+            // that still reaches the max-X tier (hi always holds an X judged to reach it).
+            int lo = xMin;
+            int hi = maxX;
+            while (lo < hi) {
+                if (Thread.currentThread().isInterrupted()) {
+                    sa.setXManaCostPaid(null);
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                final int mid = (lo + hi) >>> 1;
+                if (reaches(evaluate(ai, sa, combat, ourCombatants, fights, diesBefore, damageBefore, ourTurn, mid),
+                        tier, best.gains)) {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            sa.setXManaCostPaid(hi);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static boolean reaches(final Outcome o, final int tier, final int gains) {
+            if (o == null) {
+                return false;
+            }
+            if (tier == TIER_LETHAL) {
+                return o.lethal;
+            }
+            if (tier == TIER_GAINS) {
+                return o.gains >= gains;
+            }
+            return o.extraDamage >= MIN_EXTRA_DAMAGE;
+        }
+
+        // The declared combat at X with our combatants swapped for their animated copies; null when
+        // the model vetoes this X.
+        private static Outcome evaluate(final Player ai, final SpellAbility sa, final Combat combat,
+                final CardCollection ourCombatants, final CardCollection fights, final Map<Card, Boolean> diesBefore,
+                final Map<Player, Integer> damageBefore, final boolean ourTurn, final int x) {
+            sa.setXManaCostPaid(x);
+            final Map<Card, Card> model = new HashMap<>();
+            for (final Card c : ourCombatants) {
+                model.put(c, AnimateAi.becomeAnimated(c, sa));
+            }
+            final Combat pc = new Combat(combat.getAttackingPlayer());
+            for (final Card a : combat.getAttackers()) {
+                final GameEntity defender = combat.getDefenderByAttacker(a);
+                if (defender == null || !pc.getDefenders().contains(defender)) {
+                    return null; // a defender that has left: the rebuilt combat cannot hold this attack
+                }
+                pc.addAttacker(model.getOrDefault(a, a), defender);
+            }
+            for (final Card a : combat.getAttackers()) {
+                for (final Card b : combat.getBlockers(a)) {
+                    pc.addBlocker(model.getOrDefault(a, a), model.getOrDefault(b, b));
+                }
+            }
+
+            final Outcome o = new Outcome();
+            final Set<Card> judged = new HashSet<>();
+            for (final Card a : fights) {
+                final Card ma = model.getOrDefault(a, a);
+                final boolean attackerMine = model.containsKey(a);
+                final int ra = judge(ai, a, diesBefore.get(a),
+                        ComputerUtilCombat.attackerWouldBeDestroyed(a.getController(), ma, pc), attackerMine);
+                if (ra < 0) {
+                    return null;
+                }
+                o.gains += ra;
+                int kills = 0;
+                int toKillAll = 0;
+                for (final Card b : combat.getBlockers(a)) {
+                    toKillAll += Math.max(0, b.getLethalDamage());
+                    if (!judged.add(b)) {
+                        continue;
+                    }
+                    final boolean blockerMine = model.containsKey(b);
+                    final int rb = judge(ai, b, diesBefore.get(b),
+                            ComputerUtilCombat.blockerWouldBeDestroyed(b.getController(), model.getOrDefault(b, b), pc),
+                            blockerMine);
+                    if (rb < 0) {
+                        return null;
+                    }
+                    if (blockerMine) {
+                        o.gains += rb;
+                    } else {
+                        kills += rb;
+                    }
+                }
+                // blockerWouldBeDestroyed sets the attacker's whole power against each blocker in turn,
+                // so a double block reads as two kills: credit one unless its damage covers them all.
+                o.gains += attackerMine && kills > 1 && ComputerUtilCombat.getAttack(ma) < toKillAll ? 1 : kills;
+            }
+
+            if (ourTurn) {
+                final boolean canWin = !ai.cantWin();
+                for (final Player opp : ai.getOpponents()) {
+                    final int before = damageBefore.get(opp);
+                    final int after = damageToPlayer(opp, combat, model);
+                    o.extraDamage += after - before;
+                    if (canWin && after > before && opp.canLoseLife() && !opp.cantLoseForZeroOrLessLife()
+                            && opp.getLife() > before && opp.getLife() <= after) {
+                        o.lethal = true;
+                    }
+                }
+            }
+            return o;
+        }
+
+        // -1: the model vetoes this X; 1: a kill or save of a card worth one; 0: otherwise.
+        private static int judge(final Player ai, final Card c, final boolean before, final boolean after,
+                final boolean mine) {
+            if (mine) {
+                if (after && !before) {
+                    return -1; // a creature of ours newly dies
+                }
+                return before && !after && worthACard(c) ? 1 : 0;
+            }
+            if (!ai.isOpponentOf(c.getController())) {
+                return 0;
+            }
+            if (before && !after) {
+                return -1; // an opposing combatant newly lives
+            }
+            return after && !before && worthACard(c) ? 1 : 0;
+        }
+
+        // A face-down card (a hidden real card), mana value 2+ or power 3+. Never an indestructible
+        // one: the first-strike tail of attackerWouldBeDestroyed does not check for it.
+        private static boolean worthACard(final Card c) {
+            return !c.hasKeyword(Keyword.INDESTRUCTIBLE) && (c.isFaceDown() || c.getCMC() >= 2 || c.getNetPower() >= 3);
+        }
+
+        // Combat damage to one player: unblocked attackers plus trample over blockers, as
+        // ComputerUtilCombat.lifeThatWouldRemain counts it, except that a blocked attacker whose
+        // blockers have all left combat deals none without trample.
+        private static int damageToPlayer(final Player opp, final Combat combat, final Map<Card, Card> model) {
+            if (!opp.canLoseLife()) {
+                return 0;
+            }
+            int damage = 0;
+            final List<Card> unblocked = new ArrayList<>();
+            for (final Card a : combat.getAttackersOf(opp)) {
+                final Card ma = model.getOrDefault(a, a);
+                final CardCollection blockers = combat.getBlockers(a);
+                if (blockers.isEmpty()) {
+                    if (!combat.isBlocked(a) || ma.hasKeyword(Keyword.TRAMPLE)) {
+                        unblocked.add(ma);
+                    }
+                } else if (ma.hasKeyword(Keyword.TRAMPLE) && !ma.hasKeyword(Keyword.INFECT)) {
+                    final List<Card> modelBlockers = new ArrayList<>();
+                    for (final Card b : blockers) {
+                        modelBlockers.add(model.getOrDefault(b, b));
+                    }
+                    damage += Math.max(0, ComputerUtilCombat.getAttack(ma)
+                            - ComputerUtilCombat.totalShieldDamage(ma, modelBlockers));
+                }
+            }
+            return damage + ComputerUtilCombat.sumDamageIfUnblocked(unblocked, opp);
+        }
+    }
+
     // Black Lotus and Lotus Bloom
     public static class BlackLotus {
         public static boolean consider(final Player ai, final SpellAbility sa, final ManaCostBeingPaid cost) {
