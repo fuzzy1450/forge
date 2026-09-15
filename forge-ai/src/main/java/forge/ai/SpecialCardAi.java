@@ -3048,6 +3048,100 @@ public class SpecialCardAi {
         }
     }
 
+    // Last Night Together
+    // "Choose two target creatures. Untap them, put two +1/+1 counters on each,
+    // they gain vigilance, indestructible and haste until end of turn. After this
+    // main phase, an additional combat phase in which only they can attack."
+    // ChooseCardAi's targeting only ever searches for an opponent PLAYER, so this
+    // creature-targeted spell was CantPlayAi on every look. Pick the targets here:
+    // two creatures we own and control, at least one of them able to attack an
+    // opponent once untapped and hasted, and 5+ total post-counter power among the
+    // attack-capable picks. RNG-free, like the stock decline it replaces: attack
+    // capability is checked against every opponent player instead of
+    // AiAttackController.choosePreferredDefenderPlayer, which draws
+    // Aggregates.random with two or more opponents (identical in 1v1).
+    public static class LastNightTogether {
+        static final int COUNTERS = 2;
+        static final int MIN_SWING_POWER = 5;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            sa.resetTargets();
+
+            // "After this main phase" must be our own main phase, with nothing on the stack.
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (ai.getOpponents().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final CardCollection attackers = new CardCollection();
+            final CardCollection others = new CardCollection();
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!ai.equals(c.getOwner())) {
+                    continue; // borrowed (e.g. Become the Pilot): the counters would go back with it
+                }
+                if (!sa.canTarget(c) || ComputerUtilCard.isUselessCreature(ai, c)) {
+                    continue;
+                }
+                if (c.getNetPower() + COUNTERS > 0 && canSwing(ai, c)) {
+                    attackers.add(c);
+                } else {
+                    others.add(c);
+                }
+            }
+            if (attackers.isEmpty() || attackers.size() + others.size() < 2) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            ComputerUtilCard.sortByEvaluateCreature(attackers);
+            ComputerUtilCard.sortByEvaluateCreature(others);
+            final CardCollection picks = new CardCollection();
+            for (final Card c : attackers) {
+                if (picks.size() < 2) {
+                    picks.add(c);
+                }
+            }
+            for (final Card c : others) {
+                if (picks.size() < 2) {
+                    picks.add(c);
+                }
+            }
+
+            int swing = 0;
+            for (final Card c : picks) {
+                if (attackers.contains(c)) {
+                    swing += c.getNetPower() + COUNTERS;
+                }
+            }
+            if (swing < MIN_SWING_POWER) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            for (final Card c : picks) {
+                sa.getTargets().add(c);
+            }
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The AI wrapper skips the tapped and summoning-sick checks the spell
+        // itself solves (untap, haste) but keeps Defender, CantAttack statics,
+        // goad, a skipped combat and a must-attack-another-entity requirement.
+        private static boolean canSwing(final Player ai, final Card c) {
+            for (final Player opp : ai.getOpponents()) {
+                if (ComputerUtilCombat.canAttackNextTurn(c, opp)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Launch the Fleet
     // "Strive {1}: until end of turn, any number of target creatures each gain
     // 'Whenever this creature attacks, create a 1/1 Soldier token tapped and

@@ -39,6 +39,12 @@ public class ChooseCardAi extends SpellAbilityAi {
             return SpecialCardAi.MandateOfAbaddon.consider(ai, sa);
         }
         if (sa.usesTargeting()) {
+            if ("Last Night Together".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // Its targets are creatures: the opponent-only search below can
+                // never fill them. Every other ChooseCard card takes exactly the
+                // path it took before this branch.
+                return SpecialCardAi.LastNightTogether.consider(ai, sa);
+            }
             sa.resetTargets();
             // search targetable Opponents
             final List<Player> oppList = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa));
