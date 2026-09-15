@@ -6328,10 +6328,44 @@ public class SpecialCardAi {
         public static final int MIN_COUNTERS = 2;       // four mana and a card buy at least two cards
         public static final int LIBRARY_MARGIN = 3;     // DrawAi's own don't-deck-yourself line
 
+        // An opposing "whenever an opponent draws a card" trigger (Orcish Bowmasters, Nekusar,
+        // Kederekt Parasite, Fate Unraveler) or a draw replacement that applies to us (Notion
+        // Thief, Hullbreacher, Alms Collector). Nexus Mentality draws one card per counter, often
+        // eight or more at once: Orcish Bowmasters turned a twelve-card cash-in at six life into
+        // a loss. Same predicate as CommandersInsight.opposingDrawPunisher, copied so that
+        // accepted card's code is not touched.
+        private static boolean opposingDrawPunisher(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() != TriggerType.Drawn) {
+                            continue;
+                        }
+                        final String valid = t.getParamOrDefault("ValidCard", "Card");
+                        if (valid.contains("Opp") || valid.equals("Card") || valid.contains("OwnedBy")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (ai.equals(c.getController())) {
+                    continue;
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
             sa.resetTargets();
             final Game game = ai.getGame();
-            if (!ai.canDraw() || game.getStack().isEmpty()) {
+            if (!ai.canDraw() || game.getStack().isEmpty() || opposingDrawPunisher(ai)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             final SpellAbilityStackInstance top = game.getStack().peek();
