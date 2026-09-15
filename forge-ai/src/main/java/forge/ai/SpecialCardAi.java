@@ -300,13 +300,17 @@ public class SpecialCardAi {
     // "Choose three. You may choose the same mode more than once." CharmAi's multi-mode picker
     // (chooseMultipleOptionsAi) ignores CanRepeatModes and needs three distinct modes that each pass
     // canPlaySa on their own, and PhasesAi never targets (phasesPrefTargeting is a stub), so it could
-    // never fill three slots and the card was never cast. Build the list here instead: fill the slots
-    // with Proliferate (CharmEffect.chainAbilities clones a repeated entry), and only when those
-    // proliferates buy something real - a poison kill, or counters worth growing on our side of the
-    // table in a window where the mana is not wanted for anything else.
+    // never fill three slots and the card was never cast. Build the list here instead: at most one
+    // save (counter or phase out what an opponent's object on top of the stack threatens), then fill
+    // the remaining slots with Proliferate (CharmEffect.chainAbilities clones a repeated entry), and
+    // cast only for that save or when those proliferates buy something real - a poison kill, or
+    // counters worth growing on our side of the table in a window where the mana is not wanted for
+    // anything else.
     public static class BrokersConfluence {
         // per proliferate, on CountersProliferateAi's own scale: three of them (>= 6) cover the 5 mana
         public static final int MIN_PROLIFERATE_VALUE = 2;
+        // a threatened creature worth the card (unless it is our commander): ~ a non-token 3/3 three-drop
+        public static final int MIN_SAVE_EVAL = 180;
         private static final int VALUE_OWN_PLANESWALKER = 3;
         private static final int VALUE_OWN_POSITIVE_COUNTERS = 1;
         private static final int VALUE_OPP_NEGATIVE_COUNTERS = 1;
@@ -322,6 +326,8 @@ public class SpecialCardAi {
             // CounterAi can draw there (MyRandom.percentTrue against a 1-3 mana ability). Replay that
             // pass with its verdicts ignored, so a held Confluence consumes exactly the draws it did.
             AbilitySub prolif = null;
+            AbilitySub phase = null;
+            AbilitySub counter = null;
             for (final AbilitySub sub : choices) {
                 sub.setActivatingPlayer(ai);
                 aic.canPlaySa(sub);
@@ -330,19 +336,55 @@ public class SpecialCardAi {
                 }
                 if (sub.getApi() == ApiType.Proliferate) {
                     prolif = sub;
+                } else if (sub.getApi() == ApiType.Phases) {
+                    phase = sub;
+                } else if (sub.getApi() == ApiType.Counter) {
+                    counter = sub; // offered only while an activated or triggered ability is on the stack
                 }
             }
             if (prolif == null || num <= 0) {
                 return chosen; // script drifted: stay out
             }
 
-            final int proliferates = num;
+            // 1. a save: an opponent's object on top of the stack threatens a permanent of ours worth the card
+            boolean saves = false;
+            final SpellAbility top = ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+            if (top != null && top.getActivatingPlayer() != null && top.getActivatingPlayer().isOpponentOf(ai)) {
+                final CardCollection worth = new CardCollection();
+                for (final Object o : ComputerUtil.predictThreatenedObjects(ai, null, true)) {
+                    if (o instanceof Card c && c.isInPlay() && ai.equals(c.getController()) && isWorthSaving(c)) {
+                        worth.add(c);
+                    }
+                }
+                if (!worth.isEmpty()) {
+                    if (counter != null && !top.isSpell() && counter.canTargetSpellAbility(top)) {
+                        counter.getTargets().add(top); // counters the whole threatening ability
+                        chosen.add(counter);
+                        saves = true;
+                    } else if (phase != null) {
+                        final CardCollection savable = new CardCollection();
+                        for (final Card c : worth) {
+                            if (c.isCreature() && phase.canTarget(c)) {
+                                savable.add(c);
+                            }
+                        }
+                        if (!savable.isEmpty()) {
+                            phase.getTargets().add(ComputerUtilCard.getBestCreatureAI(savable));
+                            chosen.add(phase);
+                            saves = true;
+                        }
+                    }
+                }
+            }
+
+            // 2. fill the remaining slots with Proliferate
+            final int proliferates = num - chosen.size();
             for (int i = 0; i < proliferates; i++) {
                 chosen.add(prolif);
             }
 
-            // the floor: a poison kill at any time ...
-            if (proliferateKills(ai, proliferates)) {
+            // 3. the floor: a save or a poison kill at any time ...
+            if (saves || proliferateKills(ai, proliferates)) {
                 return chosen;
             }
             // ... otherwise real value, on an empty stack, at the opponent's end step before our turn
@@ -356,6 +398,12 @@ public class SpecialCardAi {
             }
             chosen.clear();
             return chosen;
+        }
+
+        // our commander, a planeswalker, or a creature that evaluates at MIN_SAVE_EVAL or better
+        static boolean isWorthSaving(final Card c) {
+            return c.isCommander() || c.isPlaneswalker()
+                    || (c.isCreature() && ComputerUtilCard.evaluateCreature(c) >= MIN_SAVE_EVAL);
         }
 
         // What one proliferate gives the resolution-time chooser (CountersProliferateAi.chooseSingleEntity),
