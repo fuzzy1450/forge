@@ -26,6 +26,7 @@ import forge.card.MagicColor;
 import forge.card.mana.ManaCost;
 import forge.game.Game;
 import forge.game.GameEntity;
+import forge.game.GameEntityCounterTable;
 import forge.game.GameType;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
@@ -36,9 +37,11 @@ import forge.game.cost.CostDiscard;
 import forge.game.cost.CostExile;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostPartMana;
+import forge.game.cost.CostRemoveAnyCounter;
 import forge.game.cost.CostReveal;
 import forge.game.cost.CostSacrifice;
 import forge.game.cost.CostTap;
+import forge.game.cost.PaymentDecision;
 import forge.game.keyword.Keyword;
 import forge.game.mana.ManaCostBeingPaid;
 import forge.game.phase.PhaseHandler;
@@ -2827,6 +2830,123 @@ public class SpecialCardAi {
                 return 0;
             }
             return ComputerUtilCombat.getDamageToKill(c, false) - dmg;
+        }
+    }
+
+    // Hierophant Bio-Titan
+    // "As an additional cost to cast this spell, you may remove any number of +1/+1 counters
+    // from among creatures you control. This spell costs {2} less to cast for each counter
+    // removed this way." Scripted as Cost$ 10 G G RemoveAnyCounter<X/P1P1/Creature> with a
+    // Relative ReduceCost of 2*X. No generic code chooses that non-mana X (PermanentAi only does
+    // for SacToReduceCost), so X read 0 and AiCostDecision.visit(CostRemoveAnyCounter) returned
+    // null for 0: willPayCosts declined every cast, and payment would have failed even with
+    // twelve lands. chooseX (PermanentAi.checkApiLogic) picks the SMALLEST affordable X and
+    // chooseCounters (AiCostDecision) pays it.
+    // Floor: a counter comes off a creature only if it survives with every positive P/T boost
+    // gone (Clamavus's counter-scaled static included) and its marked damage still on it; every
+    // donor keeps its last counter unless X cannot be met otherwise (The Swarmlord, Winged Hive
+    // Tyrant, Bred for the Hunt and Tyrant Guard key off creatures with counters); X never buys
+    // more reduction than the generic cost has; and an X >= 1 cast waits for our main 2, so it
+    // never shrinks this turn's attackers. The mana probes draw MyRandom
+    // (ComputerUtilMana.isManaSourceReserved) and the stock path never probed this card, so an
+    // RNG-free mana estimate rules out the hopeless boards first.
+    public static class HierophantBioTitan {
+        public static final String NAME = "Hierophant Bio-Titan";
+
+        public static boolean isOwnReduceCounterCost(final SpellAbility sa, final CostRemoveAnyCounter cost) {
+            return sa != null && sa.isSpell() && sa.getHostCard() != null
+                    && NAME.equals(sa.getHostCard().getName())
+                    && "X".equals(cost.getAmount()) && !cost.payCostFromSource()
+                    && cost.counter != null && cost.counter.is(CounterEnumType.P1P1);
+        }
+
+        // +1/+1 counters c can lose and still survive with every positive boost gone
+        static int safeCounters(final Card c) {
+            if (!c.canRemoveCounters(CounterEnumType.P1P1)) {
+                return 0;
+            }
+            int positiveBoost = 0;
+            for (Pair<Integer, Integer> boost : c.getPTBoostTable().values()) {
+                positiveBoost += Math.max(0, boost.getRight());
+            }
+            return Math.max(0, Math.min(c.getCounters(CounterEnumType.P1P1), c.getLethalDamage() - 1 - positiveBoost));
+        }
+
+        static List<Card> donors(final Player ai, final SpellAbility sa, final CostRemoveAnyCounter cost) {
+            final List<Card> list = Lists.newArrayList(CardLists.filter(CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                    cost.getType().split(";"), ai, sa.getHostCard(), sa), c -> safeCounters(c) > 0));
+            // deterministic: undying first (losing its counters re-arms it), most removable, card id
+            list.sort(Comparator.comparing((Card c) -> !c.hasKeyword(Keyword.UNDYING))
+                    .thenComparingInt(c -> -safeCounters(c))
+                    .thenComparingInt(Card::getId));
+            return list;
+        }
+
+        public static AiAbilityDecision chooseX(final Player ai, final SpellAbility sa) {
+            final CostRemoveAnyCounter part = sa.getPayCosts().getCostPartByType(CostRemoveAnyCounter.class);
+            if (part == null || !isOwnReduceCounterCost(sa, part)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // nothing to choose
+            }
+            int safe = 0;
+            for (Card c : donors(ai, sa, part)) {
+                safe += safeCounters(c);
+            }
+            sa.setXManaCostPaid(0);
+            final ManaCostBeingPaid full = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int generic = full.getGenericManaAmount();
+            // our own main 1: only a cast that removes nothing
+            final boolean main1 = ai.getGame().getPhaseHandler().is(PhaseType.MAIN1, ai);
+            final int maxX = main1 ? 0 : Math.min(safe, (generic + 1) / 2);
+            final AiPlayDecision no = main1 && safe > 0 ? AiPlayDecision.WaitForMain2 : AiPlayDecision.CantAfford;
+            // RNG-free ceiling (it counts tapped sources too) before the probes, which draw MyRandom
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, false) < full.getConvertedManaCost() - Math.min(generic, 2 * maxX)) {
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, no);
+            }
+            for (int x = 0; x <= maxX; x++) {
+                sa.setXManaCostPaid(x);
+                if (ComputerUtilCost.canPayCost(sa, ai, sa.isTrigger())) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            sa.setXManaCostPaid(null);
+            return new AiAbilityDecision(0, no);
+        }
+
+        // decision (ComputerUtilCost.checkRemoveCounterCost) and payment (payComputerCosts) alike
+        public static PaymentDecision chooseCounters(final Player ai, final SpellAbility sa,
+                final CostRemoveAnyCounter cost, final int amount) {
+            final GameEntityCounterTable table = new GameEntityCounterTable();
+            if (amount <= 0) {
+                return PaymentDecision.counters(table); // "any number" includes none
+            }
+            final List<Card> donors = donors(ai, sa, cost);
+            final int[] take = new int[donors.size()];
+            int left = amount;
+            // pass 1 leaves every donor one counter; pass 2 takes last counters only if still short
+            for (int pass = 1; pass <= 2 && left > 0; pass++) {
+                for (int i = 0; i < donors.size() && left > 0; i++) {
+                    final Card c = donors.get(i);
+                    int room = safeCounters(c);
+                    if (pass == 1) {
+                        room = Math.min(room, c.getCounters(CounterEnumType.P1P1) - 1);
+                    }
+                    final int t = Math.min(room - take[i], left);
+                    if (t > 0) {
+                        take[i] += t;
+                        left -= t;
+                    }
+                }
+            }
+            if (left > 0) {
+                return null; // never overdraw into a kill; the cast fails through setSkip instead
+            }
+            for (int i = 0; i < donors.size(); i++) {
+                if (take[i] > 0) {
+                    table.put(null, donors.get(i), CounterEnumType.P1P1, take[i]);
+                }
+            }
+            return PaymentDecision.counters(table);
         }
     }
 

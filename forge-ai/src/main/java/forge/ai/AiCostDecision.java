@@ -597,6 +597,10 @@ public class AiCostDecision extends CostDecisionMakerBase {
     @Override
     public PaymentDecision visit(CostRemoveAnyCounter cost) {
         final int c = cost.getAbilityAmount(ability);
+        if (SpecialCardAi.HierophantBioTitan.isOwnReduceCounterCost(ability, cost)) {
+            // only counters whose removal kills nothing; X=0 is paid by removing none
+            return SpecialCardAi.HierophantBioTitan.chooseCounters(player, ability, cost, c);
+        }
         final Card originalHost = Objects.requireNonNullElse(ability.getOriginalHost(), source);
 
         if (c <= 0) {

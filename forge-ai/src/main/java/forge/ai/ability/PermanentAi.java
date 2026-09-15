@@ -114,6 +114,15 @@ public class PermanentAi extends SpellAbilityAi {
             sa.setXManaCostPaid(xPay);
         }
 
+        if (SpecialCardAi.HierophantBioTitan.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // non-mana X (+1/+1 counters removed, {2} less each) that the generic code never
+            // announces; choose it here, before willPayCosts reads it
+            final AiAbilityDecision titanX = SpecialCardAi.HierophantBioTitan.chooseX(ai, sa);
+            if (!titanX.willingToPlay()) {
+                return titanX;
+            }
+        }
+
         if ("ChaliceOfTheVoid".equals(source.getSVar("AICurseEffect"))) {
             int maxX = sa.getXManaCostPaid(); // as set above
             CardCollection otherChalices = CardLists.filter(ai.getGame().getCardsIn(ZoneType.Battlefield), CardPredicates.nameEquals("Chalice of the Void"));

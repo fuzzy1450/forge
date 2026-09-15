@@ -815,6 +815,12 @@ public class AiController {
         final Card host = sa.getHostCard();
         Card altHost = host;
 
+        if (sa.isSpell() && host != null && SpecialCardAi.HierophantBioTitan.NAME.equals(host.getName())) {
+            // drop a counter X left by an evaluation that declined after choosing it:
+            // canPlayFromHost checks the additional cost against it before chooseX runs again
+            sa.setXManaCostPaid(null);
+        }
+
         if (sa instanceof Spell sp) {
             altHost = sp.canPlayFromHost();
             if (altHost == null) {
