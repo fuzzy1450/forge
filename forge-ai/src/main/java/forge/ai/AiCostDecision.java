@@ -535,6 +535,13 @@ public class AiCostDecision extends CostDecisionMakerBase {
             return PaymentDecision.card(hand);
         }
 
+        if (source != null && "Calamity of the Titans".equals(source.getName())) {
+            // Reveal the card the cast was judged on (SpecialCardAi.CalamityOfTheTitans), not the
+            // discard heuristic's pick: the revealed mana value decides what the spell exiles.
+            final Card c = SpecialCardAi.CalamityOfTheTitans.chooseReveal(player, ability, cost);
+            return c == null ? null : PaymentDecision.card(c);
+        }
+
         if (cost.getRevealFrom().size() == 2 && cost.getRevealFrom().containsAll(Arrays.asList(ZoneType.Hand, ZoneType.Battlefield))) { // RevealOrChoose
             String aiLogic = ability.getParamOrDefault("AILogic", "");
             hand = CardLists.getValidCards(hand, type.split(";"), player, source, ability);

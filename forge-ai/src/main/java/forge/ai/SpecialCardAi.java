@@ -36,6 +36,7 @@ import forge.game.cost.CostDiscard;
 import forge.game.cost.CostExile;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostPartMana;
+import forge.game.cost.CostReveal;
 import forge.game.cost.CostSacrifice;
 import forge.game.cost.CostTap;
 import forge.game.keyword.Keyword;
@@ -469,6 +470,96 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+    }
+
+    // Calamity of the Titans
+    // "As an additional cost to cast this spell, reveal a colorless creature card from your hand. Exile each
+    // creature and planeswalker with mana value less than the revealed card's mana value."
+    // X (Revealed$CardManaCost) reads the reveal cost's paid list, which stays empty until the cost is paid,
+    // so ChangeZoneAllAi's generic ChangeType filter always saw X = 0, an empty sweep, and declined; and the
+    // stock reveal payment is the discard heuristic, blind to the sweep. Judge every revealable mana value
+    // here, and pay the cost with the same chooser (AiCostDecision.visit(CostReveal)), so the sweep judged
+    // is the sweep cast. Floor: something of an opponent's is exiled, and the net exiled value (theirs
+    // minus ours) clears the profile's mass-exile margin. Reads game state only: no random draw.
+    public static class CalamityOfTheTitans {
+        private static boolean isSwept(final Card c, final int mv) {
+            return (c.isCreature() || c.isPlaneswalker()) && c.getCMC() < mv;
+        }
+
+        private static int value(final Card c) {
+            if (c.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(c);
+            }
+            return 100 + 25 * c.getCMC(); // noncreature planeswalker
+        }
+
+        /** Net value exiled by a reveal of mana value mv: the opponents' minus ours. */
+        public static int netExile(final Player ai, final int mv) {
+            int net = 0;
+            for (final Card c : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                if (isSwept(c, mv)) {
+                    net += value(c);
+                }
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isSwept(c, mv)) {
+                    net -= value(c);
+                }
+            }
+            return net;
+        }
+
+        /** The card to reveal: the best net exile, ties keeping the smaller mana value. Null if none. */
+        public static Card chooseReveal(final Player ai, final SpellAbility sa, final CostReveal reveal) {
+            final Card host = sa.getHostCard();
+            if (reveal == null || host == null) {
+                return null;
+            }
+            final CardCollection hand = new CardCollection(ai.getCardsIn(reveal.getRevealFrom()));
+            hand.remove(host); // can't pay for itself (CostReveal.getMaxAmountX)
+            final CardCollection valid = CardLists.getValidCards(hand, reveal.getType().split(";"), ai, host, sa);
+            if (valid.isEmpty()) {
+                return null;
+            }
+            final SortedSet<Integer> mvs = new TreeSet<>();
+            for (final Card c : valid) {
+                mvs.add(c.getCMC());
+            }
+            int bestMv = mvs.first();
+            int bestNet = Integer.MIN_VALUE;
+            for (final int mv : mvs) { // ascending, strict '>': a tie keeps the smaller reveal
+                final int net = netExile(ai, mv);
+                if (net > bestNet) {
+                    bestNet = net;
+                    bestMv = mv;
+                }
+            }
+            final int mv = bestMv;
+            return ComputerUtilCard.getWorstCreatureAI(CardLists.filter(valid, c -> c.getCMC() == mv));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean ignoreTiming) {
+            final CostReveal reveal = sa.getPayCosts() == null ? null
+                    : sa.getPayCosts().getCostPartByType(CostReveal.class);
+            final Card revealed = chooseReveal(ai, sa, reveal);
+            if (revealed == null || revealed.getCMC() <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int mv = revealed.getCMC();
+            // Never cast it to exile nothing of an opponent's.
+            if (!ai.getOpponents().getCardsIn(ZoneType.Battlefield).anyMatch(c -> isSwept(c, mv))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // The stock mass-exile margin (ChangeZoneAllAi.canPlay), on the real sweep.
+            if (netExile(ai, mv) <= AiProfileUtil.getIntProperty(ai, AiProps.BOUNCE_ALL_ELSEWHERE_CREAT_EVAL_DIFF)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // The stock mass-exile timing; a cascade cast is now or never, so it skips this.
+            if (!ignoreTiming && ai.getGame().getPhaseHandler().is(PhaseType.MAIN1, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TimingRestrictions);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
     }
 

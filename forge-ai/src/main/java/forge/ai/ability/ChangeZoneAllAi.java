@@ -63,6 +63,13 @@ public class ChangeZoneAllAi extends SpellAbilityAi {
             return result ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
+        if (sourceName.equals("Calamity of the Titans")) {
+            // X is the revealed card's mana value, 0 until the reveal cost is paid, so the ChangeType
+            // filter below would always come back empty. After the run-away draw above, so a declining
+            // evaluation consumes exactly the random draws it did before.
+            return SpecialCardAi.CalamityOfTheTitans.consider(ai, sa, false);
+        }
+
         oppType = AbilityUtils.filterListByType(oppType, sa.getParam("ChangeType"), sa);
         computerType = AbilityUtils.filterListByType(computerType, sa.getParam("ChangeType"), sa);
         
@@ -295,6 +302,11 @@ public class ChangeZoneAllAi extends SpellAbilityAi {
             // mandatory). The generic Battlefield branch below matches Creature.YouCtrl against the
             // opponents' cards - always empty - and so vetoes the cast unconditionally.
             return SpecialCardAi.DayOfTheDragons.consider(ai, sa);
+        }
+        if (!mandatory && "Calamity of the Titans".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // A cascade hit (PlayEffect, Optional) is judged here. Same X = 0 blindness as canPlay: the
+            // Battlefield branch below compares two empty lists and declines. No random draw either way.
+            return SpecialCardAi.CalamityOfTheTitans.consider(ai, sa, true);
         }
         CardCollectionView humanType = ai.getOpponents().getCardsIn(origin);
         humanType = AbilityUtils.filterListByType(humanType, sa.getParam("ChangeType"), sa);
