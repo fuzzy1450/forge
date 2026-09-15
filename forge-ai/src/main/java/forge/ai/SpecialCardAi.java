@@ -1969,6 +1969,13 @@ public class SpecialCardAi {
             if (ph.getPhase() == null || ph.getPhase().isBefore(PhaseType.COMBAT_END)) {
                 return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
             }
+            // An approval goes on to canPlayAndPayForFace's canPayCost, whose test payment draws
+            // MyRandom (ComputerUtilMana.isManaSourceReserved); the stock BadEtbEffects veto never
+            // reached it, so an unaffordable WillPlay desynced B from A (games 450813, 477566).
+            // RNG-free first: untapped mana for the mana value, and red sources this spell may spend.
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, true) < host.getCMC() || !hasRedSources(ai, host)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
             CardCollection pool = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield),
                     "Creature.nonWall", ai, host, sa);
             pool = CardLists.getNotKeyword(pool, Keyword.INDESTRUCTIBLE);
@@ -1988,6 +1995,36 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Enough untapped red for RR: floating red plus sources whose printed production could be
+        // red and whose mana this spell may spend (Turtle Lair's Ninja/Turtle-only mana is not).
+        private static boolean hasRedSources(final Player ai, final Card host) {
+            final ManaCost cost = host.getManaCost();
+            final int needed = cost == null ? 0 : cost.getShardCount(forge.card.mana.ManaCostShard.RED);
+            final SpellAbility spell = host.getFirstSpellAbility();
+            int red = ai.getManaPool().getAmountOfColor(MagicColor.RED);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (red >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (spell != null && !ma.getManaPart().meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("R") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        red++;
+                        break;
+                    }
+                }
+            }
+            return red >= needed;
         }
 
         // After k deaths every surviving pool creature has taken k damage, plus one
