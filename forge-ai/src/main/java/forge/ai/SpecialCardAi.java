@@ -5587,6 +5587,77 @@ public class SpecialCardAi {
         }
     }
 
+    // Prisoner's Dilemma
+    // "Each opponent secretly chooses silence or snitch..." - Forge's chooser
+    // (ChooseGenericAi.chooseSingleSpellAbility, no AILogic) always answers
+    // Silence, and a lone opponent's best reply is Silence too (4 < 8), so the
+    // spell is modelled as 4 damage to each opponent (exact in pods of Forge AIs
+    // as well: all-silence). Tiers, in order, once some opponent can take damage:
+    // a cast without paying its mana cost (Etali, Primal Storm) - nothing spent;
+    // the burn leaves a killable opponent below 5 life - any main phase;
+    // otherwise only in our own main 2, and only when it is the flashback (no
+    // card spent), the card would be discarded to hand size anyway, or 4 is at
+    // least a fifth of the weakest killable opponent's life. AIActivateLast on
+    // the script keeps it behind every other play the AI is willing to make.
+    // Reads state only and draws no RNG, like the stock refusal it replaces.
+    public static class PrisonersDilemma {
+        public static final int DMG = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card source = sa.getHostCard();
+            boolean anyDamageable = false;
+            boolean nearLethal = false;
+            Player weakest = null;
+            int weakestLeft = Integer.MAX_VALUE;
+            int weakestDmg = 0;
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.canLoseLife()) {
+                    continue;
+                }
+                final int dmg = ComputerUtilCombat.predictDamageTo(opp, DMG, source, false);
+                if (dmg <= 0) {
+                    continue;
+                }
+                anyDamageable = true;
+                if (opp.cantLoseForZeroOrLessLife()) {
+                    continue; // takes the damage, but can't be burned out (Platinum Angel)
+                }
+                final int left = opp.getLife() - dmg;
+                if (left < 5) {
+                    nearLethal = true;
+                }
+                if (left < weakestLeft) {
+                    weakest = opp;
+                    weakestLeft = left;
+                    weakestDmg = dmg;
+                }
+            }
+            if (!anyDamageable) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // nobody can take it
+            }
+            if (sa.hasParam("WithoutManaCost")) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // free: no mana, and an exiled card is lost anyway
+            }
+            if (nearLethal) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.is(PhaseType.MAIN2, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            if (sa.isFlashback()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // no card spent
+            }
+            if (!ai.isUnlimitedHandSize() && ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // cast it rather than discard it
+            }
+            if (weakest != null && weakestDmg * 5 >= weakest.getLife()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+    }
+
     // Reins of Power
     // Two windows, both safe by construction. Offensive: our own turn before
     // attackers are declared, stack empty, and the targeted opponent's army

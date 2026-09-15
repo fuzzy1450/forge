@@ -73,6 +73,14 @@ public class ChooseGenericAi extends SpellAbilityAi {
             // every other GenericChoice card takes exactly the path it took before.
             return SpecialCardAi.ImposingGrandeur.consider(ai, sa);
         }
+        if ("Prisoner's Dilemma".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Its damage sits below a GenericChoice this handler cannot see past, and it
+            // carries no AILogic (the opponents' chooser reads AILogic too), so the
+            // fallthrough below refused it outright. Judged whole in
+            // SpecialCardAi.PrisonersDilemma; every other GenericChoice card takes
+            // exactly the path it took before.
+            return SpecialCardAi.PrisonersDilemma.consider(ai, sa);
+        }
         if (sa.hasParam("AILogic")) {
             // This is equivalent to what was here before but feels bad
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);

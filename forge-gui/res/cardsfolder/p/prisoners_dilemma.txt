@@ -1,7 +1,7 @@
 Name:Prisoner's Dilemma
 ManaCost:3 R R
 Types:Sorcery
-A:SP$ GenericChoice | Defined$ Opponent | TempRemember$ Chooser | Secretly$ True | Choices$ Silence,Snitch | SubAbility$ DBSilenceBranch | StackDescription$ SpellDescription | SpellDescription$ Each opponent secretly chooses silence or snitch, then the choices are revealed. If each opponent chose silence, CARDNAME deals 4 damage to each of them. If each opponent chose snitch, CARDNAME deals 8 damage to each of them. Otherwise, CARDNAME deals 12 damage to each opponent who chose silence.
+A:SP$ GenericChoice | Defined$ Opponent | TempRemember$ Chooser | Secretly$ True | Choices$ Silence,Snitch | SubAbility$ DBSilenceBranch | AIActivateLast$ True | StackDescription$ SpellDescription | SpellDescription$ Each opponent secretly chooses silence or snitch, then the choices are revealed. If each opponent chose silence, CARDNAME deals 4 damage to each of them. If each opponent chose snitch, CARDNAME deals 8 damage to each of them. Otherwise, CARDNAME deals 12 damage to each opponent who chose silence.
 SVar:Silence:DB$ Pump | Defined$ Remembered | NoteCards$ Self | NoteCardsFor$ Silence | SpellDescription$ Silence
 SVar:Snitch:DB$ Pump | Defined$ Remembered | NoteCards$ Self | NoteCardsFor$ Snitch | SpellDescription$ Snitch
 SVar:DBSilenceBranch:DB$ Branch | BranchConditionSVar$ PlayerCountOpponents$HasPropertyNotedForSilence | BranchConditionSVarCompare$ EQPlayerCountOpponents$Amount | TrueSubAbility$ Damage4 | FalseSubAbility$ DBSnitchBranch
