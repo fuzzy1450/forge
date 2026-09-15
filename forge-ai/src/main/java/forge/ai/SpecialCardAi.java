@@ -3434,6 +3434,144 @@ public class SpecialCardAi {
         }
     }
 
+    // Rile
+    // "1 damage to target creature you control; it gains trample until end of
+    // turn. Draw a card." DamageDealAi only targets objects an opponent
+    // controls outside mandatory SAs, so Rile was never cast. It is a cantrip
+    // whose cost is a ping on one of our own creatures. Floor: only in our own
+    // main 2 (the ping can no longer change a combat and is gone at cleanup;
+    // trample is forfeited on purpose), never with a library of 4 or fewer,
+    // and only on a creature that survives the ping, that no damage
+    // replacement anywhere would touch (amplifiers such as Angrath's
+    // Marauders, which getEnoughDamageToKill does not model; prevention and
+    // shield counters; redirection), and whose becomes-target or damage-dealt
+    // triggers are not a cost to us. Prefer a body with an upside damage
+    // trigger (Enrage, or an optional one we decide), e.g. Vrondiss, Rage of
+    // Ancients' Dragon Spirit; otherwise the widest toughness margin. Draws no
+    // RNG, like the stock DamageDealAi path it replaces for this card.
+    public static class Rile {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // Routing from DamageDealAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            sa.resetTargets();
+
+            final Game game = ai.getGame();
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            if (!ai.canDraw() || ai.getCardsIn(ZoneType.Library).size() <= 4) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final Card source = sa.getHostCard();
+            Card best = null;
+            boolean bestUpside = false;
+            int bestMargin = Integer.MIN_VALUE;
+            int bestValue = Integer.MAX_VALUE;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!sa.canTarget(c)) {
+                    continue;
+                }
+                // survives: marked damage, indestructible, shields and
+                // DestroyWhenDamaged are all in getEnoughDamageToKill
+                if (ComputerUtilCombat.getEnoughDamageToKill(c, 1, source, false) <= 1) {
+                    continue;
+                }
+                if (damageWouldBeReplaced(game, c, source, sa)) {
+                    continue;
+                }
+                if (c.hasSVar("Targeting") || c.hasSVar("SacMe")) {
+                    continue;
+                }
+                if (hasCostlySelfTrigger(c, source)) {
+                    continue;
+                }
+                final boolean upside = hasUpsideDamageTrigger(c, source)
+                        && ComputerUtilCombat.predictDamageTo(c, 1, source, false) > 0;
+                final int margin = c.getNetToughness() - c.getDamage();
+                final int value = ComputerUtilCard.evaluateCreature(c);
+                final boolean better;
+                if (best == null) {
+                    better = true;
+                } else if (upside != bestUpside) {
+                    better = upside;
+                } else if (upside) {
+                    better = value > bestValue;         // the best enrage body
+                } else {
+                    better = margin > bestMargin || (margin == bestMargin && value < bestValue);
+                }
+                if (better) {
+                    best = c;
+                    bestUpside = upside;
+                    bestMargin = margin;
+                    bestValue = value;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Any DamageDone replacement on any card or effect that would modify
+        // Rile's 1 damage to c: amplifiers (Angrath's Marauders, Fiery
+        // Emancipation), prevention, shield counters, redirection. Read-only;
+        // over-excluding only costs a cast.
+        private static boolean damageWouldBeReplaced(final Game game, final Card c, final Card source, final SpellAbility sa) {
+            final Map<forge.game.ability.AbilityKey, Object> repParams = forge.game.ability.AbilityKey.mapFromAffected(c);
+            repParams.put(forge.game.ability.AbilityKey.DamageSource, source);
+            repParams.put(forge.game.ability.AbilityKey.DamageAmount, 1);
+            repParams.put(forge.game.ability.AbilityKey.IsCombat, false);  // ReplaceDamage unboxes it under IsCombat$
+            repParams.put(forge.game.ability.AbilityKey.Cause, sa);        // CauseIsSource dereferences it
+            return !game.getReplacementHandler().getReplacementList(ReplacementType.DamageDone, repParams, null).isEmpty();
+        }
+
+        // Becomes-target triggers (Illusion-style sacrifice; conservatively
+        // also Valiant, ward and Thunderbreak Regent-style bodies) and
+        // damage-dealt triggers that are not provably upside (Jackal Pup's
+        // damage to us, Phyrexian Obliterator's sacrifice, Tephraderm).
+        private static boolean hasCostlySelfTrigger(final Card c, final Card source) {
+            for (final Trigger t : c.getTriggers()) {
+                final TriggerType mode = t.getMode();
+                if ((mode == TriggerType.BecomesTarget || mode == TriggerType.BecomesTargetOnce)
+                        && t.matchesValidParam("ValidTarget", c)) {
+                    return true;
+                }
+                if (isDamageDealtToTrigger(t, c, source) && !isUpside(t)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean hasUpsideDamageTrigger(final Card c, final Card source) {
+            for (final Trigger t : c.getTriggers()) {
+                if (isDamageDealtToTrigger(t, c, source) && isUpside(t)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean isDamageDealtToTrigger(final Trigger t, final Card c, final Card source) {
+            final TriggerType mode = t.getMode();
+            return (mode == TriggerType.DamageDone || mode == TriggerType.DamageDoneOnce)
+                    && t.hasParam("ValidTarget") && t.matchesValidParam("ValidTarget", c)
+                    && t.matchesValidParam("ValidSource", source);
+        }
+
+        // an optional trigger we decide ourselves, or the Enrage ability word
+        // (upside by design: dinosaurs, AFC dragons)
+        private static boolean isUpside(final Trigger t) {
+            return "You".equals(t.getParam("OptionalDecider"))
+                    || t.getParamOrDefault("TriggerDescription", "").startsWith("Enrage");
+        }
+    }
+
     public static class SarkhanTheMad {
         public static AiAbilityDecision considerDig(final Player ai, final SpellAbility sa) {
             if (sa.getHostCard().getCounters(CounterEnumType.LOYALTY) == 1) {

@@ -106,6 +106,14 @@ public class DamageDealAi extends DamageAiBase {
             return SpecialCardAi.MeteorBlast.consider(ai, sa);
         }
 
+        if ("Rile".equals(sourceName)) {
+            // Rile can only target our own creatures, and the generic
+            // targeting below picks only objects an opponent controls unless
+            // the SA is mandatory, so it never chose one. Every other
+            // DamageDeal card takes exactly the path it took before this branch.
+            return SpecialCardAi.Rile.consider(ai, sa);
+        }
+
         final String damage = sa.getParam("NumDmg");
         int dmg = calculateDamageAmount(sa, source, damage);
 
