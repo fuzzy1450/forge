@@ -4380,6 +4380,69 @@ public class SpecialCardAi {
         }
     }
 
+    // Lifestream's Blessing
+    // "Draw X cards, where X is the greatest power among creatures you controlled as you cast
+    // this spell. If this spell was cast from exile, you gain twice X life." X is not ours to
+    // choose, so decline unless it is a real draw that cannot deck us, does not just discard at
+    // our own cleanup, and does not feed an opponent's draw replacement or draw punisher.
+    public static class LifestreamsBlessing {
+        public static final int MIN_DRAW = 3;      // six mana (five foretold) for at least three cards
+        public static final int LIBRARY_KEEP = 7;  // library left after the forced X
+
+        public static boolean consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            // The cast locks X from game.getLastStateBattlefield() as MagicStack.addAndUnfreeze
+            // stores it, and nothing between this decision and that push refreshes it. The live
+            // board can differ (a creature killed by combat damage stays in the snapshot until
+            // the next play or resolution), so read the snapshot, with AbilityUtils' own fallback.
+            CardCollectionView lki = game.getLastStateBattlefield();
+            if (lki == null || lki.isEmpty()) {
+                lki = game.getCardsIn(ZoneType.Battlefield);
+            }
+            int x = 0;
+            for (final Card c : lki) {
+                if (c.isCreature() && ai.equals(c.getController())) {
+                    x = Math.max(x, c.getNetPower());
+                }
+            }
+            if (x < MIN_DRAW || !ai.canDrawAmount(x)) {
+                return false;
+            }
+            if (ai.getCardsIn(ZoneType.Library).size() - x < LIBRARY_KEEP) {
+                return false; // never mill ourselves toward a loss on a forced X
+            }
+            int hand = ai.getCardsIn(ZoneType.Hand).size();
+            final Card source = sa.getHostCard();
+            if (source != null && source.isInZone(ZoneType.Hand)) {
+                hand--; // the spell itself is spent
+            }
+            if (!ai.isUnlimitedHandSize()) {
+                if (game.getPhaseHandler().isPlayerTurn(ai) && hand + x > ai.getMaxHandSize()) {
+                    return false; // the surplus would go at our own cleanup
+                }
+                if (hand > ai.getMaxHandSize()) {
+                    return false; // mirror DrawAi: already over max
+                }
+            }
+            for (final Card c : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.Draw) {
+                        return false; // Notion Thief, Hullbreacher
+                    }
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    // Orcish Bowmasters, Underworld Dreams, Fate Unraveler (Card.OppOwn), Spiteful
+                    // Visions (Card), Sheoldred's punisher (Card.OppCtrl). An opponent's own-draw
+                    // trigger (Card.YouOwn, Card.YouCtrl) is not about our draws.
+                    if (t.getMode() == TriggerType.Drawn && !t.getParamOrDefault("ValidCard", "").contains("You")) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
     // Living Death (and other similar cards using AILogic LivingDeath or AILogic ReanimateAll)
     public static class LivingDeath {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

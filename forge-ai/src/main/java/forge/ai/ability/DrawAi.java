@@ -340,6 +340,14 @@ public class DrawAi extends SpellAbilityAi {
             // literal NumCards$ X, so X was never announced and numCards read 0.
             return SpecialCardAi.CommandersInsight.consider(ai, sa, mandatory);
         }
+        if (!drawback && !mandatory && sa.isSpell()
+                && "Lifestream's Blessing".equals(source.getName())) {
+            // NumCards$ X is Count$LastStateBattlefieldWithFallback, which AbilityUtils reads as 0
+            // until the card has been cast, so the generic path below always saw a zero-card draw.
+            // Host name, not getAbilitySourceName: a foretold copy's original host is face down in
+            // exile, and canPlayAndPayFor has already switched the host to its face-up copy.
+            return SpecialCardAi.LifestreamsBlessing.consider(ai, sa);
+        }
 
         // Generic logic for all cards that do not need any special handling
 
