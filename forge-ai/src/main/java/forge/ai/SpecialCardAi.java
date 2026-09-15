@@ -1793,6 +1793,49 @@ public class SpecialCardAi {
         }
     }
 
+    // Excise the Imperfect
+    // "Exile target nonland permanent. Its controller incubates X, where X is its mana value."
+    // The exile half is Utter End's (ChangeZoneAi picks and sets the target with the stock removal
+    // floor); this prices only what the card hands back: an Incubator with X +1/+1 counters that
+    // becomes an X/X for {2}. Consulted as the Incubate sub's chkDrawback, after the exile target is
+    // chosen, so it draws no random number and a decline leaves the game exactly as it was.
+    public static class ExciseTheImperfect {
+        // never hand a noncreature's controller a body bigger than Pongify's / Generous Gift's 3/3
+        public static final int MAX_NONCREATURE_GIFT = 3;
+
+        public static AiAbilityDecision considerIncubate(final Player ai, final SpellAbility sub) {
+            final SpellAbility exile = sub.getParentTargetingCard();
+            final Card tgt = exile == null ? null : exile.getTargets().getFirstTargetedCard();
+            if (tgt == null || !tgt.getController().isOpponentOf(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // SVar X = Targeted$CardManaCost, which resolves to getCMC()
+            final int x = tgt.getCMC();
+            if (x <= 0) {
+                // tokens, face-down, 0-drops: the Incubator gets no counters and dies as a 0/0 if
+                // transformed, so this is Utter End
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            final boolean worth;
+            if (tgt.isCreature()) {
+                // CreatureEvaluator's value of the transformed Incubator: base 80, token (no +20),
+                // X/X from counters (15X + 10X), cmc 0, untapped +1. Accept when the creature we
+                // exile is worth at least the body we hand back (factor 1.0: the gift grows with X,
+                // is vanilla, and needs {2} to wake; Pongify's 1.5 was set against a fixed 3/3).
+                final int gift = 81 + 25 * x;
+                worth = ComputerUtilCard.evaluateCreature(tgt) >= gift;
+            } else if (tgt.isPlaneswalker()) {
+                // a walker's repeated loyalty value beats a vanilla body that needs {2}: Utter End
+                worth = true;
+            } else {
+                // artifacts, enchantments, battles: their value is already on the board, so cap the gift
+                worth = x <= MAX_NONCREATURE_GIFT;
+            }
+            return worth ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+    }
+
     // Extraplanar Lens
     public static class ExtraplanarLens {
         public static boolean consider(final Player ai, final SpellAbility sa) {
