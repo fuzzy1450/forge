@@ -1859,6 +1859,9 @@ public class AiController {
     }
 
     public int chooseNumber(SpellAbility sa, String title, int min, int max) {
+        if ("Squee's Revenge".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            return SpecialCardAi.SqueesRevenge.chooseNumber(player, sa, min, max);
+        }
         final Card source = sa.getHostCard();
         final String logic = sa.getParamOrDefault("AILogic", "Max");
         if ("GainLife".equals(logic)) {

@@ -14,5 +14,4 @@ SVar:TimesToFlip:Count$ChosenNumber
 SVar:FlipsDone:Number$0
 SVar:Loss:Number$0
 SVar:CardsToDraw:Count$ChosenNumber/Times.2
-AI:RemoveDeck:All
 Oracle:Choose a number. Flip a coin that many times or until you lose a flip, whichever comes first. If you win all the flips, draw two cards for each flip.

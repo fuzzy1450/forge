@@ -9,6 +9,13 @@ public class ChooseNumberAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision checkApiLogic(Player aiPlayer, SpellAbility sa) {
+        if ("Squee's Revenge".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Picks its own flip count with a value floor; the generic path below
+            // refuses (no AILogic), and any AILogic would cast unconditionally and
+            // let chooseNumber answer 99. Every other ChooseNumber card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.SqueesRevenge.consider(aiPlayer, sa);
+        }
         String aiLogic = sa.getParamOrDefault("AILogic", "");
 
         if (aiLogic.isEmpty()) {

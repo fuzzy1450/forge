@@ -55,6 +55,7 @@ import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.spellability.SpellPermanent;
 import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityCantDraw;
+import forge.game.staticability.StaticAbilityFlipCoinMod;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
@@ -5928,6 +5929,104 @@ public class SpecialCardAi {
                 }
             }
             return best;
+        }
+    }
+
+    // Squee's Revenge
+    // "Choose a number. Flip a coin that many times or until you lose a flip. If
+    // you win all the flips, draw two cards for each flip." ChooseNumberAi refuses
+    // any ChooseNumber without AILogic, and the stock chooseNumber answers Max (99)
+    // - a streak nobody wins, so a cast would draw nothing. Pick the count
+    // ourselves: the n maximising expected cards, 2n * P(win n in a row), plus one
+    // card per won flip for each "wins a coin flip -> draw" trigger we control
+    // (Zndrsplt). The worst case (every flip won) never decks us, and the spell's
+    // own draws never overflow the hand. Floor: n >= 1 and expected cards >= 1
+    // (it replaces itself on average), cast in main 2 unless PlayMain1.
+    public static class SqueesRevenge {
+        public static final int LIBRARY_MARGIN = 4;
+        public static final int MAX_FLIPS = 20;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (ph.getPhase().isBefore(PhaseType.MAIN2) && !ComputerUtil.castSpellInMain1(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            final Card host = sa.getHostCard();
+            final int handAfter = ai.getCardsIn(ZoneType.Hand).size()
+                    - (host != null && host.isInZone(ZoneType.Hand) ? 1 : 0);
+            if (bestCount(ai, handAfter) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // At resolution the card is on the stack: the hand is already net of it.
+        public static int chooseNumber(final Player ai, final SpellAbility sa, final int min, final int max) {
+            int n = bestCount(ai, ai.getCardsIn(ZoneType.Hand).size());
+            if (n < 1) {
+                // Already paid for (state moved since the cast decision): one flip
+                // if the library can take its worst case, otherwise nothing.
+                n = (ai.canDraw() && libraryCap(ai) >= 1 && firstFlipChance(ai) > 0) ? 1 : 0;
+            }
+            return Math.max(min, Math.min(max, n));
+        }
+
+        static int bestCount(final Player ai, final int handAfter) {
+            if (!ai.canDraw()) {
+                return 0;
+            }
+            final double p1 = firstFlipChance(ai);
+            final double p = laterFlipChance(ai);
+            if (p1 <= 0) {
+                return 0;
+            }
+            final int d = drawOnWinTriggers(ai);
+            int cap = Math.min(MAX_FLIPS, libraryCap(ai));
+            if (!ai.isUnlimitedHandSize()) {
+                cap = Math.min(cap, (ai.getMaxHandSize() - handAfter) / 2);
+            }
+            int best = 0;
+            double bestEv = 0, pAll = 1, wonFlips = 0;
+            for (int n = 1; n <= cap; n++) {
+                pAll *= (n == 1 ? p1 : p);          // P(win the first n flips)
+                wonFlips += pAll;                   // E[# won flips] for a streak of n
+                final double ev = 2.0 * n * pAll + d * wonFlips;
+                if (ev > bestEv + 1e-9) {           // ties keep the smaller n
+                    bestEv = ev;
+                    best = n;
+                }
+            }
+            return bestEv >= 1.0 - 1e-9 ? best : 0;
+        }
+
+        // Worst case (win every flip): 2n from the spell + d per flip from triggers.
+        static int libraryCap(final Player ai) {
+            return (ai.getCardsIn(ZoneType.Library).size() - LIBRARY_MARGIN) / (2 + drawOnWinTriggers(ai));
+        }
+
+        static double laterFlipChance(final Player ai) {
+            return 1.0 - Math.pow(0.5, StaticAbilityFlipCoinMod.getFlipMultiplier(ai));
+        }
+
+        static double firstFlipChance(final Player ai) {
+            final Boolean fixed = StaticAbilityFlipCoinMod.fixedResult(ai);
+            return fixed == null ? laterFlipChance(ai) : (fixed ? 1.0 : 0.0);
+        }
+
+        static int drawOnWinTriggers(final Player ai) {
+            int d = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() != TriggerType.FlippedCoin || !"Win".equals(t.getParam("ValidResult"))) {
+                        continue;
+                    }
+                    final SpellAbility ab = t.ensureAbility();
+                    if (ab != null && ab.getApi() == ApiType.Draw) {
+                        d++;
+                    }
+                }
+            }
+            return d;
         }
     }
 
