@@ -11,6 +11,7 @@ import forge.game.cost.Cost;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
 import forge.game.player.PlayerActionConfirmMode;
+import forge.game.spellability.AbilitySub;
 import forge.game.spellability.Spell;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityPredicates;
@@ -58,6 +59,16 @@ public class PlayAi extends SpellAbilityAi {
         List<Card> cards = getPlayableCards(sa, ai);
         if (cards.isEmpty()) {
             return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+        }
+
+        if ("Memory Plunder".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Narrows the ReplaySpell pool to targets whose free cast the
+            // resolution will actually make with an effect (the probe below
+            // judges a different entry point than PlayEffect's cast), then
+            // runs that same probe. AI:RemoveDeck:All stripped the card before
+            // any handler ran, so the stock path drew no random numbers for it.
+            // Every other Play card takes exactly the path it took before.
+            return SpecialCardAi.MemoryPlunder.consider(ai, sa, cards);
         }
 
         if ("ReplaySpell".equals(logic)) {

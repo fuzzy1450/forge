@@ -6614,6 +6614,100 @@ public class SpecialCardAi {
         }
     }
 
+    // Memory Plunder
+    // "You may cast target instant or sorcery card from an opponent's graveyard
+    // without paying its mana cost." AILogic$ ReplaySpell alone probes each
+    // candidate through canPlaySa on a throwaway copy, but PlayEffect casts a
+    // different object judged by a different entry point: the first spell
+    // getSpellsFromPlayEffect returns (PlayerControllerAi.getAbilityToPlay),
+    // copied with no mana cost, approved by canPlayFromEffectAI - the handler's
+    // doTriggerNoCost, not its canPlay. Where the two disagree Memory Plunder
+    // resolves into a blank: ControlGainAi approves Tempted by the Oriq
+    // (TargetMin$ 0) with no target, min-1 steals and AlwaysPlay-rooted targeted
+    // spells are declined by the resolution chooser, and a split card picked for
+    // its right half casts its left. So a candidate is kept only when that
+    // resolution judgment passes first - PlayAi.chooseSingleCard's own checks,
+    // on get(0) only - with at least one target chosen when its root targets,
+    // no X in its cost (X would resolve as 0), and, for a RepeatEach with no
+    // AILogic, only a repeat over opponents alone (Soul Shatter, Ezuri's
+    // Predation kept; Promise of Loyalty's everyone-sacrifices, Tragic
+    // Arrogance, Mirror Match refused). The stock ReplaySpell probe then runs on
+    // what is left, for timing, the handler's judgment of the moment, and cost;
+    // it still picks the highest-MV survivor. The prediction runs other cards'
+    // handlers, so it is guarded against re-entry, and a throw from one of them
+    // declines that candidate.
+    public static class MemoryPlunder {
+        private static final ThreadLocal<Boolean> PREDICTING = ThreadLocal.withInitial(() -> false);
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final List<Card> cards) {
+            if (PREDICTING.get()) {
+                // re-entered from a candidate's own handler
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            final Predicate<SpellAbility> validSA = sa.hasParam("ValidSA")
+                    ? SpellAbilityPredicates.isValid(sa.getParam("ValidSA").split(","), ai, sa.getHostCard(), sa)
+                    : null;
+
+            final CardCollection narrowed = new CardCollection();
+            PREDICTING.set(true);
+            try {
+                for (Card c : cards) {
+                    if (resolvesWithEffect(ai, aic, c, validSA)) {
+                        narrowed.add(c);
+                    }
+                }
+            } finally {
+                PREDICTING.remove();
+            }
+
+            if (ComputerUtil.targetPlayableSpellCard(ai, narrowed, sa, sa.hasParam("WithoutManaCost"), false)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+
+        // Mirrors PlayEffect.resolve for an optional, WithoutManaCost play of c:
+        // getSpellsFromPlayEffect(c, activator, Original, !altCost = false,
+        // validSA), getAbilityToPlay's get(0), copyWithNoManaCost, then
+        // playSaFromPlayEffect's canPlayFromEffectAI(spell, false, true).
+        private static boolean resolvesWithEffect(final Player ai, final AiController aic, final Card c,
+                final Predicate<SpellAbility> validSA) {
+            if (c.getManaCost() != null && c.getManaCost().countX() > 0) {
+                return false;
+            }
+            try {
+                final List<SpellAbility> sas = AbilityUtils.getSpellsFromPlayEffect(c, ai,
+                        forge.card.CardStateName.Original, false, validSA);
+                if (sas.isEmpty() || sas.get(0).isLandAbility()) {
+                    return false;
+                }
+                if (!(sas.get(0).copyWithNoManaCost() instanceof forge.game.spellability.Spell sp)) {
+                    return false;
+                }
+                if (sp.getApi() == ApiType.RepeatEach && !sp.hasParam("AILogic")) {
+                    final String players = sp.getParam("RepeatPlayers");
+                    final boolean opponentsOnly = players != null
+                            ? "Player.Opponent".equals(players)
+                            : sp.hasParam("RepeatCards") && sp.getParam("RepeatCards").contains("OppCtrl");
+                    if (!opponentsOnly) {
+                        return false;
+                    }
+                }
+                if (aic.canPlayFromEffectAI(sp, false, true) != AiPlayDecision.WillPlay) {
+                    return false;
+                }
+                if (!sp.isTargetNumberValid() || !ComputerUtilCost.canPayCost(sp, ai, true)) {
+                    return false;
+                }
+                // a targeted root that resolved approval with no target is a blank cast
+                return !sp.usesTargeting() || !sp.getTargets().isEmpty();
+            } catch (RuntimeException e) {
+                return false;
+            }
+        }
+    }
+
     // Meteor Blast
     // "X R R R: 4 damage to each of X targets" - the generic DamageDealAi
     // never announces this X (its X handling is keyed on NumDmg$ X, and here
