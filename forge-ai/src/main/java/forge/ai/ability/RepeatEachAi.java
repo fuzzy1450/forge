@@ -20,6 +20,17 @@ public class RepeatEachAi extends SpellAbilityAi {
      */
     @Override
     protected AiAbilityDecision canPlay(Player aiPlayer, SpellAbility sa) {
+        if ("Tempt with Mayhem".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Copy an opponent's self-benefit spell (SpecialCardAi.TemptWithMayhem).
+            // A decline falls through to the stock path below: WillPlay here, then the
+            // DBCopySelf chkDrawback veto, which draws the same MyRandom roll
+            // (CopySpellAbilityAi.checkApiLogic) the stored games drew, so replays stay
+            // RNG-aligned wherever the evaluator declines before judging the copy.
+            final AiAbilityDecision tempt = SpecialCardAi.TemptWithMayhem.consider(aiPlayer, sa);
+            if (tempt.willingToPlay()) {
+                return tempt;
+            }
+        }
         String logic = sa.getParam("AILogic");
 
         if ("PriceOfProgress".equals(logic)) {
