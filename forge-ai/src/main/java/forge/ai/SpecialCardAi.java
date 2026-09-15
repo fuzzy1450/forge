@@ -11888,13 +11888,28 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
 
+            // RNG parity (the Electric Seaweed / Mizzix's Mastery shape): AI:RemoveDeck:All kept A
+            // from ever evaluating this card, and both setMaxXValue's test payments
+            // (ComputerUtilMana.isManaSourceReserved) and lifeInDanger draw MyRandom. A held Wake the
+            // Dead must not run either in a window it declines. RNG-free upper bounds instead: creature
+            // cards it can target, spare mana over BB by the estimate, and two black sources;
+            // canPlayAndPayForFace runs the real canPayCost only after a WillPlay.
             sa.resetTargets();
             sa.setXManaCostPaid(null);
-            final int maxX = ComputerUtilCost.setMaxXValue(sa, ai, false); // min(spare mana, valid targets)
-            sa.setXManaCostPaid(null);
-            if (maxX <= 0) {
+            int targets = 0;
+            for (Card c : CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa)) {
+                if (c.isCreature()) {
+                    targets++;
+                }
+            }
+            if (targets == 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int spare = ComputerUtilMana.getAvailableManaEstimate(ai, true) - 2;
+            if (spare < 1 || !hasBlackSources(ai, sa.getHostCard(), 2)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
             }
+            final int maxX = Math.min(spare, targets);
 
             final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
             final CardCollection bodies = new CardCollection();   // safe to return
@@ -11965,8 +11980,9 @@ public class SpecialCardAi {
                     break;
                 }
             }
-            // lifeInDanger draws random numbers: ask only when a block is possible
-            final boolean danger = anyBlocker && ComputerUtilCombat.lifeInDanger(ai, combat);
+            // lifeInDanger draws random numbers on every call: ask only when a block is possible and
+            // its RNG-free life/poison/must-block tests can come out true
+            final boolean danger = anyBlocker && mayBeInDanger(ai, combat) && ComputerUtilCombat.lifeInDanger(ai, combat);
 
             final CardCollection picks = new CardCollection();
             if (!danger) {
@@ -12042,6 +12058,44 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // A superset of lifeInDanger's true cases, drawing nothing: its early must-block and
+        // commander returns (lifeInSeriousDanger covers both), its poison test, and its life test
+        // with the threshold at the profile's maximum (the random walk never exceeds it).
+        private static boolean mayBeInDanger(final Player ai, final Combat combat) {
+            return ComputerUtilCombat.lifeInSeriousDanger(ai, combat)
+                    || ComputerUtilCombat.resultingPoison(ai, combat) > Math.max(7, ai.getPoisonCounters())
+                    || ComputerUtilCombat.lifeThatWouldRemain(ai, combat)
+                            < Math.min(AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD), ai.getLife());
+        }
+
+        // Floating black plus untapped sources whose printed production could be black and whose
+        // mana this spell may spend (Mizzix's Mastery's hasRedSources, copied for black).
+        private static boolean hasBlackSources(final Player ai, final Card host, final int needed) {
+            final SpellAbility spell = host.getFirstSpellAbility();
+            int black = ai.getManaPool().getAmountOfColor(MagicColor.BLACK);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (black >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (spell != null && !ma.getManaPart().meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("B") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        black++;
+                        break;
+                    }
+                }
+            }
+            return black >= needed;
         }
 
         // -1: a replacement sends the card elsewhere instead (Containment Priest);
