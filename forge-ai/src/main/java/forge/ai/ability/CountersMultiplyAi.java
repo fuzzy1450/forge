@@ -104,6 +104,28 @@ public class CountersMultiplyAi extends SpellAbilityAi {
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
 
+    @Override
+    public AiAbilityDecision chkDrawback(Player ai, SpellAbility sa) {
+        // A targeted "double the counters on any number of target ..." rider chained as
+        // the SubAbility of another effect, with TargetMin 0 (Kinetic Ooze's ETB trigger).
+        // The inherited chkDrawback vetoes every targeted sub, so the rider made
+        // AiController.checkETBEffects reject the whole creature with BadEtbEffects before
+        // any cast was considered. Zero targets is legal and a no-op, so this rider never
+        // vetoes its parent; when its condition holds, target what the trigger path would
+        // (setTargets: our own creatures carrying the counter type - opponents are only
+        // picked for M1M1). The SubAbility check keeps out a MultiplyCounter attached as
+        // Execute$/Choices$ (e.g. The Thing's ImmediateTrigger), which still has a parent.
+        if (sa.usesTargeting() && sa.getMinTargets() == 0
+                && sa.getParent() != null && sa.getParent().getSubAbility() == sa) {
+            sa.resetTargets();
+            if (checkConditions(ai, sa)) {
+                setTargets(ai, sa); // resets its own targets when it finds none
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+        return super.chkDrawback(ai, sa);
+    }
+
     private CounterType getCounterType(SpellAbility sa) {
         if (sa.hasParam("CounterType")) {
             try {
