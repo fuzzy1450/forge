@@ -19,6 +19,12 @@ public class AnimateAllAi extends SpellAbilityAi {
             // card takes exactly the path it took before this branch.
             return SpecialCardAi.MassDiminish.consider(aiPlayer, sa);
         }
+        if (SpecialCardAi.CombatShrinkAll.NAMES.contains(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Combat-locked "their creatures have base power and toughness N/M" tricks, with their
+            // own target and value floors; every other AnimateAll card takes exactly the path it
+            // took before this branch.
+            return SpecialCardAi.CombatShrinkAll.consider(aiPlayer, sa);
+        }
         String logic = sa.getParamOrDefault("AILogic", "");
 
         if ("Predators' Hour".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
