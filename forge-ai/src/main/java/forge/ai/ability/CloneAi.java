@@ -49,6 +49,14 @@ public class CloneAi extends SpellAbilityAi {
         PhaseHandler phase = game.getPhaseHandler();
 
         if (sa.usesTargeting()) {
+            if ("Mirrorweave".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // A fog by copy against a lethal attack, judged whole in
+                // SpecialCardAi.Mirrorweave.consider: cloneTgtAI below never picks a
+                // target without AILogic CloneBestCreature, and that logic would copy the
+                // best creature onto the attackers. Every other Clone card takes exactly
+                // the path it took before this branch.
+                return SpecialCardAi.Mirrorweave.consider(ai, sa);
+            }
             sa.resetTargets();
             useAbility &= cloneTgtAI(sa, false);
         } else {

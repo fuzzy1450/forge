@@ -6354,6 +6354,202 @@ public class SpecialCardAi {
         }
     }
 
+    // Mirrorweave
+    // "Each other creature becomes a copy of target nonlegendary creature until end of turn."
+    // A fog by copy, cast only inside the one window CloneAi.checkPhaseRestrictions opens for a
+    // Clone spell: the opponent's declare-attackers step, stack empty. Necessity: the attack on us
+    // is lethal even after each creature we can block with absorbs as many of the biggest attackers
+    // as it may block (canBlockAny / canBlockAdditional; evasion ignored, which over-credits our
+    // blocks). Sufficiency: some template leaves the attack short of lethal with NO blocks, as an
+    // upper bound, lets no attacking commander reach 21, and kills none of our creatures. A
+    // template is judged on what a copy takes (CardState.copyFrom copies intrinsic traits only):
+    // nothing that scales with the number of copies (non-keyword statics, triggers, replacement
+    // effects, double strike, poison, afflict) and nothing our creatures could spend themselves on
+    // (battlefield activations, mana abilities costing more than mana/tap/untap, SacMe hints).
+    // Accepted, in a position that was already lost: for the rest of the turn our creatures are
+    // copies (an edict or a block may throw away the real card), and characteristic-keyed anthems
+    // (Coat of Arms) re-evaluate after the copy. Draw-free: damageIfUnblocked runs
+    // withoutAbilities (its pump scan pays through canPayCost, whose mana test can roll the main-2
+    // reservation chance) and nothing else below reaches MyRandom, so a declined evaluation leaves
+    // the game exactly where the stock path (cloneTgtAI -> CantPlayAi) left it.
+    public static class Mirrorweave {
+        // Keyword statics (Flying, Vigilance, Defender, Shroud, ...) cannot change what a
+        // zero-block attack deals.
+        private static final Set<StaticAbilityMode> KEYWORD_STATIC_MODES = EnumSet.of(
+                StaticAbilityMode.CantBlockBy, StaticAbilityMode.AttackVigilance,
+                StaticAbilityMode.CantAttack, StaticAbilityMode.CantTarget);
+        private static final Set<Keyword> MULTIPLYING_KEYWORDS = EnumSet.of(Keyword.DOUBLE_STRIKE,
+                Keyword.INFECT, Keyword.TOXIC, Keyword.POISONOUS, Keyword.AFFLICT);
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            if (ph.isPlayerTurn(ai) || !ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || combat == null
+                    || !game.getStack().isEmpty() || ai.cantLose() || !ai.canLoseLife()
+                    || ai.cantLoseForZeroOrLessLife()) {
+                return no;
+            }
+            // The card's SA is persistent and getValidCardsToTarget drops what is already
+            // targeted: a target left behind by a WillPlay that then failed to pay would hide
+            // that template for the rest of the game.
+            sa.resetTargets();
+            final CardCollection attackers = combat.getAttackersOf(ai);
+            if (attackers.isEmpty()) {
+                return no;
+            }
+
+            final List<Integer> dmg = new ArrayList<>();
+            for (Card a : attackers) {
+                dmg.add(ComputerUtilCombat.damageIfUnblocked(a, ai, combat, true));
+            }
+            dmg.sort(Collections.reverseOrder());
+            int blocks = 0;
+            for (Card c : ai.getCreaturesInPlay()) {
+                if (CombatUtil.canBlock(c, combat)) {
+                    blocks += c.canBlockAny() ? attackers.size() : 1 + c.canBlockAdditional();
+                }
+            }
+            int through = 0;
+            for (int i = blocks; i < dmg.size(); i++) {
+                through += dmg.get(i);
+            }
+            if (through < ai.getLife()) {
+                return no;
+            }
+
+            Card best = null;
+            int bestDmg = Integer.MAX_VALUE;
+            int bestEval = Integer.MAX_VALUE;
+            for (Card t : CardUtil.getValidCardsToTarget(sa)) {
+                if (!inertTemplate(t) || killsOneOfOurs(ai, t)) {
+                    continue;
+                }
+                final int post = damageAfterCopy(ai, combat, attackers, t);
+                if (post < 0 || post >= ai.getLife()) {
+                    continue; // an attacking commander reaches 21 (-1), or still lethal unblocked
+                }
+                final int eval = ComputerUtilCard.evaluateCreature(t);
+                if (post < bestDmg || (post == bestDmg && eval < bestEval)) {
+                    best = t;
+                    bestDmg = post;
+                    bestEval = eval;
+                }
+            }
+            if (best == null) {
+                return no;
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static boolean inertTemplate(final Card t) {
+            if (t.isFaceDown() || !t.getCurrentState().getType().isCreature()
+                    || t.getPTIterable().iterator().hasNext()          // no set-P/T layer on the template
+                    || t.getBaseToughness() < 1
+                    || t.hasKeyword(Keyword.WARD)                      // a ward on it taxes the spell itself
+                    || t.hasSVar("SacMe") || t.hasSVar("SacMeAfterBlock")) {
+                return false;
+            }
+            for (forge.game.keyword.KeywordInterface kw : t.getCurrentState().getIntrinsicKeywords()) {
+                if (MULTIPLYING_KEYWORDS.contains(kw.getKeyword())) {
+                    return false;
+                }
+            }
+            // Traits granted from outside (Brave the Sands' vigilance, an equipment's flying) are
+            // not copied, so only intrinsic ones count.
+            for (StaticAbility st : t.getStaticAbilities()) {
+                if (st.isIntrinsic() && (!st.isSecondary() || st.getMode().isEmpty()
+                        || !KEYWORD_STATIC_MODES.containsAll(st.getMode()))) {
+                    return false;                                      // lords, CDAs, cost and damage statics
+                }
+            }
+            for (Trigger tr : t.getTriggers()) {
+                if (tr.isIntrinsic()) {
+                    return false;                                      // ward, exalted, attack or damage triggers
+                }
+            }
+            for (ReplacementEffect re : t.getReplacementEffects()) {
+                if (re.isIntrinsic()) {
+                    return false;                                      // Charging Tuskodon's double damage
+                }
+            }
+            for (SpellAbility ab : t.getSpellAbilities()) {
+                if (!ab.isIntrinsic()) {
+                    continue;
+                }
+                if (ab.isManaAbility()) {
+                    if (ab.getPayCosts() != null) {
+                        for (CostPart cp : ab.getPayCosts().getCostParts()) {
+                            if (!(cp instanceof CostPartMana || cp instanceof CostTap
+                                    || cp instanceof forge.game.cost.CostUntap)) {
+                                return false;                          // Eldrazi Spawn's sacrifice, Wall of Roots' counter
+                            }
+                        }
+                    }
+                } else if (ab.isActivatedAbility() && (ab.getRestrictions() == null
+                        || ab.getRestrictions().getZone() == ZoneType.Battlefield)) {
+                    return false;                                      // Sakura-Tribe Elder, Burnished Hart, Mogg Fanatic
+                }
+            }
+            return true;
+        }
+
+        // Until-end-of-turn pumps (static id 0) persist over a copy in full; a static boost may
+        // come from a creature that is about to lose its abilities, so only the side that keeps
+        // the bound safe is kept: positive for damage, negative for toughness.
+        private static int boostBound(final Card c, final boolean power) {
+            int sum = 0;
+            for (Table.Cell<Long, Long, Pair<Integer, Integer>> cell : c.getPTBoostTable().cellSet()) {
+                final int v = power ? cell.getValue().getLeft() : cell.getValue().getRight();
+                sum += cell.getColumnKey() == 0L ? v : (power ? Math.max(0, v) : Math.min(0, v));
+            }
+            return sum;
+        }
+
+        // Upper bound on unblocked damage once every other attacker is a copy of t: counters,
+        // pumps and set-P/T effects persist over a copy (set-P/T taken at the larger of both),
+        // damage replacement is applied per hit, double strike is assumed kept, no death is
+        // credited. -1 = an attacking commander would still reach 21.
+        private static int damageAfterCopy(final Player ai, final Combat combat, final CardCollection attackers, final Card t) {
+            int sum = 0;
+            for (Card a : attackers) {
+                int d;
+                if (a.equals(t)) {
+                    d = ComputerUtilCombat.damageIfUnblocked(a, ai, combat, true);
+                } else {
+                    final int pow = Math.max(0, (a.getPTIterable().iterator().hasNext()
+                            ? Math.max(t.getBasePower(), a.getCurrentPower()) : t.getBasePower())
+                            + boostBound(a, true) + a.getPowerBonusFromCounters());
+                    d = Math.max(pow, ComputerUtilCombat.predictDamageTo(ai, pow, a, true))
+                            * (a.hasDoubleStrike() ? 2 : 1);
+                }
+                if (a.isCommander() && ai.getCommanderDamage(a) + d >= 21) {
+                    return -1;
+                }
+                sum += d;
+            }
+            return sum;
+        }
+
+        // No creature of ours may drop to 0 toughness / lethal marked damage as a copy.
+        private static boolean killsOneOfOurs(final Player ai, final Card t) {
+            for (Card c : ai.getCreaturesInPlay()) {
+                if (c.equals(t)) {
+                    continue;
+                }
+                final int tough = (c.getPTIterable().iterator().hasNext()
+                        ? Math.min(t.getBaseToughness(), c.getCurrentToughness()) : t.getBaseToughness())
+                        + boostBound(c, false) + c.getToughnessBonusFromCounters();
+                if (tough - c.getDamage() < 1) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Mizzix's Mastery
     // "Exile target card that's an instant or sorcery from your graveyard. For
     // each card exiled this way, copy it, and you may cast the copy without
