@@ -2088,7 +2088,8 @@ public class SpecialCardAi {
     // goaded by us, are ignored; every other copy must fit a tier or the name is
     // dropped. Tier A: in multiplayer it can attack another opponent; in 1v1 one of our
     // untapped creatures can block it alone, kill it and survive. Tier B (1v1 only): no
-    // vigilance, infect, annihilator or attack trigger, untapped now, we have an
+    // vigilance, infect, annihilator, attack trigger or combat-damage trigger, blockable
+    // and blockable by one of ours (else it attacks anyway), untapped now, we have an
     // attacker for our next turn, the opposing board's unblocked damage leaves us above
     // the danger threshold, and the name's own unblocked damage is below our life.
     // Highest summed evaluateCreature wins, tier A before tier B; ties go to the first
@@ -2100,9 +2101,17 @@ public class SpecialCardAi {
     // withoutAbilities, and an unaffordable pass is refused before any of it.
     public static class DayOfTheMoon {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // AiController.getPossibleETBCounters asks this with a non-empty stack, where a
+            // sorcery-speed Saga cannot be cast: answer as the stock refusal did.
+            if (!ai.getGame().getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
             // An approval goes on to ComputerUtilCost.canPayCost, whose mana-source
-            // reservation roll the stock veto never reached (as DayOfTheDragons).
-            if (ComputerUtilMana.getAvailableManaEstimate(ai, false) < sa.getHostCard().getCMC()) {
+            // reservation roll the stock veto never reached: refuse first, RNG-free, when
+            // the mana canPayCost could actually use does not cover the cost.
+            final Card host = sa.getHostCard();
+            final int[] usable = usableMana(ai, host);
+            if (usable[0] < host.getCMC() || usable[1] < redShards(host)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
             final Predicate<ICardFace> legal = CardFacePredicates.valid(sa.getParamOrDefault("ValidCards", "Creature"));
@@ -2175,7 +2184,8 @@ public class SpecialCardAi {
                 if (hasSafeKillingBlock(ai, c)) {
                     tierA.merge(name, ComputerUtilCard.evaluateCreature(c), Integer::sum);
                 } else if (safeToTapBlockers && c.isUntapped() && !c.hasKeyword(Keyword.VIGILANCE)
-                        && !c.hasKeyword(Keyword.INFECT) && !hasAttackTrigger(c)) {
+                        && !c.hasKeyword(Keyword.INFECT) && !hasAttackTrigger(c) && !hasCombatDamageTrigger(c)
+                        && CombatUtil.canBeBlocked(c, null, ai) && ours.anyMatch(b -> CombatUtil.canBlock(c, b))) {
                     tierB.merge(name, ComputerUtilCard.evaluateCreature(c), Integer::sum);
                     damageB.merge(name, ComputerUtilCombat.damageIfUnblocked(c, ai, null, true), Integer::sum);
                 } else {
@@ -2255,6 +2265,70 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+
+        // Profits from connecting (a combat-damage draw or loot): it attacks anyway.
+        private static boolean hasCombatDamageTrigger(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if ((TriggerType.DamageDone.equals(t.getMode()) || TriggerType.DamageDoneOnce.equals(t.getMode()))
+                        && "True".equalsIgnoreCase(t.getParam("CombatDamage"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static int redShards(final Card host) {
+            final ManaCost cost = host.getManaCost();
+            return cost == null ? 0 : cost.getShardCount(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // RNG-free count of the mana canPayCost could use for this spell: floating mana
+        // plus one per battlefield source with a usable mana ability. Skipped: sources
+        // isManaSourceReserved refuses without a roll (held for the next spell or a
+        // declare-blockers trick), {T} abilities on tapped sources or sick creatures,
+        // abilities with a mana cost (filter lands, paid abilities) and abilities whose
+        // restrictions reject this spell. [0] = total; [1] = sources whose printed
+        // production could be red (R, Any, Chosen). A Combo production is not read as red
+        // unless it names R: Creeping Tar Pit's "Combo U B" is not.
+        private static int[] usableMana(final Player ai, final Card host) {
+            final SpellAbility spell = host.getFirstSpellAbility();
+            int total = ai.getManaPool().totalMana();
+            int red = ai.getManaPool().getAmountOfColor(MagicColor.RED);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)) {
+                    continue;
+                }
+                boolean counted = false;
+                boolean countedRed = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (ma.getPayCosts().hasTapCost() && (src.isTapped() || src.isCreature() && src.isSick())) {
+                        continue;
+                    }
+                    if (ma.getPayCosts().getCostMana() != null) {
+                        continue;
+                    }
+                    if (spell != null && !ma.getManaPart().meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    if (!counted) {
+                        total++;
+                        counted = true;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (!countedRed && (produced.contains("R") || produced.contains("Any") || produced.contains("Chosen"))) {
+                        red++;
+                        countedRed = true;
+                    }
+                }
+            }
+            return new int[] {total, red};
         }
 
         // TreeMap iteration: strict > keeps the alphabetically first name on a tie.
