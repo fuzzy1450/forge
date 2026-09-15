@@ -1695,6 +1695,104 @@ public class SpecialCardAi {
         }
     }
 
+    // Entrancing Melody
+    // "X U U sorcery: gain control of target creature with mana value X" -
+    // ControlGainAi never announces this X, so ValidTgts$ Creature.cmcEQX reads
+    // X=0 and only mana-value-0 creatures are ever legal. Announce X ourselves
+    // as the chosen creature's mana value, checking canTarget at that X per
+    // candidate. Floor: an opponent's creature the stock handler would already
+    // take (controllable by us, not leaving at end of turn, not AI-unsupported,
+    // deals combat damage, can attack an opponent next turn) and worth at least
+    // a vanilla non-token 2/2 two-drop (evaluateCreature >= 160; a 3/3 token is
+    // 156). Ward only when its whole cost is mana, reserved on top of X.
+    public static class EntrancingMelody {
+        public static final int MIN_EVAL = 160;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // Routing from ControlGainAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            sa.resetTargets();
+
+            // Cheap pass first: no mana simulation (which can draw RNG) until a
+            // candidate exists.
+            final PlayerCollection opponents = ai.getOpponents();
+            final CardCollection candidates = new CardCollection();
+            for (Card c : opponents.getCreaturesInPlay()) {
+                if (!c.canBeControlledBy(ai) || c.hasSVar("EndOfTurnLeavePlay")
+                        || ComputerUtilCard.isCardRemAIDeck(c) || c.getNetCombatDamage() <= 0
+                        || wardMana(c) < 0) {
+                    continue;
+                }
+                boolean canAttack = false;
+                for (Player opp : opponents) {
+                    if (ComputerUtilCombat.canAttackNextTurn(c, opp)) {
+                        canAttack = true;
+                        break;
+                    }
+                }
+                if (canAttack && ComputerUtilCard.evaluateCreature(c) >= MIN_EVAL) {
+                    candidates.add(c);
+                }
+            }
+            if (candidates.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.setXManaCostPaid(null);
+            final int maxX = ComputerUtilCost.setMaxXValue(sa, ai, false); // X = 0 is legal (tokens)
+            Card best = null;
+            int bestEval = Integer.MIN_VALUE;
+            for (Card c : candidates) {
+                final int mv = c.getCMC();
+                if (mv + wardMana(c) > maxX) {
+                    continue; // can't pay X and still answer a mana Ward
+                }
+                sa.setXManaCostPaid(mv);
+                if (!sa.canTarget(c)) {
+                    continue;
+                }
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                if (best == null || eval > bestEval || (eval == bestEval && mv < best.getCMC())) {
+                    best = c;
+                    bestEval = eval;
+                }
+            }
+            if (best == null) {
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            sa.setXManaCostPaid(best.getCMC());
+            sa.getTargets().add(best);
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Ward mana to reserve on top of X: 0 without Ward, -1 when any part of
+        // the Ward cost is not mana (pay life, discard), which canPayCost judges
+        // only after targeting and may refuse, leaving the card stuck on the
+        // same best target at every priority.
+        private static int wardMana(final Card c) {
+            if (!c.hasKeyword(Keyword.WARD)) {
+                return 0;
+            }
+            final forge.game.cost.Cost ward = ComputerUtilCard.getTotalWardCost(c);
+            for (CostPart part : ward.getCostParts()) {
+                if (!(part instanceof CostPartMana)) {
+                    return -1;
+                }
+            }
+            return ward.getTotalMana().getCMC();
+        }
+    }
+
     // Extraplanar Lens
     public static class ExtraplanarLens {
         public static boolean consider(final Player ai, final SpellAbility sa) {

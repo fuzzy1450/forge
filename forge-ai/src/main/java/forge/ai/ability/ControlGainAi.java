@@ -61,6 +61,15 @@ public class ControlGainAi extends SpellAbilityAi {
             return SpecialCardAi.StealCreatureForX.consider(ai, sa);
         }
 
+        if ("Entrancing Melody".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && sa.isSpell() && !sa.isCopied()) {
+            // X is the target's exact mana value (ValidTgts$ Creature.cmcEQX) and
+            // nothing below announces it, so every target would be read at X=0.
+            // Judged whole in SpecialCardAi.EntrancingMelody. A copy (Unbound
+            // Flourishing) keeps its X and takes the stock path, as does every
+            // other GainControl card.
+            return SpecialCardAi.EntrancingMelody.consider(ai, sa);
+        }
+
         final List<String> lose = Lists.newArrayList();
 
         if (sa.hasParam("LoseControl")) {
