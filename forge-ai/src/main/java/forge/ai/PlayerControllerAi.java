@@ -857,8 +857,22 @@ public class PlayerControllerAi extends PlayerController {
                     SpellAbility cur = root;
                     while (cur != null) {
                         if (cur.hasParam("TargetingPlayer") && cur.getTargetingPlayer() != null) {
+                            // The targeting player's AI answers chooseTargetsFor with doTrigger, which walks
+                            // cur's WHOLE sub-chain (chkDrawbackWithSubs) and resets the targets of later subs
+                            // this AI already chose: Volcanic Offering's own "7 damage to target creature you
+                            // don't control" came back empty, MagicStack.add refused the paid spell and stranded
+                            // it in the stack zone. Only a sub with its own TargetingPlayer is the other
+                            // player's to choose (601.2c); keep ours. Empty unless a caster-targeted sub
+                            // follows a TargetingPlayer sub.
+                            final Map<SpellAbility, TargetChoices> ownTargets = new LinkedHashMap<>();
+                            for (SpellAbility sub = cur.getSubAbility(); sub != null; sub = sub.getSubAbility()) {
+                                if (sub.usesTargeting() && !sub.hasParam("TargetingPlayer")) {
+                                    ownTargets.put(sub, sub.getTargets().clone());
+                                }
+                            }
                             cur.clearTargets();
                             cur.getTargetingPlayer().getController().chooseTargetsFor(cur);
+                            ownTargets.forEach(SpellAbility::setTargets);
                             // there's a chance a target gets selected that makes the cost unaffordable
                             if (!ComputerUtilCost.canPayCost(root, root.getActivatingPlayer(), false)) {
                                 cur.resetTargets();
