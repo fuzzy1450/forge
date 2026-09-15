@@ -1996,6 +1996,37 @@ public class SpecialCardAi {
         }
     }
 
+    // New Blood
+    // The spell is judged by the stock ControlGainAi.canPlay, which targets the
+    // best opposing creature that has combat damage > 0 and can attack, can be
+    // controlled by us, has no EndOfTurnLeavePlay and is not RemAIDeck. Its
+    // "replace one creature type with Vampire" rider (DB$ ChangeText) had no AI
+    // of its own and vetoed every cast. Accept the rider only when the parent
+    // really targets an opponent's creature worth a card: at least a vanilla
+    // 2/2 (evaluateCreature 161; a vanilla 1/1 card and a 2/2 token score 131,
+    // a 1/1 token 106), so four mana and a tapped Vampire never buy a chump
+    // token. getBestCreatureAI already picked the highest-value candidate, so
+    // the floor on the pick is the floor on the whole candidate list.
+    public static class NewBlood {
+        private static final int MIN_STOLEN_VALUE = 150;
+
+        public static AiAbilityDecision considerTextChange(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            if (root == null || root.getApi() != ApiType.GainControl) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card stolen = root.getTargetCard();
+            if (stolen == null || !stolen.isCreature() || !stolen.isInPlay()
+                    || stolen.getController() == null || !ai.isOpponentOf(stolen.getController())) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            if (ComputerUtilCard.evaluateCreature(stolen) < MIN_STOLEN_VALUE) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Null Brooch
     public static class NullBrooch {
         public static boolean consider(final Player ai, final SpellAbility sa) {

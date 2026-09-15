@@ -45,6 +45,7 @@ public enum SpellApiToAi {
             .put(ApiType.ChangeCombatants, ChangeCombatantsAi.class)
             .put(ApiType.ChangeSpeed, AlwaysPlayAi.class)
             .put(ApiType.ChangeTargets, ChangeTargetsAi.class)
+            .put(ApiType.ChangeText, ChangeTextAi.class)
             .put(ApiType.ChangeX, AlwaysPlayAi.class)
             .put(ApiType.ChangeZone, ChangeZoneAi.class)
             .put(ApiType.ChangeZoneAll, ChangeZoneAllAi.class)
