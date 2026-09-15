@@ -4927,6 +4927,188 @@ public class SpecialCardAi {
         }
     }
 
+    // Hellish Rebuke
+    // "Until end of turn, permanents your opponents control gain 'When this
+    // permanent deals damage to the player who cast Hellish Rebuke, sacrifice
+    // this permanent. You lose 2 life.'" It prevents nothing: it punishes. The
+    // only window is an opponent's declare-blockers step with the stack empty.
+    // Blocks are locked there, so the attackers that will deal combat damage to
+    // us are known, and casting cannot change the damage we take. Reached from
+    // EffectAi.checkApiLogic before its randomReturn roll. Floors:
+    //  - window: not our turn, declare blockers, combat, empty stack (which
+    //    also declines a copy of the spell), no Rebuke effect of ours already
+    //    active, and an untapped-mana estimate that covers the cost;
+    //  - self-harm: no opposing attacker we own (a stolen creature of ours
+    //    gains the trigger too and is sacrificed into our graveyard instead of
+    //    coming back at end of turn);
+    //  - survival: not in serious danger from this combat (state-based actions
+    //    end the game before the triggers exist; lifeInSeriousDanger draws no
+    //    random numbers, lifeInDanger does). When an opponent controls death or
+    //    sacrifice payoffs (Blood Artist, Syr Konrad, Mayhem Devil, Zulaport
+    //    Cutthroat), the life left after combat must exceed one loss per payoff
+    //    per sacrifice, plus 5 per punished attacker that carries such a trigger
+    //    itself (Kokusho);
+    //  - worth a card: a connecting, sacrificeable attacker worth at least a
+    //    vanilla 2-mana 2/2 (or a commander), attackers worth 250 together, or
+    //    2-life drains that kill their controller after lifelink and payoff
+    //    gains. A blocked trampler that dies to its block counts toward the
+    //    drain only.
+    // Every exit before lifeInSeriousDanger draws no random numbers. The damage
+    // predictions from there on can test-pay an attacker's pump activation,
+    // which can roll ComputerUtilMana.isManaSourceReserved, so B may diverge
+    // from A in an open window even when the card is not cast.
+    public static class HellishRebuke {
+        public static final int MIN_SINGLE_VALUE = 160; // vanilla nontoken 2/2 at mana value 2
+        public static final int MIN_TOTAL_VALUE = 250;  // two 2/2 tokens (130 each) pass, two 1/1 tokens (105 each) do not
+        public static final int SELF_PAYOFF_MARGIN = 5; // Kokusho's own dies trigger
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            if (combat == null || ph.isPlayerTurn(ai) || !ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // One copy of the effect per turn is enough.
+            final String host = ComputerUtilAbility.getAbilitySourceName(sa);
+            if (ai.getCardsIn(ZoneType.Command).anyMatch(c -> c.getEffectSource() != null
+                    && host.equals(c.getEffectSource().getName()))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            for (final Card att : combat.getAttackers()) {
+                if (att.getController().isOpponentOf(ai) && ai.equals(att.getOwner())) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            final CardCollection candidates = new CardCollection();
+            for (final Card att : combat.getAttackersOf(ai)) {
+                if (att.getController().isOpponentOf(ai) && att.canBeSacrificedBy(null, true)) {
+                    candidates.add(att);
+                }
+            }
+            if (candidates.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final int cmc = sa.getPayCosts() != null && sa.getPayCosts().getTotalMana() != null
+                    ? sa.getPayCosts().getTotalMana().getCMC() : 0;
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, true) < cmc) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            int payoffs = 0;
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    payoffs += deathPayoffTriggers(c);
+                }
+            }
+
+            if (ComputerUtilCombat.lifeInSeriousDanger(ai, combat)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final Map<Player, CardCollection> punished = new LinkedHashMap<>();
+            int sacrificed = 0;
+            int selfCarriers = 0;
+            for (final Card att : candidates) {
+                if (!connects(ai, att, combat)) {
+                    continue;
+                }
+                punished.computeIfAbsent(att.getController(), p -> new CardCollection()).add(att);
+                sacrificed++;
+                if (deathPayoffTriggers(att) > 0) {
+                    selfCarriers++;
+                }
+            }
+            if (punished.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (payoffs > 0 && ComputerUtilCombat.lifeThatWouldRemain(ai, combat)
+                    <= sacrificed * payoffs + SELF_PAYOFF_MARGIN * selfCarriers) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            int best = 0;
+            int total = 0;
+            for (final Map.Entry<Player, CardCollection> e : punished.entrySet()) {
+                final Player opp = e.getKey();
+                final CardCollection hits = e.getValue();
+                int oppSelfCarriers = 0;
+                for (final Card c : hits) {
+                    if (deathPayoffTriggers(c) > 0) {
+                        oppSelfCarriers++;
+                    }
+                    if (combat.isBlocked(c) && ComputerUtilCombat.attackerWouldBeDestroyed(ai, c, combat)) {
+                        continue; // gone to its block anyway: the drain still happens
+                    }
+                    int v = ComputerUtilCard.evaluateCreature(c);
+                    if (c.isCommander()) {
+                        v = Math.max(v, MIN_SINGLE_VALUE);
+                    }
+                    best = Math.max(best, v);
+                    total += v;
+                }
+                // Lifelink on any of this controller's attackers, blocked ones included.
+                int lifelinkGain = 0;
+                for (final Card c : combat.getAttackers()) {
+                    if (opp.equals(c.getController()) && c.hasKeyword(Keyword.LIFELINK)) {
+                        lifelinkGain += Math.max(ComputerUtilCombat.getAttack(c),
+                                ComputerUtilCombat.damageIfUnblocked(c, ai, combat, false));
+                    }
+                }
+                if (!ai.cantWin() && opp.canLoseLife() && !opp.cantLoseForZeroOrLessLife()
+                        && 2 * hits.size() >= opp.getLife() + lifelinkGain
+                                + payoffs * hits.size() + SELF_PAYOFF_MARGIN * oppSelfCarriers) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            if (best >= MIN_SINGLE_VALUE || total >= MIN_TOTAL_VALUE) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // Will this attacker deal combat damage to us, given the locked blocks?
+        private static boolean connects(final Player ai, final Card att, final Combat combat) {
+            if (!combat.isBlocked(att)
+                    || forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(att)) {
+                return ComputerUtilCombat.damageIfUnblocked(att, ai, combat, false) > 0
+                        || ComputerUtilCombat.poisonIfUnblocked(att, ai) > 0; // infect damage is damage too
+            }
+            if (att.hasKeyword(Keyword.TRAMPLE)) {
+                final int excess = ComputerUtilCombat.getAttack(att)
+                        - ComputerUtilCombat.totalShieldDamage(att, combat.getBlockers(att));
+                return excess > 0 && !ComputerUtilCombat.isCombatDamagePrevented(att, ai, excess);
+            }
+            return false; // blocked (even if its blockers left) and no trample: no damage to us
+        }
+
+        // Triggers a sacrificed permanent can set off: a Sacrificed or
+        // SacrificedOnce trigger, or a ChangesZone(All) trigger that can see a
+        // move from the battlefield to the graveyard (an absent Origin or
+        // Destination matches anything). Over-counts conditional ones, which is
+        // conservative: the count only ever raises the life the AI must keep.
+        static int deathPayoffTriggers(final Card c) {
+            int n = 0;
+            for (final Trigger t : c.getTriggers()) {
+                final TriggerType mode = t.getMode();
+                if (mode == TriggerType.Sacrificed || mode == TriggerType.SacrificedOnce) {
+                    n++;
+                } else if (mode == TriggerType.ChangesZone || mode == TriggerType.ChangesZoneAll) {
+                    final String origin = t.hasParam("Origin") ? t.getParam("Origin") : "Any";
+                    final String destination = t.hasParam("Destination") ? t.getParam("Destination") : "Any";
+                    if ((origin.contains("Battlefield") || origin.contains("Any"))
+                            && (destination.contains("Graveyard") || destination.contains("Any"))) {
+                        n++;
+                    }
+                }
+            }
+            return n;
+        }
+    }
+
     // Here Comes a New Hero!
     // "Target player draws X cards. Then create a token that's a copy of up to
     // one target creature with mana value X or less." DrawAi approves the Draw X

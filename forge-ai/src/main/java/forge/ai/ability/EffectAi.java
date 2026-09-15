@@ -46,6 +46,13 @@ public class EffectAi extends SpellAbilityAi {
             // card takes exactly the path it took before this branch.
             return SpecialCardAi.HuntersInsight.consider(ai, sa);
         }
+        if ("Hellish Rebuke".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Punishes opposing attackers that connect with us. Routed before the
+            // randomReturn roll: the card used to carry AI:RemoveDeck:All, so the
+            // stock engine never evaluated it and never drew for it. Every other
+            // Effect card takes exactly the path it took before this branch.
+            return SpecialCardAi.HellishRebuke.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final PhaseHandler phase = game.getPhaseHandler();
         boolean randomReturn = MyRandom.getRandom().nextFloat() <= .6667;
