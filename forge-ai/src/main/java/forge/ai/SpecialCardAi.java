@@ -6906,11 +6906,19 @@ public class SpecialCardAi {
             if (host == null || play == null || play.getApi() != ApiType.Play) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
-            if (!ComputerUtilCost.canPayCost(sa, ai, false)) {
-                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
-            }
             if (!sa.usesTargeting()) { // Overload
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // RNG parity: AI:RemoveDeck:All kept A from ever evaluating this card, and
+            // ComputerUtilCost.canPayCost's test payment draws MyRandom
+            // (ComputerUtilMana.isManaSourceReserved), so a held Mastery must not run one on every
+            // priority pass. RNG-free upper bounds instead: the cost after reductions (Mizzix's
+            // experience) against the mana estimate, and a red source; canPlayAndPayForFace runs the
+            // real canPayCost only after a WillPlay.
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, true) < cost.toManaCost().getCMC()
+                    || !hasRedSources(ai, host, cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
 
             sa.resetTargets();
@@ -6940,6 +6948,34 @@ public class SpecialCardAi {
             }
             sa.getTargets().add(pick);
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Floating red plus untapped sources whose printed production could be red and whose mana
+        // this spell may spend (Electric Seaweed's helper, copied, taking the shard count).
+        private static boolean hasRedSources(final Player ai, final Card host, final int needed) {
+            final SpellAbility spell = host.getFirstSpellAbility();
+            int red = ai.getManaPool().getAmountOfColor(MagicColor.RED);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (red >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (spell != null && !ma.getManaPart().meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("R") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        red++;
+                        break;
+                    }
+                }
+            }
+            return red >= needed;
         }
 
         // Every spell the chooser can offer from this card (the current face,
