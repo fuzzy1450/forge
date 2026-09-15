@@ -52,6 +52,8 @@ public class CharmAi extends SpellAbilityAi {
             chosenList = chooseTriskaidekaphobia(choices, ai);
         } else if ("Brokers Confluence".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             chosenList = SpecialCardAi.BrokersConfluence.chooseModes(ai, sa, choices, num);
+        } else if ("Promise of Power".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            chosenList = SpecialCardAi.PromiseOfPower.chooseModes(ai, sa, choices);
         } else {
             // only randomize if not all possible together
             if (num < choices.size()) {

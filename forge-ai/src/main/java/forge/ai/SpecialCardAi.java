@@ -6590,6 +6590,117 @@ public class SpecialCardAi {
         }
     }
 
+    // Promise of Power
+    // "Choose one - You draw five cards and you lose 5 life; or create an X/X black Demon creature
+    // token with flying, where X is the number of cards in your hand. Entwine {4}"
+    // The script carried AI:RemoveDeck:All, and behind it the stock charm chooser shuffles the modes
+    // and trusts DrawAi/TokenAi, neither of which floors this card: TokenAi keys X on TokenAmount,
+    // not the hand-sized TokenPower (a 0/0 Demon), DrawAi skips its overdraw guard for a charm mode
+    // (drawback), and LifeLoseAi lets 8 life pay down to 3. Reached from CharmAi's name gate for the
+    // plain spell and for the entwined copy (CharmAi.chooseOptionalCosts). Only in our own main 2.
+    // Plain spell: the Demon when X at resolution (this card gone from hand) is at least 4, else the
+    // draw when its floor holds and at most one card is discarded at cleanup. Entwine: only when the
+    // draw floor holds (draw resolves first, so the Demon is at least 5/5). The draw floor: we can
+    // draw, the library holds more than 8, no opponent's permanent triggers on or replaces draws
+    // (Orcish Bowmasters, Spiteful Visions, Notion Thief, Alms Collector), and - unless we can't lose
+    // life - at least 10 life is left after the 5, and more than the profile's danger threshold after
+    // the opponents' unblocked next-turn attack. Reads state only and draws no RNG (aiLifeInDanger's
+    // block simulation would). An empty list is CantPlayAi in CharmAi; the list is mutable because
+    // CharmEffect.chainAbilities sorts it in place.
+    public static class PromiseOfPower {
+        public static final int DRAW = 5;
+        public static final int LIFE = 5;
+        public static final int MIN_LIFE_AFTER = 10;
+        public static final int MIN_DEMON = 4;
+        public static final int LIBRARY_MARGIN = 3; // DrawAi.targetAI's own deck-out margin
+
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa, final List<AbilitySub> choices) {
+            final List<AbilitySub> chosen = Lists.newArrayList();
+            AbilitySub draw = null;
+            AbilitySub demon = null;
+            for (final AbilitySub sub : choices) {
+                if (sub.getApi() == ApiType.Draw) {
+                    draw = sub;
+                } else if (sub.getApi() == ApiType.Token) {
+                    demon = sub;
+                }
+            }
+            final Card host = sa.getHostCard();
+            // an exact MAIN2 test: chooseOptionalCosts runs this before the timing check, so a
+            // "not before main 2" test would also choose at our end step
+            if (draw == null || demon == null || host == null || !demon.hasParam("TokenPower")
+                    || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return chosen; // script drifted, or not the window: stay out
+            }
+
+            // X is counted at resolution, when this card has left the hand
+            int handAfter = AbilityUtils.calculateAmount(host, demon.getParam("TokenPower"), demon);
+            if (host.isInZone(ZoneType.Hand)) {
+                handAfter--;
+            }
+
+            if (sa.isEntwine()) {
+                // five cards, then a (handAfter + 5)/(handAfter + 5) flier
+                if (drawSafe(ai)) {
+                    chosen.add(draw);
+                    chosen.add(demon);
+                }
+                return chosen;
+            }
+
+            if (handAfter >= MIN_DEMON) {
+                chosen.add(demon);
+            } else if (drawSafe(ai)
+                    && (ai.isUnlimitedHandSize() || handAfter + DRAW <= ai.getMaxHandSize() + 1)) {
+                chosen.add(draw);
+            }
+            return chosen;
+        }
+
+        // the draw mode's floor: never into a deck-out, a draw punisher, or low life
+        static boolean drawSafe(final Player ai) {
+            if (!ai.canDraw() || ai.getCardsIn(ZoneType.Library).size() <= DRAW + LIBRARY_MARGIN
+                    || drawPunished(ai)) {
+                return false;
+            }
+            if (!ai.canLoseLife()) {
+                return true;
+            }
+            final int lifeAfter = ai.getLife() - LIFE;
+            if (lifeAfter < MIN_LIFE_AFTER) {
+                return false;
+            }
+            // unblocked damage ignores our blockers, so it only ever holds the draw back
+            int unblocked = 0;
+            for (final Player opp : ai.getOpponents()) {
+                unblocked += ComputerUtilCombat.sumDamageIfUnblocked(CardLists.filter(opp.getCreaturesInPlay(),
+                        c -> ComputerUtilCombat.canAttackNextTurn(c, ai)), ai);
+            }
+            return lifeAfter - unblocked > AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD);
+        }
+
+        // an opponent's permanent that triggers on draws (Orcish Bowmasters, Spiteful Visions) or
+        // replaces them (Notion Thief, Alms Collector): five draws would feed it, or not reach us
+        static boolean drawPunished(final Player ai) {
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (ai.equals(c.getController())) {
+                    continue;
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Drawn) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Recurring Insight
     // "Draw cards equal to the number of cards in target opponent's hand. Rebound."
     // Reached from PumpAi's AILogic$ RecurringInsight branches: checkApiLogic for the cast from
