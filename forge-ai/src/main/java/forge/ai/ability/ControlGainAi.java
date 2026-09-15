@@ -341,6 +341,16 @@ public class ControlGainAi extends SpellAbilityAi {
     }
 
     @Override
+    protected Card chooseSingleCard(Player ai, SpellAbility sa, Iterable<Card> options, boolean isOptional, Player targetedPlayer, Map<String, Object> params) {
+        if ("Seize the Spotlight".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Take the creature the cast was judged on, not the first one in
+            // battlefield order (the base chooser's default).
+            return SpecialCardAi.SeizeTheSpotlight.chooseCreature(ai, options);
+        }
+        return super.chooseSingleCard(ai, sa, options, isOptional, targetedPlayer, params);
+    }
+
+    @Override
     protected Player chooseSinglePlayer(Player ai, SpellAbility sa, Iterable<Player> options, Map<String, Object> params) {
         final List<Card> cards = Lists.newArrayList();
         for (Player p : options) {

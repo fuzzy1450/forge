@@ -3809,6 +3809,109 @@ public class SpecialCardAi {
         }
     }
 
+    // Seize the Spotlight
+    // "Each opponent chooses fame or fortune. For each opponent who chose fame,
+    // gain control of a creature that player controls until end of turn, untap
+    // it, it gains haste. For each who chose fortune, draw a card and create a
+    // Treasure." A Forge AI opponent always picks Fame (ChooseGenericAi.
+    // chooseSingleSpellAbility, no AILogic -> the first choice), so the line
+    // that happens is a Threaten whose creature we choose; Fortune (a human
+    // opponent) is a card and a Treasure, never harmful. Cast only on our own
+    // turn before attackers, with an empty stack and combat not skipped, and
+    // only for a creature worth taking, judged on the one the chooser takes
+    // (the best by evaluation that can attack): lethal on its controller, or -
+    // unless the opponents' next attack would kill us - at least
+    // MIN_STOLEN_DAMAGE combat damage or MIN_STOLEN_VALUE of creature. The
+    // steal does nothing defensively (the creature untaps back home), so a
+    // non-lethal one is never worth the tempo while our next turn is at stake.
+    // Draws no RNG, like the stock refusal it replaces: the danger check is not
+    // ComputerUtil.aiLifeInDanger, whose AiBlockController draws MyRandom
+    // (ComputerUtilCombat.lifeInDanger) on every pass while the card is held.
+    public static class SeizeTheSpotlight {
+        public static final int MIN_STOLEN_DAMAGE = 3;
+        public static final int MIN_STOLEN_VALUE = 200;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                    || !game.getStack().isEmpty()
+                    || game.getReplacementHandler().wouldPhaseBeSkipped(ai, PhaseType.COMBAT_BEGIN)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+
+            boolean worthTaking = false;
+            for (final Player opp : ai.getOpponents()) {
+                final Card best = bestSteal(ai, opp.getCreaturesInPlay());
+                if (best == null) {
+                    continue;
+                }
+                final int dmg = best.getNetCombatDamage();
+                if (dmg >= opp.getLife()) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+                if (dmg >= MIN_STOLEN_DAMAGE || ComputerUtilCard.evaluateCreature(best) >= MIN_STOLEN_VALUE) {
+                    worthTaking = true;
+                }
+            }
+            if (worthTaking && !wouldDieNextCombat(ai)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // Resolution: the same filter the cast was judged on, so the creature we
+        // judged is the creature we take (unless the board changed in response).
+        public static Card chooseCreature(final Player ai, final Iterable<Card> options) {
+            final Card best = bestSteal(ai, options);
+            return best != null ? best : ComputerUtilCard.getBestCreatureAI(options);
+        }
+
+        // Act of Treason's filter (ControlGainAi.canPlay): we can control it, it
+        // has positive combat damage, it can attack one of our opponents, and it
+        // is not a card the AI is told it cannot use.
+        private static Card bestSteal(final Player ai, final Iterable<Card> creatures) {
+            final CardCollection able = new CardCollection();
+            for (final Card c : creatures) {
+                if (!c.isCreature() || c.isPhasedOut() || !c.canBeControlledBy(ai)
+                        || c.getNetCombatDamage() <= 0 || ComputerUtilCard.isCardRemAIDeck(c)) {
+                    continue;
+                }
+                for (final Player opp : ai.getOpponents()) {
+                    if (ComputerUtilCombat.canAttackNextTurn(c, opp)) {
+                        able.add(c);
+                        break;
+                    }
+                }
+            }
+            return able.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(able);
+        }
+
+        // The serious branch of ComputerUtil.predictNextCombatsRemainingLife
+        // without its AiBlockController: each opponent attacks us with every
+        // creature that can attack next turn, nothing blocks, and
+        // lifeInSeriousDanger (lethal damage, commander damage, poison, a
+        // MustBeBlocked attacker) judges it. With no blocks it holds the card in
+        // some states where our blockers would have kept us alive - more
+        // cautious than the stock check, and deterministic.
+        private static boolean wouldDieNextCombat(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                final Combat combat = new Combat(opp);
+                boolean containsAttacker = false;
+                for (final Card att : opp.getCreaturesInPlay()) {
+                    if (ComputerUtilCombat.canAttackNextTurn(att, ai)) {
+                        combat.addAttacker(att, ai);
+                        containsAttacker = true;
+                    }
+                }
+                if (containsAttacker && ComputerUtilCombat.lifeInSeriousDanger(ai, combat)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Sorin, Vengeful Bloodlord
     public static class SorinVengefulBloodlord {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

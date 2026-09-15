@@ -55,6 +55,12 @@ public class ChooseGenericAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision checkApiLogic(final Player ai, final SpellAbility sa) {
+        if ("Seize the Spotlight".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // No AILogic, so the fallthrough below refused it outright. Judged
+            // whole in SpecialCardAi.SeizeTheSpotlight; every other GenericChoice
+            // card takes exactly the path it took before.
+            return SpecialCardAi.SeizeTheSpotlight.consider(ai, sa);
+        }
         if (sa.hasParam("AILogic")) {
             // This is equivalent to what was here before but feels bad
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
