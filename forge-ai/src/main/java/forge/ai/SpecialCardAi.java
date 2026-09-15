@@ -63,12 +63,14 @@ import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityPredicates;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.spellability.SpellPermanent;
+import forge.game.spellability.TargetChoices;
 import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityCantDraw;
 import forge.game.staticability.StaticAbilityFlipCoinMod;
 import forge.game.staticability.StaticAbilityMode;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
+import forge.game.trigger.WrappedAbility;
 import forge.game.zone.ZoneType;
 import forge.item.PaperCard;
 import forge.util.Aggregates;
@@ -2782,6 +2784,219 @@ public class SpecialCardAi {
             }
 
             return sa.getTargets().size() > 0;
+        }
+    }
+
+    // Deflecting Swat
+    // "You may choose new targets for target spell or ability." Cast only in
+    // response to an opponent's spell or ability with a single-target part that
+    // harms its target, targets something of ours worth saving (or us), is
+    // predicted to remove it (or deal us lethal damage), and has a legal new
+    // target an opponent controls. At resolution the name-gated
+    // PlayerControllerAi.chooseNewTargetsFor hook moves exactly such parts, never
+    // onto anything of ours; anything unplanned keeps its targets (null).
+    public static class DeflectingSwat {
+        public static final int MIN_CREATURE_VALUE = 160; // evaluateCreature of a nontoken vanilla 2/2
+        public static final int MIN_PERMANENT_CMC = 3;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final SpellAbility top = ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+            if (top == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final Player caster = top.getActivatingPlayer();
+            if (caster == null || !caster.isOpponentOf(ai) || ai.getYourTeam().contains(caster)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final List<GameObject> threatened = ComputerUtil.predictThreatenedObjects(ai, null, true);
+            final SpellAbility root = top.isWrapper() ? ((WrappedAbility) top).getWrappedAbility() : top;
+            boolean worth = false;
+            for (SpellAbility part = root; part != null && !worth; part = part.getSubAbility()) {
+                final GameObject old = singleTarget(part);
+                // harmsItsTarget here too: casting must imply the hook will move this part
+                if (old == null || part.getActivatingPlayer() == null || !harmsItsTarget(part)
+                        || !threatened.contains(old) || !isOurs(ai, old) || !worthSaving(old)) {
+                    continue;
+                }
+                worth = hasRedirect(ai, part, old);
+            }
+            if (!worth) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.resetTargets();
+            if (!sa.canTargetSpellAbility(top)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(top);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        public static TargetChoices chooseNewTargets(final Player ai, final SpellAbility ability,
+                                                     final Predicate<GameObject> filter) {
+            final SpellAbility part = ability.isWrapper() ? ((WrappedAbility) ability).getWrappedAbility() : ability;
+            final GameObject old = singleTarget(part);
+            if (old == null || part.getActivatingPlayer() == null || !isOurs(ai, old) || !harmsItsTarget(part)) {
+                return null; // keep the original targets (the stub's behaviour)
+            }
+            final GameObject newTarget = pickRedirect(ai, part, old, filter);
+            if (newTarget == null) {
+                return null;
+            }
+            part.resetTargets(); // a fresh TargetChoices: the effect's captured oldTarget stays intact
+            part.getTargets().add(newTarget);
+            return part.getTargets();
+        }
+
+        private static GameObject singleTarget(final SpellAbility part) {
+            if (!part.usesTargeting() || part.isDividedAsYouChoose() || part.getTargets().size() != 1) {
+                return null;
+            }
+            return part.getTargets().get(0);
+        }
+
+        private static boolean isOurs(final Player ai, final GameObject o) {
+            if (o instanceof Player p) {
+                return ai.equals(p);
+            }
+            return o instanceof Card c && c.isInPlay() && ai.equals(c.getController());
+        }
+
+        private static boolean worthSaving(final GameObject o) {
+            if (o instanceof Player) {
+                return true; // predictThreatenedObjects only flags a player for lethal damage or poison
+            }
+            if (!(o instanceof Card c)) {
+                return false;
+            }
+            if (c.isCommander() || c.isPlaneswalker()) {
+                return true;
+            }
+            if (c.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(c) >= MIN_CREATURE_VALUE;
+            }
+            return !c.isLand() && c.getCMC() >= MIN_PERMANENT_CMC;
+        }
+
+        // Harmful to whatever it targets, so moving it from ours to theirs is never a loss.
+        private static boolean harmsItsTarget(final SpellAbility part) {
+            final ApiType api = part.getApi();
+            if (api == null) {
+                return false;
+            }
+            switch (api) {
+                case DealDamage:
+                case Destroy:
+                case GainControl:
+                    return true;
+                case ChangeZone: {
+                    final String dest = part.getParamOrDefault("Destination", "");
+                    if (dest.equals("Exile")) {
+                        return !returnsLater(part);
+                    }
+                    return dest.equals("Graveyard") || dest.equals("Library") || dest.equals("Hand");
+                }
+                case Pump:
+                    return part.isCurse() || part.getParamOrDefault("NumDef", "").startsWith("-")
+                            || part.getParamOrDefault("NumAtt", "").startsWith("-");
+                case Attach:
+                    return part.isCurse() || "Curse".equals(part.getParam("AILogic"))
+                            || "GainControl".equals(part.getParam("AILogic"));
+                default:
+                    return false;
+            }
+        }
+
+        // A flicker is not removal: the exiled card comes back (re-triggering its
+        // ETB), so moving it onto an opponent's permanent can hand them value.
+        private static boolean returnsLater(final SpellAbility part) {
+            for (AbilitySub sub = part.getSubAbility(); sub != null; sub = sub.getSubAbility()) {
+                if (sub.getApi() == ApiType.DelayedTrigger
+                        || (sub.getApi() == ApiType.ChangeZone && "Battlefield".equals(sub.getParam("Destination")))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Legal new targets an opponent controls (cards) or is (players);
+        // getAllCandidates already applies canTarget for the part's own activator.
+        private static List<GameEntity> opponentCandidates(final Player ai, final SpellAbility part,
+                                                           final GameObject old, final Predicate<GameObject> filter) {
+            final List<GameEntity> result = new ArrayList<>();
+            for (GameEntity ge : part.getTargetRestrictions().getAllCandidates(part, false)) {
+                if (ge.equals(old) || (filter != null && !filter.test(ge))) {
+                    continue;
+                }
+                if (ge instanceof Card c) {
+                    final Player ctrl = c.getController();
+                    if (c.isInPlay() && ctrl != null && ctrl.isOpponentOf(ai) && !ai.getYourTeam().contains(ctrl)) {
+                        result.add(c);
+                    }
+                } else if (ge instanceof Player p && p.isOpponentOf(ai) && !ai.getYourTeam().contains(p)) {
+                    result.add(p);
+                }
+            }
+            return result;
+        }
+
+        // Exactly pickRedirect(...) != null, without getBestAI (its all-lands branch
+        // draws RNG) or damage prediction: the cast-time check stays RNG-free.
+        private static boolean hasRedirect(final Player ai, final SpellAbility part, final GameObject old) {
+            for (GameEntity ge : opponentCandidates(ai, part, old, null)) {
+                if (ge instanceof Card || old instanceof Player || part.getApi() == ApiType.DealDamage) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static GameObject pickRedirect(final Player ai, final SpellAbility part, final GameObject old,
+                                               final Predicate<GameObject> filter) {
+            final List<Card> theirs = new ArrayList<>();
+            Player theirFace = null;
+            for (GameEntity ge : opponentCandidates(ai, part, old, filter)) {
+                if (ge instanceof Card c) {
+                    theirs.add(c);
+                } else if (ge instanceof Player p && (theirFace == null || p.equals(part.getActivatingPlayer()))) {
+                    theirFace = p;
+                }
+            }
+            if (old instanceof Player) {
+                return theirFace != null ? theirFace : (theirs.isEmpty() ? null : ComputerUtilCard.getBestAI(theirs));
+            }
+            final Card source = part.getHostCard();
+            final List<Card> effective = new ArrayList<>();
+            for (Card c : theirs) {
+                if (part.getApi() == ApiType.DealDamage) {
+                    if (source == null) {
+                        effective.add(c);
+                    } else {
+                        final int dmg = AbilityUtils.calculateAmount(source, part.getParam("NumDmg"), part);
+                        if (ComputerUtilCombat.predictDamageTo(c, dmg, source, false)
+                                >= ComputerUtilCombat.getDamageToKill(c, false)) {
+                            effective.add(c);
+                        }
+                    }
+                } else if (part.getApi() == ApiType.Destroy) {
+                    if (!c.hasKeyword(Keyword.INDESTRUCTIBLE) && c.getShieldCount() == 0
+                            && c.getCounters(CounterEnumType.SHIELD) == 0) {
+                        effective.add(c);
+                    }
+                } else {
+                    effective.add(c);
+                }
+            }
+            if (!effective.isEmpty()) {
+                return ComputerUtilCard.getBestAI(effective);
+            }
+            if (part.getApi() == ApiType.DealDamage && theirFace != null) {
+                return theirFace;
+            }
+            return theirs.isEmpty() ? null : ComputerUtilCard.getBestAI(theirs); // still saves ours
         }
     }
 

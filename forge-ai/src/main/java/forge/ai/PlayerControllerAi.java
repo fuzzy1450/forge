@@ -1376,6 +1376,19 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public TargetChoices chooseNewTargetsFor(SpellAbility ability, Predicate<GameObject> filter, boolean optional) {
+        // Deflecting Swat only: while a Swat this player activated is the resolving
+        // object (MagicStack keeps it on the stack until finishResolving), move the
+        // parts it was cast to move. Every other caller still gets null below.
+        final Game game = getGame();
+        if (game.getStack().isResolving() && !game.getStack().isEmpty()) {
+            final SpellAbility resolving = game.getStack().peekAbility();
+            if (resolving != null && resolving.getApi() == ApiType.ChangeTargets
+                    && player.equals(resolving.getActivatingPlayer())
+                    && resolving.getHostCard() != null
+                    && "Deflecting Swat".equals(resolving.getHostCard().getName())) {
+                return SpecialCardAi.DeflectingSwat.chooseNewTargets(player, ability, filter);
+            }
+        }
         // AI currently can't do this. But when it can it will need to be based on Ability API
         return null;
     }

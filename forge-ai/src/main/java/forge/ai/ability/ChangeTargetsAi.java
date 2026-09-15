@@ -19,6 +19,11 @@ public class ChangeTargetsAi extends SpellAbilityAi {
      */
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        if ("Deflecting Swat".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Redirect an opponent's removal off something we value; every other
+            // ChangeTargets card takes exactly the path it took before this branch.
+            return SpecialCardAi.DeflectingSwat.consider(ai, sa);
+        }
         final Game game = sa.getHostCard().getGame();
         final SpellAbility topSa = game.getStack().isEmpty() ? null
                 : ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
