@@ -2,6 +2,8 @@ package forge.ai.ability;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.ComputerUtilAbility;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -10,6 +12,11 @@ public class RemoveFromCombatAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision canPlay(Player aiPlayer, SpellAbility sa) {
+        if ("Illusionist's Gambit".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // A defensive fog on an opponent's declare-blockers step; every other
+            // RemoveFromCombat card keeps the refusal below.
+            return SpecialCardAi.IllusionistsGambit.consider(aiPlayer, sa);
+        }
         // disabled for the AI for now. Only for Gideon Jura at this time.
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }

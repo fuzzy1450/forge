@@ -5986,6 +5986,179 @@ public class SpecialCardAi {
         }
     }
 
+    // Illusionist's Gambit
+    // "Cast this spell only during the declare blockers step on an opponent's turn. Remove all
+    // attacking creatures from combat and untap them. After this phase, there is an additional combat
+    // phase. Each of those creatures attacks that combat if able. They can't attack you or
+    // planeswalkers you control that combat."
+    // A defensive fog in the card's own window: an opponent's declare-blockers step, our blocks on the
+    // board, stack empty. Worth a card only when the declared attack puts us in danger, by
+    // ComputerUtilCombat.lifeInDanger's rule with two changes: its random threshold is taken at
+    // AI_IN_DANGER_MAX_THRESHOLD (equal to it under Default, never stricter), and an attacking
+    // commander counts only when its damage reaches us (unblocked, assigned as though unblocked, or
+    // trampling over its blockers), so a chump-blocked voltron commander is no reason to untap it. A
+    // lethal attack is answered outright: not casting loses this combat, and the added combat can do
+    // no worse. Otherwise the added combat's new exposure must stay small. The removed creatures
+    // cannot attack us or our planeswalkers there, but the attacking player's held-back creatures
+    // can, so decline when those, taken fully unblocked, reach lethal life or poison, give a commander
+    // 21, or deal at least what the spell prevents.
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card, so every refusal up to and
+    // including the mana estimate reads no RNG. The danger replica predicts attackers
+    // withoutAbilities and leaves out totalShieldDamage's destroy predictor (both test-pay
+    // activations, and the test payment rolls MyRandom in ComputerUtilMana.isManaSourceReserved);
+    // lifeInDanger, lifeThatWouldRemain, resultingPoison and getLifeThreateningCommanders are not
+    // called; affordability is getAvailableManaEstimate. Both omissions understate the danger, so
+    // they can only cost casts. The held-back guard predicts with abilities (a firebreathing
+    // defender is real exposure), so it can draw, but only in an affordable, non-lethal danger window.
+    public static class IllusionistsGambit {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+
+            // Routing through RemoveFromCombatAi.canPlay's name gate bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            if (combat == null || ph.isPlayerTurn(ai) || !ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || !game.getStack().isEmpty() || ai.cantLose()) {
+                return no;
+            }
+            final Player attacker = combat.getAttackingPlayer();
+            final CardCollection atUs = combat.getAttackersOf(ai);
+            if (attacker == null || !attacker.isOpponentOf(ai) || atUs.isEmpty()) {
+                return no;
+            }
+            // lifeInDanger's own special cases
+            final CardCollectionView otb = ai.getCardsIn(ZoneType.Battlefield);
+            if ((otb.anyMatch(CardPredicates.nameEquals("Worship")) && !ai.getCreaturesInPlay().isEmpty())
+                    || (otb.anyMatch(CardPredicates.nameEquals("Elderscale Wurm")) && ai.getLife() >= 7)) {
+                return no;
+            }
+
+            // What the declared attack does to us after blocks: lifeThatWouldRemain's and
+            // resultingPoison's rules, and live commanders and MustBeBlocked as lifeInDanger reads them.
+            final boolean lifeCounts = ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife();
+            final boolean poisonable = ai.canReceiveCounters(CounterEnumType.POISON);
+            int lifeDamage = 0;
+            int poison = ai.getPoisonCounters();
+            boolean liveCommander = false;
+            boolean mustBeBlocked = false;
+            for (final Card c : atUs) {
+                final CardCollection blockers = combat.getBlockers(c);
+                int dealt = 0;
+                if (blockers.isEmpty() || forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked
+                        .assignCombatDamageAsUnblocked(c)) {
+                    dealt = ComputerUtilCombat.damageIfUnblocked(c, ai, combat, true);
+                    lifeDamage += dealt;
+                    if (poisonable) {
+                        poison += poisonIfUnblocked(c, ai);
+                    }
+                } else if (c.hasKeyword(Keyword.TRAMPLE)) {
+                    dealt = Math.max(0, ComputerUtilCombat.getAttack(c) - shield(blockers));
+                    if (dealt > 0) {
+                        if (!c.hasKeyword(Keyword.INFECT)) {
+                            lifeDamage += dealt;
+                        }
+                        if (poisonable) {
+                            poison += (c.isInfectDamage(ai) ? dealt : 0)
+                                    + ComputerUtilCombat.predictExtraPoisonWithDamage(c, ai, dealt);
+                        }
+                    }
+                }
+                if (c.isCommander() && dealt > 0 && dealt + ai.getCommanderDamage(c) >= 21) {
+                    liveCommander = true;
+                }
+                if (blockers.isEmpty() && !c.getSVar("MustBeBlocked").isEmpty()) {
+                    final String v = c.getSVar("MustBeBlocked");
+                    final boolean atPlayer = combat.getDefenderByAttacker(c) instanceof Player;
+                    if ("true".equalsIgnoreCase(v) || ("attackingplayer".equalsIgnoreCase(v) && atPlayer)
+                            || ("attackingplayerconservative".equalsIgnoreCase(v) && atPlayer
+                                && ai.getCreaturesInPlay().size() >= 3
+                                && ai.getCreaturesInPlay().size() > c.getController().getCreaturesInPlay().size())) {
+                        mustBeBlocked = true;
+                    }
+                }
+            }
+            final int remain = ai.getLife() - lifeDamage;
+            final int poisonToLose = game.getRules().getPoisonCountersToLose();
+            final boolean poisonDanger = poison > Math.max(7, ai.getPoisonCounters());
+            final boolean lethalNow = liveCommander || poison >= poisonToLose || (lifeCounts && remain < 1);
+            final int maxThreshold = AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD);
+            if (!lethalNow && !mustBeBlocked && !poisonDanger
+                    && !(lifeCounts && remain < Math.min(maxThreshold, ai.getLife()))) {
+                return no;
+            }
+
+            // canPlayAndPayForFace test-pays only after a WillPlay, and that payment rolls MyRandom,
+            // so an unpayable window refuses here: the cost after reductions and taxes against the
+            // untapped-mana estimate.
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, true) < cost.toManaCost().getCMC()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (lethalNow) {
+                // Not casting loses this combat; nothing the added combat can do is worse.
+                return new AiAbilityDecision(100, AiPlayDecision.Tempo);
+            }
+
+            final CardCollection heldBack = CardLists.filter(attacker.getCreaturesInPlay(),
+                    c -> !combat.isAttacking(c) && c.isUntapped() && !c.isPhasedOut()
+                            && !c.hasSickness() && ComputerUtilCombat.canAttackNextTurn(c, ai));
+            if (!heldBack.isEmpty()) {
+                for (final Card c : heldBack) {
+                    if (c.isCommander()
+                            && ComputerUtilCombat.damageIfUnblocked(c, ai, null, false) + ai.getCommanderDamage(c) >= 21) {
+                        return no;
+                    }
+                }
+                final int prevented = poisonDanger ? ai.getLife() : ai.getLife() - remain;
+                if (lifeCounts) {
+                    final int residual = ComputerUtilCombat.sumDamageIfUnblocked(heldBack, ai);
+                    if (residual >= ai.getLife() || residual >= prevented) {
+                        return no;
+                    }
+                }
+                if (poisonable && ai.getPoisonCounters() + ComputerUtilCombat.sumPoisonIfUnblocked(heldBack, ai)
+                        >= poisonToLose) {
+                    return no;
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.Tempo);
+        }
+
+        // ComputerUtilCombat.poisonIfUnblocked with the attacker's activated pumps left out.
+        private static int poisonIfUnblocked(final Card attacker, final Player ai) {
+            final int damage = attacker.getNetCombatDamage()
+                    + ComputerUtilCombat.predictPowerBonusOfAttacker(attacker, null, null, true);
+            int poison = 0;
+            if (attacker.isInfectDamage(ai)) {
+                final int pd = ComputerUtilCombat.predictDamageTo(ai, damage, attacker, true);
+                if (pd > 1 || !attacker.getController().getOpponents().getCardsIn(ZoneType.Battlefield)
+                        .anyMatch(CardPredicates.nameEquals("Vorinclex, Monstrous Raider"))) {
+                    poison = attacker.hasDoubleStrike() ? pd * 2 : pd;
+                }
+            }
+            if (damage > 0) {
+                poison += ComputerUtilCombat.predictExtraPoisonWithDamage(attacker, ai, damage);
+            }
+            return poison;
+        }
+
+        // ComputerUtilCombat.totalShieldDamage without its destroy-before-damage predictor (which can
+        // test-pay a blocker's pump or regeneration) and without flanking. Both overstate the shield,
+        // so the trample damage counted as reaching us is understated.
+        private static int shield(final List<Card> blockers) {
+            int total = 0;
+            for (final Card b : blockers) {
+                total += b.getLethalDamage() + b.getKeywordMagnitude(Keyword.BUSHIDO);
+            }
+            return total;
+        }
+    }
+
     // Imposing Grandeur
     // Each player may discard their hand and draw cards equal to the greatest
     // mana value of a commander they own on the battlefield or in the command
