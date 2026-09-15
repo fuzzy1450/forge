@@ -151,6 +151,11 @@ public class PumpAi extends PumpAiBase {
             // only reads battlefield creatures (canTgtCreature() is true for "Permanent..."), so it never
             // finds a target, and the stack branch only protects threatened permanents.
             return SpecialCardAi.SongOfInspiration.consider(ai, sa);
+        } else if ("RecurringInsight".equals(aiLogic)) {
+            // Recurring Insight: the Pump only chooses the opponent; the real effect is the Draw sub,
+            // whose amount counts that opponent's hand. The generic non-curse branch below cannot
+            // target an opponent player. The evaluator owns the timing and the target.
+            return SpecialCardAi.RecurringInsight.consider(ai, sa, false);
         } else if ("MoveCounter".equals(aiLogic)) {
             final SpellAbility moveSA = sa.findSubAbilityByType(ApiType.MoveCounter);
 
@@ -629,6 +634,15 @@ public class PumpAi extends PumpAiBase {
             // Optional cast of a Cascade shell (Rebound, being cascaded into, cast by an effect): the
             // non-targeting branch below declines it unconditionally. Mandatory keeps the stock WillPlay.
             return SpecialCardAi.CascadeShell.consider(ai, sa, sa.hasParam("WithoutManaCost"));
+        }
+        if ("RecurringInsight".equals(sa.getParam("AILogic"))) {
+            // Rebound's upkeep cast (PlayEffect -> canPlayFromEffectAI) is judged here, never in
+            // checkApiLogic; the non-curse targeting below cannot target an opponent player, so it
+            // declined every rebound. A mandatory cast the evaluator declines keeps the stock path.
+            final AiAbilityDecision decision = SpecialCardAi.RecurringInsight.consider(ai, sa, true);
+            if (decision.willingToPlay() || !mandatory) {
+                return decision;
+            }
         }
         final SpellAbility root = sa.getRootAbility();
         final String numDefense = sa.getParamOrDefault("NumDef", "");

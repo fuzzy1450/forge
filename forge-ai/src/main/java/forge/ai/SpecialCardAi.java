@@ -5658,6 +5658,112 @@ public class SpecialCardAi {
         }
     }
 
+    // Recurring Insight
+    // "Draw cards equal to the number of cards in target opponent's hand. Rebound."
+    // Reached from PumpAi's AILogic$ RecurringInsight branches: checkApiLogic for the cast from
+    // hand, doTriggerNoCost for Rebound's upkeep cast. The root Pump only picks the opponent, and
+    // PumpAi's non-curse targeting cannot target an opponent player, so the card was dead even
+    // without AI:RemoveDeck; DrawAi's drawback check then approves any X short of decking. Pick
+    // the targetable opponent whose hand gives the most draws - measured with the script's own
+    // NumCards, that target set - and cast only when it is worth it: the hard cast in our main 2
+    // when at least two of the drawn cards fit under the maximum hand size (it still draws all X;
+    // the rest is a cleanup discard of our choice), the free rebound cast for at least one card.
+    // Never into a deck-out, and never while an opponent's permanent replaces our draws (Notion
+    // Thief, Hullbreacher, Alms Collector would take the cards instead). No random draws.
+    public static class RecurringInsight {
+        public static final int MIN_DRAW_HARD_CAST = 2;
+        public static final int MIN_DRAW_FREE_CAST = 1;
+        public static final int LIBRARY_MARGIN = 3; // DrawAi.targetAI's own deck-out margin
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean fromEffect) {
+            final Game game = ai.getGame();
+            final Card host = sa.getHostCard();
+            final AbilitySub drawSa = sa.getSubAbility();
+            if (host == null || drawSa == null || drawSa.getApi() != ApiType.Draw || !ai.canDraw()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // checkApiLogic is only reached for a cast that pays its cost; every effect-driven cast
+            // (Rebound) comes through doTriggerNoCost. An effect that still charges mana keeps the
+            // hard-cast floor, without the main 2 wait (a resolving effect has no priority window).
+            final boolean free = fromEffect && (sa.hasParam("WithoutManaCost")
+                    || sa.getPayCosts() == null || sa.getPayCosts().getTotalMana().isZero());
+
+            if (!fromEffect) {
+                if (!game.getStack().isEmpty()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+                }
+                // A draw spell waits for our main 2 (DrawAi.checkPhaseRestrictions).
+                if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+                }
+            }
+
+            // Deliberately coarse: any active draw replacement an opponent controls declines the cast.
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final ReplacementEffect re : c.getReplacementEffects()) {
+                        if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                                && re.zonesCheck(game.getZoneOf(c))) {
+                            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                        }
+                    }
+                }
+            }
+
+            // Turn order; strict > keeps the first opponent on a tie.
+            boolean anyTargetable = false;
+            Player best = null;
+            int bestX = 0;
+            for (final Player opp : ai.getOpponents()) {
+                if (!sa.canTarget(opp)) {
+                    continue;
+                }
+                anyTargetable = true;
+                sa.resetTargets();
+                sa.getTargets().add(opp);
+                // NumCards$ X reads TargetedPlayer$CardsInHand through the sub's parent: exactly
+                // what resolution will count for this opponent.
+                final int x = AbilityUtils.calculateAmount(host, drawSa.getParamOrDefault("NumCards", "1"), drawSa);
+                if (x > bestX) {
+                    best = opp;
+                    bestX = x;
+                }
+            }
+            sa.resetTargets();
+            if (!anyTargetable) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Never deck ourselves (the margin DrawAi.chkDrawback vetoes on anyway).
+            if (bestX >= ai.getCardsIn(ZoneType.Library).size() - LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            int useful = bestX;
+            if (!free && !ai.isUnlimitedHandSize()) {
+                int handAfter = ai.getCardsIn(ZoneType.Hand).size();
+                if (host.isInZone(ZoneType.Hand)) {
+                    handAfter--; // the card itself is spent
+                }
+                useful = Math.min(bestX, Math.max(0, ai.getMaxHandSize() - handAfter));
+            }
+            if (useful < (free ? MIN_DRAW_FREE_CAST : MIN_DRAW_HARD_CAST)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.getTargets().add(best);
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Reins of Power
     // Two windows, both safe by construction. Offensive: our own turn before
     // attackers are declared, stack empty, and the targeted opponent's army
