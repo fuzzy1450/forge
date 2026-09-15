@@ -335,6 +335,13 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        } else if ("TheMasterFormedAnew".equals(aiLogic)) {
+            // Body Thief: only when a body worth re-entering exists (the stock
+            // hiddenTriggerAI approves on any creature, tokens and the commander included)
+            if (mandatory || SpecialCardAi.TheMasterFormedAnew.chooseBody(aiPlayer, aiPlayer.getCreaturesInPlay()) != null) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
         if (sa.isHidden()) {
@@ -1630,6 +1637,10 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 // A null pick ENDS this "any number" search (confirmAction answers true),
                 // so the AI stacks a few Goblins instead of every one in its library.
                 return SpecialCardAi.GoblinRecruiter.considerCardToStack(decider, sa, fetchList);
+            } else if ("TheMasterFormedAnew".equals(logic)) {
+                // Body Thief's pick; null = exile nothing (not Mandatory, so confirmAction
+                // answers true and the search ends)
+                return SpecialCardAi.TheMasterFormedAnew.chooseBody(decider, fetchList);
             } else if ("Intuition".equals(logic)) {
                 if (!multipleCardsToChoose.isEmpty()) {
                     Card choice = multipleCardsToChoose.get(0);
