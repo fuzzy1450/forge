@@ -8,6 +8,6 @@ SVar:DBDealDamage:DB$ DealDamage | ValidTgts$ Creature | NumDmg$ 1 | SpellDescri
 SVar:DBToken:DB$ Token | TokenScript$ g_1_1_saproling | TokenOwner$ You | SpellDescription$ Create a 1/1 green Saproling creature token.
 SVar:X:Count$Valid Creature.YouCtrl+Red+Other/Plus.B
 SVar:B:Count$Valid Creature.YouCtrl+Green+Other
-SVar:NeedsToPlay:X GE3
+SVar:NeedsToPlayVar:X GE3
 DeckHas:Ability$Counters|Token
 Oracle:Ulasht, the Hate Seed enters with a +1/+1 counter on it for each other red creature you control and a +1/+1 counter on it for each other green creature you control.\n{1}, Remove a +1/+1 counter from Ulasht: Choose one —\n• Ulasht deals 1 damage to target creature.\n• Create a 1/1 green Saproling creature token.
