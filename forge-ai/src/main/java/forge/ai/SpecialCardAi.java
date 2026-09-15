@@ -4109,14 +4109,17 @@ public class SpecialCardAi {
     // opponent) is a card and a Treasure, never harmful. Cast only on our own
     // turn before attackers, with an empty stack and combat not skipped, and
     // only for a creature worth taking, judged on the one the chooser takes
-    // (the best by evaluation that can attack): lethal on its controller, or -
-    // unless the opponents' next attack would kill us - at least
-    // MIN_STOLEN_DAMAGE combat damage or MIN_STOLEN_VALUE of creature. The
-    // steal does nothing defensively (the creature untaps back home), so a
-    // non-lethal one is never worth the tempo while our next turn is at stake.
-    // Draws no RNG, like the stock refusal it replaces: the danger check is not
-    // ComputerUtil.aiLifeInDanger, whose AiBlockController draws MyRandom
-    // (ComputerUtilCombat.lifeInDanger) on every pass while the card is held.
+    // (the best by evaluation that can attack and wears no triggered Equipment
+    // or Aura of an opponent's): lethal on its controller, or at least
+    // MIN_STOLEN_DAMAGE combat damage or MIN_STOLEN_VALUE of creature. A
+    // non-lethal steal is a few damage at sorcery speed and does nothing
+    // defensively (the creature untaps back home), so it is also held while the
+    // opponents' next attack puts us in danger, and while the mana it spends is
+    // what a creature or planeswalker in hand, or our commander, needs this turn.
+    // Draws no RNG, like the stock refusal it replaces: the danger check is
+    // ComputerUtilCombat.lifeInDanger's threshold rule without its MyRandom
+    // draws, and not ComputerUtil.aiLifeInDanger, whose AiBlockController draws
+    // MyRandom on every pass while the card is held.
     public static class SeizeTheSpotlight {
         public static final int MIN_STOLEN_DAMAGE = 3;
         public static final int MIN_STOLEN_VALUE = 200;
@@ -4144,7 +4147,7 @@ public class SpecialCardAi {
                     worthTaking = true;
                 }
             }
-            if (worthTaking && !wouldDieNextCombat(ai)) {
+            if (worthTaking && !inDangerNextCombat(ai) && !displacesPermanent(ai, sa)) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
@@ -4159,12 +4162,14 @@ public class SpecialCardAi {
 
         // Act of Treason's filter (ControlGainAi.canPlay): we can control it, it
         // has positive combat damage, it can attack one of our opponents, and it
-        // is not a card the AI is told it cannot use.
+        // is not a card the AI is told it cannot use. Plus: it wears no triggered
+        // attachment of an opponent's.
         private static Card bestSteal(final Player ai, final Iterable<Card> creatures) {
             final CardCollection able = new CardCollection();
             for (final Card c : creatures) {
                 if (!c.isCreature() || c.isPhasedOut() || !c.canBeControlledBy(ai)
-                        || c.getNetCombatDamage() <= 0 || ComputerUtilCard.isCardRemAIDeck(c)) {
+                        || c.getNetCombatDamage() <= 0 || ComputerUtilCard.isCardRemAIDeck(c)
+                        || hasOpposingAttachmentTrigger(ai, c)) {
                     continue;
                 }
                 for (final Player opp : ai.getOpponents()) {
@@ -4177,14 +4182,27 @@ public class SpecialCardAi {
             return able.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(able);
         }
 
-        // The serious branch of ComputerUtil.predictNextCombatsRemainingLife
-        // without its AiBlockController: each opponent attacks us with every
-        // creature that can attack next turn, nothing blocks, and
-        // lifeInSeriousDanger (lethal damage, commander damage, poison, a
-        // MustBeBlocked attacker) judges it. With no blocks it holds the card in
-        // some states where our blockers would have kept us alive - more
-        // cautious than the stock check, and deterministic.
-        private static boolean wouldDieNextCombat(final Player ai) {
+        // An Equipment or Aura stays under its controller when we take the
+        // creature, so its triggers (The Key to the Vault, the Swords, Mask of
+        // Memory, Skullclamp...) fire for the opponent off our attack.
+        private static boolean hasOpposingAttachmentTrigger(final Player ai, final Card c) {
+            for (final Card a : c.getAttachedCards()) {
+                if (!a.getController().equals(ai) && !a.getTriggers().isEmpty()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Each opponent attacks us with every creature that can attack next
+        // turn and nothing blocks. Danger is lifeInSeriousDanger (lethal damage,
+        // commander damage, poison, a MustBeBlocked attacker), or
+        // ComputerUtilCombat.lifeInDanger's poison and threshold rules without
+        // its MyRandom draws: AI_IN_DANGER_THRESHOLD itself, never raised by a
+        // roll. With no blocks it holds the card in some states where our
+        // blockers would have kept us safe - more cautious, and deterministic.
+        private static boolean inDangerNextCombat(final Player ai) {
+            final int threshold = AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_THRESHOLD);
             for (final Player opp : ai.getOpponents()) {
                 final Combat combat = new Combat(opp);
                 boolean containsAttacker = false;
@@ -4194,7 +4212,38 @@ public class SpecialCardAi {
                         containsAttacker = true;
                     }
                 }
-                if (containsAttacker && ComputerUtilCombat.lifeInSeriousDanger(ai, combat)) {
+                if (!containsAttacker) {
+                    continue;
+                }
+                if (ComputerUtilCombat.lifeInSeriousDanger(ai, combat)
+                        || ComputerUtilCombat.resultingPoison(ai, combat) > Math.max(7, ai.getPoisonCounters())
+                        || (!ai.cantLoseForZeroOrLessLife()
+                            && ComputerUtilCombat.lifeThatWouldRemain(ai, combat) < Math.min(threshold, ai.getLife()))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A non-lethal steal is a few damage at sorcery speed. Hold it while the
+        // mana it spends is what a creature or planeswalker in hand, or our
+        // commander in the command zone (with its tax), needs this turn: one we
+        // could cast with the mana we have, but not with what the steal leaves.
+        // Colours are ignored, so it holds a little more often than strictly
+        // needed, never less.
+        private static boolean displacesPermanent(final Player ai, final SpellAbility sa) {
+            final int avail = ComputerUtilMana.getAvailableManaEstimate(ai, true);
+            final int left = avail - sa.getPayCosts().getTotalMana().getCMC();
+            final CardCollection cands = CardLists.filter(ai.getCardsIn(ZoneType.Hand),
+                    card -> card.isCreature() || card.isPlaneswalker());
+            for (final Card cmdr : ai.getCommanders()) {
+                if (cmdr.isInZone(ZoneType.Command)) {
+                    cands.add(cmdr);
+                }
+            }
+            for (final Card c : cands) {
+                final int cost = c.getCMC() + (c.isCommander() ? 2 * ai.getCommanderCast(c) : 0);
+                if (cost <= avail && cost > left) {
                     return true;
                 }
             }
