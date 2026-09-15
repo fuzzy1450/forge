@@ -25,6 +25,12 @@ public class ChooseCardAi extends SpellAbilityAi {
      */
     @Override
     protected AiAbilityDecision checkApiLogic(final Player ai, final SpellAbility sa) {
+        if ("Hunted by The Family".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Targets creatures, not players: the generic branch below only
+            // looks for targetable opponents and can never build these targets.
+            // Every other ChooseCard card takes exactly the path it took before.
+            return SpecialCardAi.HuntedByTheFamily.consider(ai, sa);
+        }
         if (sa.usesTargeting()) {
             sa.resetTargets();
             // search targetable Opponents

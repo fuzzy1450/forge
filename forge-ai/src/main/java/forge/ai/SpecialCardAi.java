@@ -1668,6 +1668,153 @@ public class SpecialCardAi {
         }
     }
 
+    // Hunted by The Family
+    // "Choose up to four target creatures you don't control. For each of them,
+    // that creature's controller faces a villainous choice: it becomes a 1/1
+    // white Human with no abilities, or you create a token copy of it."
+    // ChooseCardAi's generic branch only targets players, so this card was
+    // never cast. Both outcomes are pure gain for the caster (an AI victim
+    // always shrinks: VillainousChoice -> AlwaysPlayAi -> spells.get(0)), so
+    // pick the opponents' creatures that lose the most by the shrink.
+    // What is lost is measured against the body the creature really keeps:
+    // Animate only sets base P/T (layer 7b), so counters, anthems and pumps
+    // stay on top of the 1/1. Floor: a target must lose at least MIN_GAIN
+    // (strictly above the ability bonus, so an ability alone never qualifies
+    // one); cast only for a real threat (it loses >= THREAT_GAIN, or it is an
+    // opposing commander that still has an ability to lose) or for two or
+    // more targets that lose >= MIN_TOTAL_GAIN combined.
+    public static class HuntedByTheFamily {
+        static final int MIN_GAIN = 50;         // a vanilla 3/3 three-drop loses 50
+        static final int THREAT_GAIN = 150;     // a clean 5/5 flyer loses exactly 150
+        static final int MIN_TOTAL_GAIN = 150;
+        static final int ABILITY_BONUS = 40;
+        static final int COMMANDER_BONUS = 100;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (!sa.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.resetTargets();
+
+            final List<Pair<Card, Integer>> cands = new ArrayList<>();
+            for (final Card c : ai.getOpponents().getCreaturesInPlay()) {
+                if (!sa.canTarget(c)) {
+                    continue; // hexproof, shroud, protection
+                }
+                if (c.hasKeyword(Keyword.WARD)) {
+                    continue; // ward is priced after targeting and can counter the whole spell
+                }
+                if (ai.equals(c.getOwner())) {
+                    continue; // our own card: control will likely come back to us
+                }
+                if (c.getType().isLegendary() && ai.isCardInPlay(c.getName())) {
+                    continue; // the copy branch would put us to the legend rule
+                }
+                if (c.getAmountOfKeyword("CARDNAME's power and toughness are switched") % 2 != 0) {
+                    continue; // the body it keeps cannot be modelled
+                }
+                final int gain = gain(c);
+                if (gain < MIN_GAIN && !isLiveCommander(c)) {
+                    continue;
+                }
+                cands.add(Pair.of(c, gain));
+            }
+            cands.sort((a, b) -> Integer.compare(b.getRight(), a.getRight()));
+
+            final int max = Math.min(sa.getMaxTargets(), cands.size());
+            if (max <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final List<Pair<Card, Integer>> chosen = cands.subList(0, max);
+            boolean threat = false;
+            int total = 0;
+            for (final Pair<Card, Integer> p : chosen) {
+                total += p.getRight();
+                if (p.getRight() >= THREAT_GAIN || isLiveCommander(p.getLeft())) {
+                    threat = true;
+                }
+            }
+            if (!threat && (chosen.size() < 2 || total < MIN_TOTAL_GAIN)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            for (final Pair<Card, Integer> p : chosen) {
+                sa.getTargets().add(p.getLeft());
+            }
+            if (sa.getTargets().isEmpty() || !sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // What the creature loses: its CreatureEvaluator score minus the score
+        // of the body it keeps - a 1/1 plus whatever counters, anthems and
+        // pumps still apply (15 per power, 10 per toughness), non-token +20,
+        // cmc*5 and untapped +1 unchanged - plus a flat bonus for abilities the
+        // evaluator does not price, and for a commander that still has any.
+        static int gain(final Card c) {
+            final int keptPower = Math.max(0, 1 + c.getNetPower() - c.getCurrentPower());
+            final int keptToughness = Math.max(0, 1 + c.getNetToughness() - c.getCurrentToughness());
+            final int kept = 80 + (c.isToken() ? 0 : 20) + 15 * keptPower + 10 * keptToughness
+                    + c.getCMC() * 5 + (c.isUntapped() ? 1 : 0);
+            int g = ComputerUtilCard.evaluateCreature(c) - kept;
+            if (hasUnpricedAbility(c)) {
+                g += ABILITY_BONUS;
+            }
+            if (isLiveCommander(c)) {
+                g += COMMANDER_BONUS;
+            }
+            return g;
+        }
+
+        // Static abilities and triggers the evaluator does not already price.
+        // Keyword-generated ones are excluded (Card.updateStaticAbilities and
+        // updateTriggers append them: Flying and Fear are CantBlockBy statics,
+        // ward/echo/cumulative upkeep are triggers), as are a spent self-ETB
+        // and upkeep triggers, which are often drawbacks (sac-unless, damage).
+        static boolean hasUnpricedAbility(final Card c) {
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (st.getKeyword() == null) {
+                    return true;
+                }
+            }
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getKeyword() != null) {
+                    continue;
+                }
+                if (forge.game.trigger.TriggerType.ChangesZone.equals(t.getMode())
+                        && "Battlefield".equals(t.getParam("Destination"))
+                        && "Card.Self".equals(t.getParam("ValidCard"))) {
+                    continue;
+                }
+                if (forge.game.trigger.TriggerType.Phase.equals(t.getMode())
+                        && "Upkeep".equals(t.getParam("Phase"))) {
+                    continue;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // An opposing commander that is not already neutered: any keyword,
+        // static, trigger or activated ability left to lose.
+        static boolean isLiveCommander(final Card c) {
+            if (!c.isCommander()) {
+                return false;
+            }
+            if (!c.getKeywords().isEmpty() || !c.getStaticAbilities().isEmpty() || !c.getTriggers().isEmpty()) {
+                return true;
+            }
+            for (final SpellAbility ab : c.getSpellAbilities()) {
+                if (ab.isAbility()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Invert Polarity
     // Cast only in response to an opponent's spell in Commandeer's window
     // (untargeted anywhere in the chain, no "...All" api, CMC floor): winning
