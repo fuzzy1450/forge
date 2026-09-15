@@ -87,10 +87,46 @@ public class DamageDealAi extends DamageAiBase {
                 dmg--; // the card will be spent casting the spell, so actual damage is 1 less
             }
         }
+        final TargetRestrictions randomTgt = sa.getTargetRestrictions();
+        if (randomTgt != null && randomTgt.isRandomTarget()) {
+            // TargetsAtRandom reached as a sub-ability / reflexive Execute
+            // (Explosion of Riches: "5 damage to target opponent chosen at
+            // random"): damageTargetAI refuses every random target, which
+            // vetoed the whole parent spell. The AI does not pick here, so
+            // approve only when every legal pick is a damageable opponent
+            // player. Top-level random damage (Goblin Test Pilot) and
+            // random-target triggers resolved via doTriggerNoCost (Cinderheart
+            // Giant) take exactly the paths they took before.
+            return randomOpponentDamageLands(ai, sa, dmg)
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
         if (damageTargetAI(ai, sa, dmg, true)) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
         return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+    }
+
+    // Every legal pick must be an opponent PLAYER who can lose life and is
+    // predicted to take damage: safe whether the pick is random (the rules)
+    // or the resolver's lowest-life choice (damageChoosingTargets). Any card
+    // candidate keeps the old refusal (reflect/enrage/indestructible). Draws
+    // no RNG, like the refusal it replaces.
+    private static boolean randomOpponentDamageLands(final Player ai, final SpellAbility sa, final int dmg) {
+        if (dmg <= 0 || sa.getActivatingPlayer() == null) {
+            return false;
+        }
+        final List<GameEntity> cands = sa.getTargetRestrictions().getAllCandidates(sa);
+        if (cands.isEmpty()) {
+            return false;
+        }
+        for (final GameEntity ent : cands) {
+            if (!(ent instanceof Player p) || !p.isOpponentOf(ai) || !p.canLoseLife()
+                    || ComputerUtilCombat.predictDamageTo(p, dmg, sa.getHostCard(), false) <= 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
