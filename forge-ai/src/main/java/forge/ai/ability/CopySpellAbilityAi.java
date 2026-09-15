@@ -122,6 +122,13 @@ public class CopySpellAbilityAi extends SpellAbilityAi {
 
     @Override
     public AiAbilityDecision chkDrawback(final Player aiPlayer, final SpellAbility sa) {
+        if ("Wild Ricochet".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Judged whole in SpecialCardAi.WildRicochet.consider (routed from
+            // ChangeTargetsAi): the copy was already required to be a spell the AI
+            // would cast for free right now. The generic check below refuses every
+            // untargeted Defined$ Targeted copy sub.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         if ("ChainOfSmog".equals(sa.getParam("AILogic"))) {
             return SpecialCardAi.ChainOfSmog.consider(aiPlayer, sa);
         }

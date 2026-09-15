@@ -6,8 +6,12 @@ import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.mana.ManaCostBeingPaid;
 import forge.game.player.Player;
+import forge.game.player.PlayerActionConfirmMode;
+import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.TargetChoices;
+
+import java.util.Map;
 
 public class ChangeTargetsAi extends SpellAbilityAi {
 
@@ -24,6 +28,12 @@ public class ChangeTargetsAi extends SpellAbilityAi {
             // ChangeTargets card takes exactly the path it took before this branch.
             return SpecialCardAi.DeflectingSwat.consider(ai, sa);
         }
+        if ("Wild Ricochet".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Copy an opponent's instant or sorcery for ourselves; the "choose new
+            // targets" half is a no-op for the AI (see confirmAction below). Every
+            // other ChangeTargets card takes exactly the path it took before.
+            return SpecialCardAi.WildRicochet.consider(ai, sa);
+        }
         final Game game = sa.getHostCard().getGame();
         final SpellAbility topSa = game.getStack().isEmpty() ? null
                 : ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
@@ -38,6 +48,17 @@ public class ChangeTargetsAi extends SpellAbilityAi {
             return new AiAbilityDecision(50, AiPlayDecision.MandatoryPlay);
         }
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+    }
+
+    @Override
+    public boolean confirmAction(Player player, SpellAbility sa, PlayerActionConfirmMode mode, String message, Map<String, Object> params) {
+        if ("Wild Ricochet".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // The AI cannot choose new targets for the original spell
+            // (PlayerControllerAi.chooseNewTargetsFor is a stub outside Deflecting
+            // Swat): skip the optional retarget, the copy is the whole value.
+            return false;
+        }
+        return super.confirmAction(player, sa, mode, message, params);
     }
 
     private AiAbilityDecision doSpellMagnet(SpellAbility sa, SpellAbility topSa, Player aiPlayer) {

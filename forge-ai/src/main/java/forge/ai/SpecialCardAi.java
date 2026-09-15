@@ -11385,6 +11385,131 @@ public class SpecialCardAi {
         }
     }
 
+    // Wild Ricochet
+    // "You may choose new targets for target instant or sorcery spell. Then copy that
+    // spell. You may choose new targets for the copy." Cast only in response to an
+    // opponent's instant or sorcery whose copy the AI would cast itself, for free, right
+    // now. The retarget half does nothing for the AI (PlayerControllerAi.
+    // chooseNewTargetsFor is a stub outside Deflecting Swat, and ChangeTargetsAi.
+    // confirmAction declines it), so the original resolves as its caster aimed it
+    // whether or not we cast this: the whole value is the copy, which the AI re-targets
+    // itself at resolution (CopySpellAbilityEffect sets mayChooseNewTargets ->
+    // orderAndPlaySimultaneousSa -> setupTargets -> doTrigger). Floors: every part of
+    // the spell is on an api whitelist whose evaluation-time and resolution-time target
+    // choices agree (no Charm, no *All, no Play/copy/retarget recursion, no handler that
+    // vetoes only in canPlay, which canPlayFromEffectAI never calls); no X in its cost
+    // (the copy's X resets to 0 when re-targeted); nothing reading mana spent (not
+    // copied); no CopyPermanent handing tokens to the target's controller (Saw in Half);
+    // mana value 3+; and the copy, costs stripped as the real one's are
+    // (CardFactory.copySpellAbilityAndPossiblyHost), must pass canPlayFromEffectAI with a
+    // non-empty, valid target set on every targeted part.
+    public static class WildRicochet {
+        public static final int MIN_COPIED_CMC = 3;
+
+        private static final EnumSet<ApiType> ROOT_OK = EnumSet.of(ApiType.Destroy, ApiType.ChangeZone,
+                ApiType.DealDamage, ApiType.Counter, ApiType.Draw, ApiType.Dig, ApiType.Token, ApiType.CopyPermanent);
+        private static final EnumSet<ApiType> SUB_OK = EnumSet.of(ApiType.Destroy, ApiType.ChangeZone,
+                ApiType.DealDamage, ApiType.Draw, ApiType.Dig, ApiType.Token, ApiType.CopyPermanent,
+                ApiType.Cleanup, ApiType.GainLife, ApiType.LoseLife, ApiType.Scry);
+        private static final String[] MANA_SPENT_WORDS = {"Converge", "CastTotalManaSpent", "ManaSpent", "Adamant", "Sunburst"};
+        private static final ThreadLocal<Boolean> JUDGING = ThreadLocal.withInitial(() -> false);
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (JUDGING.get()) {
+                // re-entered from the copy's own handler (e.g. a graveyard replay scan)
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty() || !(ai.getController() instanceof PlayerControllerAi)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final SpellAbility topSA = ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+            if (!(topSA instanceof forge.game.ability.SpellApiBased) || !topSA.isSpell()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final Card host = topSA.getHostCard();
+            if (host == null || !(host.isInstant() || host.isSorcery())) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            // Opponent's spell only: the original resolves regardless of what we do.
+            final Player caster = topSA.getActivatingPlayer();
+            if (caster == null || !caster.isOpponentOf(ai) || ai.getYourTeam().contains(caster)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // The copy must actually happen and be worth four mana and a card.
+            if (topSA.cantBeCopied() || host.hasSVar("AINoCopy") || ComputerUtilCard.isCardRemAIDeck(host)
+                    || host.getManaCost().countX() > 0 || host.getCMC() < MIN_COPIED_CMC) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final String svar : host.getSVars().values()) {
+                if (readsManaSpent(svar)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            for (SpellAbility part = topSA; part != null; part = part.getSubAbility()) {
+                final ApiType api = part.getApi();
+                if (api == null || !(part == topSA ? ROOT_OK : SUB_OK).contains(api)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                if (api == ApiType.CopyPermanent && part.hasParam("Controller") && !"You".equals(part.getParam("Controller"))) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                for (final Map.Entry<String, String> param : part.getMapParams().entrySet()) {
+                    if (param.getKey().contains("ManaSpent") || readsManaSpent(param.getValue())) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                }
+            }
+
+            sa.resetTargets();
+            if (!sa.canTargetSpellAbility(topSA)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            // The copy must be something the AI would cast for free now, with targets it
+            // picks itself (CopySpellAbilityAi's targeted branch uses the same judgment).
+            final SpellAbility topCopy = topSA.copy(ai);
+            topCopy.clearManaPaid();
+            topCopy.resetTargets();
+            topCopy.setPayCosts(new forge.game.cost.Cost("", false));
+            AiPlayDecision copyDecision;
+            JUDGING.set(true);
+            try {
+                copyDecision = ((PlayerControllerAi) ai.getController()).getAi()
+                        .canPlayFromEffectAI((forge.game.spellability.Spell) topCopy, false, true);
+            } finally {
+                JUDGING.remove();
+            }
+            if (copyDecision != AiPlayDecision.WillPlay) {
+                return new AiAbilityDecision(0, copyDecision);
+            }
+            // canPlayFromEffectAI never checks target validity (ControlGainAi approves a
+            // non-mandatory copy with no targets), so require them here.
+            for (SpellAbility part = topCopy; part != null; part = part.getSubAbility()) {
+                if (part.usesTargeting() && (part.getTargets().isEmpty() || !part.isTargetNumberValid())) {
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+            }
+
+            sa.getTargets().add(topSA);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static boolean readsManaSpent(final String text) {
+            if (text == null) {
+                return false;
+            }
+            for (final String word : MANA_SPENT_WORDS) {
+                if (text.contains(word)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Witch's Mark
     // "You may discard a card. If you do, draw two cards. Create a Wicked Role token attached to
     // up to one target creature you control." Its Role sub targets through TokenAi.chkDrawback;
