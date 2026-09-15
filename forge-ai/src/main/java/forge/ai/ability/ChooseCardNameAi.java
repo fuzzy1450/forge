@@ -61,6 +61,12 @@ public class ChooseCardNameAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        if (!mandatory && sa.getHostCard() != null && "Day of the Moon".equals(sa.getHostCard().getName())) {
+            // AiController.checkETBEffects' Saga branch asks chapter I here before the
+            // cast; the fall-through below answered CantPlayAi and vetoed it with
+            // BadEtbEffects. The real chapter triggers are mandatory and keep WillPlay.
+            return SpecialCardAi.DayOfTheMoon.consider(ai, sa);
+        }
         String aiLogic = sa.getParamOrDefault("AILogic", "");
         if ("PhyrexianRevoker".equals(aiLogic) && !mandatory) {
             // Phyrexian Revoker names a card as it enters, so

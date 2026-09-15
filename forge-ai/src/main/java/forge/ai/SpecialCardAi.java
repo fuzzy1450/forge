@@ -23,7 +23,9 @@ import forge.StaticData;
 import forge.ai.ability.AnimateAi;
 import forge.ai.ability.FightAi;
 import forge.ai.ability.TokenAi;
+import forge.card.CardFacePredicates;
 import forge.card.ColorSet;
+import forge.card.ICardFace;
 import forge.card.MagicColor;
 import forge.card.mana.ManaCost;
 import forge.game.Game;
@@ -68,6 +70,7 @@ import forge.game.staticability.StaticAbilityMode;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
+import forge.item.PaperCard;
 import forge.util.Aggregates;
 import forge.util.FileSection;
 import forge.util.IterableUtil;
@@ -76,6 +79,7 @@ import forge.util.TextUtil;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.*;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -2068,6 +2072,202 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
+    // Day of the Moon
+    // "I, II, III - Choose a creature card name, then goad all creatures with a name
+    // chosen for this Saga." AiController.checkETBEffects asks chapter I's NameCard
+    // non-mandatorily before the cast (its Saga branch) and ChooseCardNameAi answered
+    // CantPlayAi to every such ask; the stock resolution chooser (no AILogic) ignored
+    // ValidCards and named any opposing nonland card in any zone. One chooser serves
+    // the cast decision and every chapter. A name qualifies when it is a legal
+    // creature card name on an opposing creature, not yet chosen for this Saga, and on
+    // no card the AI owns or controls in any zone (names accumulate, so a later chapter
+    // would goad our own copy). Opposing copies that cannot attack, or are already
+    // goaded by us, are ignored; every other copy must fit a tier or the name is
+    // dropped. Tier A: in multiplayer it can attack another opponent; in 1v1 one of our
+    // untapped creatures can block it alone, kill it and survive. Tier B (1v1 only): no
+    // vigilance, infect, annihilator or attack trigger, untapped now, we have an
+    // attacker for our next turn, the opposing board's unblocked damage leaves us above
+    // the danger threshold, and the name's own unblocked damage is below our life.
+    // Highest summed evaluateCreature wins, tier A before tier B; ties go to the first
+    // name alphabetically. RNG-free, like the stock refusal it replaces:
+    // ComputerUtilCard.canBeBlockedProfitably and ComputerUtil.aiLifeInDanger both run
+    // an AiBlockController (lifeInDanger's threshold roll, random trade blocks), and
+    // abilities-on combat predictions reach canPayCost's mana-reservation roll, so
+    // single-blocker canDestroyAttacker/canDestroyBlocker and damageIfUnblocked run
+    // withoutAbilities, and an unaffordable pass is refused before any of it.
+    public static class DayOfTheMoon {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // An approval goes on to ComputerUtilCost.canPayCost, whose mana-source
+            // reservation roll the stock veto never reached (as DayOfTheDragons).
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, false) < sa.getHostCard().getCMC()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final Predicate<ICardFace> legal = CardFacePredicates.valid(sa.getParamOrDefault("ValidCards", "Creature"));
+            return chooseName(ai, sa, legal) != null
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // null = no name clears the floor
+        public static String chooseName(final Player ai, final SpellAbility sa, final Predicate<ICardFace> legal) {
+            final Card host = sa.getHostCard();
+            final Game game = ai.getGame();
+            final PlayerCollection opps = ai.getOpponents();
+            final boolean multiplayer = game.getPlayers().size() > 2;
+            final Set<String> ownNames = ownNames(ai);
+            final CardCollectionView ours = ai.getCreaturesInPlay();
+
+            boolean safeToTapBlockers = false;
+            if (!multiplayer) {
+                boolean weCanAttack = false;
+                for (final Card o : ours) {
+                    if (ComputerUtilCombat.canAttackNextTurn(o)) {
+                        weCanAttack = true;
+                        break;
+                    }
+                }
+                int incoming = 0;
+                for (final Player opp : opps) {
+                    for (final Card att : opp.getCreaturesInPlay()) {
+                        if (ComputerUtilCombat.canAttackNextTurn(att, ai)) {
+                            incoming += ComputerUtilCombat.damageIfUnblocked(att, ai, null, true);
+                        }
+                    }
+                }
+                safeToTapBlockers = weCanAttack
+                        && incoming + AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD) < ai.getLife();
+            }
+
+            final Map<String, Integer> tierA = new TreeMap<>();
+            final Map<String, Integer> tierB = new TreeMap<>();
+            final Map<String, Integer> damageB = new HashMap<>(); // looked up by name only
+            final Set<String> dropped = new HashSet<>();          // looked up by name only
+            for (final Card c : CardLists.filterControlledBy(game.getCardsIn(ZoneType.Battlefield), opps)) {
+                if (!c.isCreature()) {
+                    continue;
+                }
+                final String name = c.getName();
+                if (name.isEmpty() || host.getNamedCards().contains(name) || ownNames.contains(name)
+                        || ours.anyMatch(o -> o.sharesNameWith(name))) {
+                    continue;
+                }
+                final ICardFace face = StaticData.instance().getCommonCards().getFaceByName(name);
+                if (face == null || !legal.test(face)) {
+                    continue; // not a creature card name (e.g. a plain "Soldier" token)
+                }
+                if (ComputerUtilCard.isUselessCreature(ai, c) || c.isGoadedBy(ai)) {
+                    continue; // goading this copy forces nothing new
+                }
+                if (multiplayer) {
+                    if (canAttackAnotherOpponent(ai, c)) {
+                        tierA.merge(name, ComputerUtilCard.evaluateCreature(c), Integer::sum);
+                    } else if (ComputerUtilCombat.canAttackNextTurn(c)) {
+                        dropped.add(name); // it could only be forced into us
+                    }
+                    continue;
+                }
+                if (!ComputerUtilCombat.canAttackNextTurn(c)) {
+                    continue;
+                }
+                if (hasSafeKillingBlock(ai, c)) {
+                    tierA.merge(name, ComputerUtilCard.evaluateCreature(c), Integer::sum);
+                } else if (safeToTapBlockers && c.isUntapped() && !c.hasKeyword(Keyword.VIGILANCE)
+                        && !c.hasKeyword(Keyword.INFECT) && !hasAttackTrigger(c)) {
+                    tierB.merge(name, ComputerUtilCard.evaluateCreature(c), Integer::sum);
+                    damageB.merge(name, ComputerUtilCombat.damageIfUnblocked(c, ai, null, true), Integer::sum);
+                } else {
+                    dropped.add(name);
+                }
+            }
+            for (final Map.Entry<String, Integer> e : damageB.entrySet()) {
+                if (e.getValue() >= ai.getLife()) {
+                    dropped.add(e.getKey());
+                }
+            }
+            tierA.keySet().removeAll(dropped);
+            tierB.keySet().removeAll(dropped);
+            tierB.keySet().removeAll(tierA.keySet());
+            final String best = best(tierA);
+            return best != null ? best : best(tierB);
+        }
+
+        // A mandatory chapter with nothing worth goading: a name that adds no creature.
+        public static String harmlessName(final Player ai, final SpellAbility sa, final Predicate<ICardFace> legal) {
+            final List<String> named = sa.getHostCard().getNamedCards();
+            if (!named.isEmpty()) {
+                return named.get(0); // already chosen for this Saga: goads nothing new
+            }
+            final Set<String> ownNames = ownNames(ai);
+            final CardCollectionView field = ai.getGame().getCardsIn(ZoneType.Battlefield);
+            for (final PaperCard pc : StaticData.instance().getCommonCards().getUniqueCards()) {
+                final ICardFace face = pc.getRules().getMainPart();
+                final String name = face.getName();
+                if (legal.test(face) && !ownNames.contains(name) && !field.anyMatch(c -> c.sharesNameWith(name))) {
+                    return name;
+                }
+            }
+            return "Morphling";
+        }
+
+        private static Set<String> ownNames(final Player ai) {
+            final Set<String> names = new HashSet<>();
+            for (final Card c : ai.getAllCards()) {
+                names.add(c.getName());
+            }
+            return names;
+        }
+
+        private static boolean canAttackAnotherOpponent(final Player ai, final Card c) {
+            for (final Player o : ai.getOpponents()) {
+                if (!o.equals(c.getController()) && ComputerUtilCombat.canAttackNextTurn(c, o)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // One of our creatures, untapped now (it stays tapped through the opponent's
+        // turn), can block it alone, kills it and survives. Abilities off: RNG-free.
+        private static boolean hasSafeKillingBlock(final Player ai, final Card attacker) {
+            if (!CombatUtil.canBeBlocked(attacker, null, ai) || !CombatUtil.canAttackerBeBlockedWithAmount(attacker, 1, ai)) {
+                return false;
+            }
+            for (final Card b : ai.getCreaturesInPlay()) {
+                if (CombatUtil.canBlock(attacker, b)
+                        && ComputerUtilCombat.canDestroyAttacker(ai, attacker, b, null, true)
+                        && !ComputerUtilCombat.canDestroyBlocker(ai, b, attacker, null, true)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean hasAttackTrigger(final Card c) {
+            if (c.hasKeyword(Keyword.ANNIHILATOR)) {
+                return true;
+            }
+            for (final Trigger t : c.getTriggers()) {
+                if (TriggerType.Attacks.equals(t.getMode())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // TreeMap iteration: strict > keeps the alphabetically first name on a tie.
+        private static String best(final Map<String, Integer> scores) {
+            String best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (final Map.Entry<String, Integer> e : scores.entrySet()) {
+                if (e.getValue() > bestScore) {
+                    best = e.getKey();
+                    bestScore = e.getValue();
+                }
+            }
+            return best;
         }
     }
 

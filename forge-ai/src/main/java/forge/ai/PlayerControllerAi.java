@@ -1494,6 +1494,12 @@ public class PlayerControllerAi extends PlayerController {
                 }
             }
         }
+        if (sa.getHostCard() != null && "Day of the Moon".equals(sa.getHostCard().getName())) {
+            // The same chooser as the cast decision; with nothing worth goading, a
+            // name that goads no creature (the stock fallback ignored ValidCards).
+            final String name = SpecialCardAi.DayOfTheMoon.chooseName(player, sa, cpp);
+            return name != null ? name : SpecialCardAi.DayOfTheMoon.harmlessName(player, sa, cpp);
+        }
         if (sa.hasParam("AILogic")) {
             CardCollectionView aiLibrary = player.getCardsIn(ZoneType.Library);
             CardCollectionView oppLibrary = player.getStrongestOpponent().getCardsIn(ZoneType.Library);
