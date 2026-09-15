@@ -155,6 +155,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.GuffRewritesHistory.consider(aiPlayer, sa);
         }
 
+        if ("Unfinished Business".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Picks the creature and up to two Aura/Equipment cards together:
+            // the sub's AttachedTo$ ParentTarget is read as a card type by
+            // isPreferredTarget, so the generic sub targeting vetoes the spell
+            // on every board. The stock root targeting still runs first, and
+            // its decision is discarded: it keeps the random draws it made
+            // (useRemovalNow) so evaluations that end in a decline stay in step
+            // with the stock engine. Every other ChangeZone card takes exactly
+            // the path it took before this branch.
+            knownOriginCanPlayAI(aiPlayer, sa);
+            return SpecialCardAi.UnfinishedBusiness.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
@@ -212,6 +225,17 @@ public class ChangeZoneAi extends SpellAbilityAi {
             // The opponent-graveyard target was already chosen by
             // SpecialCardAi.Spelltwine.consider with its force-cast safety
             // scan; keep it instead of re-targeting generically.
+            if (sa.isTargetNumberValid()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+        if ("Unfinished Business".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa instanceof AbilitySub && sa.hasParam("AttachedTo")) {
+            // Up to two Aura/Equipment targets (zero is legal, TargetMin$ 0)
+            // were chosen against the parent's creature by
+            // SpecialCardAi.UnfinishedBusiness.consider; keep them instead of
+            // the generic targeting, which cannot read AttachedTo$ ParentTarget.
             if (sa.isTargetNumberValid()) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }

@@ -3741,6 +3741,154 @@ public class SpecialCardAi {
         }
     }
 
+    // Unfinished Business
+    // Return a creature card from our graveyard, then up to two Aura and/or
+    // Equipment cards from our graveyard attached to it. The generic ChangeZone
+    // targeting cannot read the sub's AttachedTo$ ParentTarget (it tests the
+    // Defined word as a card type, so every attachment is filtered out) and
+    // refuses "up to two" with fewer than two picks, so the whole package is
+    // chosen here. Floor: a real body (evaluateCreature >= 140 after static
+    // P/T, not ETB-prevented, no legend-rule collision); attachments only if
+    // they help it (Equipment, or an Aura with Pump attach logic), can legally
+    // attach to it once it is on the battlefield, and do not cut its toughness
+    // to zero (Skullclamp on an X/1); and at least five mana of returned
+    // permanents, the spell's own mana value. Zero attachments is legal
+    // (TargetMin$ 0), so a big enough body goes back alone.
+    public static class UnfinishedBusiness {
+        public static final int MIN_BODY_EVAL = 140; // above a vanilla 1/1
+        public static final int MIN_RETURNED_MV = 5;
+        public static final int MAX_ATTACHMENTS = 2;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AbilitySub attach = sa.getSubAbility();
+            if (!sa.usesTargeting() || attach == null || attach.getApi() != ApiType.ChangeZone
+                    || !attach.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card source = sa.getHostCard();
+            final CardCollectionView graveyard = ai.getCardsIn(ZoneType.Graveyard);
+
+            // Which attachments help does not depend on the creature: collect
+            // them once, highest mana value first (a stable sort).
+            final List<Card> helpful = new ArrayList<>();
+            for (Card a : CardLists.getTargetableCards(graveyard, attach)) {
+                if (a.getOwner().equals(ai) && helps(a)) {
+                    helpful.add(a);
+                }
+            }
+            helpful.sort((x, y) -> Integer.compare(y.getCMC(), x.getCMC()));
+            int maxAttachMV = 0;
+            for (int i = 0; i < Math.min(MAX_ATTACHMENTS, helpful.size()); i++) {
+                maxAttachMV += helpful.get(i).getCMC();
+            }
+
+            Card bestCreature = null;
+            List<Card> bestPicks = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (Card c : CardLists.getTargetableCards(graveyard, sa)) {
+                if (c.equals(source) || !c.getOwner().equals(ai)) {
+                    continue;
+                }
+                // cheap exits before any LKI copy is built
+                if (c.getCMC() + maxAttachMV < MIN_RETURNED_MV) {
+                    continue;
+                }
+                if (ComputerUtil.isETBprevented(c) || (!c.ignoreLegendRule() && ai.isCardInPlay(c.getName()))) {
+                    continue;
+                }
+
+                // judge it as it would be on the battlefield: canBeAttached
+                // refuses any creature that is not in play
+                final Card lki = CardCopyService.getLKICopy(c);
+                lki.setLastKnownZone(ai.getZone(ZoneType.Battlefield));
+                ComputerUtilCard.applyStaticContPT(c.getGame(), lki, null);
+                if (lki.getNetToughness() <= 0) {
+                    continue;
+                }
+                final int body = ComputerUtilCard.evaluateCreature(lki);
+                if (body < MIN_BODY_EVAL) {
+                    continue;
+                }
+
+                final List<Card> picks = new ArrayList<>();
+                int mv = c.getCMC();
+                for (Card a : helpful) {
+                    if (picks.size() >= MAX_ATTACHMENTS) {
+                        break;
+                    }
+                    if (!killsOnArrival(a, lki) && lki.canBeAttached(a, attach)) {
+                        picks.add(a);
+                        mv += a.getCMC();
+                    }
+                }
+                if (mv < MIN_RETURNED_MV) {
+                    continue;
+                }
+                final int score = body + 40 * picks.size() + 10 * mv;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestCreature = c;
+                    bestPicks = picks;
+                }
+            }
+
+            if (bestCreature == null) {
+                attach.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.resetTargets();
+            attach.resetTargets();
+            if (!sa.canTarget(bestCreature)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(bestCreature);
+            for (Card a : bestPicks) {
+                if (attach.canAddMoreTarget() && attach.canTarget(a)) {
+                    attach.getTargets().add(a);
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Equipment always helps the creature it is attached to; an Aura only
+        // when its attach logic is Pump (the stock "good aura" signal in
+        // ChangeZoneAi.isPreferredTarget), so curses stay in the graveyard.
+        private static boolean helps(final Card a) {
+            if (a.isEquipment()) {
+                return true;
+            }
+            if (!a.isAura()) {
+                return false;
+            }
+            if ("Pump".equals(a.getSVar("AttachAILogic"))) {
+                return true;
+            }
+            for (SpellAbility s : a.getSpellAbilities()) {
+                if (s.getApi() == ApiType.Attach && "Pump".equals(s.getParam("AILogic"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A literal toughness cut (AddToughness$ -N) the creature cannot
+        // survive. This reads the LKI's toughness without ETB counters, so it
+        // can skip a survivable pick but never admits a lethal one.
+        private static boolean killsOnArrival(final Card a, final Card lki) {
+            for (StaticAbility st : a.getStaticAbilities()) {
+                if (!st.checkMode(forge.game.staticability.StaticAbilityMode.Continuous)) {
+                    continue;
+                }
+                final String t = st.getParam("AddToughness");
+                if (t != null && t.matches("-\\d{1,4}") && lki.getNetToughness() <= Integer.parseInt(t.substring(1))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Veil of Summer
     public static class VeilOfSummer {
         public static boolean consider(final Player ai, final SpellAbility sa) {
