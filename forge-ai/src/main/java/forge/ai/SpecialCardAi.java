@@ -1148,7 +1148,7 @@ public class SpecialCardAi {
         }
     }
 
-    // Sudden Spoiling, Polymorphist's Jest
+    // Sudden Spoiling, Polymorphist's Jest, Flatline
     // A combat trick for "until end of turn, creatures target player controls lose all abilities
     // and have base power and toughness N/M". Cast only after blocks are locked in (declare-blockers
     // step, stack empty, combat damage not already prevented) and only with at least the spell's
@@ -1165,8 +1165,13 @@ public class SpecialCardAi {
     // getLifeThreateningCommanders and damageIfUnblocked, whose activated-pump prediction
     // pay-checks through a MyRandom-reading mana reservation. The swing's destroy predictors draw
     // only while a Regenerate ability is on the battlefield.
+    // Flatline ("creatures your opponents control have base power and toughness 0/1") differs in two
+    // ways, both read from the spell rather than its name: it has no target (sa.usesTargeting()), so
+    // the victims are its own ValidCards set, refused outright if that set holds a creature of ours;
+    // and it keeps abilities (no RemoveAllAbilities$), so double strike, trample, deathtouch, first
+    // strike, infect, toxic and indestructible stay in the post-spell math.
     public static class CombatShrinkAll {
-        public static final Set<String> NAMES = Set.of("Sudden Spoiling", "Polymorphist's Jest");
+        public static final Set<String> NAMES = Set.of("Sudden Spoiling", "Polymorphist's Jest", "Flatline");
         public static final int MIN_SWING_VALUE = 250;     // evaluateCreature: a vanilla 5/5, or two real creatures
         public static final int MIN_PREVENTED_DAMAGE = 8;  // and at least life/4 (10 at 40 life)
 
@@ -1194,11 +1199,15 @@ public class SpecialCardAi {
             final int bp = AbilityUtils.calculateAmount(host, sa.getParam("Power"), sa);
             final int bt = AbilityUtils.calculateAmount(host, sa.getParam("Toughness"), sa);
             final String valid = sa.getParamOrDefault("ValidCards", "");
+            final boolean targeted = sa.usesTargeting();
+            final boolean keeps = !sa.hasParam("RemoveAllAbilities");
             final Player attacking = combat.getAttackingPlayer();
             final boolean ourAttack = ai.equals(attacking);
 
             final List<Player> candidates = new ArrayList<>();
-            if (ourAttack) {
+            if (!targeted) {
+                candidates.add(null);                          // one fixed set, no target to choose
+            } else if (ourAttack) {
                 for (final Card b : combat.getAllBlockers()) {
                     if (b.getController().isOpponentOf(ai) && !candidates.contains(b.getController())) {
                         candidates.add(b.getController());
@@ -1209,15 +1218,25 @@ public class SpecialCardAi {
             }
 
             Player best = null;
+            boolean found = false;
             int bestScore = 0;
             for (final Player victim : candidates) {
-                if (!sa.canTarget(victim)) {
-                    continue;
+                final CardCollectionView affected;
+                if (victim == null) {
+                    // Exactly the creatures AnimateAllEffect.resolve animates without a target;
+                    // never cast if that set is empty or holds a creature of ours.
+                    affected = AbilityUtils.filterListByType(game.getCardsIn(ZoneType.Battlefield), valid, sa);
+                    if (affected.isEmpty() || !noneControlledBy(affected, ai)) {
+                        continue;
+                    }
+                } else {
+                    if (!sa.canTarget(victim)) {
+                        continue;
+                    }
+                    // Exactly the creatures AnimateAllEffect.resolve animates for this target.
+                    affected = AbilityUtils.filterListByType(victim.getCardsIn(ZoneType.Battlefield), valid, sa);
                 }
-                // Exactly the creatures AnimateAllEffect.resolve animates for this target.
-                final CardCollectionView affected = AbilityUtils.filterListByType(
-                        victim.getCardsIn(ZoneType.Battlefield), valid, sa);
-                final int defuse = ourAttack ? 0 : defuseLevel(ai, combat, affected, bp);
+                final int defuse = ourAttack ? 0 : defuseLevel(ai, combat, affected, bp, keeps);
                 // No-grow veto: a base power above a victim combatant's current combat damage (a
                 // base-0 power creature, or one that assigns no combat damage) hands it more damage
                 // than it deals now. Cast into that only when the hit on us is lethal and the
@@ -1225,21 +1244,24 @@ public class SpecialCardAi {
                 if (defuse < 2 && growsPower(combat, affected, bp)) {
                     continue;
                 }
-                final int swing = swing(ai, combat, affected, bp, bt);
+                final int swing = swing(ai, combat, affected, bp, bt, keeps);
                 if (defuse == 0 && swing < MIN_SWING_VALUE) {
                     continue;
                 }
                 final int score = defuse * 100000 + swing;   // defusing a hit on us outranks any trade
-                if (best == null || score > bestScore) {
+                if (!found || score > bestScore) {
+                    found = true;
                     best = victim;
                     bestScore = score;
                 }
             }
-            if (best == null) {
+            if (!found) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
-            sa.resetTargets();
-            sa.getTargets().add(best);
+            if (targeted) {
+                sa.resetTargets();
+                sa.getTargets().add(best);
+            }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
@@ -1247,7 +1269,8 @@ public class SpecialCardAi {
         // damage or poison) becomes survivable; 1 = still surviving, the hit no longer lands us
         // under the danger threshold, or a big hit is prevented; 0 = no defuse. The stack is empty,
         // so attack and block triggers have already resolved into the current stats.
-        private static int defuseLevel(final Player ai, final Combat combat, final CardCollectionView affected, final int bp) {
+        private static int defuseLevel(final Player ai, final Combat combat, final CardCollectionView affected,
+                                       final int bp, final boolean keeps) {
             final CardCollection attackers = combat.getAttackersOf(ai);
             if (attackers.isEmpty() || ai.cantLose()) {
                 return 0;
@@ -1281,13 +1304,21 @@ public class SpecialCardAi {
                     dealt = combatDamageTo(ai, a, ComputerUtilCombat.getAttack(a) - absorbed);
                 }
 
-                // After: a victim attacker has base power N and no abilities - no trample, double
-                // strike, infect or toxic - so only an unblocked one still reaches us.
+                // After: a victim attacker has base power N. One that keeps its abilities still
+                // strikes twice and tramples (a blocked trampler counts its whole post-spell damage,
+                // an upper bound) with infect and toxic; one that loses them has no trample, double
+                // strike, infect or toxic, so only an unblocked one still reaches us.
                 final int dealtAfter;
                 final boolean infectAfter;
                 final boolean toxicAfter;
                 final int strikesAfter;
-                if (affected.contains(a)) {
+                if (affected.contains(a) && keeps) {
+                    dealtAfter = unblocked || a.hasKeyword(Keyword.TRAMPLE)
+                            ? combatDamageTo(ai, a, postPower(a, bp) * strikes) : 0;
+                    infectAfter = infect;
+                    toxicAfter = toxic;
+                    strikesAfter = strikes;
+                } else if (affected.contains(a)) {
                     dealtAfter = unblocked ? combatDamageTo(ai, a, postPower(a, bp)) : 0;
                     infectAfter = infect && !a.hasKeyword(Keyword.INFECT);   // only an outside infect static stays
                     toxicAfter = false;
@@ -1334,7 +1365,7 @@ public class SpecialCardAi {
         // minus losses. Only our creatures and the victim's count: a block holding anyone else's
         // creature is skipped, and a victim blocker is counted at most once.
         private static int swing(final Player ai, final Combat combat, final CardCollectionView affected,
-                                 final int bp, final int bt) {
+                                 final int bp, final int bt, final boolean keeps) {
             final boolean ourAttack = ai.equals(combat.getAttackingPlayer());
             final CardCollection counted = new CardCollection();
             int value = 0;
@@ -1350,18 +1381,36 @@ public class SpecialCardAi {
                     }
                     // Before the spell it kills at most one of a gang for sure, so a saved gang
                     // counts once, at its cheapest member.
-                    final int hit = postPower(a, bp);
+                    // With abilities kept, its double strike, deathtouch and our blockers'
+                    // prevention still apply; our blocker that dies only because of the spell is a loss.
+                    final int hit = postPower(a, bp) * (keeps && a.hasDoubleStrike() ? 2 : 1);
+                    final boolean touch = keeps && hit > 0 && a.hasKeyword(Keyword.DEATHTOUCH);
                     int saved = -1;
+                    boolean oursStillDie = false;
                     for (final Card b : blockers) {
-                        if (hit < ComputerUtilCombat.getDamageToKill(b, false)
-                                && ComputerUtilCombat.blockerWouldBeDestroyed(ai, b, combat)) {
-                            final int v = ComputerUtilCard.evaluateCreature(b);
-                            saved = saved < 0 ? v : Math.min(saved, v);
+                        final boolean bDiesAfter = keeps
+                                ? touch || ComputerUtilCombat.predictDamageTo(b, hit, a, true) >= ComputerUtilCombat.getDamageToKill(b, false)
+                                : hit >= ComputerUtilCombat.getDamageToKill(b, false);
+                        oursStillDie |= bDiesAfter;
+                        if (!bDiesAfter) {
+                            if (ComputerUtilCombat.blockerWouldBeDestroyed(ai, b, combat)) {
+                                final int v = ComputerUtilCard.evaluateCreature(b);
+                                saved = saved < 0 ? v : Math.min(saved, v);
+                            }
+                        } else if (keeps && !ComputerUtilCombat.blockerWouldBeDestroyed(ai, b, combat)) {
+                            value -= ComputerUtilCard.evaluateCreature(b);
                         }
                     }
                     value += Math.max(0, saved);
+                    // A first striker that still kills one of our blockers first takes that
+                    // blocker's damage away, so its death is never credited then; indestructible,
+                    // regeneration and shields keep a victim that kept its abilities alive.
+                    final boolean firstStrikeFirst = keeps && hit > 0 && oursStillDie
+                            && (a.hasFirstStrike() || a.hasDoubleStrike());
                     final boolean diesNow = ComputerUtilCombat.attackerWouldBeDestroyed(ai, a, combat);
-                    final boolean diesAfter = !shielded(a) && blockersKill(a, blockers, postToughness(a, bt));
+                    final boolean diesAfter = !firstStrikeFirst && !shielded(a)
+                            && blockersKill(a, blockers, postToughness(a, bt))
+                            && !(keeps && ComputerUtilCombat.combatantCantBeDestroyed(ai, a));
                     if (diesAfter != diesNow) {
                         // a loss when the new base toughness lets a trading attacker survive
                         value += (diesAfter ? 1 : -1) * ComputerUtilCard.evaluateCreature(a);
@@ -1372,10 +1421,26 @@ public class SpecialCardAi {
                         continue;
                     }
                     int hitUs = 0;
+                    int firstHit = 0;
+                    boolean touchUs = false;
+                    boolean firstTouch = false;
                     for (final Card b : blockers) {
-                        hitUs += postPower(b, bp);
+                        if (keeps) {
+                            // abilities kept: prevention, double strike, first strike and deathtouch apply
+                            final int once = ComputerUtilCombat.predictDamageTo(a, postPower(b, bp), b, true);
+                            final boolean touches = once > 0 && b.hasKeyword(Keyword.DEATHTOUCH);
+                            hitUs += once * (b.hasDoubleStrike() ? 2 : 1);
+                            touchUs |= touches;
+                            if (b.hasFirstStrike() || b.hasDoubleStrike()) {
+                                firstHit += once;
+                                firstTouch |= touches;
+                            }
+                        } else {
+                            hitUs += postPower(b, bp);
+                        }
                     }
-                    if (hitUs < ComputerUtilCombat.getDamageToKill(a, false)
+                    final int toKillUs = ComputerUtilCombat.getDamageToKill(a, false);
+                    if (!touchUs && hitUs < toKillUs
                             && ComputerUtilCombat.attackerWouldBeDestroyed(ai, a, combat)) {
                         value += ComputerUtilCard.evaluateCreature(a);         // our attacker now lives
                     }
@@ -1383,6 +1448,9 @@ public class SpecialCardAi {
                     // checked per blocker against prevention and shields.
                     final boolean touch = a.hasKeyword(Keyword.DEATHTOUCH);
                     int left = a.getNetCombatDamage();
+                    if (keeps && !a.hasFirstStrike() && !a.hasDoubleStrike() && (firstTouch || firstHit >= toKillUs)) {
+                        left = 0;                                              // a first striker kills it before it strikes
+                    }
                     int remaining = blockers.size();
                     for (final Card b : blockers) {
                         remaining--;
@@ -1395,7 +1463,8 @@ public class SpecialCardAi {
                         }
                         counted.add(b);
                         final int dmg = assigned > 0 ? ComputerUtilCombat.predictDamageTo(b, assigned, a, true) : 0;
-                        final boolean diesAfter = need <= 0 || (!shielded(b) && (touch ? dmg > 0 : dmg >= need));
+                        final boolean diesAfter = need <= 0 || ((touch ? dmg > 0 : dmg >= need) && !shielded(b)
+                                && !(keeps && ComputerUtilCombat.combatantCantBeDestroyed(ai, b)));
                         final boolean diesNow = ComputerUtilCombat.blockerWouldBeDestroyed(ai, b, combat);
                         if (diesAfter != diesNow) {
                             // a loss when the new base toughness lets a dying blocker survive
@@ -1458,6 +1527,15 @@ public class SpecialCardAi {
         private static boolean allControlledBy(final CardCollection cards, final Player p) {
             for (final Card c : cards) {
                 if (!p.equals(c.getController())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean noneControlledBy(final CardCollectionView cards, final Player p) {
+            for (final Card c : cards) {
+                if (p.equals(c.getController())) {
                     return false;
                 }
             }
