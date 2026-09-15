@@ -1319,6 +1319,43 @@ public class SpecialCardAi {
         }
     }
 
+    // Goblin Recruiter
+    // "Search your library for any number of Goblin cards ... put those cards on top in any order."
+    // The stock hidden-origin chooser never returns null, so the AI stacked EVERY Goblin and drew
+    // nothing else - no land, removal or non-Goblin engine - for the rest of the game. Stack only
+    // the next few draws: the best Goblin creatures the hand is about to run out of, each one a
+    // card the AI's own scry heuristic would keep on top. A null pick ends the search.
+    public static class GoblinRecruiter {
+        public static final int MAX_STACKED = 3;
+
+        public static Card considerCardToStack(final Player ai, final SpellAbility sa, final CardCollection fetchList) {
+            final Card host = sa.getHostCard();
+            if (fetchList.isEmpty() || host == null || !ai.equals(sa.getActivatingPlayer())) {
+                return null; // someone else deciding our search: stack nothing
+            }
+            // Picks are removed from fetchList but stay in the library until the move,
+            // so (eligible in library) - (still offered) = already stacked.
+            final int eligible = AbilityUtils.filterListByType(ai.getCardsIn(ZoneType.Library),
+                    sa.getParam("ChangeType"), sa).size();
+            final int already = eligible - fetchList.size();
+            // Creatures already in hand compete for the same mana: stack only what the hand runs out of.
+            final int budget = MAX_STACKED - CardLists.count(ai.getCardsIn(ZoneType.Hand), CardPredicates.CREATURES);
+            if (already >= budget) {
+                return null;
+            }
+            // scryWillMoveCardToBottomOfLibrary: castable soon (lands in hand counted, no free land
+            // drop assumed), not a below-average creature on a wide board, not a spell on a mana-light board.
+            final CardCollection pool = CardLists.filter(fetchList, c -> c.isCreature()
+                    && !c.getName().equals(host.getName())
+                    && !(c.getType().isLegendary() && ai.isCardInPlay(c.getName()))
+                    && !ComputerUtil.scryWillMoveCardToBottomOfLibrary(ai, c));
+            if (pool.isEmpty()) {
+                return null; // nothing worth a guaranteed draw: leave the rest random
+            }
+            return ComputerUtilCard.getBestCreatureAI(pool);
+        }
+    }
+
     // Grisly Sigil
     public static class GrislySigil {
         public static boolean consider(final Player ai, final SpellAbility sa) {

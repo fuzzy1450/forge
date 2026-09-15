@@ -1546,6 +1546,10 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 return SpecialCardAi.SurvivalOfTheFittest.considerCardToGet(decider, sa);
             } else if ("MazesEnd".equals(logic)) {
                 return SpecialCardAi.MazesEnd.considerCardToGet(decider, sa);
+            } else if ("GoblinRecruiter".equals(logic)) {
+                // A null pick ENDS this "any number" search (confirmAction answers true),
+                // so the AI stacks a few Goblins instead of every one in its library.
+                return SpecialCardAi.GoblinRecruiter.considerCardToStack(decider, sa, fetchList);
             } else if ("Intuition".equals(logic)) {
                 if (!multipleCardsToChoose.isEmpty()) {
                     Card choice = multipleCardsToChoose.get(0);
