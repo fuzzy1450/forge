@@ -192,6 +192,17 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.SurgeToVictory.consider(aiPlayer, sa);
         }
 
+        if ("Wake the Dead".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // X is the TARGET COUNT and the returned creatures are sacrificed at
+            // the next end step: the generic known-origin path below announces
+            // X=0 on bare BB (a zero-target cast) and fires at beginning of
+            // combat, before any attacker exists. AI:RemoveDeck:All stripped the
+            // card before any handler ran, so the stock path drew no random
+            // numbers for it. Every other ChangeZone card takes exactly the path
+            // it took before this branch.
+            return SpecialCardAi.WakeTheDead.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {

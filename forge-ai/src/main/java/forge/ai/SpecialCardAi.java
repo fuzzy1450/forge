@@ -11395,6 +11395,267 @@ public class SpecialCardAi {
         }
     }
 
+    // Wake the Dead
+    // "Cast only during combat on an opponent's turn. Return X target creature
+    // cards from your graveyard to the battlefield. Sacrifice those creatures at
+    // the beginning of the next end step." The engine stamps the returned
+    // creatures EndOfTurnLeavePlay, which AiBlockController already spends as
+    // free blockers, so the one window is the opponent's declare-attackers step
+    // (empty stack) with an attack aimed at us or our planeswalkers. X is the
+    // number of USEFUL picks, never padding and never 0: creatures whose own ETB
+    // will fire and that checkETBEffects would run, and one untapped blocker per
+    // attacker a single creature can block (blockers take the slots first when
+    // our life is in danger, ETB picks first otherwise). Each candidate is
+    // scanned for what its arrival does: a redirecting replacement (Containment
+    // Priest) drops it, an enters-tapped one (Kinjalli's Sunwing) keeps it out of
+    // the blocks, and a prevented ETB, a legend-rule clash or toughness 0 after
+    // statics drop it.
+    // Floor: an ETB pick taken, a block that kills an attacker worth a card
+    // (nontoken, MV >= 2 or power >= 3), blocks absorbing at least
+    // max(MIN_ABSORBED, life / 5) damage (capped for tramplers), or our life in
+    // danger with a blocker picked.
+    public static class WakeTheDead {
+        public static final int MIN_ABSORBED = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            if (ph.isPlayerTurn(ai) || !ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                    || combat == null || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // attackers coming at us or our planeswalkers/battles
+            final List<Card> attackers = new ArrayList<>();
+            for (Card a : combat.getAttackers()) {
+                if (ai.equals(combat.getDefenderPlayerByAttacker(a))) {
+                    attackers.add(a);
+                }
+            }
+            if (attackers.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.resetTargets();
+            sa.setXManaCostPaid(null);
+            final int maxX = ComputerUtilCost.setMaxXValue(sa, ai, false); // min(spare mana, valid targets)
+            sa.setXManaCostPaid(null);
+            if (maxX <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            final CardCollection bodies = new CardCollection();   // safe to return
+            final CardCollection etbPicks = new CardCollection(); // an ETB that fires and the AI would run
+            final Set<Card> entersTapped = new HashSet<>();
+            final Map<Card, Card> lki = new HashMap<>();
+            for (Card c : CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa)) {
+                if (!c.isCreature() || ComputerUtil.isETBprevented(c)) {
+                    continue;
+                }
+                if (!c.ignoreLegendRule() && ai.isCardInPlay(c.getName())) {
+                    continue; // the legend rule would bin it on arrival
+                }
+                final Card copy = CardCopyService.getLKICopy(c);
+                ComputerUtilCard.applyStaticContPT(game, copy, null);
+                if (copy.getNetToughness() <= 0) {
+                    continue;
+                }
+                final int arrival = arrivalReplacement(game, c);
+                if (arrival < 0) {
+                    continue; // redirected elsewhere (Containment Priest): the card is lost
+                }
+                boolean etb = false;
+                if (c.hasETBTrigger(false)) {
+                    if (!aic.checkETBEffects(c, sa, null)) {
+                        continue; // a mandatory ETB the AI would not run
+                    }
+                    etb = etbWillFire(game, c);
+                }
+                if (arrival > 0) {
+                    if (!etb) {
+                        continue; // enters tapped: it cannot block, only its ETB can pay for it
+                    }
+                    entersTapped.add(c);
+                }
+                if (etb) {
+                    etbPicks.add(c);
+                }
+                bodies.add(c);
+                lki.put(c, copy);
+            }
+            if (bodies.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            ComputerUtilCard.sortByEvaluateCreature(etbPicks);
+            ComputerUtilCard.sortByEvaluateCreature(bodies);
+
+            // biggest unblocked damage first; only attackers one creature can block
+            final Map<Card, Integer> unblocked = new HashMap<>();
+            for (Card a : attackers) {
+                unblocked.put(a, ComputerUtilCombat.damageIfUnblocked(a, ai, combat, false));
+            }
+            attackers.sort((a, b) -> Integer.compare(unblocked.get(b), unblocked.get(a)));
+            attackers.removeIf(a -> CombatUtil.getMinNumBlockersForAttacker(a, ai) > 1);
+
+            boolean anyBlocker = false;
+            for (Card c : bodies) {
+                if (entersTapped.contains(c)) {
+                    continue;
+                }
+                for (Card a : attackers) {
+                    if (CombatUtil.canBlock(a, lki.get(c))) {
+                        anyBlocker = true;
+                        break;
+                    }
+                }
+                if (anyBlocker) {
+                    break;
+                }
+            }
+            // lifeInDanger draws random numbers: ask only when a block is possible
+            final boolean danger = anyBlocker && ComputerUtilCombat.lifeInDanger(ai, combat);
+
+            final CardCollection picks = new CardCollection();
+            if (!danger) {
+                for (Card c : etbPicks) {
+                    if (picks.size() >= maxX) {
+                        break;
+                    }
+                    picks.add(c);
+                }
+            }
+
+            final Set<Card> blockersUsed = new HashSet<>();
+            int absorbed = 0;
+            boolean killBlock = false;
+            for (Card a : attackers) {
+                for (Card c : bodies) {
+                    if (blockersUsed.contains(c) || entersTapped.contains(c) || !CombatUtil.canBlock(a, lki.get(c))) {
+                        continue;
+                    }
+                    if (!picks.contains(c)) {
+                        if (picks.size() >= maxX) {
+                            continue; // slots full: only an already-picked creature can still block
+                        }
+                        picks.add(c);
+                    }
+                    blockersUsed.add(c);
+                    final Card blocker = lki.get(c);
+                    int dmg = unblocked.get(a);
+                    if (a.hasKeyword(Keyword.TRAMPLE)) {
+                        dmg = Math.min(dmg, a.hasKeyword(Keyword.DEATHTOUCH) ? 1 : Math.max(0, blocker.getNetToughness()));
+                    }
+                    absorbed += dmg;
+                    if (!a.isToken() && (a.getCMC() >= 2 || a.getNetPower() >= 3)
+                            && ComputerUtilCombat.canDestroyAttacker(ai, a, blocker, combat, false)) {
+                        killBlock = true;
+                    }
+                    break;
+                }
+            }
+
+            if (danger) {
+                for (Card c : etbPicks) {
+                    if (picks.size() >= maxX) {
+                        break;
+                    }
+                    if (!picks.contains(c)) {
+                        picks.add(c);
+                    }
+                }
+            }
+
+            boolean etbTaken = false;
+            for (Card c : picks) {
+                if (etbPicks.contains(c)) {
+                    etbTaken = true;
+                    break;
+                }
+            }
+            final boolean floor = etbTaken || killBlock
+                    || absorbed >= Math.max(MIN_ABSORBED, ai.getLife() / 5)
+                    || (danger && !blockersUsed.isEmpty());
+            if (picks.isEmpty() || !floor) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.setXManaCostPaid(picks.size());
+            for (Card c : picks) {
+                sa.getTargets().add(c);
+            }
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // -1: a replacement sends the card elsewhere instead (Containment Priest);
+        // 1: it would enter tapped (Kinjalli's Sunwing); 0: neither.
+        // Mirrors AiController's enters-tapped land scan.
+        private static int arrivalReplacement(final Game game, final Card c) {
+            final Map<forge.game.ability.AbilityKey, Object> repParams = forge.game.ability.AbilityKey.mapFromAffected(c);
+            repParams.put(forge.game.ability.AbilityKey.CardLKI, c);
+            repParams.put(forge.game.ability.AbilityKey.Origin, ZoneType.Graveyard);
+            repParams.put(forge.game.ability.AbilityKey.Destination, ZoneType.Battlefield);
+            // add Params for AddCounter Replacements
+            final GameEntityCounterTable table = new GameEntityCounterTable();
+            repParams.put(forge.game.ability.AbilityKey.EffectOnly, true);
+            repParams.put(forge.game.ability.AbilityKey.CounterTable, table);
+            repParams.put(forge.game.ability.AbilityKey.CounterMap, table.column(c));
+
+            boolean tapped = false;
+            for (ReplacementEffect re : game.getReplacementHandler().getReplacementList(ReplacementType.Moved, repParams, ReplacementLayer.Other)) {
+                final SpellAbility reSA = re.ensureAbility();
+                if (reSA == null) {
+                    continue;
+                }
+                if (ApiType.ChangeZone.equals(reSA.getApi())) {
+                    return -1;
+                }
+                if (ApiType.Tap.equals(reSA.getApi())) {
+                    reSA.setActivatingPlayer(reSA.getHostCard().getController());
+                    if (reSA.metConditions()) {
+                        tapped = true;
+                    }
+                }
+            }
+            return tapped ? 1 : 0;
+        }
+
+        // At least one of the card's own enters-the-battlefield triggers would
+        // fire for a return from the graveyard right now: origin allows the
+        // graveyard, ValidCard matches (a +wasCast one never does), its
+        // requirements hold (Morbid), and no Torpor Orb-style static disables it.
+        private static boolean etbWillFire(final Game game, final Card c) {
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone
+                        || !ZoneType.Battlefield.toString().equals(tr.getParam("Destination"))) {
+                    continue;
+                }
+                if (!tr.hasParam("ValidCard") || !tr.getParam("ValidCard").contains("Self")) {
+                    continue;
+                }
+                if (tr.hasParam("Origin") && !"Any".equals(tr.getParam("Origin"))
+                        && !Arrays.asList(tr.getParam("Origin").split(",")).contains(ZoneType.Graveyard.toString())) {
+                    continue;
+                }
+                if (!tr.matchesValidParam("ValidCard", c) || !tr.requirementsCheck(game)) {
+                    continue;
+                }
+                final Map<forge.game.ability.AbilityKey, Object> runParams = forge.game.ability.AbilityKey.mapFromCard(c);
+                runParams.put(forge.game.ability.AbilityKey.Destination, ZoneType.Battlefield.name());
+                if (forge.game.staticability.StaticAbilityDisableTriggers.disabled(game, tr, runParams)) {
+                    continue;
+                }
+                return true;
+            }
+            return false;
+        }
+    }
+
     // Warbriar Blessing
     // An Aura whose ETB makes the enchanted creature fight up to one target creature
     // we don't control. Stock AI never cast it: AiController.checkETBEffects judges
