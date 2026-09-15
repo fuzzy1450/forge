@@ -39,6 +39,10 @@ public class DiscardAi extends SpellAbilityAi {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
+        if ("Path of the Pyromancer".equals(sourceName)) {
+            return SpecialCardAi.PathOfThePyromancer.consider(ai, sa, false);
+        }
+
         if (aiLogic.equals("VolrathsShapeshifter")) {
             return SpecialCardAi.VolrathsShapeshifter.consider(ai, sa);
         }
@@ -160,6 +164,9 @@ public class DiscardAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        if (!mandatory && "Path of the Pyromancer".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            return SpecialCardAi.PathOfThePyromancer.consider(ai, sa, true);
+        }
         if (sa.usesTargeting()) {
             PlayerCollection targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa));
             Player opp = targetableOpps.min(PlayerPredicates.compareByLife());

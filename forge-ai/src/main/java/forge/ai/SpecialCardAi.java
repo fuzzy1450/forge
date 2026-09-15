@@ -4462,6 +4462,48 @@ public class SpecialCardAi {
         }
     }
 
+    // Path of the Pyromancer
+    // "Discard all the cards in your hand. Add {R} for each card discarded this
+    // way, then draw that many cards plus one." Card-neutral by construction
+    // (Path + N cards in, N+1 random cards out), so the floor only decides which
+    // hand is worth trading: an empty one, or one where every card is worse than
+    // a random draw. A castable keeper is never pitched, whatever order the main-2
+    // spell list is evaluated in (Path's CMC 5 sorts ahead of most keepers).
+    // The Will of the Planeswalkers rider does nothing outside Planechase.
+    public static class PathOfThePyromancer {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean fromEffect) {
+            // Our own main 2 (DiscardAi's stock timing): the {R} floats through the
+            // phase and pays for what we draw. A free cast from an effect has no
+            // choice of phase.
+            if (!fromEffect && !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            // Discarding the hand and drawing nothing is pure loss.
+            if (!ai.canDraw()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection hand = new CardCollection(ai.getCardsIn(ZoneType.Hand));
+            hand.remove(sa.getHostCard());
+            // Never deck ourselves: DrawAi's own margin, on the real draw count
+            // (nothing is remembered yet, so the Draw sub's own check sees one card).
+            if (hand.size() + 1 >= ai.getCardsIn(ZoneType.Library).size() - 3) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final Card c : hand) {
+                // Dead = worse than a random draw: excess lands, or spells not
+                // castable for some time. isWorseThanDraw's late-game "small stuff"
+                // clause (CMC <= 1) is ignored for spells, so cheap held interaction
+                // stays a keeper. One keeper vetoes the whole trade.
+                final boolean dead = c.hasSVar("DiscardMe")
+                        || (ComputerUtil.isWorseThanDraw(ai, c) && (c.isLand() || c.getCMC() > 1));
+                if (!dead) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Path of the Schemer
     // Each player mills two, then we put a creature card from ANY graveyard
     // onto the battlefield under our control (the Will of the Planeswalkers
