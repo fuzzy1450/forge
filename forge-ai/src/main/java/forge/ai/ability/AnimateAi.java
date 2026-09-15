@@ -43,6 +43,28 @@ import java.util.Map;
 
 public class AnimateAi extends SpellAbilityAi {
     @Override
+    protected AiAbilityDecision canPlay(final Player ai, final SpellAbility sa) {
+        if ("Time Lord Regeneration".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Judged whole in SpecialCardAi.TimeLordRegeneration.consider. The generic
+            // checks cannot take it: checkPhaseRestrictions closes every response window
+            // for an instant-speed end-of-turn Animate (only our COMBAT_BEGIN and the
+            // opponent's declare-attackers step stay open), and animateTgtAI has no branch
+            // for a grant that is only a trigger (no Types$, no Power$) and falls through
+            // to CantPlayAi. With a Sacrifice on top of the stack the stock path is kept:
+            // there checkPhaseRestrictions may run a test payment (random draws) and build
+            // an animated copy, and checkApiLogic writes AiCardMemory, so that state stays
+            // exactly as it was (an edict is not a window this card answers). Every other
+            // Animate card takes the path it took before.
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty() && game.getStack().peekAbility().getApi() == ApiType.Sacrifice) {
+                return super.canPlay(ai, sa);
+            }
+            return SpecialCardAi.TimeLordRegeneration.consider(ai, sa);
+        }
+        return super.canPlay(ai, sa);
+    }
+
+    @Override
     protected boolean checkAiLogic(final Player ai, final SpellAbility sa, final String aiLogic) {
         final Game game = ai.getGame();
         final PhaseHandler ph = game.getPhaseHandler();

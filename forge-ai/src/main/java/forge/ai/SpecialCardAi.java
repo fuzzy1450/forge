@@ -28,6 +28,7 @@ import forge.card.mana.ManaCost;
 import forge.game.Game;
 import forge.game.GameEntity;
 import forge.game.GameEntityCounterTable;
+import forge.game.GameObject;
 import forge.game.GameType;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
@@ -7606,6 +7607,124 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
+    // Time Lord Regeneration
+    // "Until end of turn, target Time Lord you control gains 'When this creature
+    // dies, reveal cards until you reveal a Time Lord creature card and put it onto
+    // the battlefield.'" The grant is worth something only on a Time Lord that is
+    // about to die, so the card is never cast proactively - only in two windows
+    // where the AI's own death predictors (the ones RegenerateAi relies on) say one
+    // of our Time Lords dies:
+    // - in response to an opponent's stack top that kills it (destroy, lethal
+    //   damage or -X/-X, per predictThreatenedObjects with no saviour), when
+    //   nothing in that chain would exile, bounce, steal or attach to it, or
+    //   replace the death (the trigger needs a real "dies");
+    // - declare blockers with an empty stack, when combatantWouldBeDestroyed says
+    //   one of our Time Lords in combat dies and combatantCantBeDestroyed does not
+    //   save it (a chump block or a losing trade becomes a free Time Lord).
+    // A Time Lord whose own replacement effects send it anywhere but the graveyard
+    // (The Eighth Doctor's grant on graveyard-cast permanents) never "dies" and is
+    // never a candidate. Floor: a Time Lord creature card must remain in our
+    // library (the AI knows its own decklist), checked last because it scans the
+    // whole library. Worst case: {U} and the card, never board loss.
+    public static class TimeLordRegeneration {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+
+            // Routing through AnimateAi.canPlay's name gate bypasses the base
+            // class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+
+            sa.resetTargets();
+            final CardCollection ours = CardLists.filter(
+                    CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa),
+                    CardPredicates.CREATURES.and(c -> !deathIsReplaced(c)));
+            if (ours.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            final CardCollection dying = new CardCollection();
+            if (!game.getStack().isEmpty()) {
+                final SpellAbility top = game.getStack().peekAbility();
+                if (top == null || top.getActivatingPlayer() == null
+                        || ai.equals(top.getActivatingPlayer()) || !killsWithoutReplacing(top)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                // A null saviour opens every threat branch; an Animate-typed saviour
+                // would skip the destroy and -X/-X branches.
+                final List<GameObject> threatened = ComputerUtil.predictThreatenedObjects(ai, null, true);
+                for (final Card c : ours) {
+                    if (threatened.contains(c)) {
+                        dying.add(c);
+                    }
+                }
+            } else if (game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS) && game.getCombat() != null) {
+                final Combat combat = game.getCombat();
+                for (final Card c : ours) {
+                    // combatantWouldBeDestroyed first: it returns at once for a creature
+                    // outside combat, so the regeneration scan in combatantCantBeDestroyed
+                    // only runs for our combatants. combatantCantBeDestroyed covers what
+                    // the damage totals ignore (indestructible, shield counters,
+                    // regeneration shields and abilities).
+                    if (ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                            && !ComputerUtilCombat.combatantCantBeDestroyed(ai, c)) {
+                        dying.add(c);
+                    }
+                }
+            }
+            if (dying.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            if (!IterableUtil.any(ai.getCardsIn(ZoneType.Library),
+                    c -> c.isCreature() && c.getType().hasCreatureType("Time Lord"))) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+
+            sa.getTargets().add(ComputerUtilCard.getBestCreatureAI(dying));
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // predictThreatenedObjects(ai, null, ...) unions every threat branch of the
+        // chain. Reject any chain that could remove our Time Lord WITHOUT it dying
+        // (exile / bounce / steal / attach) or that replaces the death, so whatever
+        // it still flags came from a destroy, lethal-damage or -X/-X branch.
+        private static boolean killsWithoutReplacing(final SpellAbility top) {
+            for (SpellAbility part = top; part != null; part = part.getSubAbility()) {
+                if (part.hasParam("ReplaceDyingDefined") || part.hasParam("ReplaceDyingValid")) {
+                    return false;
+                }
+                final ApiType api = part.getApi();
+                if (api == ApiType.GainControl || api == ApiType.Attach) {
+                    return false;
+                }
+                if ((api == ApiType.ChangeZone || api == ApiType.ChangeZoneAll)
+                        && ("Exile".equals(part.getParam("Destination"))
+                            || part.getParamOrDefault("Origin", "").contains("Battlefield"))) {
+                    return false;
+                }
+                if (api == ApiType.Effect && part.hasParam("ReplacementEffects")) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // A card-local "moved from the battlefield (or from anywhere) -> somewhere
+        // other than the graveyard" replacement means the creature never "dies".
+        private static boolean deathIsReplaced(final Card c) {
+            for (final ReplacementEffect re : c.getReplacementEffects()) {
+                if (re.getMode() == ReplacementType.Moved
+                        && (!re.hasParam("Origin") || re.getParam("Origin").contains("Battlefield"))
+                        && (!re.hasParam("Destination") || re.getParam("Destination").contains("Graveyard"))) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
