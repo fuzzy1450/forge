@@ -168,6 +168,17 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.UnfinishedBusiness.consider(aiPlayer, sa);
         }
 
+        if ("Surge to Victory".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Picks and targets our own graveyard instant/sorcery itself: its
+            // mana value pumps our attackers and every attacker that connects
+            // FORCE-casts a copy of it in our combat damage step, so the pick
+            // needs a safety scan the generic graveyard-exile targeting (which
+            // keeps only opponents' cards here) never does. The stock path
+            // drew no random numbers before refusing. Every other ChangeZone
+            // card takes exactly the path it took before this branch.
+            return SpecialCardAi.SurgeToVictory.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {

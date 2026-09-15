@@ -32,8 +32,10 @@ import forge.game.ability.ApiType;
 import forge.game.card.*;
 import forge.game.combat.Combat;
 import forge.game.combat.CombatUtil;
+import forge.game.cost.CostDiscard;
 import forge.game.cost.CostExile;
 import forge.game.cost.CostPart;
+import forge.game.cost.CostPartMana;
 import forge.game.cost.CostSacrifice;
 import forge.game.keyword.Keyword;
 import forge.game.mana.ManaCostBeingPaid;
@@ -3844,6 +3846,140 @@ public class SpecialCardAi {
             }
 
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+    }
+
+    // Surge to Victory
+    // "Exile target instant or sorcery card from your graveyard. Creatures you
+    // control get +X/+0 until end of turn, where X is that card's mana value.
+    // Whenever a creature you control deals combat damage to a player this
+    // turn, you may cast a copy of the exiled card." ChangeZoneAi's generic
+    // graveyard-exile targeting keeps only opponents' cards, so the card was
+    // never cast. The script's copy has no Optional$: every creature of ours
+    // that connects FORCE-casts a copy of the pick in our own combat damage
+    // step, while our creatures are attacking. So the pick must be safe under
+    // compulsion - a whitelisted, untargeted, self-only effect chain: no
+    // forced cast inside it, nothing leaving the battlefield, no Effect static
+    // other than "may play", no trigger or replacement effect, no cost beyond
+    // mana or a discard (a sacrifice or life cost would be paid again for
+    // every copy), no Demonstrate (each copy could hand an opponent one).
+    // Floor: our own main 1 (a main-2 cast pumps nothing and never triggers),
+    // combat damage not prevented this turn, a pick of mana value at least
+    // MIN_PICK_CMC, pick mana value times the attackers of the AI's own attack
+    // plan that face no attack tax (Propaganda, Ghostly Prison: the prediction
+    // ignores taxes, and Surge's six mana may be what would have paid one) at
+    // least MIN_TOTAL_PUMP, and a library deeper than LIBRARY_PER_COPY cards
+    // per such attacker. Every board-only check runs before the predicted
+    // combat is built, which can draw MyRandom; the stock refusal drew nothing.
+    public static class SurgeToVictory {
+        public static final int MIN_PICK_CMC = 2;
+        public static final int MIN_TOTAL_PUMP = 4;
+        public static final int LIBRARY_PER_COPY = 7; // Apex of Power exiles 7, Dig Through Time digs 7
+
+        private static final EnumSet<ApiType> SAFE_COPY_APIS = EnumSet.of(
+                ApiType.Draw, ApiType.Dig, ApiType.DigUntil, ApiType.Token, ApiType.Mana,
+                ApiType.Scry, ApiType.Surveil, ApiType.Shuffle, ApiType.RearrangeTopOfLibrary,
+                ApiType.PeekAndReveal, ApiType.Effect, ApiType.Cleanup, ApiType.ChangeZone,
+                ApiType.Discard, ApiType.Play);
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            // The stock targeting reset the targets before it refused; a decline
+            // here leaves them the same way.
+            sa.resetTargets();
+
+            if (!game.getPhaseHandler().is(PhaseType.MAIN1, ai)
+                    || game.getReplacementHandler().isPreventCombatDamageThisTurn()) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForCombat);
+            }
+            final int creatures = ai.getCreaturesInPlay().size();
+            final int library = ai.getCardsIn(ZoneType.Library).size();
+            if (creatures == 0 || library <= LIBRARY_PER_COPY) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            Card pick = null;
+            for (Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                if (!(c.isInstant() || c.isSorcery()) || c.getManaCost() == null
+                        || c.getCMC() < MIN_PICK_CMC || c.getManaCost().countX() > 0
+                        || !sa.canTarget(c) || !safeAsForcedCopy(c)) {
+                    continue;
+                }
+                if (pick == null || c.getCMC() > pick.getCMC()) {
+                    pick = c;
+                }
+            }
+            // The attackers are a subset of our creatures: when even all of them
+            // fall short of the floor, decline before predicting combat.
+            if (pick == null || pick.getCMC() * creatures < MIN_TOTAL_PUMP) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final Combat predicted = ((PlayerControllerAi) ai.getController()).getAi().getPredictedCombat();
+            int attackers = 0;
+            for (Card c : ai.getCreaturesInPlay()) {
+                if (predicted.isAttacking(c)
+                        && CombatUtil.getAttackCost(game, c, predicted.getDefenderByAttacker(c)) == null) {
+                    attackers++;
+                }
+            }
+            if (attackers == 0 || pick.getCMC() * attackers < MIN_TOTAL_PUMP
+                    || library <= LIBRARY_PER_COPY * attackers) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Whitelist, not blacklist: every part of every basic spell must be an
+        // untargeted self-only effect that cannot touch the battlefield we are
+        // attacking with. Unlisted apis (Charm, RepeatEach, GenericChoice,
+        // ImmediateTrigger, TwoPiles, any ...All) hide their effects outside
+        // the getSubAbility chain or hit every creature.
+        static boolean safeAsForcedCopy(final Card c) {
+            if (c.getBasicSpells().isEmpty() || c.hasKeyword(Keyword.DEMONSTRATE)) {
+                return false;
+            }
+            for (SpellAbility csa : c.getBasicSpells()) {
+                if (csa.getPayCosts() != null) {
+                    for (CostPart cp : csa.getPayCosts().getCostParts()) {
+                        if (!(cp instanceof CostPartMana) && !(cp instanceof CostDiscard)) {
+                            return false; // a sacrifice / life / exile cost on every connecting attacker
+                        }
+                    }
+                }
+                for (SpellAbility part = csa; part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    if (api == null || part.usesTargeting() || !SAFE_COPY_APIS.contains(api)) {
+                        return false;
+                    }
+                    if (api == ApiType.Play && !part.hasParam("Optional")) {
+                        return false; // a forced cast inside the forced cast
+                    }
+                    if (api == ApiType.ChangeZone && part.getParamOrDefault("Origin", "").contains("Battlefield")) {
+                        return false; // could move our attackers
+                    }
+                    if (api == ApiType.Effect) {
+                        if (part.hasParam("Triggers") || part.hasParam("ReplacementEffects")) {
+                            return false;
+                        }
+                        if (part.hasParam("StaticAbilities")) {
+                            for (String st : part.getParam("StaticAbilities").split(",")) {
+                                if (!part.getSVar(st.trim()).contains("MayPlay$")) {
+                                    return false; // Hunter's Ambush, Inspired Idea, Peace Talks ...
+                                }
+                            }
+                        }
+                    }
+                    final String who = part.getParamOrDefault(api == ApiType.Token ? "TokenOwner" : "Defined", "You");
+                    if (api != ApiType.ChangeZone && api != ApiType.Play && api != ApiType.Effect
+                            && api != ApiType.Cleanup && !"You".equals(who)) {
+                        return false; // a draw, dig, discard or token aimed at someone else
+                    }
+                }
+            }
+            return true;
         }
     }
 
