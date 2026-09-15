@@ -6238,6 +6238,87 @@ public class SpecialCardAi {
         }
     }
 
+    // Nexus Mentality (the "remove all counters, draw that many" mode only)
+    // An answer to an opponent's removal: when the top of the stack is about
+    // to take one of our countered nonland permanents anyway (destroy, lethal
+    // damage or -X/-X, exile, a permanent steal), cash its counters in for
+    // cards. Stripping the counters kills a 0/0 body, so the only window is
+    // one where the permanent is lost either way. Stays out of: a temporary
+    // steal (the counters come back with it), divided damage (the threat
+    // prediction credits the full amount to every target), an "unless" cost
+    // (the threat may not happen), a non-steal Attach (a curse aura leaves
+    // the permanent in play), and, under a dies threat, a permanent whose own
+    // dies trigger pays off those counters (Lifeblood Hydra, Hangarback
+    // Walker). Reads the board only: no random draws.
+    public static class NexusMentality {
+        public static final int MIN_COUNTERS = 2;       // four mana and a card buy at least two cards
+        public static final int LIBRARY_MARGIN = 3;     // DrawAi's own don't-deck-yourself line
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            if (!ai.canDraw() || game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbilityStackInstance top = game.getStack().peek();
+            if (top == null || top.getActivatingPlayer() == null || !top.getActivatingPlayer().isOpponentOf(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            boolean diesThreat = false;
+            for (SpellAbility s = top.getSpellAbility(); s != null; s = s.getSubAbility()) {
+                final ApiType api = s.getApi();
+                if (s.hasParam("UnlessCost")
+                        || (api == ApiType.GainControl && s.hasParam("LoseControl"))
+                        || (api == ApiType.DealDamage && s.hasParam("DividedAsYouChoose"))
+                        || (api == ApiType.Attach && !"GainControl".equals(s.getParam("AILogic")))) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                if (api == ApiType.Destroy || api == ApiType.DestroyAll || api == ApiType.DealDamage
+                        || api == ApiType.DamageAll || api == ApiType.Pump || api == ApiType.PumpAll) {
+                    diesThreat = true;
+                }
+            }
+            final int library = ai.getCardsIn(ZoneType.Library).size();
+            Card best = null;
+            int bestN = 0;
+            for (final Object o : ComputerUtil.predictThreatenedObjects(ai, null, true)) {
+                if (!(o instanceof Card c) || !c.isInPlay() || c.isLand()
+                        || !ai.equals(c.getController()) || !sa.canTarget(c)) {
+                    continue;
+                }
+                if (diesThreat && hasOwnDiesTrigger(c)) {
+                    continue; // its death already pays off the counters we would strip
+                }
+                int n = 0;
+                for (final CounterType ct : c.getCounters().elementSet()) {
+                    if (c.canRemoveCounters(ct)) {
+                        n += c.getCounters(ct);
+                    }
+                }
+                if (n > bestN || (n == bestN && best != null
+                        && ComputerUtilCard.getBestAI(Arrays.asList(best, c)) == c)) {
+                    best = c;
+                    bestN = n;
+                }
+            }
+            if (best == null || bestN < MIN_COUNTERS || bestN >= library - LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static boolean hasOwnDiesTrigger(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() == TriggerType.ChangesZone && "Graveyard".equals(t.getParam("Destination"))
+                        && t.matchesValidParam("ValidCard", c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Null Brooch
     public static class NullBrooch {
         public static boolean consider(final Player ai, final SpellAbility sa) {

@@ -36,6 +36,12 @@ public class CountersRemoveAi extends SpellAbilityAi {
      */
     @Override
     protected boolean checkPhaseRestrictions(Player ai, SpellAbility sa, PhaseHandler ph) {
+        if ("Nexus Mentality".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Its only window is an opponent's removal on the stack, which opens
+            // before MAIN2 on either turn; SpecialCardAi.NexusMentality is the
+            // whole judgment (and draws no random numbers).
+            return true;
+        }
         final String type = sa.getParam("CounterType");
 
         if (ph.getPhase().isBefore(PhaseType.MAIN2) && !sa.hasParam("ActivationPhases") && !type.equals("M1M1")) {
@@ -52,6 +58,13 @@ public class CountersRemoveAi extends SpellAbilityAi {
      */
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        if ("Nexus Mentality".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // CounterType$ All on a YouCtrl target: doTgt's All branch only knows
+            // Dark Depths and opponents' planeswalkers (Vampire Hexmage), so this
+            // mode was TargetingFailed on every call. Every other RemoveCounter
+            // card takes exactly the path it took before.
+            return SpecialCardAi.NexusMentality.consider(ai, sa);
+        }
         final String type = sa.getParam("CounterType");
 
         if (sa.usesTargeting()) {
