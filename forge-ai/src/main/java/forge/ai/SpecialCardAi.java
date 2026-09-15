@@ -37,6 +37,7 @@ import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.*;
 import forge.game.combat.Combat;
+import forge.game.combat.CombatLki;
 import forge.game.combat.CombatUtil;
 import forge.game.combat.GlobalAttackRestrictions;
 import forge.game.cost.CostDiscard;
@@ -521,69 +522,90 @@ public class SpecialCardAi {
             for (final Card c : ourCombatants) {
                 model.put(c, AnimateAi.becomeAnimated(c, sa));
             }
-            final Combat pc = new Combat(combat.getAttackingPlayer());
-            for (final Card a : combat.getAttackers()) {
-                final GameEntity defender = combat.getDefenderByAttacker(a);
-                if (defender == null || !pc.getDefenders().contains(defender)) {
-                    return null; // a defender that has left: the rebuilt combat cannot hold this attack
-                }
-                pc.addAttacker(model.getOrDefault(a, a), defender);
+            // AnimateAi.becomeAnimated's getLKICopy saved each copy into the live combat
+            // (CardCopyService.getLKICopy: setCombatLKI(combat.saveLKI(copy))), so a copy of an attacker
+            // carries a CombatLki naming the REAL attacking band. addAttacker on the rebuilt combat asks
+            // getBandOfAttacker, whose LKI fallback reads the copy's own CombatLki (FCollection.get returns
+            // the argument when absent), and removeAttacker then takes the real card out of the live
+            // combat: it deals no combat damage, whether or not the spell is cast. Same guard as
+            // ComputerUtilCard.canBeBlockedProfitably (avoid removing original attacker). Restored after,
+            // not left null: the live combat's lkiCache keeps this first copy per id for the rest of the
+            // combat and is read only through getCombatLKI, so a nulled copy would make a creature that
+            // later leaves this combat read as never having attacked.
+            final Map<Card, CombatLki> savedLki = new HashMap<>();
+            for (final Card m : model.values()) {
+                savedLki.put(m, m.getCombatLKI());
+                m.setCombatLKI(null);
             }
-            for (final Card a : combat.getAttackers()) {
-                for (final Card b : combat.getBlockers(a)) {
-                    pc.addBlocker(model.getOrDefault(a, a), model.getOrDefault(b, b));
-                }
-            }
-
-            final Outcome o = new Outcome();
-            final Set<Card> judged = new HashSet<>();
-            for (final Card a : fights) {
-                final Card ma = model.getOrDefault(a, a);
-                final boolean attackerMine = model.containsKey(a);
-                final int ra = judge(ai, a, diesBefore.get(a),
-                        ComputerUtilCombat.attackerWouldBeDestroyed(a.getController(), ma, pc), attackerMine);
-                if (ra < 0) {
-                    return null;
-                }
-                o.gains += ra;
-                int kills = 0;
-                int toKillAll = 0;
-                for (final Card b : combat.getBlockers(a)) {
-                    toKillAll += Math.max(0, b.getLethalDamage());
-                    if (!judged.add(b)) {
-                        continue;
+            try {
+                final Combat pc = new Combat(combat.getAttackingPlayer());
+                for (final Card a : combat.getAttackers()) {
+                    final GameEntity defender = combat.getDefenderByAttacker(a);
+                    if (defender == null || !pc.getDefenders().contains(defender)) {
+                        return null; // a defender that has left: the rebuilt combat cannot hold this attack
                     }
-                    final boolean blockerMine = model.containsKey(b);
-                    final int rb = judge(ai, b, diesBefore.get(b),
-                            ComputerUtilCombat.blockerWouldBeDestroyed(b.getController(), model.getOrDefault(b, b), pc),
-                            blockerMine);
-                    if (rb < 0) {
+                    pc.addAttacker(model.getOrDefault(a, a), defender);
+                }
+                for (final Card a : combat.getAttackers()) {
+                    for (final Card b : combat.getBlockers(a)) {
+                        pc.addBlocker(model.getOrDefault(a, a), model.getOrDefault(b, b));
+                    }
+                }
+
+                final Outcome o = new Outcome();
+                final Set<Card> judged = new HashSet<>();
+                for (final Card a : fights) {
+                    final Card ma = model.getOrDefault(a, a);
+                    final boolean attackerMine = model.containsKey(a);
+                    final int ra = judge(ai, a, diesBefore.get(a),
+                            ComputerUtilCombat.attackerWouldBeDestroyed(a.getController(), ma, pc), attackerMine);
+                    if (ra < 0) {
                         return null;
                     }
-                    if (blockerMine) {
-                        o.gains += rb;
-                    } else {
-                        kills += rb;
+                    o.gains += ra;
+                    int kills = 0;
+                    int toKillAll = 0;
+                    for (final Card b : combat.getBlockers(a)) {
+                        toKillAll += Math.max(0, b.getLethalDamage());
+                        if (!judged.add(b)) {
+                            continue;
+                        }
+                        final boolean blockerMine = model.containsKey(b);
+                        final int rb = judge(ai, b, diesBefore.get(b),
+                                ComputerUtilCombat.blockerWouldBeDestroyed(b.getController(), model.getOrDefault(b, b), pc),
+                                blockerMine);
+                        if (rb < 0) {
+                            return null;
+                        }
+                        if (blockerMine) {
+                            o.gains += rb;
+                        } else {
+                            kills += rb;
+                        }
                     }
+                    // blockerWouldBeDestroyed sets the attacker's whole power against each blocker in turn,
+                    // so a double block reads as two kills: credit one unless its damage covers them all.
+                    o.gains += attackerMine && kills > 1 && ComputerUtilCombat.getAttack(ma) < toKillAll ? 1 : kills;
                 }
-                // blockerWouldBeDestroyed sets the attacker's whole power against each blocker in turn,
-                // so a double block reads as two kills: credit one unless its damage covers them all.
-                o.gains += attackerMine && kills > 1 && ComputerUtilCombat.getAttack(ma) < toKillAll ? 1 : kills;
-            }
 
-            if (ourTurn) {
-                final boolean canWin = !ai.cantWin();
-                for (final Player opp : ai.getOpponents()) {
-                    final int before = damageBefore.get(opp);
-                    final int after = damageToPlayer(opp, combat, model);
-                    o.extraDamage += after - before;
-                    if (canWin && after > before && opp.canLoseLife() && !opp.cantLoseForZeroOrLessLife()
-                            && opp.getLife() > before && opp.getLife() <= after) {
-                        o.lethal = true;
+                if (ourTurn) {
+                    final boolean canWin = !ai.cantWin();
+                    for (final Player opp : ai.getOpponents()) {
+                        final int before = damageBefore.get(opp);
+                        final int after = damageToPlayer(opp, combat, model);
+                        o.extraDamage += after - before;
+                        if (canWin && after > before && opp.canLoseLife() && !opp.cantLoseForZeroOrLessLife()
+                                && opp.getLife() > before && opp.getLife() <= after) {
+                            o.lethal = true;
+                        }
                     }
                 }
+                return o;
+            } finally {
+                for (final Map.Entry<Card, CombatLki> e : savedLki.entrySet()) {
+                    e.getKey().setCombatLKI(e.getValue());
+                }
             }
-            return o;
         }
 
         // -1: the model vetoes this X; 1: a kill or save of a card worth one; 0: otherwise.
