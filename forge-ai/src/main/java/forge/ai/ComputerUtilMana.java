@@ -27,6 +27,7 @@ import forge.game.keyword.Keyword;
 import forge.game.mana.Mana;
 import forge.game.mana.ManaCostBeingPaid;
 import forge.game.mana.ManaPool;
+import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.player.PlayerPredicates;
@@ -1378,6 +1379,10 @@ public class ComputerUtilMana {
                     }
                 }
             }
+            // Steward of the Harvest: a creature whose only mana is the Steward grant is a blocker first
+            if (card.isCreature() && isOnlyStewardGranted(card) && stewardGrantUnsafe(ai)) {
+                continue;
+            }
             // exclude cards that will deal lethal damage when tapped
             if (canDieToTapDamage) {
                 boolean dealsLethalOnTap = false;
@@ -1489,6 +1494,45 @@ public class ComputerUtilMana {
         return sortedManaSources;
     }
 
+    // Steward of the Harvest grants every creature the exiled lands' mana abilities. Tapping those
+    // creatures on our own turn (or on an opponent's turn before blocks) leaves them tapped through
+    // the opponents' next combat. Refuse the grant while that combat reaches lethal range. No RNG:
+    // ComputerUtilCombat.lifeInDanger draws MyRandom, so it is deliberately not used.
+    private static boolean isStewardGrant(final SpellAbility m) {
+        return m.getGrantorStatic() != null && m.getGrantorStatic().getHostCard() != null
+                && "Steward of the Harvest".equals(m.getGrantorStatic().getHostCard().getName());
+    }
+
+    private static boolean isOnlyStewardGranted(final Card card) {
+        final List<SpellAbility> abs = getAIPlayableMana(card);
+        if (abs.isEmpty()) {
+            return false;
+        }
+        for (final SpellAbility m : abs) {
+            if (!isStewardGrant(m)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean stewardGrantUnsafe(final Player ai) {
+        final PhaseHandler ph = ai.getGame().getPhaseHandler();
+        if (!ph.isPlayerTurn(ai) && !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS)) {
+            return false; // this turn's blocks are declared; it untaps before the next opposing combat
+        }
+        int incoming = 0;
+        for (final Player opp : ai.getOpponents()) {
+            final boolean thisCombat = ph.isPlayerTurn(opp) && ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS);
+            for (final Card att : opp.getCreaturesInPlay()) {
+                if (thisCombat ? CombatUtil.canAttack(att, ai) : ComputerUtilCombat.canAttackNextTurn(att, ai)) {
+                    incoming += ComputerUtilCombat.damageIfUnblocked(att, ai, null, false);
+                }
+            }
+        }
+        return incoming + AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD) >= ai.getLife();
+    }
+
     private static ListMultimap<Integer, SpellAbility> groupSourcesByManaColor(final Player ai, boolean checkPlayable) {
         final ListMultimap<Integer, SpellAbility> manaMap = ArrayListMultimap.create();
         final Game game = ai.getGame();
@@ -1503,6 +1547,9 @@ public class ComputerUtilMana {
                 }
                 m.setActivatingPlayer(ai);
                 if (checkPlayable && !m.canPlay()) {
+                    continue;
+                }
+                if (sourceCard.isCreature() && isStewardGrant(m) && stewardGrantUnsafe(ai)) {
                     continue;
                 }
 
