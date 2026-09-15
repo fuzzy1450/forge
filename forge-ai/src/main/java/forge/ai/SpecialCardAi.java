@@ -1088,6 +1088,136 @@ public class SpecialCardAi {
         }
     }
 
+    // Guff Rewrites History
+    // For each player, target a nonland nonenchantment permanent they control;
+    // owners shuffle them into their libraries, then each affected player casts
+    // a free nonland permanent dug off the top. The swap is symmetric, so both
+    // halves must favour us: each opponent loses a permanent worth more than an
+    // average refill, and we lose only fodder that our own refill (a
+    // planeswalker-heavy deck) beats. Guards: empty stack only; never on our
+    // own turn before MAIN1 (upkeep/draw would spend the mana our walkers want
+    // at sorcery speed); never a ward threat (ward counters the whole spell);
+    // never a combatant already dying in this combat, nor our own attacker or
+    // blocker; no creature fodder when the opponents' untapped-next-turn
+    // attackers could kill us unblocked. Everything here is RNG-free, like the
+    // generic targeting it replaces.
+    public static class GuffRewritesHistory {
+        public static final int MIN_THREAT_VALUE = 220; // a vanilla 4/4 four-drop evaluates to 221
+        public static final int MAX_FODDER_VALUE = 130; // tokens, Sol Ring, Signets; keeps CMC 3+ artifacts and every walker
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.MAIN1)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Combat combat = game.getCombat();
+
+            // Opponents: each one's biggest targetable permanent, above the floor
+            final CardCollection threats = new CardCollection();
+            for (final Player p : game.getPlayers()) { // the same set OneEach counts
+                if (!p.isOpponentOf(ai)) {
+                    continue;
+                }
+                final CardCollection candidates = CardLists.filter(
+                        CardLists.getTargetableCards(p.getCardsIn(ZoneType.Battlefield), sa),
+                        c -> !c.hasKeyword(Keyword.WARD)
+                                && (combat == null || !ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)));
+                final Card threat = Aggregates.itemWithMax(candidates, GuffRewritesHistory::value);
+                if (threat == null || value(threat) < MIN_THREAT_VALUE) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                threats.add(threat);
+            }
+            if (threats.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Keep our creatures when the attackers left after the shuffle are lethal unblocked
+            int incoming = 0;
+            for (final Player p : ai.getOpponents()) {
+                final CardCollection attackers = CardLists.filter(p.getCreaturesInPlay(),
+                        c -> !threats.contains(c) && ComputerUtilCombat.canAttackNextTurn(c, ai));
+                incoming += ComputerUtilCombat.sumDamageIfUnblocked(attackers, ai);
+            }
+            final boolean lastBlockersMatter = ai.canLoseLife() && incoming >= ai.getLife();
+
+            // Us (and teammates): the cheapest fodder, never the commander
+            final CardCollection picks = new CardCollection(threats);
+            for (final Player p : game.getPlayers()) {
+                if (p.isOpponentOf(ai)) {
+                    continue;
+                }
+                Card fodder = null;
+                for (final Card c : CardLists.getTargetableCards(p.getCardsIn(ZoneType.Battlefield), sa)) {
+                    if (c.isCommander() || value(c) > MAX_FODDER_VALUE
+                            || (lastBlockersMatter && c.isCreature())
+                            || (combat != null && (combat.isAttacking(c) || combat.isBlocking(c)))) {
+                        continue;
+                    }
+                    if (fodder == null || fodderBefore(c, fodder)) {
+                        fodder = c;
+                    }
+                }
+                if (fodder == null) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                picks.add(fodder);
+            }
+
+            for (final Card c : picks) {
+                if (!sa.canTarget(c)) {
+                    sa.resetTargets();
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+                sa.getTargets().add(c);
+            }
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Tokens first (lowest value first), then nontoken permanents without
+        // mana abilities (lowest value first), then mana sources - highest
+        // value first, since at this end of the CMC scale a Signet (110) is a
+        // worse rock than Sol Ring (80).
+        private static boolean fodderBefore(final Card c, final Card best) {
+            final int rc = rank(c);
+            final int rb = rank(best);
+            if (rc != rb) {
+                return rc < rb;
+            }
+            return rc == 2 ? value(c) > value(best) : value(c) < value(best);
+        }
+
+        private static int rank(final Card c) {
+            if (c.isToken()) {
+                return 0;
+            }
+            return c.getManaAbilities().isEmpty() ? 1 : 2;
+        }
+
+        // The scale of ComputerUtilCard.evaluateRemovalTargetPriority (private
+        // there), minus its token bonus and board-position term: a shuffled
+        // token is not "gone for good" here, its controller still gets a card.
+        private static int value(final Card c) {
+            if (c.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(c);
+            }
+            int v = 50 + 30 * c.getCMC();
+            if (c.isPlaneswalker()) {
+                v += 10 * c.getCounters(CounterEnumType.LOYALTY);
+            }
+            return v;
+        }
+    }
+
     // Guilty Conscience
     public static class GuiltyConscience {
         public static Card getBestAttachTarget(final Player ai, final SpellAbility sa, final List<Card> list) {

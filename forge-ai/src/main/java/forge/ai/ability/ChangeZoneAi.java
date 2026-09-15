@@ -146,6 +146,15 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.Spelltwine.consider(aiPlayer, sa);
         }
 
+        if ("Guff Rewrites History".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // One target per player (TargetMin$ OneEach, TargetsForEachPlayer),
+            // our own permanent included; the generic targeting below keeps
+            // only opponents' cards (isPreferredTarget's AITgtOwnCards filter)
+            // and can never complete that set. Every other ChangeZone card
+            // takes exactly the path it took before this branch.
+            return SpecialCardAi.GuffRewritesHistory.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
