@@ -117,6 +117,16 @@ public class PumpAi extends PumpAiBase {
             // took before this branch.
             return SpecialCardAi.LegionsToAshes.consider(ai, sa);
         }
+        if ("Finale of Promise".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Two Pump target carriers over our own graveyard (the real effect is the Play sub): the
+            // code below clears X and never announces it (its X handling is keyed on NumAtt/NumDef), so
+            // both cmcLEX filters read 0, and its targeting treats "up to one" with nothing found as
+            // TargetingFailed, refusing every consult. The evaluator announces X and chooses both
+            // targets. The stock path drew no random numbers for this card before that refusal, and the
+            // evaluator draws none before its pick; every other Pump card takes exactly the path it
+            // took before this branch.
+            return SpecialCardAi.FinaleOfPromise.consider(ai, sa);
+        }
         if ("Sinister Waltz".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
             // A Pump targeting shell over our own graveyard (the real effect is its ChangeZone
             // sub): the non-curse targeting below only reads battlefield creatures
@@ -717,6 +727,15 @@ public class PumpAi extends PumpAiBase {
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+        if ("Finale of Promise".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && sa.usesTargeting()
+                && sa.getRootAbility().getXManaCostPaid() != null) {
+            // The sorcery target was chosen, or deliberately left empty, by
+            // SpecialCardAi.FinaleOfPromise.consider together with X; the generic re-targeting below
+            // would discard that pick and refuse zero targets. Without an announced X (a free cast by
+            // another effect) the stock path runs as before.
+            return sa.isTargetNumberValid() ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
         final SpellAbility root = sa.getRootAbility();
         final Card source = sa.getHostCard();

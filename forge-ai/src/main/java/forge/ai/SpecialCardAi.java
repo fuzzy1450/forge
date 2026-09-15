@@ -4636,6 +4636,246 @@ public class SpecialCardAi {
         }
     }
 
+    // Finale of Promise
+    // "X R R: you may cast up to one target instant card and/or up to one target sorcery card from
+    // your graveyard, each with mana value X or less, without paying their mana costs." Two SP$ Pump
+    // target carriers (the instant on the spell, the sorcery on its sub) over a Play sub.
+    // PumpAi.checkApiLogic clears X and never announces it (its X handling is keyed on NumAtt/NumDef),
+    // so both cmcLEX filters read 0, and pumpTgtAI treats "up to one" with nothing found as
+    // TargetingFailed: every consult refused the spell. Announce X as the highest pick's mana value
+    // and choose both targets here. A pick is a card the resolution-time chooser would cast right now:
+    // PlayAi.chooseSingleCard on the Play sub, the call PlayEffect makes (the free copy's own
+    // doTriggerNoCost, a valid target count, a payable remaining cost, no X). That free-trigger
+    // judgment approves some spells blindly, so the pool first drops a card with any offered spell
+    // whose root is Mana (a ritual's worth depends on the mana Finale itself spends: Rousing Refrain)
+    // or DelayedTrigger (Galvanic Iteration's copy trigger misses the spell cast beside it), that
+    // makes us discard our hand without a target anywhere in its chain (Pyretic Charge), or whose
+    // discard cost the hand cannot pay without Finale, which is on the stack at resolution (Big
+    // Score); X spells and AI:RemoveDeck cards (Windfall) are dropped too.
+    // Floor: an instant and a sorcery, each of mana value MIN_PICK_CMC or more (together they repay
+    // X R R and the card), or one pick of MIN_SOLO_CMC or more. The casts stay optional at
+    // resolution, so a board that changed in between wastes the cast and never forces it.
+    // RNG parity: with no hint, the stock path reached checkApiLogic on every sorcery-speed pass and
+    // drew nothing before its TargetingFailed, so nothing here draws before the chooser runs: an
+    // RNG-free mana estimate stands in for setMaxXValue (whose test payments draw in
+    // ComputerUtilMana.isManaSourceReserved), then a red-source count, then a pool that can meet the
+    // floor; canPlayAndPayForFace runs the real canPayCost only after a WillPlay. The prediction runs
+    // other cards' handlers, so it is guarded against re-entry, and a throw from one of them declines
+    // that candidate.
+    public static class FinaleOfPromise {
+        public static final int MIN_PICK_CMC = 2;
+        public static final int MIN_SOLO_CMC = 4;
+
+        private static final ThreadLocal<Boolean> PREDICTING = ThreadLocal.withInitial(() -> false);
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (PREDICTING.get()) {
+                // re-entered from a candidate's own handler
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.setXManaCostPaid(null);
+            final Card host = sa.getHostCard();
+            final AbilitySub sorcerySub = sa.getSubAbility();
+            final SpellAbility play = sa.findSubAbilityByType(ApiType.Play);
+            if (host == null || !sa.usesTargeting() || !sa.costHasManaX() || sorcerySub == null
+                    || sorcerySub.getApi() != ApiType.Pump || !sorcerySub.usesTargeting() || play == null
+                    || !ai.getGame().getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // R R after cost changes, X still unannounced (it counts 0); the leftover estimate is the
+            // most X could be.
+            final ManaCostBeingPaid fixed = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int maxX = ComputerUtilMana.getAvailableManaEstimate(ai, true) - fixed.toManaCost().getCMC();
+            if (maxX < MIN_PICK_CMC
+                    || !hasRedSources(ai, host, fixed.getUnpaidShards(forge.card.mana.ManaCostShard.RED))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+
+            sa.resetTargets();
+            sorcerySub.resetTargets();
+            final CardCollection instants = new CardCollection();
+            final CardCollection sorceries = new CardCollection();
+            sa.setXManaCostPaid(maxX); // both cmcLEX filters read the most X could be
+            for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                final boolean instant = c.isInstant();
+                if ((!instant && !c.isSorcery()) || c.getCMC() < MIN_PICK_CMC || c.getCMC() > maxX
+                        || (c.getManaCost() != null && c.getManaCost().countX() > 0)
+                        || ComputerUtilCard.isCardRemAIDeck(c)
+                        || !(instant ? sa.canTarget(c) : sorcerySub.canTarget(c))
+                        || !safeToOffer(ai, host, c)) {
+                    continue;
+                }
+                (instant ? instants : sorceries).add(c);
+            }
+            sa.setXManaCostPaid(null);
+            if ((instants.isEmpty() || sorceries.isEmpty())
+                    && !hasCmcAtLeast(instants, MIN_SOLO_CMC) && !hasCmcAtLeast(sorceries, MIN_SOLO_CMC)) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+
+            CardLists.sortByCmcDesc(instants);
+            CardLists.sortByCmcDesc(sorceries);
+            final Card instant;
+            final Card sorcery;
+            PREDICTING.set(true);
+            try {
+                // A pick with no partner must reach MIN_SOLO_CMC, so a type with no partner left skips the
+                // cheap candidates (the same decision as picking both at MIN_PICK_CMC, fewer handler runs).
+                instant = bestPick(ai, play, instants, sorceries.isEmpty() ? MIN_SOLO_CMC : MIN_PICK_CMC);
+                sorcery = bestPick(ai, play, sorceries, instant == null ? MIN_SOLO_CMC : MIN_PICK_CMC);
+            } finally {
+                PREDICTING.remove();
+            }
+
+            final int x;
+            if (instant != null && sorcery != null) {
+                x = Math.max(instant.getCMC(), sorcery.getCMC());
+            } else {
+                final Card solo = instant != null ? instant : sorcery;
+                if (solo == null || solo.getCMC() < MIN_SOLO_CMC) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                x = solo.getCMC();
+            }
+            sa.setXManaCostPaid(x); // cmcLEX now reads x for both targets; the payment pays this X
+            if ((instant != null && !sa.canTarget(instant)) || (sorcery != null && !sorcerySub.canTarget(sorcery))) {
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            if (instant != null) {
+                sa.getTargets().add(instant);
+            }
+            if (sorcery != null) {
+                sorcerySub.getTargets().add(sorcery);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Highest mana value first (the pool is sorted); the first card the resolution-time chooser
+        // accepts wins.
+        private static Card bestPick(final Player ai, final SpellAbility play, final CardCollection pool,
+                final int minCmc) {
+            final SpellAbilityAi playAi = SpellApiToAi.Converter.get(play);
+            for (final Card c : pool) {
+                if (c.getCMC() < minCmc) {
+                    break;
+                }
+                try {
+                    if (playAi.chooseSingleCard(ai, play, new CardCollection(c), true, null, null) != null) {
+                        return c;
+                    }
+                } catch (RuntimeException e) {
+                    // a throw from the candidate's own handler declines that candidate
+                }
+            }
+            return null;
+        }
+
+        private static boolean hasCmcAtLeast(final CardCollection pool, final int cmc) {
+            for (final Card c : pool) {
+                if (c.getCMC() >= cmc) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Every spell the chooser can offer from this card (the current face, plus the back of a modal
+        // card, as AbilityUtils.getSpellsFromPlayEffect collects them).
+        private static boolean safeToOffer(final Player ai, final Card host, final Card c) {
+            final List<SpellAbility> spells = new ArrayList<>(c.getBasicSpells());
+            if (c.isModal() && c.hasState(forge.card.CardStateName.Backside)) {
+                spells.addAll(c.getBasicSpells(c.getState(forge.card.CardStateName.Backside)));
+            }
+            if (spells.isEmpty()) {
+                return false;
+            }
+            for (final SpellAbility s : spells) {
+                if (s.getApi() == ApiType.Mana || s.getApi() == ApiType.DelayedTrigger
+                        || discardsOwnHand(s) || !discardCostPayable(ai, host, c, s)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // An untargeted discard of our whole hand (Defined You, the default, or each Player) anywhere in
+        // the chain, charm choices included.
+        private static boolean discardsOwnHand(final SpellAbility root) {
+            for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+                if (part.getApi() == ApiType.Discard && !part.usesTargeting() && "Hand".equals(part.getParam("Mode"))) {
+                    final String defined = part.getParamOrDefault("Defined", "You");
+                    if ("You".equals(defined) || "Player".equals(defined)) {
+                        return true;
+                    }
+                }
+                for (final AbilitySub choice : part.getAdditionalAbilityList("Choices")) {
+                    if (discardsOwnHand(choice)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // The chooser judges a discard cost with Finale still in hand, but at resolution Finale is on the
+        // stack, so only the hand's other cards can pay it. Discard types this does not model (the whole
+        // hand, the last drawn card, name groups, X or chosen-color types, the card itself) decline.
+        private static boolean discardCostPayable(final Player ai, final Card host, final Card c, final SpellAbility s) {
+            if (s.getPayCosts() == null) {
+                return true;
+            }
+            for (final CostPart part : s.getPayCosts().getCostParts()) {
+                if (!(part instanceof CostDiscard)) {
+                    continue;
+                }
+                final String type = part.getType();
+                final Integer amount = part.convertAmount();
+                if (part.payCostFromSource() || amount == null || "Hand".equals(type) || "LastDrawn".equals(type)
+                        || type.contains("+With") || type.contains("X") || type.contains("Chosen")) {
+                    return false;
+                }
+                CardCollectionView others = CardLists.filter(ai.getCardsIn(ZoneType.Hand), h -> !h.equals(host));
+                if (!"Random".equals(type)) {
+                    others = CardLists.getValidCards(others, type.split(";"), ai, c, s);
+                }
+                if (others.size() < amount) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Floating red plus untapped sources whose printed production could be red and whose mana
+        // this spell may spend (Mizzix's Mastery's copy of Electric Seaweed's helper, copied again).
+        private static boolean hasRedSources(final Player ai, final Card host, final int needed) {
+            final SpellAbility spell = host.getFirstSpellAbility();
+            int red = ai.getManaPool().getAmountOfColor(MagicColor.RED);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (red >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (spell != null && !ma.getManaPart().meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("R") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        red++;
+                        break;
+                    }
+                }
+            }
+            return red >= needed;
+        }
+    }
+
     // Fire Covenant
     // "As an additional cost to cast this spell, pay X life. Fire Covenant deals X damage divided
     // as you choose among any number of target creatures." The stock DamageDealAi path maximizes
