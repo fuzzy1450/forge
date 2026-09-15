@@ -10855,6 +10855,65 @@ public class SpecialCardAi {
         }
     }
 
+    // Spectral Searchlight
+    // The tap is a ChoosePlayer root with a Mana sub, so the AI mana payer never
+    // uses it (ComputerUtilMana.getAIPlayableMana skips non-Mana roots). Tap it
+    // ritual-style only: on our own main phase with an empty stack, when one mana
+    // of the colour we will pick at resolution turns a spell we want to cast from
+    // unaffordable into affordable. The mana always goes to us (AILogic$ Pump).
+    public static class SpectralSearchlight {
+        public static boolean consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || ph.getPhase() == null || !ph.getPhase().isMain()
+                    || !game.getStack().isEmpty()) {
+                return false; // ritual-style only; the mana drains at end of step
+            }
+            final AbilitySub mana = sa.getSubAbility();
+            if (mana == null || mana.getApi() != ApiType.Mana) {
+                return false;
+            }
+            // mirror PlayerControllerAi.chooseColor at resolution: WUBRG menu and an
+            // empty stack -> most prominent colour in hand, else WHITE
+            byte color = MagicColor.fromName(ComputerUtilCard.getMostProminentColor(ai.getCardsIn(ZoneType.Hand)));
+            if ((ColorSet.WUBRG.getColor() & color) == 0) {
+                color = MagicColor.WHITE;
+            }
+            final String shard = MagicColor.toShortString(color);
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            final String self = ComputerUtilAbility.getAbilitySourceName(sa);
+
+            // Command too: a commander recast one mana short is priced with its tax
+            final List<SpellAbility> all = ComputerUtilAbility.getSpellAbilities(ai.getCardsIn(ZoneType.Hand, ZoneType.Command), ai);
+            for (final SpellAbility testSa : ComputerUtilAbility.getOriginalAndAltCostAbilities(all, ai)) {
+                if (!testSa.isSpell() || testSa.getApi() == null || testSa.hasParam("AINoRecursiveCheck")
+                        || self.equals(ComputerUtilAbility.getAbilitySourceName(testSa))
+                        || testSa.getPayCosts() == null || !testSa.canPlay()) {
+                    continue; // canPlay also covers unpayable additional (non-mana) costs
+                }
+                final ManaCost mc = testSa.getPayCosts().getTotalMana();
+                if (mc == null || mc.getCMC() == 0 || mc.countX() > 0) {
+                    continue; // nothing to ramp into; X sizing is setMaxXValue's job
+                }
+                testSa.setActivatingPlayer(ai);
+                final ManaCostBeingPaid rest = ComputerUtilMana.calculateManaCost(testSa.getPayCosts(), testSa, ai, true, 0, false);
+                if (!rest.ai_payMana(shard, ai.getManaPool())) {
+                    continue; // our one mana could not be spent on it
+                }
+                if (!ComputerUtilMana.canPayManaCost(rest, testSa, ai, false)) {
+                    continue; // still short even with it (Searchlight is not a payer source)
+                }
+                if (ComputerUtilCost.canPayCost(testSa, ai, false)) {
+                    continue; // already castable without the tap: it buys nothing
+                }
+                if (aic.canPlaySa(testSa) == AiPlayDecision.WillPlay) {
+                    return true; // we want this spell and can only afford it with the tap
+                }
+            }
+            return false;
+        }
+    }
+
     // Spelltwine
     // Exile our best instant/sorcery and an opponent's, copy both, cast the
     // copies free. The copies are cast "if able" - a forced cast the AI does

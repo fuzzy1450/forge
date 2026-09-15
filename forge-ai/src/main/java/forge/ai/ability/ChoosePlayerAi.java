@@ -5,6 +5,8 @@ import com.google.common.collect.Iterables;
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.AiPlayerPredicates;
+import forge.ai.ComputerUtilAbility;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.player.Player;
 import forge.game.player.PlayerCollection;
@@ -17,6 +19,16 @@ import java.util.Map;
 public class ChoosePlayerAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision canPlay(Player ai, SpellAbility sa) {
+        if ("Spectral Searchlight".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa.getParent() == null && sa.isManaAbility()) {
+            // The AI mana payer never taps this (ComputerUtilMana.getAIPlayableMana
+            // skips non-Mana roots), so the only useful activation is ritual-style:
+            // tap only when the mana lets us cast something now. Otherwise the stock
+            // unconditional WillPlay below idle-taps it into an emptying pool.
+            return SpecialCardAi.SpectralSearchlight.consider(ai, sa)
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 
