@@ -5,6 +5,7 @@ import com.google.common.collect.Maps;
 import forge.ai.*;
 import forge.card.MagicColor;
 import forge.card.mana.ManaCost;
+import forge.card.mana.ManaCostShard;
 import forge.game.Game;
 import forge.game.GameEntity;
 import forge.game.GameObject;
@@ -20,6 +21,7 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.player.PlayerCollection;
 import forge.game.player.PlayerPredicates;
+import forge.game.spellability.AbilityManaPart;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.TargetChoices;
@@ -87,10 +89,169 @@ public class DamageDealAi extends DamageAiBase {
                 dmg--; // the card will be spent casting the spell, so actual damage is 1 less
             }
         }
+        final TargetRestrictions randomTgt = sa.getTargetRestrictions();
+        if (randomTgt != null && randomTgt.isRandomTarget()
+                && "Explosion of Riches".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // "5 damage to target opponent chosen at random", reached as the reflexive Execute:
+            // damageTargetAI refuses every random target, which vetoed the whole spell.
+            return explosionOfRiches(ai, sa, dmg);
+        }
         if (damageTargetAI(ai, sa, dmg, true)) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
         return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+    }
+
+    // Explosion of Riches (row 77, second attempt). Reads state only: no MyRandom draw, no AiCardMemory
+    // write, no target set. The script's AIActivateLast$ True keeps the hand cast behind every other play
+    // the AI is willing to make, so a hand cast only ever spends mana the AI would have left idle.
+    private static AiAbilityDecision explosionOfRiches(final Player ai, final SpellAbility sa, final int dmg) {
+        final SpellAbility root = sa.getRootAbility();
+        final Card host = sa.getHostCard();
+        if (root == sa || !root.isSpell() || host == null
+                || !ai.equals(root.getActivatingPlayer()) || !ai.equals(sa.getActivatingPlayer())) {
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+        final ManaCost own = root.getPayCosts() == null ? ManaCost.ZERO : root.getPayCosts().getTotalMana();
+        final int[] cap = explosionManaCapacity(ai, root);
+        if (!explosionFits(cap, own, ManaCost.ZERO)) {
+            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
+        if (!randomOpponentDamageLands(ai, sa, dmg)) {
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+        if (root.isCastFromPlayEffect()) {
+            if (host.isInZone(ZoneType.Library) && explosionRevealedBesidePermanent(ai, host)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+    }
+
+    // A reveal-and-choose Play effect (Sunbird's Invocation) remembers what it revealed on its
+    // source. PlayAi's getBestAI takes the most expensive card of a mixed list, so a playable
+    // Explosion (6) would beat any cheaper revealed permanent: decline, and stock's pick stands.
+    private static boolean explosionRevealedBesidePermanent(final Player ai, final Card host) {
+        for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+            if (!src.isRemembered(host)) {
+                continue;
+            }
+            for (final Object o : src.getRemembered()) {
+                if (o instanceof Card c && !c.equals(host) && c.isInZone(ZoneType.Library)
+                        && c.isPermanent() && !c.isLand() && c.getCMC() <= host.getCMC()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Every legal pick must be an opponent PLAYER who can lose life and is predicted to take damage
+    // (safe for a true random pick and for damageChoosingTargets' lowest-life pick). Any card
+    // candidate keeps the old refusal. As in 9224cc91570.
+    private static boolean randomOpponentDamageLands(final Player ai, final SpellAbility sa, final int dmg) {
+        if (dmg <= 0 || sa.getActivatingPlayer() == null) {
+            return false;
+        }
+        final List<GameEntity> cands = sa.getTargetRestrictions().getAllCandidates(sa);
+        if (cands.isEmpty()) {
+            return false;
+        }
+        for (final GameEntity ent : cands) {
+            if (!(ent instanceof Player p) || !p.isOpponentOf(ai) || !p.canLoseLife()
+                    || ComputerUtilCombat.predictDamageTo(p, dmg, sa.getHostCard(), false) <= 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // What the AI payment could use now, as [total, W, U, B, R, G, any color]: the sources
+    // ComputerUtilMana.getAvailableManaSources/groupSourcesByManaColor would offer, without the
+    // RNG roll in isManaSourceReserved. Errs low: a decline here is exactly stock's refusal.
+    private static int[] explosionManaCapacity(final Player ai, final SpellAbility spell) {
+        final int[] cap = new int[7];
+        cap[0] = ai.getManaPool().totalMana();
+        for (int i = 0; i < 5; i++) {
+            final int n = ai.getManaPool().getAmountOfColor(MagicColor.WUBRG[i]);
+            cap[1 + i] += n;
+            cap[6] += n;
+        }
+        for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+            if (src.getManaAbilities().isEmpty()
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)) {
+                continue;
+            }
+            int best = 0;
+            int colors = 0;
+            for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+                ma.setActivatingPlayer(ai);
+                final AbilityManaPart mp = ma.getManaPart();
+                if (mp == null || !ma.canPlay() || !ma.checkRestrictions(ai) || !mp.meetsManaRestrictions(spell)
+                        || ma.getPayCosts().hasSpecificCostType(forge.game.cost.CostPayLife.class)) {
+                    continue;
+                }
+                final String[] tokens = mp.getOrigProduced().split(" ");
+                final boolean combo = "Combo".equals(tokens[0]);
+                final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                final int net = (combo ? 1 : tokens.length) * amount;
+                if (net <= 0) {
+                    continue;
+                }
+                best = Math.max(best, net);
+                if (ma.getSubAbility() != null) {
+                    continue; // the payment may refuse the drawback (a Talisman's pain): no colors from it
+                }
+                for (int t = combo ? 1 : 0; t < tokens.length; t++) {
+                    if (tokens[t].length() == 1 && "WUBRG".contains(tokens[t])) {
+                        colors |= MagicColor.fromName(tokens[t].charAt(0));
+                    } else if (!"C".equals(tokens[t])) {
+                        colors |= MagicColor.ALL_COLORS;
+                    }
+                }
+            }
+            cap[0] += best;
+            if (colors != 0) {
+                cap[6] += best;
+                for (int i = 0; i < 5; i++) {
+                    if ((colors & MagicColor.WUBRG[i]) != 0) {
+                        cap[1 + i] += best;
+                    }
+                }
+            }
+        }
+        return cap;
+    }
+
+    // Can cap pay a and b together: total mana, each color's mono shards, and every colored shard
+    // (a hybrid needs some color). Phyrexian and 2/C shards are left to generic. An upper bound.
+    private static boolean explosionFits(final int[] cap, final ManaCost a, final ManaCost b) {
+        final int[] need = new int[7];
+        for (final ManaCost m : new ManaCost[] {a, b}) {
+            need[0] += m.getCMC();
+            for (final ManaCostShard s : m) {
+                if (s.isPhyrexian() || s.isOr2Generic() || (s.getColorMask() & MagicColor.ALL_COLORS) == 0) {
+                    continue;
+                }
+                need[6]++;
+                if (s.isMonoColor()) {
+                    for (int i = 0; i < 5; i++) {
+                        if (s.isColor(MagicColor.WUBRG[i])) {
+                            need[1 + i]++;
+                        }
+                    }
+                }
+            }
+        }
+        for (int k = 0; k < 7; k++) {
+            if (cap[k] < need[k]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
