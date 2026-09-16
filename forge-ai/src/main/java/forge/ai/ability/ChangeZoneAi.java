@@ -203,6 +203,16 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.WakeTheDead.consider(aiPlayer, sa);
         }
 
+        if ("Run Away Together".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Both creatures are targets of this one SA (TargetsWithDifferentControllers):
+            // the generic known-origin targeting below keeps only opponents' creatures, so
+            // in a two-seat game every second pick shares the first one's controller and the
+            // target set can never be completed. AI:RemoveDeck:All stripped the card before
+            // any handler ran, so the stock path drew no random numbers for it. Every other
+            // ChangeZone card takes exactly the path it took before this branch.
+            return SpecialCardAi.OwnAndOpponentBounce.considerSingleSa(aiPlayer, sa);
+        }
+
         if ("Ghostly Flicker".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
             // Picks and targets two of our own permanents itself: the stock
             // blink targeting in isPreferredTarget runs only for single-target

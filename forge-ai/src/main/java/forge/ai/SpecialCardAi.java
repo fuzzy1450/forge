@@ -10192,6 +10192,143 @@ public class SpecialCardAi {
         }
     }
 
+    // Own-and-opponent bounce (Run Away Together; Peel from Reality)
+    // "Return a creature of ours and a creature of theirs to their owners' hands."
+    // Both targets are required, so the card is only ever spent to SAVE one of ours:
+    // a creature the top of the stack is about to kill, or one the declared combat
+    // would destroy without taking anything with it. Theirs is the best removal
+    // target the board is NOT already killing, because bouncing a creature out of a
+    // wrath or out of a lethal block hands it back to them for free. There are no
+    // proactive, reload or enters-reuse windows.
+    public static class OwnAndOpponentBounce {
+        // mineSa targets our creature and theirsSa theirs; a card that takes both on
+        // one SA passes the same SA twice. Every caller resets its targets first.
+        private static Pair<Card, Card> choosePair(final Player ai, final SpellAbility mineSa,
+                final SpellAbility theirsSa) {
+            final Game game = ai.getGame();
+            final Combat combat = game.getCombat();
+            final boolean declaredBlockers = combat != null
+                    && game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS);
+
+            CardCollection mine = CardLists.getTargetableCards(ai.getCreaturesInPlay(), mineSa);
+            mine = ComputerUtil.getSafeTargets(ai, mineSa, mine);
+            // a token never comes back; a creature we do not own would be "saved" into
+            // its owner's hand; persist and undying bring it back on their own
+            mine = CardLists.filter(mine, c -> !c.isToken() && ai.equals(c.getOwner())
+                    && !ComputerUtilCard.isUselessCreature(ai, c)
+                    && !ComputerUtilCard.hasActiveUndyingOrPersist(c));
+            if (mine.isEmpty()) {
+                return null;
+            }
+
+            // our half: a creature we would otherwise lose in this priority window
+            Card save = null;
+            if (!game.getStack().isEmpty()) {
+                // the TOP of the stack only, which getSpellAbilityToPlay guarantees is an
+                // opponent's item: one of our own wraths further down can be mispredicted
+                // as threatening everything (a ChooseType DestroyAll reads every creature
+                // as doomed while its type is still unchosen) and would buy a bounce for
+                // nothing
+                final List<GameObject> threatened = ComputerUtil.predictThreatenedObjects(ai, mineSa, true);
+                save = ComputerUtilCard.getBestCreatureAI(CardLists.filter(mine, threatened::contains));
+            }
+            if (save == null && declaredBlockers) {
+                save = ComputerUtilCard.getBestCreatureAI(CardLists.filter(mine,
+                        c -> c.getShieldCount() == 0 && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                                && freeToLeaveCombat(ai, c, combat)));
+            }
+            if (save == null) {
+                return null;
+            }
+            final Card saved = save;
+
+            // their half: never a creature the board is already killing
+            final Set<GameObject> doomed = new HashSet<>(ComputerUtil.predictThreatenedObjects(ai, null));
+            for (final Player opp : ai.getOpponents()) {
+                // a ValidCards sweeper is read over whichever battlefield the caller names
+                doomed.addAll(ComputerUtil.predictThreatenedObjects(opp, null));
+            }
+            final CardCollection pool = CardLists.filter(
+                    CardLists.getTargetableCards(game.getCardsIn(ZoneType.Battlefield), theirsSa),
+                    c -> c.isCreature() && c != saved && c.getController().isOpponentOf(ai)
+                            && (c.isToken() || c.getCMC() > 0) && !wearsOurAura(ai, c));
+            CardCollection live = CardLists.filter(pool, c -> !doomed.contains(c)
+                    && !(declaredBlockers && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)));
+            if (live.isEmpty()) {
+                // a doomed token gives them nothing back; a doomed card is a gift
+                live = CardLists.filter(pool, Card::isToken);
+            }
+            if (combat != null) {
+                final CardCollection fighting = CardLists.filter(live,
+                        c -> combat.isAttacking(c) || combat.isBlocking(c));
+                if (!fighting.isEmpty()) {
+                    live = fighting;
+                }
+            }
+            final Card pick = ComputerUtilCard.getBestRemovalTargetAI(ai, live);
+            return pick == null ? null : Pair.of(saved, pick);
+        }
+
+        // Leaving combat may not undo a trade we are winning, and a blocker may not be
+        // pulled off a trampler: Combat.removeFromCombat leaves the band blocked, and a
+        // blocked band with no blockers left sends ALL of a trampler's damage to us.
+        private static boolean freeToLeaveCombat(final Player ai, final Card c, final Combat combat) {
+            if (combat.isBlocking(c)) {
+                for (final Card attacker : combat.getAttackersBlockedBy(c)) {
+                    if (attacker.hasKeyword(Keyword.TRAMPLE)
+                            || ComputerUtilCombat.attackerWouldBeDestroyed(ai, attacker, combat)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            if (combat.isAttacking(c)) {
+                for (final Card blocker : combat.getBlockers(c)) {
+                    if (ComputerUtilCombat.blockerWouldBeDestroyed(ai, blocker, combat)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // Our own aura on their creature falls off when it leaves: bouncing it would
+        // free their threat and cost us the aura.
+        private static boolean wearsOurAura(final Player ai, final Card c) {
+            for (final Card attached : c.getAttachedCards()) {
+                if (attached.isAura() && ai.equals(attached.getController())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Run Away Together: both creatures are targets of the one SA
+        public static AiAbilityDecision considerSingleSa(final Player ai, final SpellAbility sa) {
+            // FIRST: TargetsWithDifferentControllers is read against the targets already on
+            // the SA, and a window we cannot pay for leaves a pair set on the card in hand
+            // (canPlaySa runs before canPayCost, and nothing on that path resets). Without
+            // this the pool shrinks to that stale pair for the rest of the game.
+            sa.resetTargets();
+            final Pair<Card, Card> pair = choosePair(ai, sa, sa);
+            if (pair == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!sa.canTarget(pair.getLeft())) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(pair.getLeft());
+            // differentControllers is read against the first target
+            if (!sa.canTarget(pair.getRight()) || !sa.getTargets().add(pair.getRight())
+                    || !sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Path of the Pyromancer
     // "Discard all the cards in your hand. Add {R} for each card discarded this
     // way, then draw that many cards plus one." Card-neutral by construction
