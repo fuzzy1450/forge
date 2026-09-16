@@ -203,6 +203,18 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.WakeTheDead.consider(aiPlayer, sa);
         }
 
+        if ("Peel from Reality".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Picks our creature and theirs together: the root's Creature.YouCtrl list is
+            // emptied by the generic known-origin targeting below, which keeps only
+            // opponents' cards outside its canBouncePermanent window, and that window has
+            // no value floor (it reloads a creature just for a -1/-1 counter); the sub's
+            // generic pick would happily bounce a creature the same stack is already
+            // killing. AI:RemoveDeck:All stripped the card before any handler ran, so the
+            // stock path drew no random numbers for it. Every other ChangeZone card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.OwnAndOpponentBounce.considerRootAndSub(aiPlayer, sa);
+        }
+
         if ("Run Away Together".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
             // Both creatures are targets of this one SA (TargetsWithDifferentControllers):
             // the generic known-origin targeting below keeps only opponents' creatures, so
@@ -306,6 +318,16 @@ public class ChangeZoneAi extends SpellAbilityAi {
             // the creature its resolution will take to be worth it. Every
             // other ChangeZone card is unchanged.
             return SpecialCardAi.PathOfTheSchemer.consider(aiPlayer, sa);
+        }
+        if ("Peel from Reality".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && sa.usesTargeting()) {
+            // The opponent-creature target was already chosen by
+            // SpecialCardAi.OwnAndOpponentBounce against the creature the root is saving;
+            // keep it instead of re-targeting generically (the generic pick has no
+            // already-dying filter). Same shape as the Spelltwine gate above.
+            if (sa.isTargetNumberValid()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
         if (sa.isHidden()) {
             return hiddenOriginPlayDrawbackAI(aiPlayer, sa);

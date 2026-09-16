@@ -10304,6 +10304,27 @@ public class SpecialCardAi {
             return false;
         }
 
+        // Peel from Reality: ours on the root, theirs on the sub
+        public static AiAbilityDecision considerRootAndSub(final Player ai, final SpellAbility sa) {
+            final AbilitySub theirs = sa.getSubAbility();
+            if (theirs == null || theirs.getApi() != ApiType.ChangeZone || !theirs.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.resetTargets();
+            theirs.resetTargets();
+            final Pair<Card, Card> pair = choosePair(ai, sa, theirs);
+            if (pair == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!sa.canTarget(pair.getLeft()) || !theirs.canTarget(pair.getRight())
+                    || !sa.getTargets().add(pair.getLeft()) || !theirs.getTargets().add(pair.getRight())) {
+                sa.resetTargets();
+                theirs.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
         // Run Away Together: both creatures are targets of the one SA
         public static AiAbilityDecision considerSingleSa(final Player ai, final SpellAbility sa) {
             // FIRST: TargetsWithDifferentControllers is read against the targets already on
