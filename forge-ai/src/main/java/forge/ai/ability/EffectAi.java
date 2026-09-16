@@ -46,6 +46,16 @@ public class EffectAi extends SpellAbilityAi {
             // card takes exactly the path it took before this branch.
             return SpecialCardAi.HuntersInsight.consider(ai, sa);
         }
+        if ("RideTheAvalanche".equals(sa.getParam("AILogic"))) {
+            // A "next spell you cast this turn" pre-cast, and only worth its card in
+            // front of a spell the AI is casting anyway: AiController.getSpellAbilityToPlay
+            // offers it once it has chosen one, and the evaluator declines everywhere else.
+            // Routed before the randomReturn roll: the card used to carry AI:RemoveDeck:All,
+            // so the stock engine never evaluated it and never drew for it, and the
+            // declining answer on an ordinary pass draws no RNG either. Only
+            // ride_the_avalanche.txt carries this logic.
+            return SpecialCardAi.RideTheAvalanche.consider(ai, sa);
+        }
         if ("Hellish Rebuke".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             // Punishes opposing attackers that connect with us. Routed before the
             // randomReturn roll: the card used to carry AI:RemoveDeck:All, so the

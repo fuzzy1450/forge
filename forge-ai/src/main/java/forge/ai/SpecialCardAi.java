@@ -41,6 +41,7 @@ import forge.game.combat.Combat;
 import forge.game.combat.CombatLki;
 import forge.game.combat.CombatUtil;
 import forge.game.combat.GlobalAttackRestrictions;
+import forge.game.cost.Cost;
 import forge.game.cost.CostDiscard;
 import forge.game.cost.CostExile;
 import forge.game.cost.CostPart;
@@ -11006,6 +11007,127 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+    }
+
+    // Ride the Avalanche
+    // "The next spell you cast this turn can be cast as though it had flash. When
+    // you cast your next spell this turn, put X +1/+1 counters on up to one target
+    // creature, where X is the mana value of that spell." Two mana and a card buy
+    // nothing at all unless a real spell follows, so the only window worth casting
+    // it in is immediately in front of one: findPreCast is offered the spell
+    // AiController has ALREADY chosen this pass and decides whether to slip Ride in
+    // ahead of it. Predicting a follow-up out of the hand instead (the shape the
+    // skeptic rejected) would let Ride take the mana of the play the AI had chosen,
+    // ride in front of a board wipe that then kills the creature it just grew, or
+    // lose the race to an activated ability that sorts ahead.
+    //
+    // The counters themselves are CountersPutAi's job at resolution: its boon path
+    // picks our own best creature through getSafeTargets, and TargetMin 0 means it
+    // simply takes no target when there is nobody to grow. This class only decides
+    // the cast.
+    public static class RideTheAvalanche {
+        public static final String AI_LOGIC = "RideTheAvalanche";
+        // X is the follow-up's mana value, so a 1- or 2-drop in front of it is not
+        // worth a card
+        public static final int MIN_FOLLOWUP_CMC = 3;
+        // The SA findPreCast is currently offering, set on the game thread and read
+        // by EffectAi on that same thread. The ordinary evaluation loop runs on the
+        // "Game AI Eval" thread, where this is always null, so Ride sits in saList
+        // and is declined on every other pass with no RNG drawn - exactly the RNG
+        // the stock engine consumed for it while AI:RemoveDeck:All filtered it out.
+        public static final ThreadLocal<SpellAbility> PENDING = new ThreadLocal<>();
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (PENDING.get() != sa) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Returns the Ride the Avalanche SA to cast in front of chosenSa, or null.
+        // Every check up to the mana estimate is RNG-free, so a held copy with no
+        // real window costs nothing and stays on the stored RNG stream.
+        public static SpellAbility findPreCast(final Player ai, final SpellAbility chosenSa,
+                final List<SpellAbility> saList) {
+            // 1. the follow-up must be a permanent spell the AI picked itself. A wipe
+            // (Winds of Rath, Cast Off) or any other one-shot is excluded by the api,
+            // so we never grow a creature the very next spell destroys, and a copy is
+            // not a cast we are paying for.
+            if (chosenSa == null || !chosenSa.isSpell() || chosenSa.isCopied()) {
+                return null;
+            }
+            final ApiType api = chosenSa.getApi();
+            if (api != ApiType.PermanentCreature && api != ApiType.PermanentNoncreature) {
+                return null;
+            }
+            // 2. our own main phase with an empty stack: nothing gets a window in between
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return null;
+            }
+            // 3. X is the follow-up's mana value (CardManaCostLKI), so a cheap spell
+            // pays nothing back. X in its cost is not counted here, and a sacrifice
+            // cost is a decision we would be re-taking a spell later.
+            final Card chosenHost = chosenSa.getHostCard();
+            final Cost chosenCosts = chosenSa.getPayCosts();
+            if (chosenHost == null || chosenCosts == null
+                    || chosenHost.getCMC() < MIN_FOLLOWUP_CMC
+                    || chosenCosts.getTotalMana().countX() > 0
+                    || chosenCosts.hasSpecificCostType(CostSacrifice.class)) {
+                return null;
+            }
+            // 4. the Ride SA still on offer on this pass
+            SpellAbility ride = null;
+            for (final SpellAbility ab : saList) {
+                if (AI_LOGIC.equals(ab.getParam("AILogic")) && !ab.isSkip() && ab.getHostCard() != null
+                        && !ab.getHostCard().equals(chosenHost) && ab.getPayCosts() != null) {
+                    ride = ab;
+                    break;
+                }
+            }
+            if (ride == null) {
+                return null;
+            }
+            ride.setActivatingPlayer(ai);
+            // 5. somebody of ours to take the counters. Without this the card would be
+            // cast for the flash alone, which the AI cannot use.
+            boolean canTakeCounters = false;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (c.canBeTargetedBy(ride) && c.canReceiveCounters(CounterEnumType.P1P1)) {
+                    canTakeCounters = true;
+                    break;
+                }
+            }
+            if (!canTakeCounters) {
+                return null;
+            }
+            // 6. one at a time: with an effect of ours already waiting, a second Ride
+            // would be the spell that sets off the first one's trigger, for X = 2.
+            for (final Card eff : ai.getCardsIn(ZoneType.Command)) {
+                final Card src = eff.getEffectSource();
+                if (src != null && src.getName().equals(ride.getHostCard().getName())) {
+                    return null;
+                }
+            }
+            // 7. RNG-free affordability screen, so the paying check below is only
+            // reached in a window where both spells plausibly fit
+            final ManaCost rideMana = ride.getPayCosts().getTotalMana();
+            final ManaCost chosenMana = chosenCosts.getTotalMana();
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, true) < rideMana.getCMC() + chosenMana.getCMC()) {
+                return null;
+            }
+            // 8. and can we actually pay for both? Test mode sets castFrom, so commander
+            // tax and the follow-up's own cost reducers are included. effect = false:
+            // this is a real cast, not an effect's payment (the DelayedTriggerAi
+            // SpellCopy precedent passes true).
+            final SpellAbility combined = chosenSa.copyWithDefinedCost(
+                    new Cost(ManaCost.combine(rideMana, chosenMana), false));
+            if (!ComputerUtilMana.canPayManaCost(combined, ai, 0, false)) {
+                return null;
+            }
+            return ride;
         }
     }
 

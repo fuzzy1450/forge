@@ -1592,6 +1592,29 @@ public class AiController {
             return null; // not planning to copy the spell and not marked as something the AI would respond to
         }
 
+        // Ride the Avalanche: a "next spell you cast this turn" pre-cast is only worth
+        // its card in front of a spell we are casting anyway, so it is offered here,
+        // with the choice already made, rather than predicted out of the hand. Inert
+        // and RNG-free unless an SA in saList carries that AILogic.
+        if (top == null) {
+            SpellAbility ride = SpecialCardAi.RideTheAvalanche.findPreCast(player, chosenSa, saList);
+            if (ride != null) {
+                SpecialCardAi.RideTheAvalanche.PENDING.set(ride);
+                try {
+                    // hold the follow-up's own sources back first, so paying for the
+                    // pre-cast can never starve the spell it rides in front of
+                    if (reserveManaSourcesForNextSpell(chosenSa, ride)) {
+                        if (canPlayAndPayFor(ride) == AiPlayDecision.WillPlay) {
+                            return ride;
+                        }
+                        memory.clearMemorySet(AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+                    }
+                } finally {
+                    SpecialCardAi.RideTheAvalanche.PENDING.remove();
+                }
+            }
+        }
+
         return chosenSa;
     }
 
