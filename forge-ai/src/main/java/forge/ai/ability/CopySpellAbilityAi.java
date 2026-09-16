@@ -129,20 +129,6 @@ public class CopySpellAbilityAi extends SpellAbilityAi {
             // untargeted Defined$ Targeted copy sub.
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
-        if ("Tempt with Mayhem".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
-            // DBCopySelf copies the root's target (Defined$ Targeted) and has no targeting
-            // of its own, so checkApiLogic's non-mandatory fallthrough refuses it. Accept
-            // only a spell SpecialCardAi.TemptWithMayhem.consider (routed from
-            // RepeatEachAi.canPlay) already chose and that is still a legal target on the
-            // stack; otherwise take the stock path below (the cascade path never runs
-            // consider, so a stale target must not pass).
-            final SpellAbility root = sa.getRootAbility();
-            final SpellAbility copied = root.usesTargeting() ? root.getTargets().getFirstTargetedSpell() : null;
-            if (copied != null && aiPlayer.getGame().getStack().getInstanceMatchingSpellAbilityID(copied) != null
-                    && root.canTargetSpellAbility(copied)) {
-                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-            }
-        }
         if ("ChainOfSmog".equals(sa.getParam("AILogic"))) {
             return SpecialCardAi.ChainOfSmog.consider(aiPlayer, sa);
         }
