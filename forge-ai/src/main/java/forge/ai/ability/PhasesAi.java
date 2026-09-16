@@ -49,6 +49,21 @@ public class PhasesAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player aiPlayer, SpellAbility sa, boolean mandatory) {
+        // Oubliette: "exile until it leaves the battlefield" written as phasing, so this
+        // enters trigger is the removal. phasesPrefTargeting below is an unconditional
+        // stub, so the non-mandatory evaluation AiController.checkETBEffects runs on the
+        // trigger always refused and every cast was vetoed with BadEtbEffects. The
+        // evaluator picks the target itself, at cast time and again when the trigger goes
+        // on the stack. When it finds nothing worth the three mana, a mandatory trigger
+        // still falls through to the stock unpreferred targeting below, as the rules
+        // require.
+        if ("Oubliette".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && sa.usesTargeting()) {
+            final AiAbilityDecision decision = SpecialCardAi.Oubliette.consider(aiPlayer, sa);
+            if (decision.willingToPlay() || !mandatory) {
+                return decision;
+            }
+        }
+
         final TargetRestrictions tgt = sa.getTargetRestrictions();
 
         if (tgt == null) {

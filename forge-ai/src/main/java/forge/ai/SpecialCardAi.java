@@ -9844,6 +9844,53 @@ public class SpecialCardAi {
         }
     }
 
+    // Oubliette
+    // "Exile until it leaves the battlefield", written as phasing: the targeted creature
+    // stays phased out for as long as Oubliette stays, so the enters trigger is removal.
+    // The target is picked the way the O-Ring family picks one
+    // (ChangeZoneAi.isPreferredTarget: an opponent's targetable permanent, skipping one
+    // wearing our own aura, prioritizeCreaturesWorthRemovingNow, getBestRemovalTargetAI),
+    // plus a value floor, because three mana buys one creature-only answer. Ward is
+    // excluded outright rather than priced: the trigger is not a spell, so nothing on this
+    // path pays a ward cost (ComputerUtilCost.canPayCost only weighs ward for
+    // non-triggers), and the biggest warded body is exactly what getBestRemovalTargetAI
+    // would rank first, leaving a countered trigger and a blank three-mana permanent.
+    // Draws no random numbers.
+    public static class Oubliette {
+        // evaluateCreature of a vanilla 2/2 for 2; a 1/1 token is 106, a 2/2 token 131
+        public static final int MIN_TARGET_VALUE = 160;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+
+            CardCollection list = CardLists.getTargetableCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa);
+            list = ComputerUtil.filterAITgts(sa, ai, list, true);
+            list = CardLists.filter(list, c -> c.isCreature()
+                    // a card we own but an opponent controls comes back to us anyway
+                    && !ai.equals(c.getOwner())
+                    // the trigger would resolve and do nothing
+                    && !forge.game.staticability.StaticAbilityCantPhase.cantPhaseOut(c)
+                    // a triggered ability cannot pay a ward cost, so the trigger is countered
+                    && !c.hasKeyword(Keyword.WARD)
+                    && !ComputerUtilCard.isUselessCreature(c.getController(), c)
+                    // phasing it out takes our own aura with it
+                    && c.getEnchantedBy().stream().noneMatch(a -> ai.equals(a.getController()))
+                    && (c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= MIN_TARGET_VALUE));
+            if (list.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            list = ComputerUtilCard.prioritizeCreaturesWorthRemovingNow(ai, list, false);
+            final Card best = ComputerUtilCard.getBestRemovalTargetAI(ai, list);
+            if (best == null || !sa.canTarget(best)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Overcharged Amalgam
     // Flash, flying, exploit: "When this exploits a creature, counter target spell, activated
     // ability, or triggered ability" - a counterspell that leaves a 3/3 flyer, paid for with a
