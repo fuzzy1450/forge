@@ -7947,7 +7947,14 @@ public class SpecialCardAi {
     // Floors in both: target not a land, nonlegendary (the legend rule would bin
     // every copied land), base power and toughness at least 1 (copiable values:
     // Hydroid Krasis and Ulvenwald Hydra copies die at once), no Defender, no
-    // EndOfTurnLeavePlay. The copied lands are held out of the spell's own
+    // EndOfTurnLeavePlay. Nothing below the phase gate runs until a precondition
+    // passes: the spell is castable at this priority and the cost is payable from
+    // sources we are NOT about to hold, and two copies or a killable single
+    // opponent exist. A window that fails it costs nothing and writes no
+    // AiCardMemory, because stock answered MissingLogic here without ever reaching
+    // ComputerUtilCost.canPayCost, and one floor pass in an unpayable window
+    // re-rolls the game (game 494947 diverged from turn 19 that way, with no cast
+    // in either arm). The copied lands are held out of the spell's own
     // payment (HELD_MANA_SOURCES_FOR_NEXT_SPELL) so the copies arrive untapped;
     // the spell is declined, and the holds released, when it can't be paid
     // without them. No RNG and no clock: no choosePreferredDefenderPlayer (its
@@ -7972,7 +7979,8 @@ public class SpecialCardAi {
             if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
             }
-            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isBefore(PhaseType.COMBAT_BEGIN)
+            if (!sa.canCastTiming(ai) || !ph.isPlayerTurn(ai)
+                    || !ph.getPhase().isBefore(PhaseType.COMBAT_BEGIN)
                     || !game.getStack().isEmpty()) {
                 return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
             }
@@ -7980,6 +7988,24 @@ public class SpecialCardAi {
             final CardCollection copied = type.isEmpty() ? new CardCollection() : readyLandsOfType(ai, type);
             final PlayerCollection opps = ai.getOpponents();
             if (copied.isEmpty() || opps.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // Precondition, before every scan and before any AiCardMemory write: this
+            // cast has to be payable from what is left once the copied lands are held.
+            // Both reads are RNG-free and write no memory, so a window that fails here
+            // costs exactly what stock's MissingLogic cost.
+            final ManaCost payCost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            final int needMana = payCost == null ? sa.getHostCard().getCMC() : payCost.getCMC();
+            if (spareManaEstimate(ai, copied) < needMana || !hasSpareBlueSources(ai, sa, copied)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            final Player single = opps.size() == 1 ? opps.getFirst() : null;
+            final boolean canKill = single != null && single.canLoseLife() && !single.cantLoseForZeroOrLessLife();
+            // Shape bound before the board scans: the pressure window needs two copies,
+            // and with no killable single opponent there is no lethal window either.
+            if (copied.size() < 2 && !canKill) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
 
@@ -8000,8 +8026,6 @@ public class SpecialCardAi {
                 deathtouch |= b.hasKeyword(Keyword.DEATHTOUCH);
             }
 
-            final Player single = opps.size() == 1 ? opps.getFirst() : null;
-            final boolean canKill = single != null && single.canLoseLife() && !single.cantLoseForZeroOrLessLife();
             final List<Integer> readyVsSingle = new ArrayList<>();
             int readyAny = 0;
             for (final Card c : ai.getCreaturesInPlay()) {
@@ -8067,20 +8091,30 @@ public class SpecialCardAi {
 
             clone.getTargets().add(best);
             final List<Card> held = new ArrayList<>();
-            for (final Card land : copied) {
-                if (!AiCardMemory.isRememberedCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
-                    AiCardMemory.rememberCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
-                    held.add(land);
+            boolean accepted = false;
+            try {
+                for (final Card land : copied) {
+                    if (!AiCardMemory.isRememberedCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                        AiCardMemory.rememberCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+                        held.add(land);
+                    }
+                }
+                if (!ComputerUtilCost.canPayCost(sa, ai, false)) {
+                    clone.resetTargets();
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+                accepted = true;
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            } finally {
+                // The only hold that outlives this call is the one the accepted cast
+                // needs; a decline, or a throw out of canPayCost, releases every land
+                // this call held, so no hold of ours can survive a consult that said no.
+                if (!accepted) {
+                    for (final Card land : held) {
+                        AiCardMemory.forgetCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+                    }
                 }
             }
-            if (!ComputerUtilCost.canPayCost(sa, ai, false)) {
-                for (final Card land : held) {
-                    AiCardMemory.forgetCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
-                }
-                clone.resetTargets();
-                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
-            }
-            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
         // The nonbasic type with the most untapped noncreature lands we control; ties
@@ -8115,6 +8149,80 @@ public class SpecialCardAi {
         private static CardCollection readyLandsOfType(final Player ai, final String type) {
             return CardLists.filter(ai.getLandsInPlay(),
                     c -> c.isUntapped() && !c.isCreature() && c.getType().hasStringType(type));
+        }
+
+        // ComputerUtilMana.getAvailableManaEstimate(ai, true) with the lands this cast
+        // would hold taken out of the pool: copied again rather than refactored, so no
+        // verified card's path moves. Playable sources only, no RNG, no memory write.
+        private static int spareManaEstimate(final Player ai, final CardCollection excluded) {
+            int available = 0;
+            int producedWithCost = 0;
+            boolean hasSourcesWithNoManaCost = false;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (excluded.contains(src) || src.getManaAbilities().isEmpty()) {
+                    continue;
+                }
+                int maxProduced = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay()) {
+                        continue;
+                    }
+                    final int costsToActivate = ma.getPayCosts().getCostMana() != null
+                            ? ma.getPayCosts().getCostMana().convertAmount() : 0;
+                    final int producedMana = ma.getParamOrDefault("Produced", "").split(" ").length;
+                    final int producedAmount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    final int producedTotal = producedMana * producedAmount - costsToActivate;
+                    if (costsToActivate > 0) {
+                        producedWithCost += producedTotal;
+                    } else {
+                        hasSourcesWithNoManaCost = true;
+                    }
+                    if (producedTotal > maxProduced) {
+                        maxProduced = producedTotal;
+                    }
+                }
+                available += maxProduced;
+            }
+            available += ai.getManaPool().totalMana();
+            if (producedWithCost > 0 && !hasSourcesWithNoManaCost) {
+                available -= producedWithCost;
+            }
+            return available;
+        }
+
+        // GhostlyFlicker's hasBlueSources, copied again with the same exclusion and this
+        // SA's own pips (the Flashback cost has them too): floating blue plus playable
+        // sources we are not holding, read from the printed production text.
+        private static boolean hasSpareBlueSources(final Player ai, final SpellAbility sa,
+                final CardCollection excluded) {
+            final ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            final int needed = cost == null ? 0 : cost.getShardCount(forge.card.mana.ManaCostShard.BLUE);
+            int blue = ai.getManaPool().getAmountOfColor(MagicColor.BLUE);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (blue >= needed) {
+                    break;
+                }
+                if (excluded.contains(src)) {
+                    continue;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (!ma.getManaPart().meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("U") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        blue++;
+                        break;
+                    }
+                }
+            }
+            return blue >= needed;
         }
     }
 
