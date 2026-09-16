@@ -13005,6 +13005,371 @@ public class SpecialCardAi {
         }
     }
 
+    // The Master, Formed Anew
+    // Body Thief (a cast trigger) exiles a creature we control with a takeover
+    // counter, and the Master may enter as a copy of a creature card in exile with
+    // one. Stock AI: CloneAi.doTriggerNoCost scans the battlefield for the Choices
+    // (it ignores ChoiceZone$ Exile, and before the cast no takeover card exists
+    // anywhere), so AiController.checkETBEffects vetoes the cast (BadEtbEffects)
+    // and the copy is declined at resolution; the stock hidden-origin chooser
+    // would exile our worst creature (often a token or the commander). Reached
+    // through AILogic$ TheMasterFormedAnew on TrigExile and DBCopy. A body is
+    // taken only when its re-entry gains something, in this order: one whose
+    // control rests on an effect (the copy is ours for good), a face-down one
+    // whose real face is worth more than the face-down body (exiled, it turns
+    // face up), one held down by an opponent's aura or -1/-1 counters, one whose
+    // own enters trigger the AI would run now and that gains something. Only the
+    // cast gate judges bodies, and only once {U}{B} is coverable; held
+    // evaluations and the resolution answer read exile alone. A candidate's
+    // enters triggers go through AiController.doTrigger, lazily, in preference
+    // order, and that is the only place this class can draw random numbers. The
+    // cast gate remembers the body it approved (MemorySet.THE_MASTER_BODY) and
+    // Body Thief takes that body without judging it again, so a random roll in
+    // that judgement (e.g. AlwaysPlayAi's 80% for a trigger already run this
+    // turn) cannot decline the body after the cast is committed.
+    public static class TheMasterFormedAnew {
+        private static final int UNSAFE = -1;
+        private static final int NEUTRAL = 0;
+        private static final int GAINS = 1;
+
+        // CloneAi.doTriggerNoCost, not mandatory: the cast gate (through
+        // checkETBEffects), a held evaluation, a Play effect, and the
+        // enters-as-a-copy answer at resolution.
+        public static AiAbilityDecision considerCopy(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final CardCollection inExile = CardLists.getValidCards(ai.getGame().getCardsIn(ZoneType.Exile),
+                    sa.getParam("Choices"), ai, host, sa);
+            if (!atCastGate(host)) {
+                // Resolution (the real card on the stack), a held evaluation
+                // (getPossibleETBCounters walks hand, library top, graveyard and exile) or a
+                // Play effect (the real card): copy only what is already in exile. Never
+                // judges a body, so it draws nothing and leaves THE_MASTER_BODY alone.
+                return inExile.isEmpty() ? new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+                        : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            AiCardMemory.clearMemorySet(ai, AiCardMemory.MemorySet.THE_MASTER_BODY);
+            if (!canPayNow(ai, host)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford); // before any trigger is judged
+            }
+            if (!inExile.isEmpty()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // Body Thief then takes nothing
+            }
+            final Card body = chooseBody(ai, ai.getCreaturesInPlay());
+            if (body == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            AiCardMemory.rememberCard(ai, body, AiCardMemory.MemorySet.THE_MASTER_BODY);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // AiController.canPlaySa hands saSideEffects an LKI copy of the spell's host:
+        // no zone of its own (getZone() == null), last known zone the stack. At
+        // resolution the host is the real card, whose getZone() IS the stack.
+        // Card.isInZone reads the last known zone, so it cannot tell the two apart.
+        private static boolean atCastGate(final Card host) {
+            return host.getZone() == null && host.isInZone(ZoneType.Stack);
+        }
+
+        // Necessary, never sufficient, RNG-free: enough mana, and {U} and {B} from two
+        // different sources or from one activation that makes both. Unknown shapes
+        // (Any, Chosen, ColorIdentity, reflected) count as either colour.
+        private static boolean canPayNow(final Player ai, final Card host) {
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, true) < host.getCMC()) {
+                return false;
+            }
+            int u = ai.getManaPool().getAmountOfColor(MagicColor.BLUE);
+            int b = ai.getManaPool().getAmountOfColor(MagicColor.BLACK);
+            int ub = u + b;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                boolean srcU = false, srcB = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay()) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart() == null ? "" : ma.getManaPart().getOrigProduced();
+                    final boolean combo = produced.startsWith("Combo");
+                    boolean mayU = false, mayB = false, known = true;
+                    for (final String tok : produced.split(" ")) {
+                        switch (tok) {
+                            case "Combo": case "C": case "W": case "R": case "G": break;
+                            case "U": mayU = true; break;
+                            case "B": mayB = true; break;
+                            default: known = false; break;
+                        }
+                    }
+                    if (!known || produced.isEmpty()) {
+                        mayU = true;
+                        mayB = true;
+                    }
+                    final boolean many = !"1".equals(ma.getParamOrDefault("Amount", "1"));
+                    if (mayU && mayB && ((!combo && known && !produced.isEmpty()) || many)) {
+                        return true; // one activation makes both (Darkwater Catacombs)
+                    }
+                    srcU |= mayU;
+                    srcB |= mayB;
+                }
+                u += srcU ? 1 : 0;
+                b += srcB ? 1 : 0;
+                ub += (srcU || srcB) ? 1 : 0;
+            }
+            // one {U} and one {B} from two different sources (Hall's condition for two single shards)
+            return u >= 1 && b >= 1 && ub >= 2;
+        }
+
+        // Body Thief, both its confirm and its pick: the body the cast was approved
+        // for, while it is still on the battlefield and still passes the static
+        // filters, WITHOUT running etbVerdict again. Nothing remembered: the cast
+        // gate approved a takeover card already in exile (a second body would be
+        // stranded), so take nothing; with none there, judge afresh. A remembered
+        // body that left or changed in response: judge afresh.
+        public static Card bodyThiefPick(final Player ai, final Iterable<Card> pool) {
+            if (AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.THE_MASTER_BODY)) {
+                final boolean waiting = ai.getGame().getCardsIn(ZoneType.Exile).anyMatch(
+                        c -> c.isCreature() && c.getCounters(CounterEnumType.TAKEOVER) > 0);
+                return waiting ? null : chooseBody(ai, pool);
+            }
+            for (final Card c : pool) {
+                if (AiCardMemory.isRememberedCard(ai, c, AiCardMemory.MemorySet.THE_MASTER_BODY)
+                        && c.isInPlay() && staticPass(ai, c, false)) {
+                    return c;
+                }
+            }
+            return chooseBody(ai, pool);
+        }
+
+        // Which creature Body Thief exiles; null = exile nothing.
+        public static Card chooseBody(final Player ai, final Iterable<Card> pool) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            final boolean attackAhead = ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS);
+            final List<Card> stolen = new ArrayList<>();
+            final List<Card> hindered = new ArrayList<>();
+            final List<Card> etb = new ArrayList<>();
+            final List<Card> faceDown = new ArrayList<>();
+            for (final Card c : pool) {
+                if (!staticPass(ai, c, attackAhead)) {
+                    continue;
+                }
+                if (c.isFaceDown()) {
+                    faceDown.add(c); // exiled, it turns face up: the copy is the real creature
+                    continue;
+                }
+                if (!ours(ai, c)) {
+                    // control rests on an effect (a steal), or an opponent's card we put onto the
+                    // battlefield without casting it: either way the copy is ours for good
+                    stolen.add(c);
+                    continue;
+                }
+                if (c.getCounters(CounterEnumType.M1M1) > 0
+                        || c.getEnchantedBy().anyMatch(a -> a.getController().isOpponentOf(ai))) {
+                    hindered.add(c); // the copy sheds the opponent's aura or -1/-1 counters
+                    continue;
+                }
+                etb.add(c);
+            }
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            for (final Card c : byValue(stolen)) {
+                if (etbVerdict(aic, ai, c, false) != UNSAFE) {
+                    return c;
+                }
+            }
+            final Map<Card, Integer> real = new HashMap<>();
+            for (final Card c : faceDown) {
+                real.put(c, realValue(c));
+            }
+            faceDown.sort((a, b) -> Integer.compare(real.get(b), real.get(a)));
+            for (final Card c : faceDown) {
+                final int now = ComputerUtilCard.evaluateCreature(c);
+                if (real.get(c) > now && etbVerdict(aic, ai, c, false) != UNSAFE) {
+                    return c;
+                }
+            }
+            for (final Card c : byValue(hindered)) {
+                if (etbVerdict(aic, ai, c, false) != UNSAFE) {
+                    return c;
+                }
+            }
+            for (final Card c : byValue(etb)) {
+                if (etbVerdict(aic, ai, c, true) == GAINS) {
+                    return c;
+                }
+            }
+            return null;
+        }
+
+        // Owned, or an opponent's card we cast (Ensnared by the Mara): control is
+        // already ours for good, so the copy gains only what an owned body's would.
+        // An opponent's card we reanimated face up has no cast SA and counts as not
+        // ours (the carrier returns such cards only face down).
+        private static boolean ours(final Player ai, final Card c) {
+            final SpellAbility cast = c.getCastSA();
+            return ai.equals(c.getOwner()) || (cast != null && ai.equals(cast.getActivatingPlayer()));
+        }
+
+        // Every body filter that needs no judgement of its enters triggers (draws
+        // nothing): the stolen tier keeps its equipment / +1/+1 / own-aura bodies.
+        private static boolean staticPass(final Player ai, final Card c, final boolean attackAhead) {
+            final boolean faceDown = c.isFaceDown();
+            if (!ai.equals(c.getController()) || !c.isCreature() || c.isToken() || c.isCommander()
+                    || c.isCloned() || c.isPhasedOut() || c.hasMergedCard()
+                    || c.getCurrentStateName() != (faceDown ? forge.card.CardStateName.FaceDown
+                            : forge.card.CardStateName.Original)) {
+                return false; // nothing, or a different face, would be in exile to copy
+            }
+            final CardState original = c.getState(forge.card.CardStateName.Original);
+            if (faceDown && original != null && original.getType().isLegendary()
+                    && ai.isCardInPlay(original.getName())) {
+                return false; // the copy would meet the legend rule
+            }
+            if (original == null || !original.getType().isCreature() || original.getBaseToughness() <= 0
+                    || original.getManaCost().countX() > 0
+                    || (faceDown ? etbReplacement(original) : c.hasETBReplacement())) {
+                // not a creature card in exile; a 0/0 copy dies; an X copy has X = 0;
+                // an enters replacement (stun counters, etbCounter) applies again
+                return false;
+            }
+            if (attackAhead && CombatUtil.canAttack(c)) {
+                return false; // never pay this turn's attack for it
+            }
+            if (ours(ai, c) && (c.isEquipped() || c.getCounters(CounterEnumType.P1P1) > 0
+                    || c.getEnchantedBy().anyMatch(a -> !a.getController().isOpponentOf(ai)))) {
+                return false; // our own investment would be lost
+            }
+            return true;
+        }
+
+        // The real face's value, judged on an LKI copy turned face up (the live card is untouched).
+        private static int realValue(final Card c) {
+            final Card lki = CardCopyService.getLKICopy(c);
+            lki.setFaceDown(false);
+            lki.setState(forge.card.CardStateName.Original, false);
+            // The Master's copy is a new object: no anthem (The Cyber-Controller), no counters (Cult of
+            // Skaro) and no granted keyword (Cyberman Patrol's afflict) carries over from the Cyberman.
+            lki.setPTBoost(com.google.common.collect.ImmutableTable.of());
+            lki.clearCounters();
+            lki.setChangedCardKeywords(com.google.common.collect.ImmutableTable.of());
+            lki.updateKeywordsCache(lki.getCurrentState());
+            return ComputerUtilCard.evaluateCreature(lki);
+        }
+
+        // Card.hasETBReplacement for a state that is not the current one (a face-down body's real face).
+        private static boolean etbReplacement(final CardState state) {
+            for (final ReplacementEffect re : state.getReplacementEffects()) {
+                if (!(re instanceof forge.game.replacement.ReplaceMoved)
+                        || !ZoneType.Battlefield.toString().equals(re.getParam("Destination"))) {
+                    continue;
+                }
+                if (re.hasParam("ValidCard") && !re.getParam("ValidCard").contains("Self")) {
+                    continue;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // Highest evaluateCreature first; ties keep board order.
+        private static List<Card> byValue(final List<Card> cards) {
+            final Map<Card, Integer> value = new HashMap<>();
+            for (final Card c : cards) {
+                value.put(c, ComputerUtilCard.evaluateCreature(c));
+            }
+            cards.sort((a, b) -> Integer.compare(value.get(b), value.get(a)));
+            return cards;
+        }
+
+        // UNSAFE: an enters trigger the copy must run is one the AI would not run
+        // now (Phage's loss). GAINS: a gain is needed and at least one trigger with
+        // a real effect is one the AI would run now; a donate-itself chain (Vislor
+        // Turlough) is no gain. NEUTRAL: neither. Judged trigger by trigger, never
+        // through checkETBEffects, whose skips (optional, disabled, failed
+        // requirements, no targets) only mean that nothing objected. An optional
+        // trigger can be declined, so it is judged only when a gain is needed.
+        private static int etbVerdict(final AiController aic, final Player ai, final Card c, final boolean needGain) {
+            final Game game = ai.getGame();
+            boolean gains = false;
+            final Iterable<Trigger> triggers = c.isFaceDown()
+                    ? c.getState(forge.card.CardStateName.Original).getTriggers() : c.getTriggers();
+            for (final Trigger tr : triggers) {
+                if (tr.getMode() != TriggerType.ChangesZone || tr.isKeyword(Keyword.PARTNER_WITH)
+                        || !ZoneType.Battlefield.toString().equals(tr.getParam("Destination"))) {
+                    continue;
+                }
+                if (tr.hasParam("ValidCard")
+                        && (!tr.getParam("ValidCard").contains("Self") || onlyWhenCast(tr.getParam("ValidCard")))) {
+                    continue; // not its own enters, or only when cast, kicked or bargained: a copy is none of these
+                }
+                final boolean optional = tr.hasParam("OptionalDecider");
+                if (optional && !needGain) {
+                    continue;
+                }
+                final Map<forge.game.ability.AbilityKey, Object> runParams = forge.game.ability.AbilityKey.mapFromCard(c);
+                runParams.put(forge.game.ability.AbilityKey.Destination, ZoneType.Battlefield.name());
+                if (forge.game.staticability.StaticAbilityDisableTriggers.disabled(game, tr, runParams)
+                        || !tr.requirementsCheck(game)) {
+                    continue; // would not fire now: neither a risk nor a gain
+                }
+                final SpellAbility exSA = tr.ensureAbility();
+                if (exSA == null) {
+                    continue;
+                }
+                if (givesOpponentTokens(exSA)) {
+                    return UNSAFE; // Hunted cycle, Pursued Whale: the copy hands the opponent an army
+                }
+                final SpellAbility copy = exSA.copy(ai);
+                copy.setTrigger(tr);
+                copy.setTriggeringObject(forge.game.ability.AbilityKey.Card, c);
+                if (!aic.doTrigger(copy, false)) {
+                    if (!optional) {
+                        return UNSAFE;
+                    }
+                    continue;
+                }
+                // a self-mill root (Eccentric Farmer) is a re-shuffle of our own draws, not a gain
+                boolean noGain = copy.getApi() == null
+                        || (copy.getApi() == ApiType.Mill && !copy.usesTargeting()
+                            && (!copy.hasParam("Defined") || "You".equals(copy.getParam("Defined"))));
+                for (SpellAbility s = copy; s != null && !noGain; s = s.getSubAbility()) {
+                    noGain = s.getApi() == ApiType.GainControl && "Self".equals(s.getParam("Defined"));
+                }
+                gains |= !noGain;
+            }
+            return gains ? GAINS : NEUTRAL;
+        }
+
+        // A Token link whose tokens go to an opponent (TokenOwner Opponent / Player.Opponent, or a
+        // targeted player). TargetedController (Amphin Mutineer: the exiled creature's controller) is a
+        // removal, not a gift, and is left to doTrigger.
+        private static boolean givesOpponentTokens(final SpellAbility root) {
+            for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
+                if (s.getApi() != ApiType.Token || !s.hasParam("TokenOwner")) {
+                    continue;
+                }
+                final String owner = s.getParam("TokenOwner");
+                if ("Opponent".equals(owner) || "Player.Opponent".equals(owner)) {
+                    return true;
+                }
+                if (("Targeted".equals(owner) || "TargetedPlayer".equals(owner)) && s.hasParam("ValidTgts")
+                        && (s.getParam("ValidTgts").contains("Opponent") || s.getParam("ValidTgts").contains("Player"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A positive kicked / wasCast... / bargained / PromisedGift property in the
+        // trigger's ValidCard: a copy was neither cast nor paid for, so it never fires.
+        private static boolean onlyWhenCast(final String validCard) {
+            for (final String part : validCard.split("[.+,]")) {
+                final String p = part.trim();
+                if (p.startsWith("kicked") || p.startsWith("wasCast") || p.startsWith("bargained")
+                        || p.startsWith("PromisedGift")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // The Mimeoplasm
     // Its optional "as it enters" copy effect is a ChooseCard chain whose copy
     // chooser picks from the two cards the first chooser exiles mid-resolution.
