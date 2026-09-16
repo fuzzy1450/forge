@@ -9953,6 +9953,138 @@ public class SpecialCardAi {
         }
     }
 
+    // Open into Wonder
+    // "X U U sorcery: X target creatures can't be blocked this turn and gain 'whenever this
+    // creature deals combat damage to a player, draw a card'". X is the TARGET COUNT, and
+    // the generic AILogic$ Pump branch in EffectAi never announces it (see the router
+    // there), so the stock AI paid {U}{U} at X = 0 and had the spell dropped at stack-add.
+    // Announce X here as the number of our creatures that will attack AND connect this
+    // turn, and target exactly those.
+    // Floor: two such attackers (two cards for X + 2 mana, plus the evasion), or lethal
+    // unblocked damage. Never draw our own library out, never tap out into a lethal
+    // crack-back, never a creature that is taxed to attack (the spell would eat the mana
+    // the tax needs), never past the board's global attack limit, and never while the
+    // opponent has a planeswalker, because the attack would be aimed at it and the granted
+    // trigger only fires on damage to a PLAYER.
+    public static class OpenIntoWonder {
+        // two cards plus evasion on two attackers; below that the spell is not worth a card
+        public static final int MIN_TARGETS = 2;
+        // bounds the per-creature attack sims inside the AI's per-decision budget
+        public static final int MAX_EVALUATED = 8;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // the stock AILogic$ Pump branch this replaces reset the targets on every pass
+            sa.resetTargets();
+            sa.setXManaCostPaid(null);
+            // the effect lasts only for this turn's combat, so main 2 is always too late
+            if (!ph.is(PhaseType.MAIN1, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Player opp = ai.getWeakestOpponent();
+            if (opp == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // setMaxXValue stamps X as a side effect; clear it again until we commit
+            final int maxX = ComputerUtilCost.setMaxXValue(sa, ai, false);
+            sa.setXManaCostPaid(null);
+            if (maxX <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+
+            // our creatures that can attack right now, are not taxed to attack, and would
+            // actually deal damage to the opponent unblocked. A taxed attacker is never a
+            // target: paying X would starve the tax, and AiController.removeUnpayableAttackers
+            // would then drop it from the real declaration.
+            final CardCollection candidates = new CardCollection();
+            final Map<Card, Integer> unblockedDamage = new HashMap<>();
+            for (Card c : CardLists.filterControlledBy(CardUtil.getValidCardsToTarget(sa), ai)) {
+                if (!CombatUtil.canAttack(c, opp) || CombatUtil.getAttackCost(game, c, opp) != null) {
+                    continue;
+                }
+                final int unblocked = ComputerUtilCombat.damageIfUnblocked(c, opp, null, false);
+                if (unblocked <= 0) {
+                    continue;
+                }
+                candidates.add(c);
+                unblockedDamage.put(c, unblocked);
+            }
+            candidates.sort(Comparator.comparingInt((Card c) -> unblockedDamage.get(c)).reversed());
+
+            // keep only the attackers our own attack planner would send once they cannot be
+            // blocked (the EffectAi MakeUnblockable LKI idiom). An already unblockable
+            // attacker passes too, and it still gains the draw trigger.
+            final CardCollection chosen = new CardCollection();
+            int evaluated = 0;
+            for (Card c : candidates) {
+                if (chosen.size() >= maxX || evaluated >= MAX_EVALUATED) {
+                    break;
+                }
+                evaluated++;
+                final Card copy = CardCopyService.getLKICopy(c);
+                copy.addStaticAbility("Mode$ CantBlockBy | ValidAttacker$ Creature.Self");
+                copy.setSickness(false); // c itself already passed canAttack
+                if (!ComputerUtilCard.doesSpecifiedCreatureAttackAI(ai, copy)) {
+                    continue;
+                }
+                chosen.add(c);
+            }
+
+            // a global attack limit (Silent Arbiter, Crawlspace) caps what the real
+            // declaration can send, so any target past it would connect with nothing
+            final GlobalAttackRestrictions restrictions = new Combat(ai).getAttackConstraints().getGlobalRestrictions();
+            final Integer attackLimit = restrictions.getMax() != null
+                    ? restrictions.getMax() : restrictions.getDefenderMax().get(opp);
+            if (attackLimit != null) {
+                while (chosen.size() > Math.max(0, attackLimit)) {
+                    chosen.remove(chosen.size() - 1);
+                }
+            }
+
+            int damage = 0;
+            for (Card c : chosen) {
+                damage += unblockedDamage.get(c);
+            }
+            final boolean lethal = !chosen.isEmpty() && opp.canLoseLife()
+                    && !opp.cantLoseForZeroOrLessLife() && damage >= opp.getLife();
+            if (!lethal) {
+                // chooseDefender aims a non-lethal attack at a planeswalker first, and the
+                // granted trigger is ValidTarget$ Player, so those draws are wasted
+                if (!opp.getPlaneswalkersInPlay().isEmpty()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                // every connecting target draws a card, and the trigger is mandatory: keep
+                // one card back for our own next draw step
+                if (!ai.cantLose()) {
+                    final int library = ai.getCardsIn(ZoneType.Library).size();
+                    while (chosen.size() > Math.max(0, library - 1)) {
+                        chosen.remove(chosen.size() - 1);
+                    }
+                }
+                if (chosen.size() < MIN_TARGETS) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                // those attackers stay tapped through the opponent's turn
+                if (ComputerUtil.predictNextCombatsRemainingLife(ai, false, false, 0, chosen) <= 0) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+
+            sa.setXManaCostPaid(chosen.size());
+            for (Card c : chosen) {
+                sa.getTargets().add(c);
+            }
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Order of Succession
     // Resolution is predictable under AI choosers: ControlGainVariantAi.chooseSingleCard
     // is getBestCreatureAI over the next player's creatures, so we gain the best creature

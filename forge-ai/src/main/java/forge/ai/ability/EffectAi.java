@@ -84,6 +84,18 @@ public class EffectAi extends SpellAbilityAi {
             return SpecialCardAi.HeroicSacrifice.consider(ai, sa);
         }
 
+        if ("Open into Wonder".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // X is the TARGET COUNT here (TargetMin$ X | TargetMax$ X, SVar:X:Count$xPaid).
+            // The AILogic$ Pump branch below adds exactly one target and never announces X,
+            // so the AI paid {U}{U} at X = 0 and MagicStack.add dropped the spell for an
+            // illegal target count, stranding the card in the Stack zone for the rest of
+            // the game. Routed after the randomReturn roll: the card has no RemoveDeck
+            // hint, so the stock engine evaluated it and drew here before reaching that
+            // branch. Every other Effect card takes exactly the path it took before this
+            // branch.
+            return SpecialCardAi.OpenIntoWonder.consider(ai, sa);
+        }
+
         if (sa.hasParam("AILogic")) {
             logic = sa.getParam("AILogic");
             if (logic.equals("BeginningOfOppTurn")) {
