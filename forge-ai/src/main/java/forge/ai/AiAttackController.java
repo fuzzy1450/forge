@@ -39,6 +39,7 @@ import forge.game.spellability.SpellAbilityPredicates;
 import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked;
 import forge.game.staticability.StaticAbilityMode;
+import forge.game.staticability.StaticAbilityMustBlock;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
@@ -113,14 +114,16 @@ public class AiAttackController {
         if (CombatUtil.canAttack(attacker, defendingOpponent)) {
             attackers.add(attacker);
         }
-        this.blockers = getPossibleBlockers(oppList, this.attackers, this.nextTurn);
+        this.blockers = withoutBlocksWeWillNotMake(getPossibleBlockers(oppList, this.attackers, this.nextTurn), defendingOpponent);
         this.timeOut = ai.getGame().getAITimeout();
         this.canUseTimeout = ai.getGame().canUseTimeout();
     } // overloaded constructor to evaluate single specified attacker
 
     private void refreshCombatants(GameEntity defender) {
+        Player blockDeclarer = defendingOpponent;
         if (defender instanceof Card card && card.isBattle()) {
-            this.oppList = getOpponentCreatures(card.getProtectingPlayer());
+            blockDeclarer = card.getProtectingPlayer();
+            this.oppList = getOpponentCreatures(blockDeclarer);
         } else {
             this.oppList = getOpponentCreatures(defendingOpponent);
         }
@@ -130,7 +133,35 @@ public class AiAttackController {
                 attackers.add(c);
             }
         }
-        this.blockers = getPossibleBlockers(oppList, this.attackers, this.nextTurn);
+        this.blockers = withoutBlocksWeWillNotMake(getPossibleBlockers(oppList, this.attackers, this.nextTurn), blockDeclarer);
+    }
+
+    /**
+     * The blocks a player who does not choose its own blocks can still be forced to make.
+     * AiBlockController.assignRequiredBlocksOnly, which declares them whenever
+     * PlayerControllerAi.declareBlockers is handed an opponent's block declaration, makes
+     * exactly these plus lure blocks, which need a Combat this model does not have yet.
+     * @param blockers the blockers a free defender could choose from
+     * @return only the ones that block each combat if able
+     */
+    public static List<Card> forcedBlockersOnly(final List<Card> blockers) {
+        return CardLists.filter(blockers, StaticAbilityMustBlock::blocksEachCombatIfAble);
+    }
+
+    /**
+     * While an effect (Master Warcraft, Odric, Melee, Berserker's Frenzy, Invasion Plans)
+     * has handed this AI another player's block declaration, that player's optional
+     * blockers will not block, so they are no obstacle to this attack. Never applied to a
+     * next-turn model: those effects last one turn.
+     * @param possible the blockers that could block if their controller chose freely
+     * @param blockDeclarer the player whose creatures those are
+     * @return the blockers this attack actually has to beat
+     */
+    private List<Card> withoutBlocksWeWillNotMake(final List<Card> possible, final Player blockDeclarer) {
+        if (nextTurn || blockDeclarer == null || !ai.equals(blockDeclarer.getDeclaresBlockers())) {
+            return possible;
+        }
+        return forcedBlockersOnly(possible);
     }
 
     public static List<Card> getOpponentCreatures(final Player defender) {
@@ -763,6 +794,27 @@ public class AiAttackController {
         }
 
         return false;
+    }
+
+    /**
+     * Master Warcraft's question, asked before its spell resolves, so nothing points at
+     * this player yet: is an all-out attack lethal ONLY if we declare the defender's
+     * blocks? doAssault answers both halves, so the evaluator and the declaration that
+     * follows it share one model instead of two that can disagree.
+     * @return true if doAssault refuses against a freely blocking defender and accepts
+     *         against one that can make only its forced blocks
+     */
+    public boolean assaultOnlyIfBlocksAreOurs() {
+        if (doAssault()) {
+            return false;
+        }
+        final List<Card> possible = this.blockers;
+        try {
+            this.blockers = forcedBlockersOnly(possible);
+            return doAssault();
+        } finally {
+            this.blockers = possible;
+        }
     }
 
     private GameEntity chooseDefender(final Combat c, final boolean bAssault) {

@@ -67,6 +67,7 @@ import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.spellability.SpellPermanent;
 import forge.game.spellability.TargetChoices;
 import forge.game.staticability.StaticAbility;
+import forge.game.staticability.StaticAbilityAttackRestrict;
 import forge.game.staticability.StaticAbilityCantDraw;
 import forge.game.staticability.StaticAbilityFlipCoinMod;
 import forge.game.staticability.StaticAbilityMode;
@@ -8325,6 +8326,121 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+    }
+
+    // Master Warcraft
+    //
+    // "You choose which creatures attack this turn. You choose which creatures block
+    // this turn and how those creatures block." The engine already routes both
+    // declarations to the caster (PhaseHandler reads Player.getDeclaresAttackers and
+    // getDeclaresBlockers), but nothing in the AI made use of them: the card carried
+    // AI:RemoveDeck:All, so it was stripped from the playable list before any handler
+    // ran, and behind that EffectAi refused every Effect with no AILogic. Both gates
+    // are lifted, and two more pieces make the effect worth its four mana:
+    // PlayerControllerAi.declareBlockers now declares only the forced blocks when an
+    // effect hands us an OPPONENT's block declaration, and AiAttackController drops
+    // that player's optional blockers from its model while it does.
+    //
+    // Window: our own turn, MAIN1 through COMBAT_BEGIN (the board has settled, and it
+    // is still before attackers), empty stack, exactly one opponent. On an opponent's
+    // turn the attack half would hand THEIR attack to AiController.declareAttackers,
+    // which plans that player's best attack, so the card is a blank there. With more
+    // than one opponent choosePreferredDefenderPlayer's tie-break is random, so the
+    // player judged here need not be the one the declaration swings at.
+    //
+    // Value floor: the planner that will declare the attack decides, not a second
+    // model beside it. doAssault has to say no against the blockers this opponent
+    // could choose and yes against only the ones the rules force on it - that is
+    // exactly "the card turns a stalled board into a kill". Declined before the
+    // planner ever runs, RNG-free, when: a copy already resolved this turn, the
+    // opponent cannot lose, we cannot win, we have no attacker, the opponent has no
+    // OPTIONAL blocker to deny, attacking costs anything (doAssault weighs the tax
+    // against mana this spell is about to eat), a global or per-defender attack cap is
+    // in play (doAssault models neither, by its own TODO), or an unblocked swing is
+    // not lethal by itself.
+    //
+    // RNG: the card was hinted, so the stock AI never evaluated it and drew nothing
+    // for it; the router sits above EffectAi's randomReturn roll for the same reason.
+    // Every guard above is RNG-free, so a held copy on a board that cannot convert
+    // stays on the stored stream. In a window that passes them all the planner runs,
+    // and its ComputerUtilCost.canPayCost calls (the opponent's Animate abilities in
+    // getOpponentCreatures, a Fog in hasAFogEffect, our own burn in
+    // possibleNonCombatDamage) can reach ComputerUtilMana's mana-reservation roll.
+    // That residual is accepted, as for the other planner-backed evaluators. No clock:
+    // doAssault runs no futures, so the 5 s attack-simulation budget is not touched.
+    //
+    // Residual: an attacker of ours with lure forces blocks that the forced-blocker
+    // model (StaticAbilityMustBlock.blocksEachCombatIfAble, a card-level test, with no
+    // Combat to read yet) does not predict, so such a board can cast and fall short.
+    // The cost of every miss is the card and four mana; "no optional blocks" is never
+    // worse for damage dealt than the blocks the opponent would have chosen.
+    public static class MasterWarcraft {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+
+            if (!ph.isPlayerTurn(ai) || ph.getPhase().isBefore(PhaseType.MAIN1)
+                    || ph.getPhase().isAfter(PhaseType.COMBAT_BEGIN) || !game.getStack().isEmpty()) {
+                return no;
+            }
+            if (ai.cantWin()) {
+                return no;
+            }
+            final PlayerCollection opponents = ai.getOpponents();
+            if (opponents.size() != 1) {
+                return no;
+            }
+            final Player opp = opponents.get(0);
+            // Nothing to gain against a player who cannot lose, and a second copy in the
+            // same turn denies nothing the first one did not.
+            if (opp.cantLose() || ai.equals(opp.getDeclaresBlockers())) {
+                return no;
+            }
+            // An attack cap can make the all-out attack doAssault calls lethal
+            // undeclarable, and doAssault does not look at one.
+            if (StaticAbilityAttackRestrict.globalAttackRestrict(game) != null
+                    || StaticAbilityAttackRestrict.attackRestrictNum(opp) != null) {
+                return no;
+            }
+            final CardCollection attackers = CardLists.filter(ai.getCreaturesInPlay(), c -> CombatUtil.canAttack(c, opp));
+            if (attackers.isEmpty()) {
+                return no;
+            }
+            // Any attack tax at all: doAssault weighs it against the mana we hold right
+            // now, which still includes the four this spell is about to spend, so its
+            // answer here would be more optimistic than the declaration's.
+            for (final Card c : attackers) {
+                if (CombatUtil.getAttackCost(game, c, opp) != null) {
+                    return no;
+                }
+            }
+            // Something to deny: a blocker that is not already forced to block.
+            final List<Card> blockers = AiAttackController.getPossibleBlockers(opp.getCreaturesInPlay(), attackers, false);
+            if (blockers.size() == AiAttackController.forcedBlockersOnly(blockers).size()) {
+                return no;
+            }
+            // A cheap necessary condition for the planner's second run, so a board that
+            // cannot kill at all never pays for one.
+            if (!lethalUnblocked(attackers, opp)) {
+                return no;
+            }
+            if (!new AiAttackController(ai).assaultOnlyIfBlocksAreOurs()) {
+                return no;
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Combat damage alone, with nothing blocking. doAssault also credits trample
+        // through blockers and our own non-combat damage; both only add, so this stays
+        // on the conservative side of the answer it will give.
+        private static boolean lethalUnblocked(final List<Card> attackers, final Player opp) {
+            if (opp.getLife() > 0 && !opp.cantLoseForZeroOrLessLife()
+                    && ComputerUtilCombat.sumDamageIfUnblocked(attackers, opp) >= opp.getLife()) {
+                return true;
+            }
+            return ComputerUtilCombat.sumPoisonIfUnblocked(attackers, opp) >= 10 - opp.getPoisonCounters();
         }
     }
 

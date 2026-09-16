@@ -1013,6 +1013,44 @@ public class AiBlockController {
         attackers = sortPotentialAttackers(combat);
         assignBlockers(combat, possibleBlockers);
     }
+
+    /**
+     * Declares only the blocks the rules force, for a player whose block declaration an
+     * effect has handed to another AI (see PlayerControllerAi.declareBlockers). Every
+     * optional block is left unmade, which is what those effects are cast for. The
+     * prediction path, AiController.declareBlockersFor, is untouched and still answers
+     * with the blocks that player would choose for itself.
+     * @param combat combat instance
+     */
+    public void assignRequiredBlocksOnly(final Combat combat) {
+        final List<Card> possibleBlockers = ai.getCreaturesInPlay();
+        attackers = sortPotentialAttackers(combat);
+        if (attackers.isEmpty()) {
+            return;
+        }
+
+        clearBlockers(combat, possibleBlockers);
+
+        // remove all blockers that can't block anyway
+        for (final Card b : possibleBlockers) {
+            if (!CombatUtil.canBlock(b, combat)) {
+                blockersLeft.remove(b);
+            }
+        }
+
+        makeRequiredBlocks(combat);
+
+        //Check for validity of blocks in case something slipped through
+        for (Card attacker : attackers) {
+            if (!CombatUtil.canAttackerBeBlockedWithAmount(attacker, combat.getBlockers(attacker).size(), combat)) {
+                for (final Card blocker : CardLists.filterControlledBy(combat.getBlockers(attacker), ai)) {
+                    // don't touch other player's blockers
+                    combat.removeFromCombat(blocker);
+                }
+            }
+        }
+    }
+
     /**
      * assignBlockersForCombat() with additional and possibly "virtual" blockers.
      * @param combat combat instance

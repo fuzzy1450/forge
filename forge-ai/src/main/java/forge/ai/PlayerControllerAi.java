@@ -825,6 +825,15 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public void declareBlockers(Player defender, Combat combat) {
+        if (defender.isOpponentOf(player)) {
+            // An effect (Master Warcraft, Odric, Melee, Berserker's Frenzy, Invasion
+            // Plans) has handed us an opponent's block declaration. Declare only what
+            // the rules force: AiController.declareBlockersFor would block in that
+            // player's own interest, which is what the card was cast to prevent, and it
+            // stays as it is because the AI also uses it to PREDICT their blocks.
+            new AiBlockController(defender, true).assignRequiredBlocksOnly(combat);
+            return;
+        }
         brains.declareBlockersFor(defender, combat);
     }
 

@@ -53,6 +53,14 @@ public class EffectAi extends SpellAbilityAi {
             // Effect card takes exactly the path it took before this branch.
             return SpecialCardAi.HellishRebuke.consider(ai, sa);
         }
+        if ("MasterWarcraft".equals(sa.getParam("AILogic"))) {
+            // We choose every attack and every block this turn. Routed before the
+            // randomReturn roll: the card used to carry AI:RemoveDeck:All, so the
+            // stock engine never evaluated it and never drew for it, and a declining
+            // evaluation here draws no RNG either. Every other Effect card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.MasterWarcraft.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final PhaseHandler phase = game.getPhaseHandler();
         boolean randomReturn = MyRandom.getRandom().nextFloat() <= .6667;
