@@ -884,6 +884,13 @@ public class AiController {
         if (!checkAiSpecificRestrictions(sa)) {
             return AiPlayDecision.CantPlayAi;
         }
+        // The non-mana half of Grell Philosopher's grant veto (the mana half is in
+        // ComputerUtilMana.getAIPlayableMana): an ability its effect copied onto our Horrors keeps
+        // the artifact's own cost, so "Sacrifice/Exile CARDNAME" now names the Horror. Nothing but
+        // a Grell grant carries that origin, so this is inert for every other ability.
+        if (SpecialCardAi.GrellPhilosopher.vetoGrantedAbility(sa)) {
+            return AiPlayDecision.CantPlayAi;
+        }
         if (sa instanceof WrappedAbility) {
             return canPlaySa(((WrappedAbility) sa).getWrappedAbility());
         }

@@ -707,6 +707,16 @@ public class EffectAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(final Player aiPlayer, final SpellAbility sa, final boolean mandatory) {
+        if ("Grell Philosopher".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa.usesTargeting() && !sa.getTargetRestrictions().canTgtPlayer()) {
+            // Both of the card's triggers run this same sub, at the cast-time ETB check
+            // (mandatory false) and at resolution (mandatory true). It replaces the "Nova
+            // Pentacle" branch below, which targets the opponent's most expensive artifact
+            // without asking whether a Horror could use its abilities. Same RNG as that
+            // branch: none. The card carried AI:RemoveDeck:All until this commit, so the
+            // stock engine never reached here for it at all.
+            return SpecialCardAi.GrellPhilosopher.chooseArtifact(aiPlayer, sa, mandatory);
+        }
         if ("ElectricSeaweed".equals(sa.getParam("AILogic"))) {
             // One consult, one checkApiLogic pass, one randomReturn roll, as the stock
             // no-AILogic consult drew (the generic pre-call below would draw a second

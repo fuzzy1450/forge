@@ -1722,6 +1722,14 @@ public class ComputerUtilMana {
                 continue;
             }
 
+            // Grell Philosopher grants our Horrors an opposing artifact's abilities with its cost
+            // copied verbatim, so a Treasure's or Phyrexian Altar's mana would be paid with the
+            // creature that gained it. Dropping it here keeps source estimation and payment
+            // consistent; nothing else reaches this, the grant's origin is checked by name.
+            if (SpecialCardAi.GrellPhilosopher.vetoGrantedAbility(a)) {
+                continue;
+            }
+
             if (a.getRestrictions() != null && a.getRestrictions().isInstantSpeed()) {
                 continue;
             }

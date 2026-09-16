@@ -5575,6 +5575,123 @@ public class SpecialCardAi {
         }
     }
 
+    // Grell Philosopher
+    // "When this enters and at the beginning of your upkeep, each Horror you control gains all
+    // activated abilities of target artifact an opponent controls until end of turn."
+    // The stock EffectAi "Nova Pentacle" branch takes the opponent's BEST artifact
+    // (ComputerUtilCard.getBestAI -> getMostExpensivePermanentAI on a noncreature board), which is
+    // blind to what a Horror could do with the abilities. Two ways that hurts: the most expensive
+    // artifact often has no activated ability at all (Solemn Simulacrum), and an artifact whose
+    // ability pays with its own source (Treasure, Lotus Petal, Wayfarer's Bauble, Burnished Hart,
+    // Nihil Spellbomb, Relic of Progenitus) hands our Horrors a button that sacrifices or exiles
+    // THEM - the copied cost still reads "Sacrifice CARDNAME", and CARDNAME is now the creature.
+    // Score each targetable artifact by what the grant is worth on a creature instead:
+    //   -3  a cost that eats the grantee (sacrifice/exile of the source, or a sacrifice of a
+    //       creature such as Phyrexian Altar's), mana and non-mana abilities alike;
+    //   +2  a clean mana ability;
+    //   +1  anything else;
+    //    0  Attach and Crew, which a creature simply cannot use (GameEntity.cantBeAttachedMsg
+    //       refuses to equip a creature; AnimateAi refuses a non-Vehicle).
+    // Highest score wins, mana value breaking ties the way the stock pick did (the later card wins
+    // an exact tie, as getMostExpensivePermanentAI does). At the cast-time ETB check (mandatory
+    // false) a best score below zero holds the card in hand; the upkeep trigger is mandatory, so
+    // there it still targets and only minimises the harm. Reads game state only: no random draw,
+    // exactly like the stock branch it replaces.
+    // vetoGrantedAbility is the same card's other half, shared by the two engine hooks that stop
+    // the AI ever activating one of those self-eating abilities off the grant
+    // (ComputerUtilMana.getAIPlayableMana and AiController.canPlaySa).
+    public static class GrellPhilosopher {
+        public static final String CARD_NAME = "Grell Philosopher";
+
+        public static AiAbilityDecision chooseArtifact(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            CardCollection cands = CardLists.getValidCards(ai.getOpponents().getCardsIn(sa.getTargetRestrictions().getZone()),
+                    sa.getTargetRestrictions().getValidTgts(), ai, sa.getHostCard(), sa);
+            cands = CardLists.filter(cands, sa::canTarget);
+            if (cands.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            Card best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (final Card c : cands) {
+                int score = 0;
+                for (final SpellAbility ab : c.getSpellAbilities()) {
+                    // the grant copies activated abilities only (StaticAbilityContinuous)
+                    if (!ab.isActivatedAbility()) {
+                        continue;
+                    }
+                    if (ab.getApi() == ApiType.Attach || ab.isCrew()) {
+                        continue; // inert on a creature, so neither value nor harm
+                    }
+                    if (eatsTheGrantee(ab.getPayCosts())) {
+                        score -= 3;
+                    } else if (ab.isManaAbility()) {
+                        score += 2;
+                    } else {
+                        score += 1;
+                    }
+                }
+                if (best == null || score > bestScore || (score == bestScore && c.getCMC() >= best.getCMC())) {
+                    bestScore = score;
+                    best = c;
+                }
+            }
+
+            if (!mandatory && bestScore < 0) {
+                // every artifact on the table only hands our Horrors a self-destruct button
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.resetTargets();
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // True for an activated ability this card's effect granted. The grant rides on a static
+        // whose host is the Effect card Grell created (StaticAbilityContinuous sets grantorStatic),
+        // and that Effect card's getEffectSource() is Grell itself (SpellAbilityEffect.createEffect).
+        // Gating on the effect SOURCE, never on the Effect card's own name (which is built from
+        // Card.toString()), reaches exactly the abilities Grell Philosopher granted and nothing else.
+        public static boolean isGrantedAbility(final SpellAbility sa) {
+            if (sa == null || sa.getGrantorStatic() == null) {
+                return false;
+            }
+            final Card effect = sa.getGrantorStatic().getHostCard();
+            return effect != null && effect.getEffectSource() != null
+                    && CARD_NAME.equals(effect.getEffectSource().getName());
+        }
+
+        // True when paying this cost would eat the creature that gained the ability: the copied
+        // cost still says "Sacrifice/Exile CARDNAME", which now names the Horror, and a
+        // "Sacrifice a creature" cost (Phyrexian Altar, The Golden Throne) can pick one too.
+        public static boolean eatsTheGrantee(final forge.game.cost.Cost cost) {
+            if (cost == null) {
+                return false;
+            }
+            for (final CostPart part : cost.getCostParts()) {
+                if (!(part instanceof CostSacrifice) && !(part instanceof CostExile)) {
+                    continue;
+                }
+                if (part.payCostFromSource()) {
+                    return true;
+                }
+                if (part instanceof CostSacrifice && part.getType() != null) {
+                    for (final String t : part.getType().split(";")) {
+                        if (t.equals("Creature") || t.startsWith("Creature.")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // The veto the two engine hooks share.
+        public static boolean vetoGrantedAbility(final SpellAbility sa) {
+            return isGrantedAbility(sa) && eatsTheGrantee(sa.getPayCosts());
+        }
+    }
+
     // Grisly Sigil
     public static class GrislySigil {
         public static boolean consider(final Player ai, final SpellAbility sa) {
