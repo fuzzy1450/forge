@@ -12430,55 +12430,6 @@ public class SpecialCardAi {
                 }
             }
 
-            // Guard L: do not buy value while we are dying. Every whitelisted api except
-            // Token leaves the board and our life untouched, so a copy cannot answer an
-            // attack. RNG-free: sumDamageIfUnblocked (ComputerUtilCombat:239-252) and
-            // canAttackNextTurn (:91) draw no random number and build no ability.
-            boolean makesBlockers = false;
-            for (SpellAbility part = topSA; part != null; part = part.getSubAbility()) {
-                if (part.getApi() == ApiType.Token) {
-                    makesBlockers = true;
-                    break;
-                }
-            }
-            if (!makesBlockers) {
-                int incoming = 0;
-                for (final Player opp : ai.getOpponents()) {
-                    incoming += ComputerUtilCombat.sumDamageIfUnblocked(CardLists.filter(opp.getCreaturesInPlay(),
-                            c -> ComputerUtilCombat.canAttackNextTurn(c, ai)), ai);
-                }
-                if (incoming >= ai.getLife()) {
-                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
-                }
-            }
-
-            // Guard R: a land fetch still has to be worth fetching. The dominant real
-            // window is ramp (Cultivate, Kodama's Reach, Harrow, Explosive Vegetation,
-            // Migration Path, Map the Frontier); on seven-plus lands with nothing bigger
-            // in hand, two more tapped basics and two dead ones buy nothing.
-            boolean onlyLandFetch = true;
-            for (SpellAbility part = topSA; part != null; part = part.getSubAbility()) {
-                final ApiType api = part.getApi();
-                if (api == ApiType.Cleanup) {
-                    continue;
-                }
-                final String ct = part.getParamOrDefault("ChangeType", "");
-                if (api != ApiType.ChangeZone || !(ct.contains("Land") || ct.contains("Basic"))) {
-                    onlyLandFetch = false;
-                    break;
-                }
-            }
-            if (onlyLandFetch) {
-                final int lands = ai.getLandsInPlay().size();
-                int topHandMV = 0;
-                for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
-                    topHandMV = Math.max(topHandMV, c.getCMC());
-                }
-                if (lands >= 7 && lands >= topHandMV) {
-                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
-                }
-            }
-
             // Would we take this effect for free right now? (CopySpellAbilityAi.checkApiLogic)
             if (topCopy == null) {
                 topCopy = evaluationCopy(ai, topSA);
