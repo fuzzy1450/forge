@@ -111,6 +111,23 @@ import java.util.stream.Collectors;
  */
 public class SpecialCardAi {
 
+    // Card.getBasicSpells() was deleted upstream in the merge of 2026-09-19;
+    // this is its body verbatim, kept here because the dead-card work below asks
+    // the same question of a card some chooser may offer us.
+    private static List<SpellAbility> basicSpells(final Card c) {
+        return basicSpells(c.getCurrentState());
+    }
+
+    private static List<SpellAbility> basicSpells(final CardState state) {
+        final List<SpellAbility> res = new ArrayList<>();
+        for (final SpellAbility sa : state.getNonManaAbilities()) {
+            if (sa.isSpell() && sa.isBasicSpell()) {
+                res.add(sa);
+            }
+        }
+        return res;
+    }
+
     // Aethersnatch
     // Commandeer's window (an opponent's spell on top, no chosen targets anywhere
     // in its chain, no "...All" api, CMC >= 5 counting announced X), which the card
@@ -1011,7 +1028,7 @@ public class SpecialCardAi {
             final Card source = sa.getHostCard();
             sa.resetTargets();
             // draw-limit statics (Narset, Parter of Veils; Spirit of the Labyrinth) after our draw step
-            if (!ai.canDrawAmount(MIN_KEPT)) {
+            if (!ai.canDraw(MIN_KEPT)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
 
@@ -2217,7 +2234,7 @@ public class SpecialCardAi {
             }
 
             // Necessary conditions of the accept test below, checked RNG-free first:
-            // total >= MIN_DRAW, total >= bonus and total <= capTotal, canDrawAmount(total).
+            // total >= MIN_DRAW, total >= bonus and total <= capTotal, canDraw(total).
             if (sa.canTarget(ai) && ai.canDraw() && capTotal >= Math.max(MIN_DRAW, bonus)
                     && !opposingDrawPunisher(ai)) {
                 int x;
@@ -2229,7 +2246,7 @@ public class SpecialCardAi {
                     x = Math.max(0, Math.min(x, capTotal - bonus));
                 }
                 final int total = x + bonus;
-                if (total >= MIN_DRAW && total <= capTotal && ai.canDrawAmount(total)) {
+                if (total >= MIN_DRAW && total <= capTotal && ai.canDraw(total)) {
                     if (!xFixed) {
                         root.setXManaCostPaid(x);
                     }
@@ -4785,9 +4802,9 @@ public class SpecialCardAi {
         // Every spell the chooser can offer from this card (the current face, plus the back of a modal
         // card, as AbilityUtils.getSpellsFromPlayEffect collects them).
         private static boolean safeToOffer(final Player ai, final Card host, final Card c) {
-            final List<SpellAbility> spells = new ArrayList<>(c.getBasicSpells());
+            final List<SpellAbility> spells = new ArrayList<>(basicSpells(c));
             if (c.isModal() && c.hasState(forge.card.CardStateName.Backside)) {
-                spells.addAll(c.getBasicSpells(c.getState(forge.card.CardStateName.Backside)));
+                spells.addAll(basicSpells(c.getState(forge.card.CardStateName.Backside)));
             }
             if (spells.isEmpty()) {
                 return false;
@@ -4937,7 +4954,7 @@ public class SpecialCardAi {
                     ai.getStartingLife() / 4);
             final int budget = effLife - reserve;
             if (budget <= 0) {
-                return new AiAbilityDecision(0, AiPlayDecision.LifeInDanger);
+                return new AiAbilityDecision(0, AiPlayDecision.IncreasesLifeInDanger);
             }
 
             final Card source = sa.getHostCard();
@@ -4977,7 +4994,7 @@ public class SpecialCardAi {
             }
             // already in danger before paying anything: every kill would be dropped below
             if (ComputerUtil.aiLifeInDanger(ai, false, incoming)) {
-                return new AiAbilityDecision(0, AiPlayDecision.LifeInDanger);
+                return new AiAbilityDecision(0, AiPlayDecision.IncreasesLifeInDanger);
             }
 
             // don't pay into a lethal next combat: drop the weakest kills first
@@ -7022,7 +7039,7 @@ public class SpecialCardAi {
 
         // draws the whole amount (no Narset/Spirit-style cap) and survives the next draw step
         static boolean canRefill(final Player p, final int draw) {
-            return draw > 0 && p.canDrawAmount(draw) && p.getCardsIn(ZoneType.Library).size() > draw;
+            return draw > 0 && p.canDraw(draw) && p.getCardsIn(ZoneType.Library).size() > draw;
         }
     }
 
@@ -7880,7 +7897,7 @@ public class SpecialCardAi {
                     x = Math.max(x, c.getNetPower());
                 }
             }
-            if (x < MIN_DRAW || !ai.canDrawAmount(x)) {
+            if (x < MIN_DRAW || !ai.canDraw(x)) {
                 return false;
             }
             if (ai.getCardsIn(ZoneType.Library).size() - x < LIBRARY_KEEP) {
@@ -9138,9 +9155,9 @@ public class SpecialCardAi {
         // plus the back of a modal card, as AbilityUtils.getSpellsFromPlayEffect
         // collects them) and every part of each.
         static boolean safeToOffer(final Card c) {
-            final List<SpellAbility> spells = new ArrayList<>(c.getBasicSpells());
+            final List<SpellAbility> spells = new ArrayList<>(basicSpells(c));
             if (c.isModal() && c.hasState(forge.card.CardStateName.Backside)) {
-                spells.addAll(c.getBasicSpells(c.getState(forge.card.CardStateName.Backside)));
+                spells.addAll(basicSpells(c.getState(forge.card.CardStateName.Backside)));
             }
             if (spells.isEmpty()) {
                 return false;
@@ -12243,10 +12260,10 @@ public class SpecialCardAi {
         // ImmediateTrigger, TwoPiles, any ...All) hide their effects outside
         // the getSubAbility chain or hit every creature.
         static boolean safeAsForcedCopy(final Card c) {
-            if (c.getBasicSpells().isEmpty() || c.hasKeyword(Keyword.DEMONSTRATE)) {
+            if (basicSpells(c).isEmpty() || c.hasKeyword(Keyword.DEMONSTRATE)) {
                 return false;
             }
-            for (SpellAbility csa : c.getBasicSpells()) {
+            for (SpellAbility csa : basicSpells(c)) {
                 if (csa.getPayCosts() != null) {
                     for (CostPart cp : csa.getPayCosts().getCostParts()) {
                         if (!(cp instanceof CostPartMana) && !(cp instanceof CostDiscard)) {
@@ -12510,7 +12527,7 @@ public class SpecialCardAi {
                     continue;
                 }
                 boolean safe = true;
-                for (SpellAbility csa : c.getBasicSpells()) {
+                for (SpellAbility csa : basicSpells(c)) {
                     for (SpellAbility part = csa; part != null; part = part.getSubAbility()) {
                         if (part.usesTargeting()
                                 || (part.getApi() != null && part.getApi().name().endsWith("All"))) {
@@ -15049,7 +15066,7 @@ public class SpecialCardAi {
         // Bowmasters, Spiteful Visions, Waste Not). The Roles still land when this says no.
         public static boolean willRummage(final Player payer, final SpellAbility sa) {
             final int n = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParamOrDefault("NumCards", "1"), sa);
-            if (!payer.canDrawAmount(n)) {
+            if (!payer.canDraw(n)) {
                 return false;
             }
             if (n >= payer.getCardsIn(ZoneType.Library).size() - 3 && !payer.isCardInPlay("Laboratory Maniac")) {
