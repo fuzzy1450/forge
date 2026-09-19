@@ -3897,7 +3897,7 @@ public class SpecialCardAi {
                 if (predictOverwhelmingDamage(ai, sa)) {
                     // We'll try to deal lethal trample/unblocked damage, so remember the card for attack
                     // and wait until declare blockers step.
-                    AiCardMemory.rememberCard(ai, source, AiCardMemory.MemorySet.MANDATORY_ATTACKERS);
+                    AiCardMemory.rememberCard(ai, source, AiCardMemory.MemorySet.TRICK_ATTACKERS);
                     return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
             } else if (!game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS)) {
@@ -3936,7 +3936,6 @@ public class SpecialCardAi {
                     // Can pump to kill the planeswalker, go for it
                     return new AiAbilityDecision(100, AiPlayDecision.ImpactCombat);
                 }
-
             }
 
             for (Card c : opposition) {
@@ -3954,7 +3953,7 @@ public class SpecialCardAi {
                         || (canTrample && predictedPT.getLeft() - oppT > 0 && predictedPT.getRight() > oppP)) {
                     // We can deal a lot of damage (either a lot of damage directly to the opponent,
                     // or kill the blocker(s) and damage the opponent at the same time, so go for it
-                    AiCardMemory.rememberCard(ai, source, AiCardMemory.MemorySet.MANDATORY_ATTACKERS);
+                    AiCardMemory.rememberCard(ai, source, AiCardMemory.MemorySet.TRICK_ATTACKERS);
                     return new AiAbilityDecision(100, AiPlayDecision.ImpactCombat);
                 }
             }
@@ -9917,10 +9916,15 @@ public class SpecialCardAi {
 
             int numManaSrcs = CardLists.filter(ComputerUtilMana.getAvailableManaSources(ai, true), CardPredicates.UNTAPPED).size();
 
-            for (final SpellAbility testSa : ComputerUtilAbility.getOriginalAndAltCostAbilities(all, ai)) {
+            final List<SpellAbility> testable = ComputerUtilAbility.getOriginalAndAltCostAbilities(all, ai);
+            // the same sources answer this for every ability tested, so ask once - and not at all
+            // when there is nothing to ask about
+            final byte availableColors = testable.isEmpty() ? 0 : ColorSet.fromNames(
+                    ComputerUtilCost.getAvailableManaColors(ai, sa.getHostCard())).getColor();
+
+            for (final SpellAbility testSa : testable) {
                 ManaCost cost = testSa.getPayCosts().getTotalMana();
-                boolean canPayWithAvailableColors = cost.canBePaidWithAvailable(ColorSet.fromNames(
-                        ComputerUtilCost.getAvailableManaColors(ai, sa.getHostCard())).getColor());
+                boolean canPayWithAvailableColors = cost.canBePaidWithAvailable(availableColors);
 
                 byte colorProfile = cost.getColorProfile();
 
@@ -13542,7 +13546,7 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
 
-            return new AiAbilityDecision(0, AiPlayDecision.LifeInDanger);
+            return new AiAbilityDecision(0, AiPlayDecision.IncreasesLifeInDanger);
         }
     }
 

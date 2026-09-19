@@ -39,23 +39,17 @@ public class CardImage implements FImage {
             image = ImageCache.getInstance().getImage(card);
             if (image == null) {
                 if (!Forge.enableUIMask.equals("Off")) //render this if mask is still loading
-                    CardImageRenderer.drawCardImage(g, cv, false, x, y, w, h, CardStackPosition.Top, Forge.enableUIMask.equals("Art"), true);
+                    CardImageRenderer.drawCardImage(g, cv, false, x, y, w, h, CardStackPosition.Top, (Forge.enableUIMask.equals("Art") || cv.useCardArt()), true);
 
                 return; //can't draw anything if can't be loaded yet
             }
         }
 
-        if (image == ImageCache.getInstance().getDefaultImage() || Forge.enableUIMask.equals("Art")) {
+        if (image == ImageCache.getInstance().getDefaultImage() || (Forge.enableUIMask.equals("Art") || cv.useCardArt())) {
             CardImageRenderer.drawCardImage(g, cv, false, x, y, w, h, CardStackPosition.Top, true, true);
         } else {
             if (Forge.enableUIMask.equals("Full")) {
-                if (ImageCache.getInstance().isFullBorder(image))
-                    g.drawCardRoundRect(image, null, x, y, w, h, false, false, false);
-                else {
-                    float radius = (h - w) / 8;
-                    g.drawborderImage(ImageCache.getInstance().borderColor(image), x, y, w, h);
-                    g.drawImage(ImageCache.getInstance().croppedBorderImage(image), x + radius / 2.2f, y + radius / 2, w * 0.96f, h * 0.96f);
-                }
+                g.drawCardRoundRect(image, null, x, y, w, h, false, false, false);
             } else if (Forge.enableUIMask.equals("Crop")) {
                 g.drawImage(ImageCache.getInstance().croppedBorderImage(image), x, y, w, h);
             } else

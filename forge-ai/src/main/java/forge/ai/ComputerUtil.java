@@ -350,6 +350,7 @@ public class ComputerUtil {
             }
 
             if (AiProfileUtil.getBoolProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_ENABLE)) {
+                // TODO combine these into a Valid check
                 int minCMC = AiProfileUtil.getIntProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_MIN_CMC);
                 int maxCMC = AiProfileUtil.getIntProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_MAX_CMC);
                 int maxCreatureEval = AiProfileUtil.getIntProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL);
@@ -374,15 +375,16 @@ public class ComputerUtil {
             }
 
             // Sac lands
-            final CardCollection landsInPlay = CardLists.getType(typeList, "Land");
-            if (!landsInPlay.isEmpty()) {
+            final CardCollection landsToSac = CardLists.getType(typeList, "Land");
+            if (!landsToSac.isEmpty()) {
                 final int landsInHand = Math.min(2, CardLists.getType(ai.getCardsIn(ZoneType.Hand), "Land").size());
                 final CardCollection nonLandsInHand = CardLists.getNotType(ai.getCardsIn(ZoneType.Hand), "Land");
                 nonLandsInHand.addAll(ai.getCardsIn(ZoneType.Library));
+                // TODO add +1 for X shards
                 final int highestCMC = Math.max(6, Aggregates.max(nonLandsInHand, Card::getCMC));
-                if (landsInPlay.size() + landsInHand >= highestCMC) {
-                    // Don't need more land.
-                    return ComputerUtilCard.getWorstLand(landsInPlay);
+                if (ai.getLandsInPlay().size() + landsInHand >= highestCMC) {
+                    // Don't need more land
+                    return ComputerUtilCard.getWorstLand(landsToSac);
                 }
             }
 
@@ -1010,11 +1012,23 @@ public class ComputerUtil {
         for (final Card c : l) {
             for (final SpellAbility sa : c.getSpellAbilities()) {
                 if (!sa.isActivatedAbility() || sa.getApi() != ApiType.Regenerate) {
-                    continue; // Not a Regenerate ability
+                    continue;
                 }
+
+                // Combat prediction asks this for many creatures. Rule out
+                // unrelated regeneration abilities before evaluating their costs.
+                final TargetRestrictions tgt = sa.getTargetRestrictions();
+                if (tgt != null) {
+                    if (!CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), tgt.getValidTgts(), controller, sa.getHostCard(), sa).contains(card)) {
+                        continue;
+                    }
+                } else if (!AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa).contains(card)) {
+                    continue;
+                }
+
                 sa.setActivatingPlayer(controller);
                 if (!(sa.canPlay() && ComputerUtilCost.canPayCost(sa, controller, false))) {
-                    continue; // Can't play ability
+                    continue;
                 }
 
                 if (controller == ai) {
@@ -1031,14 +1045,7 @@ public class ComputerUtil {
                     }
                 }
 
-                final TargetRestrictions tgt = sa.getTargetRestrictions();
-                if (tgt != null) {
-                    if (CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), tgt.getValidTgts(), controller, sa.getHostCard(), sa).contains(card)) {
-                        return true;
-                    }
-                } else if (AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa).contains(card)) {
-                    return true;
-                }
+                return true;
             }
         }
 
@@ -1396,7 +1403,8 @@ public class ComputerUtil {
         }
         if (abCost.hasTapCost() && source.hasSVar("AITapDown")) {
             return true;
-        } else if (sa.getRootAbility().isPwAbility() && ai.getGame().getPhaseHandler().is(PhaseType.MAIN2)) {
+        }
+        if (sa.getRootAbility().isPwAbility() && ai.getGame().getPhaseHandler().is(PhaseType.MAIN2)) {
             for (final CostPart part : sa.getRootAbility().getPayCosts().getCostParts()) {
                 if (part instanceof CostPutCounter) {
                     return part.convertAmount() == null || part.convertAmount() > 0 || ai.isCardInPlay("Carth the Lion");
@@ -1405,16 +1413,7 @@ public class ComputerUtil {
         }
         for (final CostPart part : abCost.getCostParts()) {
             if (part instanceof CostSacrifice sac) {
-                if (sac.payCostFromSource()) {
-                    if (source.getSVar("SacMe").equals("6")) {
-                        return true;
-                    } else if (shouldSacrificeThreatenedCard(ai, source, sa)) {
-                        return true;
-                    }
-                    continue;
-                }
-
-                final CardCollection typeList =
+                final List<Card> typeList = sac.payCostFromSource() ? List.of(source) :
                         CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), sac.getType(), source.getController(), source, sa);
                 for (Card c : typeList) {
                     if (c.getSVar("SacMe").equals("6")) {
@@ -1454,6 +1453,9 @@ public class ComputerUtil {
                     }
 
                     final String affected = stAb.getParam("Affected");
+                    if (stAb.hasParam("AffectedDefined") || affected == null) {
+                        continue;
+                    }
                     if (affected.startsWith("Creature") && (affected.contains("YouCtrl") || !affected.contains("."))) {
                         return true;
                     }
@@ -1505,7 +1507,8 @@ public class ComputerUtil {
             for (final Card c : opp) {
                 for (StaticAbility stAb : c.getStaticAbilities()) {
                     if (stAb.checkMode(StaticAbilityMode.Continuous) && stAb.hasParam("AddKeyword")
-                            && stAb.getParam("AddKeyword").contains("Haste")) {
+                            && stAb.getParam("AddKeyword").contains("Haste")
+                            && !stAb.hasParam("AffectedDefined") && stAb.hasParam("Affected")) {
                         final ArrayList<String> affected = Lists.newArrayList(stAb.getParam("Affected").split(","));
                         if (affected.contains("Creature")) {
                             return true;

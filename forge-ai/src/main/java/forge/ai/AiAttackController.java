@@ -51,10 +51,8 @@ import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.function.Predicate;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 
@@ -1059,7 +1057,7 @@ public class AiAttackController {
         if (ai.getController().isAI()) {
             // Only do this if |ai| is actually an AI - as we could be trying to predict how the human will attack.
             for (Card attacker : this.attackers) {
-                if (AiCardMemory.isRememberedCard(ai, attacker, AiCardMemory.MemorySet.MANDATORY_ATTACKERS)) {
+                if (AiCardMemory.isRememberedCard(ai, attacker, AiCardMemory.MemorySet.TRICK_ATTACKERS)) {
                     combat.addAttacker(attacker, defender);
                     attackersLeft.remove(attacker);
                 }

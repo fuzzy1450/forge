@@ -42,6 +42,7 @@ import java.util.Map;
  */
 
 public class AnimateAi extends SpellAbilityAi {
+
     @Override
     protected AiAbilityDecision canPlay(final Player ai, final SpellAbility sa) {
         if ("Time Lord Regeneration".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
