@@ -3070,7 +3070,34 @@ public class ComputerUtil {
         return false;
     }
 
+    // Ids of the host cards whose play effect this thread is judging right now.
+    private static final ThreadLocal<Set<Integer>> PLAY_EFFECT_HOSTS_BEING_JUDGED = ThreadLocal.withInitial(HashSet::new);
+
     public static boolean targetPlayableSpellCard(final Player ai, Iterable<Card> options, final SpellAbility sa, final boolean withoutPayingManaCost, boolean mandatory) {
+        // A play effect can come back to its own judgment through a candidate's hypothetical
+        // cast. Walk 7 game 671988: a ReplaySpell card in hand had Repeated Reverberation in the
+        // graveyard among its candidates; DelayedTriggerAi.canPlay (AILogic SpellCopy) asks
+        // whether we would cast each instant or sorcery in hand, which put the first card back
+        // here, which asked about Repeated Reverberation again. Nothing bounded that, so the
+        // "Game AI Eval" thread overflowed its stack after however many random draws the stack
+        // size allowed (1,287 at the default, 53,698 at -Xss64m) and the same seed played
+        // different games. An effect whose host is already being judged further up this
+        // thread's stack finds nothing to play.
+        final Card host = sa.getHostCard();
+        final Set<Integer> beingJudged = PLAY_EFFECT_HOSTS_BEING_JUDGED.get();
+        if (host != null && !beingJudged.add(host.getId())) {
+            return false;
+        }
+        try {
+            return targetPlayableSpellCardUnguarded(ai, options, sa, withoutPayingManaCost, mandatory);
+        } finally {
+            if (host != null) {
+                beingJudged.remove(host.getId());
+            }
+        }
+    }
+
+    private static boolean targetPlayableSpellCardUnguarded(final Player ai, Iterable<Card> options, final SpellAbility sa, final boolean withoutPayingManaCost, boolean mandatory) {
         // determine and target a card with a SA that the AI can afford and will play
         AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
         sa.resetTargets();
