@@ -11,6 +11,7 @@ import forge.card.CardRules;
 import forge.item.IPaperCard;
 import forge.item.PaperToken;
 import forge.util.Aggregates;
+import forge.util.MyRandom;
 
 import java.util.*;
 import java.util.function.Predicate;
@@ -104,6 +105,8 @@ public class TokenDb implements ITokenDatabase {
         return new PaperToken(rules, edition, name, t.collectorNumber(), t.artistName());
     }
 
+    // Every art and printing pick here draws from MyRandom.getCosmeticRandom(), never the game's
+    // stream: which art a token shows must not move a seeded game's shuffles and decisions.
     // Null filter: historical first-alphabetical match. Non-null: random among
     // editions that register the token and pass the filter, or null if none.
     // When preferEraMatchedArt is on and hostDate != null, instead picks the
@@ -114,7 +117,7 @@ public class TokenDb implements ITokenDatabase {
                 if (restrictedTokenEntries.contains(edition.getCode() + "/" + tokenName)) continue;
                 String fullName = String.format("%s_%s", tokenName, edition.getCode().toLowerCase());
                 if (loadTokenFromSet(edition, tokenName)) {
-                    return Aggregates.random(allTokenByName.get(fullName));
+                    return Aggregates.random(allTokenByName.get(fullName), MyRandom.getCosmeticRandom());
                 }
             }
             return null;
@@ -138,10 +141,10 @@ public class TokenDb implements ITokenDatabase {
                 }
             }
         } else {
-            pick = Aggregates.random(legal);
+            pick = Aggregates.random(legal, MyRandom.getCosmeticRandom());
         }
         String fullName = String.format("%s_%s", tokenName, pick.getCode().toLowerCase());
-        return Aggregates.random(allTokenByName.get(fullName));
+        return Aggregates.random(allTokenByName.get(fullName), MyRandom.getCosmeticRandom());
     }
 
     protected PaperToken fallbackToken(String name, String hostEditionCode) {
@@ -173,7 +176,7 @@ public class TokenDb implements ITokenDatabase {
             Collection<PaperToken> collection = allTokenByName.get(fullName);
 
             if (artIndex < 1 || artIndex > collection.size()) {
-                return Aggregates.random(collection);
+                return Aggregates.random(collection, MyRandom.getCosmeticRandom());
             }
 
             return Iterables.get(collection, artIndex - 1);

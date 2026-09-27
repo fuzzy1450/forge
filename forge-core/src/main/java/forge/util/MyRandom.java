@@ -34,6 +34,16 @@ public class MyRandom {
     private static Random random = new SecureRandom();
 
     /**
+     * Randomness for picks that change how the game LOOKS and never what happens in it: which
+     * printing and art a token shows. Deliberately not the game's stream. A seeded game used to
+     * draw one number per art variant each time a token was made -- or merely looked up, as the
+     * AI's creature-type census does for every token-making card it counts -- so a deck change
+     * that only moved a token-making card in or out of what the AI counted shifted every later
+     * shuffle and decision of the game.
+     */
+    private static final Random cosmeticRandom = new Random();
+
+    /**
      * <p>
      * percentTrue.<br>
      * If percent is like 30, then 30% of the time it will be true.
@@ -61,6 +71,11 @@ public class MyRandom {
      */
     public static void setRandom(Random random) {
         MyRandom.random = random;
+    }
+
+    /** The stream for cosmetic picks only (see {@link #cosmeticRandom}): never the game's. */
+    public static Random getCosmeticRandom() {
+        return MyRandom.cosmeticRandom;
     }
 
     public static int[] splitIntoRandomGroups(final int value, final int numGroups) {

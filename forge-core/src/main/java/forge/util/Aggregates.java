@@ -129,6 +129,11 @@ public class Aggregates {
      * @return the t
      */
     public static final <T> T random(final Iterable<T> source) {
+        return random(source, MyRandom.getRandom());
+    }
+
+    /** {@link #random(Iterable)} drawing from {@code rnd}, e.g. {@link MyRandom#getCosmeticRandom()}. */
+    public static final <T> T random(final Iterable<T> source, final Random rnd) {
         if (source == null) { return null; }
 
         if (source instanceof List<?>) {
@@ -137,14 +142,14 @@ public class Aggregates {
             switch(len) {
                 case 0: return null;
                 case 1: return src.get(0);
-                default: return src.get(MyRandom.getRandom().nextInt(len));
+                default: return src.get(rnd.nextInt(len));
             }
         }
 
         T candidate = null;
         int lowest = Integer.MAX_VALUE;
         for (final T item : source) {
-            int next = MyRandom.getRandom().nextInt();
+            int next = rnd.nextInt();
             if(next < lowest) {
                 lowest = next;
                 candidate = item;

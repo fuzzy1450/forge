@@ -208,7 +208,7 @@ public class PaperToken implements InventoryItemFromSet, IPaperCard {
                 suffix = ImageKeys.BACKFACE_POSTFIX;
             }
         }
-        int idx = MyRandom.getRandom().nextInt(artIndex);
+        int idx = MyRandom.getCosmeticRandom().nextInt(artIndex); // art only: never the game's stream
         return getImageKey(idx) + suffix;
     }
 
