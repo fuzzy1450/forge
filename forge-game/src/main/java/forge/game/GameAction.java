@@ -1023,6 +1023,14 @@ public class GameAction {
 
         // run Game Commands early
         c.runChangeControllerCommands();
+        // Those commands can change control again, or re-enter here for this same card and move
+        // it themselves (see Card.runChangeControllerCommands). The zones read above are then
+        // stale, and moving the card out of them would put it on a battlefield twice. Start over
+        // from the card's current state: the commands are spent, so this does not come back.
+        if (game.getZoneOf(c) != oldBattlefield || !controller.equals(c.getController())) {
+            controllerChangeZoneCorrection(c);
+            return;
+        }
 
         game.getTriggerHandler().suppressMode(TriggerType.ChangesZone);
 

@@ -3632,10 +3632,16 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         facedownCommandList.clear();
     }
     public final void runChangeControllerCommands() {
-        for (final GameCommand c : changeControllerCommandList) {
+        // Taken before running, not cleared after: a command can change control again and
+        // re-enter GameAction.controllerChangeZoneCorrection for this same card, which runs this
+        // list again -- a lose-control command whose target is its own host (Mind Flayer's ETB
+        // aimed at itself, then an opposing copy of Mind Flayer taking it). The same command then
+        // ran forever: StackOverflowError, and the game was recorded as an Error.
+        final List<GameCommand> commands = Lists.newArrayList(changeControllerCommandList);
+        changeControllerCommandList.clear();
+        for (final GameCommand c : commands) {
             c.run();
         }
-        changeControllerCommandList.clear();
     }
     public final void runPhaseOutCommands() {
         for (final GameCommand c : phaseOutCommandList) {
