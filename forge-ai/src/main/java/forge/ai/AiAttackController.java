@@ -992,6 +992,12 @@ public class AiAttackController {
                     }
                     return mustAttackDef;
                 }).exceptionally(ex -> {
+                    // an Error in a requirement check ends the game rather than reading as "no
+                    // requirement" (see AiController.chooseSpellAbilityToPlayFromList)
+                    Throwable cause = ex instanceof CompletionException && ex.getCause() != null ? ex.getCause() : ex;
+                    if (cause instanceof Error err) {
+                        throw err;
+                    }
                     ex.printStackTrace();
                     return null;
                 }));

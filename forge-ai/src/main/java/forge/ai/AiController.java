@@ -1721,6 +1721,14 @@ public class AiController {
         try {
             return future.get(game.getAITimeout(), TimeUnit.SECONDS);
         } catch (InterruptedException | ExecutionException | TimeoutException e) {
+            if (e instanceof ExecutionException && e.getCause() instanceof Error err) {
+                // An Error thrown by the evaluation -- a StackOverflowError out of an unbounded AI
+                // recursion, an OutOfMemoryError -- is not a decision. Read as "nothing to play",
+                // it let the game go on from a random-stream position that depended on how deep
+                // the eval thread's stack happened to reach, so one seed played different games
+                // (walk 7 game 671988). Rethrown, it ends the game as an Error, every run alike.
+                throw err;
+            }
             e.printStackTrace();
             if (e instanceof TimeoutException) {
                 // log where the eval thread currently is - each timeout doubles as a
