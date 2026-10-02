@@ -52,6 +52,17 @@ public class DestroyAllAi extends SpellAbilityAi {
             // took before this branch.
             return SpecialCardAi.GazeOfGranite.consider(ai, sa);
         }
+        if (SpecialCardAi.DeadlyTempest.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                || SpecialCardAi.DeadlyTempest.NAME.equals(sa.getHostCard().getName())) { // face-down exile: source name is ""
+            // Each player also loses life for each of its creatures destroyed: the generic path
+            // below never prices that loss (it can cast into its own death), and its main-2
+            // survival branch runs the block simulation, which draws MyRandom on every held main 2
+            // even while the spell is unaffordable. Only the normal cast path and canPlaySa probes
+            // come here; doTriggerNoCost (Play-effect casts: Sunbird's Invocation, thefts) keeps
+            // the stock judge, and every other DestroyAll card takes exactly the path it took
+            // before this branch.
+            return SpecialCardAi.DeadlyTempest.consider(ai, sa);
+        }
 
         return doMassRemovalLogic(ai, sa);
     }

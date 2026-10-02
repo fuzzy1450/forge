@@ -3917,6 +3917,176 @@ public class SpecialCardAi {
         }
     }
 
+    // Deadly Tempest (dead-card batch 2, row 17)
+    // "Destroy all creatures. Each player loses life equal to the number of creatures they
+    // controlled that were destroyed this way." Routed from DestroyAllAi.checkApiLogic's name
+    // gate after Gaze of Granite (the source name, or the host's name: a face-down exiled copy's
+    // source name is ""): the normal cast path, from hand or a MayPlay zone, and canPlaySa
+    // probes. Play-effect casts (Sunbird's Invocation, Nathan Drake's attack trigger, Jeleva)
+    // reach DestroyAllAi.doTriggerNoCost and keep the stock doMassRemovalLogic. That stock judge
+    // never prices the life loss (it can cast into its own death), and its main-2 survival
+    // branch runs AiBlockController, which draws MyRandom on every held main 2 whether or not
+    // the spell is affordable; none of it is carried over. Cast on one of two lines:
+    // - lethal: each opponent's own loss (its destroyed creatures) reaches its life, no opponent
+    //   can't lose, and we survive our own loss (or can't lose). State-based actions end the
+    //   game before any death trigger resolves; both sides at 0 is a draw, so it is excluded.
+    // - board: the opponents' destroyed creatures outvalue ours by DestroyAllAi's own 1v1 margin
+    //   (CREATURE_EVAL_THRESHOLD 200, summed over every opponent in a pod) on evaluateCreature,
+    //   plus 100 for a commander's recast tax and 100 per extra card in a mutated pile (a SacMe
+    //   creature is worth 0 but still costs its life), and our own loss leaves SAFE_LIFE:
+    //   RepeatEachAi's AllPlayerLoseLife rule (lossYou + 5 > life declines), where the loss is
+    //   our destroyed creatures plus DRAIN_PER_DEATH per destroyed creature (both sides) for
+    //   each opposing "a creature dies" trigger that makes a player lose life or deals damage
+    //   (Vein Ripper, Massacre Wurm, Blood Artist, Bastion of Remembrance): those resolve after
+    //   the spell, on top of its own loss.
+    // Destroyed = a creature without indestructible or a shield counter (DestroyAllAi's own
+    // predicate); regeneration is allowed and overcounts both sides, as in every stock wrath.
+    // Affordability, RNG-free: the cost calculateManaCost gives in test mode (cost reducers and
+    // raisers count, a free cast is 0) against HonestMana (G2, held sources skipped,
+    // restrictions read on this sa), in total and in black. Never getAvailableManaEstimate: it
+    // counts the words of Produced$ (Command Tower 2, a Talisman or a Temple 3), so it approves
+    // windows that canPayCost's test payment fails after drawing isManaSourceReserved rolls.
+    // RNG parity: AI:RemoveDeck:All kept A from ever judging this card on the normal-cast path.
+    // Nothing here draws MyRandom, holds mana, remembers a card or writes the SA (no targets,
+    // no X), and it never answers WaitForMain2: every decline leaves the control's stream as
+    // it was, and only a WillPlay goes on to canPayCost.
+    public static class DeadlyTempest {
+        public static final String NAME = "Deadly Tempest";
+        private static final int MARGIN = 200;        // DestroyAllAi CREATURE_EVAL_THRESHOLD, 1v1
+        private static final int SAFE_LIFE = 5;       // RepeatEachAi.java:62: lossYou + 5 > life declines
+        private static final int COMMANDER_TAX = 100; // the recast tax (Gaze of Granite's +2, eval scale)
+        private static final int PILE_CARD = 100;     // each extra card in a mutated pile dies too
+        private static final int DRAIN_PER_DEATH = 2; // Vein Ripper's and Massacre Wurm's 2, the most common
+
+        // what the sweep actually destroys
+        private static boolean destroyed(final Card c) {
+            return c.isCreature() && !c.hasKeyword(Keyword.INDESTRUCTIBLE) && c.getCounters(CounterEnumType.SHIELD) <= 0;
+        }
+
+        private static int value(final Iterable<Card> dying) {
+            int v = 0;
+            for (final Card c : dying) {
+                if (c.hasSVar("SacMe")) {
+                    continue; // happy to die (DestroyAllAi's predicate); still counted in the life loss
+                }
+                v += ComputerUtilCard.evaluateCreature(c)
+                        + (c.isCommander() ? COMMANDER_TAX : 0)
+                        + (c.hasMergedCard() ? PILE_CARD * Math.max(0, c.getMergedCards().size() - 1) : 0);
+            }
+            return v;
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // cheapest first: a destroyable opposing creature (stock doMassRemovalLogic :83)
+            boolean anyTheirs = false;
+            for (final Player opp : ai.getOpponents()) {
+                if (CardLists.count(opp.getCreaturesInPlay(), DeadlyTempest::destroyed) > 0) {
+                    anyTheirs = true;
+                    break;
+                }
+            }
+            if (!anyTheirs) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            final CardCollection mine = CardLists.filter(ai.getCreaturesInPlay(), DeadlyTempest::destroyed);
+            final int myLoss = ai.canLoseLife() ? mine.size() : 0;
+            final boolean mortal = !ai.cantLose() && !ai.cantLoseForZeroOrLessLife();
+            boolean allOpponentsDie = true;
+            int theirValue = 0;
+            int dying = mine.size();
+            for (final Player opp : ai.getOpponents()) {
+                final CardCollection theirs = CardLists.filter(opp.getCreaturesInPlay(), DeadlyTempest::destroyed);
+                dying += theirs.size();
+                theirValue += value(theirs);
+                final int loss = opp.canLoseLife() ? theirs.size() : 0;
+                if (loss < opp.getLife() || opp.cantLose() || opp.cantLoseForZeroOrLessLife()) {
+                    allOpponentsDie = false;
+                }
+            }
+            // lethal: every opponent loses at state-based actions and we live
+            if (allOpponentsDie && (!mortal || myLoss < ai.getLife())) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            // never into our own low life, death drains included
+            if (mortal) {
+                final int loss = myLoss + DRAIN_PER_DEATH * dying * drainTriggers(ai);
+                if (loss > 0 && loss + SAFE_LIFE > ai.getLife()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            if (theirValue > value(mine) + MARGIN) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // The cost after CostAdjustment (calculateManaCost in test mode, the G1 ceiling's call: no
+        // MyRandom, nothing written to the SA) against G2's total and black.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLACK) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK);
+        }
+
+        // Opposing battlefield triggers on a creature dying (ChangesZone Battlefield -> Graveyard,
+        // a ValidCard naming Creature) whose ability chain makes a player lose life or deals damage.
+        private static int drainTriggers(final Player ai) {
+            int n = 0;
+            for (final Card c : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() != TriggerType.ChangesZone
+                            || !t.getParamOrDefault("Origin", "").contains("Battlefield")
+                            || !t.getParamOrDefault("Destination", "").contains("Graveyard")
+                            || !t.getParamOrDefault("ValidCard", "").contains("Creature")) {
+                        continue;
+                    }
+                    if (drains(t)) {
+                        n++;
+                    }
+                }
+            }
+            return n;
+        }
+
+        // Reads the trigger's ability chain without building it (CloneLegion.isHarmfulChain's walk,
+        // a private copy): the overriding ability when built, else the Execute SVar text and its
+        // SubAbility chain, because building an ability allocates a SpellAbility id.
+        private static boolean drains(final Trigger t) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                for (SpellAbility part = built; part != null; part = part.getSubAbility()) {
+                    if (part.getApi() == ApiType.LoseLife || part.getApi() == ApiType.DealDamage) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            final Set<String> seen = new HashSet<>();
+            String svar = t.hasParam("Execute") ? t.getParam("Execute") : null;
+            while (svar != null && seen.add(svar)) {
+                final String text = t.getSVar(svar);
+                if (text.isEmpty()) {
+                    break;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                String api = params.get("DB");
+                if (api == null) {
+                    api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+                }
+                if (ApiType.LoseLife.name().equals(api) || ApiType.DealDamage.name().equals(api)) {
+                    return true;
+                }
+                svar = params.get("SubAbility");
+            }
+            return false;
+        }
+    }
+
     // Deathgorge Scavenger
     public static class DeathgorgeScavenger {
         public static boolean consider(final Player ai, final SpellAbility sa) {
