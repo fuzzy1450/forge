@@ -76,6 +76,16 @@ public class DestroyAi extends SpellAbilityAi {
             if (!ph.is(PhaseType.END_OF_TURN) || !ai.getCreaturesAttackedThisTurn().isEmpty()) {
                 return false;
             }
+        } else if ("AtOppEOT".equals(logic)) {
+            // Nullmage Shepherd ("Tap four untapped creatures you control: Destroy target
+            // artifact or enchantment."): the creatures tapped for the cost untap in our own
+            // untap step, so the opponent's end step right before our turn is the one window
+            // where the cost gives up no attack and no block. SpellAbilityAi implements this
+            // logic (checkPhaseRestrictions, 4-arg), but this override never delegated to it.
+            // Only nullmage_shepherd.txt carries AtOppEOT on a Destroy. Draws no random numbers.
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.getNextTurn() != ai) {
+                return false;
+            }
         } else if ("Pactivator".equals(logic)) {
             // Ability that's intended to destroy own useless token to trigger Grave Pacts
             // should be fired at end of turn or when under attack after blocking to make opponent sac something
