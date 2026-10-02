@@ -3063,6 +3063,132 @@ public class SpecialCardAi {
         }
     }
 
+    // Curse of the Swine
+    // "Exile X target creatures. For each creature exiled this way, its controller creates a
+    // 2/2 green Boar creature token." Routed from ChangeZoneAi.checkApiLogic for the root SA
+    // (normal casts and canPlaySa probes; Play-effect casts keep the stock trigger path). Own
+    // main phase only (sorcery timing is checked before any handler). X is the number of
+    // USEFUL targets, never padding and never 0: each must clear Pongify's floor
+    // (SpecialAiLogic.doPongifyLogic: worth 1.5 times the token it leaves behind), priced
+    // against a vanilla 2/2 token and doubled per token-creation replacement its controller
+    // has (Adrix and Nev, Parallel Lives, ...). Opponents' creatures only: not a card we own
+    // (exiling our own card loses it), not a warded one (one ward trigger counters the whole
+    // spell), not one wearing our aura, not one leaving at end of turn anyway
+    // (EndOfTurnLeavePlay); commanders always qualify (the command-zone redirect still makes
+    // the Boar, and the recast costs two more). Not in main 1 while we control no creature
+    // (isPreferredTarget's own "don't rush" rule).
+    // Mana, RNG-free: HonestMana (G2, held sources skipped, restrictions read on this sa)
+    // against the cost calculateManaCost gives in test mode at X = k (cost reducers and
+    // raisers both count), its total and its UU; X walks down from the number of picks, so
+    // the best picks are kept. Never getAvailableManaEstimate: it counts the words of
+    // Produced$ (Command Tower 2, a Temple or Talisman 3), so the X it allows is unpayable in
+    // exactly the windows with the most targets, and canPayCost's test payment then draws
+    // isManaSourceReserved rolls with no cast. Residual: target-dependent cost increases and
+    // conditional mana.
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating this card on its normal-cast
+    // path. Nothing here draws MyRandom or creates a card: no setMaxXValue, no useRemovalNow,
+    // no TokenAi.spawnToken (it takes a game card id via CardFactory.getCard), so BOAR_VALUE
+    // is a constant. Every decline leaves no targets and no X behind.
+    public static class CurseOfTheSwine {
+        public static final String NAME = "Curse of the Swine";
+        // CreatureEvaluator on a vanilla 2/2 token: 80 + 2*15 + 2*10 + 1 (untapped); cf. Oubliette's note
+        public static final int BOAR_VALUE = 131;
+        private static final int MAX_DOUBLINGS = 3;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            sa.setXManaCostPaid(null);
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.MAIN2)
+                    && ai.getCreaturesInPlay().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // cheap preconditions before any loop
+            boolean anyOpp = false;
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.getCreaturesInPlay().isEmpty()) {
+                    anyOpp = true;
+                    break;
+                }
+            }
+            if (!anyOpp) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (!affordable(ai, sa, mana, 1)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+
+            final Map<Player, Integer> gift = new HashMap<>();
+            for (final Player opp : ai.getOpponents()) {
+                gift.put(opp, BOAR_VALUE << Math.min(MAX_DOUBLINGS, tokenReplacements(opp)));
+            }
+            CardCollection list = CardLists.getTargetableCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa);
+            list = ComputerUtil.filterAITgts(sa, ai, list, true);
+            list = CardLists.filter(list, c -> c.isCreature()
+                    && !ai.equals(c.getOwner())
+                    && !c.hasKeyword(Keyword.WARD)
+                    && !c.hasSVar("EndOfTurnLeavePlay")
+                    && c.getEnchantedBy().stream().noneMatch(a -> ai.equals(a.getController()))
+                    && (c.isCommander()
+                        || 2 * ComputerUtilCard.evaluateCreature(c) >= 3 * gift.getOrDefault(c.getController(), BOAR_VALUE)));
+            if (list.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            ComputerUtilCard.sortByEvaluateCreature(list); // best first
+            final CardCollection picks = new CardCollection();
+            for (final Card c : list) {
+                if (picks.size() >= mana.total()) {
+                    break; // X never exceeds the mana we have (a reduction of 3 or more aside)
+                }
+                if (sa.canTarget(c)) {
+                    picks.add(c);
+                }
+            }
+            if (picks.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            // the largest X we can pay, best picks kept; X = 1 was affordable above
+            int x = picks.size();
+            while (x > 1 && !affordable(ai, sa, mana, x)) {
+                x--;
+            }
+            sa.setXManaCostPaid(x);
+            for (int i = 0; i < x; i++) {
+                sa.getTargets().add(picks.get(i));
+            }
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The cost at X = k after CostAdjustment (calculateManaCost in test mode, the commander
+        // ceiling's call: no MyRandom, the SA's own X untouched) against G2's total and blue.
+        private static boolean affordable(final Player ai, final SpellAbility sa, final HonestMana mana, final int k) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, k, false);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLUE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+
+        // Token-creation replacements the player controls (any one could double the Boar;
+        // counting a non-doubler only raises the floor).
+        private static int tokenReplacements(final Player p) {
+            int n = 0;
+            for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.CreateToken) {
+                        n++;
+                    }
+                }
+            }
+            return n;
+        }
+    }
+
     public static class PithingNeedle {
         // TODO Build out exclusion list based off cards in my deck and cards that other needles have chosen
         public static String chooseCard(final Player ai, final SpellAbility sa) {

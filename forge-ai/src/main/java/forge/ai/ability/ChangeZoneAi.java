@@ -257,6 +257,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.SevinnesReclamation.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.CurseOfTheSwine.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // X is the TARGET COUNT and every exiled creature leaves its controller a 2/2
+            // Boar: the generic known-origin path below sizes X with setMaxXValue (its test
+            // payments draw MyRandom in isManaSourceReserved), fills it with the opponents'
+            // best removal targets, tokens first, with no floor against the Boar, and at X = 1
+            // asks useRemovalNow (MyRandom). AI:RemoveDeck:All stripped the card before any
+            // handler ran, so the stock path drew no random numbers for it on a normal cast.
+            // Play-effect casts (Discover, Nathan Drake's attack trigger) and copy retargets go
+            // through doTriggerNoCost and never reach checkApiLogic. Every other ChangeZone
+            // card takes exactly the path it took before this branch.
+            return SpecialCardAi.CurseOfTheSwine.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {

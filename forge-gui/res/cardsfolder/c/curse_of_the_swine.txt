@@ -6,5 +6,5 @@ SVar:DBToken:DB$ RepeatEach | UseImprinted$ True | DefinedCards$ DirectRemembere
 SVar:TokenBoar:DB$ Token | TokenScript$ g_2_2_boar | TokenOwner$ ImprintedController
 SVar:DBCleanup:DB$ Cleanup | ClearRemembered$ True
 SVar:X:Count$xPaid
-AI:RemoveDeck:All
+SVar:AINoCopy:True
 Oracle:Exile X target creatures. For each creature exiled this way, its controller creates a 2/2 green Boar creature token.
