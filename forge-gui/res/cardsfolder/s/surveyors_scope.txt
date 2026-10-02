@@ -3,6 +3,9 @@ ManaCost:2
 Types:Artifact
 A:AB$ ChangeZone | Cost$ T Exile<1/CARDNAME> | Origin$ Library | Destination$ Battlefield | ChangeType$ Land.Basic | ChangeTypeDesc$ basic land | ChangeNum$ X | SpellDescription$ Search your library for up to X basic land cards, where X is the number of players who control at least two more lands than you. Put those lands onto the battlefield, then shuffle.
 SVar:X:PlayerCountPropertywithAtLeast2MoreLandsThanYou$Amount
-AI:RemoveDeck:All
+SVar:ScopeBasics:Count$ValidLibrary Land.Basic+YouOwn
+SVar:ScopeFloor:SVar$X/Times.ScopeBasics
+SVar:NeedsToPlayVar:ScopeFloor GE1
+SVar:AIPriorityModifier:-10
 AI:RemoveDeck:Random
 Oracle:{T}, Exile Surveyor's Scope: Search your library for up to X basic land cards, where X is the number of players who control at least two more lands than you. Put those cards onto the battlefield, then shuffle.
