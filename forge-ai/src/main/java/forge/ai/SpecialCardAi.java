@@ -2195,6 +2195,53 @@ public class SpecialCardAi {
         }
     }
 
+    // Commander cast ceiling (dead-card batch 2, shared generalization G1)
+    // A commander whose AI:RemoveDeck:All hint a batch-2 row drops was never evaluated by A: the
+    // hint stripped its command-zone spell at AiController.getSpellAbilityToPlay. With the hint
+    // gone the spell is offered in every own main phase, and the stock path reaches
+    // ComputerUtilCost.canPayCost, whose test payment draws MyRandom.percentTrue per source it
+    // tries (ComputerUtilMana.isManaSourceReserved). Every window that cannot pay would re-roll a
+    // held game with no visible cast. affordable() refuses those windows first, drawing nothing:
+    // - the cost is the engine's own test-mode calculateManaCost, the number canPayCost prices:
+    //   the commander tax (castFrom is set to the host's current zone and restored) and every
+    //   RaiseCost and ReduceCost static (Krosan Warchief, the Medallions; the static choice is
+    //   first-element, no RNG);
+    // - the mana is HonestMana (G2) with held sources skipped, never getAvailableManaEstimate,
+    //   which counts the words of Produced$ (Jungle Shrine 4, a Guildgate 3, Command Tower 2)
+    //   and so approves windows that canPayCost then fails after drawing;
+    // - the cost's mana value must fit the total, and each W, U, B, R and G shard its colour.
+    // A ceiling, not a payability test: true sends the cast on to the stock checks, false is the
+    // caller's CantAfford. Residuals: one multicolour source counts toward each colour it can
+    // make (two pips of different colours on one Command Tower pass); hybrid, Phyrexian and {C}
+    // shards are checked through the total only; hand sources and mana multipliers are not
+    // counted (HonestMana). RNG-free for a spell with no Announce$ NumTimes (calculateManaCost
+    // test-pays it) and no cost feature whose adjustment asks a controller (Assist, Delve,
+    // Convoke, Improvise, Offering, Emerge, Waterbend); none of its callers has one. sa's
+    // activating player must be set, as it is on every checkApiLogic path. Called only from
+    // each commander row's own name gate; frozen once accepted (a row that needs other
+    // semantics keeps a private copy).
+    public static class CommanderCastCeiling {
+        // the five coloured shards, in MagicColor.WUBRG order
+        private static final forge.card.mana.ManaCostShard[] SHARDS = {
+                forge.card.mana.ManaCostShard.WHITE, forge.card.mana.ManaCostShard.BLUE,
+                forge.card.mana.ManaCostShard.BLACK, forge.card.mana.ManaCostShard.RED,
+                forge.card.mana.ManaCostShard.GREEN };
+
+        public static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()) {
+                return false;
+            }
+            for (int i = 0; i < SHARDS.length; i++) {
+                if (mana.colour(MagicColor.WUBRG[i]) < cost.getUnpaidShards(SHARDS[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
     // Commander's Insight
     // "Target player draws X cards plus an additional card for each time they've cast a
     // commander from the command zone this game." The script says NumCards$ Z (SVar$Y/Plus.X),
@@ -6439,6 +6486,147 @@ public class SpecialCardAi {
                 }
             }
             return PaymentDecision.counters(table);
+        }
+    }
+
+    // Honest mana (dead-card batch 2, shared generalization G2)
+    // An RNG-free count of the mana a player can make right now, for affordability ceilings that
+    // must answer before ComputerUtilCost.canPayCost, whose test payment draws MyRandom per source
+    // it tries (ComputerUtilMana.isManaSourceReserved). ComputerUtilMana.getAvailableManaEstimate
+    // is not that count: it multiplies Amount by the number of words in Produced$, so a choice is
+    // counted as if every option were made at once (Jungle Shrine's "Combo R G W" 4, a Guildgate
+    // or a Talisman 3, Command Tower or Arcane Signet 2), and a ceiling built on it approves
+    // windows that canPayCost fails after drawing. A separate copy in the spirit of
+    // DayOfTheMoon.usableMana; the estimate and every batch-1 helper are left as they are.
+    // - Counted: the floating pool, plus, for each battlefield source the player controls, its
+    //   best mana ability that canPlay() (so not tapped, not summoning-sick, restrictions met),
+    //   has no mana in its own cost, meets its conditions and may be spent on sa
+    //   (meetsManaRestrictions).
+    // - Worth: Amount for a choice production (Combo ..., Any, Chosen, Special, a ManaReflected
+    //   ability, an empty production), else Amount times its symbols ("R W" 2, Sol Ring's "C"
+    //   with Amount 2 is 2).
+    // - Per colour, a source gives what one activation of its best ability for that colour can
+    //   make of it. A Combo reads its own letters through getComboColors (Chosen through the
+    //   chosen colour, ColorIdentity through the controller's commander identity, Any as every
+    //   colour; AnyDifferent gives at most one of each); a plain Any is every colour; Chosen is
+    //   the chosen colour; a reflected, Special or colourless production is none. Being a Combo
+    //   never makes a source every colour: only its letters count.
+    // - skipHeld drops the sources isManaSourceReserved refuses, in the phases it refuses them:
+    //   held for the next spell; held for a block trick outside declare blockers and cleanup;
+    //   held for Main 2 outside Main 2 and cleanup (every AI profile reserves at 100%).
+    // Under-counts, the safe side for a ceiling: hand sources (Simian Spirit Guide), mana
+    // multipliers (TapsForMana triggers, ProduceMana replacements), repeatable sacrifice
+    // outlets, Special and reflected colours. Over-count: one multicolour source counts toward
+    // each colour it can make. Draws nothing and holds nothing; its only write is
+    // setActivatingPlayer on the mana abilities it reads, as the estimate does. Frozen once
+    // accepted: a row whose reviewed count differs keeps a private copy.
+    public static class HonestMana {
+        private final int total;
+        private final int[] colours; // MagicColor.WUBRG order
+
+        private HonestMana(final int total, final int[] colours) {
+            this.total = total;
+            this.colours = colours;
+        }
+
+        // the pool plus every counted source's best ability
+        public int total() {
+            return total;
+        }
+
+        // mana of one colour (MagicColor.WHITE, BLUE, BLACK, RED or GREEN); 0 for anything else
+        public int colour(final byte colour) {
+            final int i = index(colour);
+            return i < 0 ? 0 : colours[i];
+        }
+
+        public static HonestMana of(final Player ai, final SpellAbility sa, final boolean skipHeld) {
+            int total = ai.getManaPool().totalMana();
+            final int[] colours = new int[MagicColor.WUBRG.length];
+            for (int i = 0; i < colours.length; i++) {
+                colours[i] = ai.getManaPool().getAmountOfColor(MagicColor.WUBRG[i]);
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (skipHeld && isHeld(ai, src)) {
+                    continue;
+                }
+                int best = 0;
+                final int[] bestColours = new int[colours.length];
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean reflectedOrSpecial = ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana();
+                    final boolean choice = reflectedOrSpecial || produced.isEmpty() || mp.isComboMana()
+                            || mp.isAnyMana() || produced.contains("Chosen");
+                    best = Math.max(best, choice ? amount : amount * produced.split(" ").length);
+
+                    final String letters;
+                    if (reflectedOrSpecial) {
+                        letters = "";
+                    } else if (mp.isComboMana()) {
+                        letters = mp.getComboColors(ma);
+                    } else if (mp.isAnyMana()) {
+                        letters = "W U B R G";
+                    } else if (produced.contains("Chosen")) {
+                        letters = produced.replace("Chosen", mp.getChosenColor(ma));
+                    } else {
+                        letters = produced;
+                    }
+                    final int[] symbols = new int[colours.length];
+                    for (final String t : letters.split(" ")) {
+                        final int i = t.length() == 1 ? index(MagicColor.fromName(t.charAt(0))) : -1;
+                        if (i >= 0) {
+                            symbols[i]++;
+                        }
+                    }
+                    final int each = produced.contains("AnyDifferent") ? Math.min(1, amount) : amount;
+                    for (int i = 0; i < colours.length; i++) {
+                        final int made = choice ? (symbols[i] > 0 ? each : 0) : symbols[i] * amount;
+                        bestColours[i] = Math.max(bestColours[i], made);
+                    }
+                }
+                total += best;
+                for (int i = 0; i < colours.length; i++) {
+                    colours[i] += bestColours[i];
+                }
+            }
+            return new HonestMana(total, colours);
+        }
+
+        // the sources ComputerUtilMana.isManaSourceReserved refuses, in the phases it refuses them
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+
+        private static int index(final byte colour) {
+            for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                if (MagicColor.WUBRG[i] == colour) {
+                    return i;
+                }
+            }
+            return -1;
         }
     }
 
