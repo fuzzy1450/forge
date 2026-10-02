@@ -96,6 +96,17 @@ public class EffectAi extends SpellAbilityAi {
             return SpecialCardAi.OpenIntoWonder.consider(ai, sa);
         }
 
+        if ("Theoretical Duplication".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Copies every nontoken creature that enters under an opponent's control this
+            // turn. The no-AILogic fallthrough below refused it every time. Routed after the
+            // randomReturn roll: the card has no RemoveDeck hint, so the stock engine evaluated
+            // it and drew here before refusing, and the evaluator draws no RNG. A name gate, not
+            // an AILogic$, so doTriggerNoCost's AILogic pre-call never runs for it and a
+            // Play-effect theft (Jeleva) still draws exactly one roll. Every other Effect card
+            // takes exactly the path it took before this branch.
+            return SpecialCardAi.TheoreticalDuplication.consider(ai, sa);
+        }
+
         if (sa.hasParam("AILogic")) {
             logic = sa.getParam("AILogic");
             if (logic.equals("BeginningOfOppTurn")) {

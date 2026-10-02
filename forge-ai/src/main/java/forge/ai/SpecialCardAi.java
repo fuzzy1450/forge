@@ -16543,6 +16543,65 @@ public class SpecialCardAi {
         }
     }
 
+    // Theoretical Duplication
+    // "Whenever a nontoken creature enters under an opponent's control this turn, create a
+    // token that's a copy of that creature." ({2}{U} instant)
+    // EffectAi's no-AILogic fallthrough refused it every time. Reached from
+    // EffectAi.checkApiLogic's name gate after the randomReturn roll. The only window with a
+    // guaranteed copy: an opponent's nontoken creature SPELL on top of the stack (not a copied
+    // spell, which resolves as a token; not face-down; not a mutate merge, which does not
+    // enter). A token copy must be worth the three mana and the card. The screen is Clone
+    // Legion's, read-only: no harmful self-ETB (lose the game, skip turns, mass
+    // sacrifice/destroy, exile our library/board, sacrifice-unless), no 0-toughness body that
+    // gets its size from counters, no RemoveDeck card, no legend we already hold. RemoveRandom
+    // cards (Leveler-type drawbacks, as in Here Comes a New Hero!) are vetoed too, and so is a
+    // body that leaves at end of turn (SVar:EndOfTurnLeavePlay, the Ball Lightning family,
+    // ControlGainAi's veto): its copy is sacrificed in that end step unused. A copyValue of at
+    // least MIN_COPY_VALUE, on base P/T, is required. Affordability is checked RNG-free before
+    // any approval, because an approval goes on into canPayCost's mana-reservation rolls, which
+    // the stock refusal never reached: the printed cost of the SA being cast against G2
+    // (HonestMana, held sources skipped, restrictions read on this sa), in total and in blue,
+    // never getAvailableManaEstimate, which counts the words of Produced$. Draws no RNG and
+    // holds nothing. Every later creature that turn is a free extra.
+    public static class TheoreticalDuplication {
+        // ~ a non-token 3/3 with an ability (Cosmic Intervention's single-creature floor):
+        // a vanilla 3-mana 3/3 scores ~191 and a 4-mana 4/4 ~220 on this scale.
+        public static final int MIN_COPY_VALUE = 200;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty()) { // the common case: O(1) out
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility top = game.getStack().peekAbility();
+            if (top == null || !top.isSpell() || top.isMutate() || top.getActivatingPlayer() == null
+                    || !top.getActivatingPlayer().isOpponentOf(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card c = top.getHostCard();
+            if (c == null || !c.isCreature() || c.isCopiedSpell() || c.isFaceDown()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (c.hasSVar("EndOfTurnLeavePlay") // Ball Lightning family: the copy leaves at end of turn unused
+                    || !CloneLegion.worthCopying(ai, c) || CloneLegion.hasHarmfulSelfETB(c)
+                    || ComputerUtilCard.isCardRemRandomDeck(c)
+                    || CloneLegion.copyValue(c) < MIN_COPY_VALUE) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // judge the SA being cast, not host.getFirstSpellAbility() (row 77): a free
+            // Play-effect cast carries no mana cost
+            final ManaCost cost = sa.getPayCosts() == null ? ManaCost.ZERO : sa.getPayCosts().getTotalMana();
+            if (cost.getCMC() > 0) {
+                final HonestMana mana = HonestMana.of(ai, sa, true);
+                if (mana.total() < cost.getCMC()
+                        || mana.colour(MagicColor.BLUE) < cost.getShardCount(forge.card.mana.ManaCostShard.BLUE)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // The Scarab God
     public static class TheScarabGod {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
