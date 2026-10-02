@@ -81,6 +81,14 @@ public class DrawAi extends SpellAbilityAi {
             // "draws nothing" veto); judged whole by the sacrifice chooser instead.
             return SpecialCardAi.MomentousFall.consider(ai, sa);
         }
+        if (SpecialCardAi.ImprobableAlliance.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa.isActivatedAbility() && !(sa instanceof AbilitySub)
+                && !SpecialCardAi.ImprobableAlliance.canPay(ai, sa, SpecialCardAi.ImprobableAlliance.LOOT_MV)) {
+            // The {4}{U}{R} loot, which AI:RemoveDeck:All kept A from ever evaluating: refuse an
+            // unpayable window without RNG (an approval runs on into canPayCost's reserve roll); a
+            // payable one falls through to the stock floors below.
+            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
 
         Card hostCard = sa.getHostCard();
         PhaseHandler ph = ai.getGame().getPhaseHandler();

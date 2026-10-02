@@ -9236,6 +9236,119 @@ public class SpecialCardAi {
         }
     }
 
+    // Improbable Alliance
+    // "Whenever you draw your second card each turn, create a 1/1 blue Faerie creature token with
+    // flying. {4}{U}{R}: Draw a card, then discard a card." A 2-mana permanent with no drawback:
+    // PermanentAi's own timing (own main 2, behind every costlier or creature spell, never on mana
+    // held for a trick) is the cast floor, plus the one blank case: a player who cannot draw a
+    // second card in a turn (Narset, Parter of Veils; any CantDraw static) never makes a Faerie.
+    // The loot keeps DrawAi's stock floors (main 2 on, library margin, no own-turn overfill, a
+    // non-empty hand); the script's AIActivateLast$ True sorts it behind every spell, and in our
+    // own main 2 its draw is the second card of the turn, a Faerie.
+    // Reached from PermanentNoncreatureAi.canPlay (the cast; the Play-effect path,
+    // PermanentAi.doTriggerNoCost, never calls canPlay and stays stock) and DrawAi.checkApiLogic
+    // (the loot; DrawAi.doTriggerNoCost never calls checkApiLogic).
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card, so every refusal here
+    // is RNG-free, and an approval must first be payable, because canPayCost's test payment rolls
+    // MyRandom (ComputerUtilMana.isManaSourceReserved). Nothing is held past a decline: no
+    // AiCardMemory write, no reservation.
+    public static class ImprobableAlliance {
+        public static final String NAME = "Improbable Alliance";
+        public static final int CAST_MV = 2;   // {U}{R}
+        public static final int LOOT_MV = 6;   // {4}{U}{R}
+
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (!canPay(ai, sa, CAST_MV)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (!canDrawSecondCard(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // turn-independent: a CantDraw static on us with a limit under two (DrawLimit absent = 0),
+        // read as StaticAbilityCantDraw.applyCantDrawAmountAbility reads it
+        private static boolean canDrawSecondCard(final Player ai) {
+            if (!ai.canDraw()) {
+                return false;
+            }
+            for (final Card ca : ai.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
+                for (final StaticAbility st : ca.getStaticAbilities()) {
+                    if (st.checkConditions(StaticAbilityMode.CantDraw) && st.matchesValidParam("ValidPlayer", ai)
+                            && Integer.parseInt(st.getParamOrDefault("DrawLimit", "0")) < 2) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // RNG-free. The total is G2 (HonestMana, held sources skipped, restrictions read on this
+        // sa) against mv, never getAvailableManaEstimate, which counts the words of Produced$
+        // (Command Tower, Arcane Signet and Commander's Sphere 2 each, a Snarl or Temple 3). Then
+        // Hall's condition for the two pips: a U source and a different R source among floating
+        // mana and untapped, cost-free mana abilities. The scan skips, as DayOfTheMoon.usableMana
+        // does, HELD_MANA_SOURCES_FOR_NEXT_SPELL / _FOR_DECLBLK / _FOR_ENEMY_DECLBLK sources,
+        // tapped or summoning-sick {T} sources and abilities with a mana cost. A Combo source
+        // counts for the colours it lists (getComboColors: Command Tower, Arcane Signet and
+        // Commander's Sphere read the commander's identity, so "Combo R W" is never blue), a
+        // Chosen one for its chosen colour; Any and a reflected production (Exotic Orchard) count
+        // for both. A residual approval (a cost raiser the printed mv cannot see, a reflected
+        // colour nobody has) costs one canPayCost roll and no cast.
+        public static boolean canPay(final Player ai, final SpellAbility sa, final int mv) {
+            if (HonestMana.of(ai, sa, true).total() < mv) {
+                return false;
+            }
+            int u = ai.getManaPool().getAmountOfColor(MagicColor.BLUE);
+            int r = ai.getManaPool().getAmountOfColor(MagicColor.RED);
+            int either = u + r;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (u >= 1 && r >= 1 && either >= 2) {
+                    break;
+                }
+                if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)) {
+                    continue;
+                }
+                boolean canU = false;
+                boolean canR = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().getCostMana() != null
+                            || (ma.getPayCosts().hasTapCost() && (src.isTapped() || src.isCreature() && src.isSick()))) {
+                        continue;
+                    }
+                    final String p = mp.getOrigProduced();
+                    if (p == null || p.isEmpty() || mp.isAnyMana()) {
+                        canU = true;
+                        canR = true;
+                        continue;
+                    }
+                    final String colours = mp.isComboMana() ? mp.getComboColors(ma)
+                            : p.replace("Chosen", mp.getChosenColor(ma));
+                    canU |= colours.contains("U");
+                    canR |= colours.contains("R");
+                }
+                if (canU) {
+                    u++;
+                }
+                if (canR) {
+                    r++;
+                }
+                if (canU || canR) {
+                    either++;
+                }
+            }
+            return u >= 1 && r >= 1 && either >= 2;   // Hall's condition for the two pips
+        }
+    }
+
     // Infinite Reflection
     // Enchant a creature (ours or an opponent's) only when turning each other nontoken creature
     // we control into a copy of it is a clear board upgrade. The target must be a nonlegendary

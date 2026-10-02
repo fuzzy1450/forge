@@ -19,6 +19,25 @@ import forge.game.zone.ZoneType;
  */
 public class PermanentNoncreatureAi extends PermanentAi {
 
+    // Improbable Alliance is judged here rather than in checkApiLogic. canPlay is reached only
+    // from canPlayWithSubs: the owner's cast from hand (or from Wrenn's Resolve exile) and a
+    // MayPlay thief, the path AI:RemoveDeck:All used to block. PermanentAi.doTriggerNoCost, which
+    // canPlayFromEffectAI uses for Play effects (Nathan Drake's exile-and-cast), goes straight to
+    // checkApiLogic; that path never read the hint, so it stays stock. The hook runs only after
+    // the stock checks (restrictions, the main-2 wait, checkApiLogic, willPayCosts) approved.
+    @Override
+    protected AiAbilityDecision canPlay(final Player ai, final SpellAbility sa) {
+        final AiAbilityDecision decision = super.canPlay(ai, sa);
+        if (decision.willingToPlay() && sa.isSpell()
+                && SpecialCardAi.ImprobableAlliance.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            final AiAbilityDecision alliance = SpecialCardAi.ImprobableAlliance.considerCast(ai, sa);
+            if (!alliance.willingToPlay()) {
+                return alliance;
+            }
+        }
+        return decision;
+    }
+
     /**
      * The rest of the logic not covered by the canPlayAI template is defined
      * here
