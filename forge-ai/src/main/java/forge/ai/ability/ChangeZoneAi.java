@@ -239,6 +239,24 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.GhostlyFlicker.consider(aiPlayer, sa);
         }
 
+        if ("Sevinne's Reclamation".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)
+                && aiPlayer.getGame().getStack().isEmpty()) {
+            // Judged whole by SpecialCardAi.SevinnesReclamation.consider (hand and flashback
+            // SAs alike). The generic path below times this reanimation with useRemovalNow (a
+            // removal-tempo roll), and whatever it decides, the DBCopy rider then vetoes the
+            // spell in CopySpellAbilityAi.chkDrawback (any copy sub on an empty stack). The card
+            // carries only AI:RemoveDeck:Random, so the stock engine evaluated it here and drew
+            // MyRandom in useRemovalNow (and in its interrupt-1 AiAttackController runs): make
+            // that same call first and discard its decision, so every decline stays on the
+            // stored random stream. On an empty stack the stock path drew nothing after this
+            // call (the rider refuses before its percentTrue); on a non-empty stack (an Elsha
+            // flash cast from the library top) the rider draws, so the spell keeps the stock
+            // path there. Play-effect casts and copy retargets never reach checkApiLogic. Every
+            // other ChangeZone card takes exactly the path it took before this branch.
+            knownOriginCanPlayAI(aiPlayer, sa);
+            return SpecialCardAi.SevinnesReclamation.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {

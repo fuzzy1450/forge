@@ -13012,6 +13012,91 @@ public class SpecialCardAi {
         }
     }
 
+    // Sevinne's Reclamation
+    // "Return target permanent card with mana value 3 or less from your graveyard to the
+    // battlefield. If this spell was cast from a graveyard, you may copy this spell and may
+    // choose a new target for the copy. Flashback {4}{W}"
+    // The owner never cast it: the stock root timed the reanimation with useRemovalNow (a
+    // removal-tempo roll with no meaning for a return), and the DBCopy rider then vetoed every
+    // cast (CopySpellAbilityAi refuses any copy sub on an empty stack). Routed from
+    // ChangeZoneAi.checkApiLogic for the root SA (from hand, or the flashback SA) on an empty
+    // stack only, after the stock knownOriginCanPlayAI call whose decision is discarded (the
+    // card is unhinted, so the stock engine evaluated it and drew there); a matching name gate
+    // in CopySpellAbilityAi.chkDrawback waves the rider through.
+    // Affordability, cheapest first and RNG-free: HonestMana (G2, held sources skipped) against
+    // THIS sa's printed cost (3 from hand, 5 by flashback) and its white pip, never
+    // getAvailableManaEstimate, which counts the words of Produced$ (a guildgate 3, Command
+    // Tower 2) and would send unpayable windows into canPayCost's isManaSourceReserved draws.
+    // Residual: cost increases and conditional mana.
+    // Floor: our own permanent card worth a card (see worthReturning); pick: the stock getBestAI
+    // ranking (best creature when all are creatures, else the highest mana value), the same
+    // one the flashback copy's stock retarget uses. On a decline the root keeps the targets the
+    // stock call left. Nothing is held or remembered; no random draws.
+    public static class SevinnesReclamation {
+        public static final int MIN_BODY_EVAL = 140; // above a vanilla 1/1 (130), UnfinishedBusiness' line
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard(); // judge sa itself, never host.getFirstSpellAbility() (row 77)
+            if (host == null || !sa.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // A WillPlay goes on to canPayCost, whose test payment draws MyRandom per source it
+            // tries; the stock rider veto never reached it, so refuse windows this cast cannot pay.
+            final ManaCost cost = sa.getPayCosts().getTotalMana();
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getCMC()
+                    || mana.colour(MagicColor.WHITE) < cost.getShardCount(forge.card.mana.ManaCostShard.WHITE)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final CardCollection worth = new CardCollection();
+            for (final Card c : CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa)) {
+                if (!c.equals(host) && c.getOwner().equals(ai) && worthReturning(ai, c)) {
+                    worth.add(c);
+                }
+            }
+            if (worth.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // stock targets left as the stock call left them
+            }
+            final Card pick = ComputerUtilCard.getBestAI(worth);
+            if (!sa.canTarget(pick)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.resetTargets();
+            sa.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Value floor (the printed pool is any own permanent card with mana value 3 or less; every
+        // exclusion here is a value judgement): no land (a 3-mana card-for-card land is below the
+        // line), no Aura or Battle (their attach and protector choices fall outside this
+        // evaluator), no AI:RemoveDeck:All card, nothing ETB-prevented, no legend we already
+        // control, no Equipment with no creature of ours to carry it, no mana-value-0 noncreature
+        // (X permanents enter empty) unless a planeswalker, and a creature must keep toughness
+        // after static P/T and score at least MIN_BODY_EVAL.
+        private static boolean worthReturning(final Player ai, final Card c) {
+            // cheap exits first; the LKI copy is built only for a creature that survives them
+            if (c.isLand() || c.isAura() || c.isBattle() || ComputerUtilCard.isCardRemAIDeck(c)) {
+                return false;
+            }
+            if (c.getType().isLegendary() && !c.ignoreLegendRule() && ai.isCardInPlay(c.getName())) {
+                return false;
+            }
+            if (ComputerUtil.isETBprevented(c)) {
+                return false;
+            }
+            if (c.isEquipment() && !c.isCreature() && ai.getCreaturesInPlay().isEmpty()) {
+                return false;
+            }
+            if (!c.isCreature()) {
+                return c.isPlaneswalker() || c.getCMC() >= 1; // MV-0 X permanents (Everflowing Chalice) enter empty
+            }
+            final Card lki = CardCopyService.getLKICopy(c);
+            lki.setLastKnownZone(ai.getZone(ZoneType.Battlefield));
+            ComputerUtilCard.applyStaticContPT(c.getGame(), lki, null);
+            return lki.getNetToughness() > 0 && ComputerUtilCard.evaluateCreature(lki) >= MIN_BODY_EVAL;
+        }
+    }
+
     // Sin, Unending Cataclysm
     // "As Sin enters, remove all counters from any number of artifacts, creatures, and
     // enchantments. Sin enters with X +1/+1 counters, where X is twice the number removed."

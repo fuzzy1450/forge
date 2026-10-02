@@ -129,6 +129,22 @@ public class CopySpellAbilityAi extends SpellAbilityAi {
             // untargeted Defined$ Targeted copy sub.
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
+        if ("Sevinne's Reclamation".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && aiPlayer.getGame().getStack().isEmpty() && sa.getParent() != null
+                && sa.getRootAbility().isSpell() && !sa.getRootAbility().isCopied()
+                && !sa.getRootAbility().isCastFromPlayEffect()) {
+            // The root was judged whole by SpecialCardAi.SevinnesReclamation.consider (the
+            // ChangeZoneAi name gate, also empty-stack only). This rider copies only when the
+            // spell was cast from a graveyard, which the engine checks at resolution; the copy
+            // is optional (confirmAction: yes) and its new target is the stock mandatory
+            // retarget. The generic check below refuses any copy sub on an empty stack, and a
+            // sorcery is only judged on an empty stack, so it vetoed every cast; its
+            // checkConditions would refuse again (the spell is not cast yet, so
+            // wasCastFromGraveyard is false). On a non-empty stack (an Elsha flash cast,
+            // another spell copying this one, the copy's own resolution-time retarget, a
+            // Play-effect cast) the stock path below runs, with its percentTrue draw.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         if ("ChainOfSmog".equals(sa.getParam("AILogic"))) {
             return SpecialCardAi.ChainOfSmog.consider(aiPlayer, sa);
         }
