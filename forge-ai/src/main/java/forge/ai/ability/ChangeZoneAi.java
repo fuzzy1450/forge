@@ -1640,6 +1640,10 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        } else if ("AniktheaHandOfErebos".equals(logic)) {
+            // Own-graveyard enchantment for a 3/3 Zombie copy. isPreferredTarget below keeps
+            // only opponents' cards for Destination$ Exile, so the pre-cast probe vetoed every cast.
+            return SpecialCardAi.AniktheaHandOfErebos.chooseTarget(ai, sa, mandatory);
         } else if ("ExileCombatThreat".equals(logic)) {
             return doExileCombatThreatLogic(ai, sa);
         }

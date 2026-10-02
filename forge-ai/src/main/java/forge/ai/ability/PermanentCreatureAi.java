@@ -206,6 +206,12 @@ public class PermanentCreatureAi extends PermanentAi {
                 return marath;
             }
         }
+        if (SpecialCardAi.AniktheaHandOfErebos.NAME.equals(card.getName())
+                && !SpecialCardAi.AniktheaHandOfErebos.castAffordable(ai, sa)) {
+            // RNG-free commander cast ceiling (G1): an unpayable window must not reach
+            // canPayCost's MyRandom mana probe; see the class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
         final ManaCost mana = card.getManaCost();
         final Game game = ai.getGame();
 

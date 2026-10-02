@@ -170,6 +170,89 @@ public class SpecialCardAi {
         }
     }
 
+    // Anikthea, Hand of Erebos (dead-card batch 2, row 129; the commander of precon:Enduring
+    // Enchantments (CMM))
+    // "Whenever Anikthea enters or attacks, exile up to one target non-Aura enchantment card from
+    // your graveyard. Create a token that's a copy of that card, except it's a 3/3 black Zombie
+    // creature in addition to its other types." The script has no AI hint, so the stock engine
+    // evaluated the command-zone spell and declined it: saSideEffects test-runs the enters trigger
+    // non-mandatorily (AiController.checkETBEffects -> doTrigger(exSA, false)), and
+    // ChangeZoneAi.isPreferredTarget keeps only opponents' cards for Destination$ Exile unless
+    // AITgtOwnCards. Every valid target is ours, so the probe failed and every cast was
+    // BadEtbEffects; the lack-of-targets rescue in checkETBEffectsPreparedCard is dead for
+    // TargetMin$ 0, and at resolution stock chose zero targets. Its only two casts in the store came
+    // in the games where an opponent's Hushwing Gryff switched the probe off.
+    // - Probe (not mandatory): approve. The 4/4 menace body is the cast's value and zero targets is
+    //   legal; the probe's ability is a throwaway copy, so nothing is targeted or held.
+    // - Resolution (the enters and the attack trigger are both mandatory): the most expensive safe
+    //   non-Aura enchantment card in our graveyard (ties to the last in graveyard order), else none.
+    //   Safe: not AI:RemoveDeck:All (isCardRemAIDeck reads only All; a Random hint such as Starfield
+    //   of Nyx's stays a candidate), no second copy of a legend we control, no EndOfTurnLeavePlay,
+    //   and no enters trigger rooted in DestroyAll, SacrificeAll or DamageAll unless it needs the
+    //   card to have been cast (a token copy never is: Cacophony Unleashed's wipe stays off).
+    // - Cast ceiling: CommanderCastCeiling (G1), answered from PermanentCreatureAi.checkApiLogic
+    //   before canPayCost, whose test payment draws MyRandom (ComputerUtilMana
+    //   .isManaSourceReserved). G1 prices calculateManaCost's adjusted cost, so the colours are the
+    //   adjusted cost's (a Demon of Fate's Design life cast asks only for the tax), and counts
+    //   HonestMana (G2), never getAvailableManaEstimate, which counts this deck's Sandsteppe
+    //   Citadel 4, its Temples and Snarls 3, Command Tower and Arcane Signet 2. A Play-effect cast
+    //   skips it and stays stock. G1's per-colour residual is kept (skeptic R2): one multicolour
+    //   source can stand for two of W, B and G.
+    // Draws nothing and holds nothing.
+    public static class AniktheaHandOfErebos {
+        public static final String NAME = "Anikthea, Hand of Erebos";
+
+        public static AiAbilityDecision chooseTarget(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            if (!mandatory) {
+                // the pre-cast probe: the body is the value, zero targets is legal
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            final CardCollection safe = CardLists.filter(
+                    CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa),
+                    c -> copyable(ai, c));
+            final Card pick = ComputerUtilCard.getMostExpensivePermanentAI(safe);
+            if (pick != null && sa.canTarget(pick)) {
+                sa.getTargets().add(pick);
+            }
+            // "up to one": zero targets is legal and harmless
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Can this card become the 3/3 Zombie copy without hurting us?
+        private static boolean copyable(final Player ai, final Card c) {
+            if (ComputerUtilCard.isCardRemAIDeck(c)) {
+                return false; // AI:RemoveDeck:All: the AI does not run it from hand, nor as a token
+            }
+            if (c.getType().isLegendary() && ai.isCardInPlay(c.getName())) {
+                return false; // the legend rule would bin one of them
+            }
+            if (c.hasSVar("EndOfTurnLeavePlay")) {
+                return false;
+            }
+            for (final Trigger t : c.getTriggers()) {
+                // a token copy is never cast, so an "if you cast it" enters trigger cannot fire
+                if (t.getMode() == TriggerType.ChangesZone && "Battlefield".equals(t.getParam("Destination"))
+                        && !t.getParamOrDefault("ValidCard", "").contains("wasCast")) {
+                    final String api = TheMimeoplasm.rootApi(t);
+                    if ("DestroyAll".equals(api) || "SacrificeAll".equals(api) || "DamageAll".equals(api)) {
+                        return false; // a symmetric sweeper would hit our own board
+                    }
+                }
+            }
+            return true;
+        }
+
+        // The RNG-free cast ceiling, for our own paid cast only: true sends the cast on to the
+        // stock checks, false is the caller's CantAfford.
+        public static boolean castAffordable(final Player ai, final SpellAbility sa) {
+            if (!sa.isSpell() || sa.isCastFromPlayEffect()) {
+                return true;
+            }
+            return CommanderCastCeiling.affordable(ai, sa);
+        }
+    }
+
     // Archangel of Strife
     // "As this enters, each player chooses war or peace." Every AI chooser takes the first choice
     // (ChooseGenericAi.chooseSingleSpellAbility -> War), and a human opponent is modelled the same
