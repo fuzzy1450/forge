@@ -170,6 +170,186 @@ public class SpecialCardAi {
         }
     }
 
+    // Aetherspouts (dead-card batch 2, row 48; precon:Prismari Performance (C21) and precon:Undead
+    // Unleashed (MIC))
+    // "For each attacking creature, its owner puts it on their choice of the top or bottom of their
+    // library." A one-sided answer to an opponent's attack, cast in the opponent's declare-blockers
+    // step: our blocks are on the board, the stack is empty, and none of our creatures is attacking
+    // (it hits every attacker, ours too). The owner chooses top or bottom (an AI owner takes DBTop,
+    // ChooseGenericAi's no-AILogic first choice), so a nontoken attacker is redrawn: the value is
+    // tempo, the owner's lost draws and recast mana; tokens are gone and a commander goes to the
+    // command zone. Floor: at least MIN_ATTACKERS opposing attackers (the script's own
+    // NeedsToPlayVar Z GE2, so an approval is never re-vetoed by checkNeedsToPlayReqs), one of them
+    // at us or a permanent we protect, affordable, and either
+    //  - danger: the attack as blocked leaves us below min(AI_IN_DANGER_MAX_THRESHOLD, life), or an
+    //    attacking commander's damage reaches 21 (IllusionistsGambit's rule; poison and trample-over
+    //    left out, both understate the danger, so they can only cost casts); or
+    //  - value: the opposing attackers are worth MIN_VALUE (Legions to Ashes' floor) net, where an
+    //    attacker our blocks already kill counts negative: the cast would hand it back.
+    // Routed from the end of PumpAi.checkApiLogic's untargeted branch, where the stock path refused
+    // it at every consult. RNG parity: that stock path drew no random numbers for this card, so every
+    // refusal here is RNG-free: lifeInDanger is not called (it rolls), the combat predictors run
+    // withoutAbilities, attackerWouldBeDestroyed is replaced by blocksKill (its
+    // combatantCantBeDestroyed asks ComputerUtil.canRegenerate, which test-pays a regenerator's
+    // ability, and the test payment rolls), and affordability is checked before any approval: the
+    // cost after reductions and taxes against min(getAvailableManaEstimate, untappedMana), plus the
+    // blue pips, because canPlayAndPayForFace's canPayCost rolls (ComputerUtilMana
+    // .isManaSourceReserved) once an approval reaches it. Nothing is held or remembered.
+    public static class Aetherspouts {
+        public static final String NAME = "Aetherspouts";
+        public static final int MIN_ATTACKERS = 2; // the script's NeedsToPlayVar:Z GE2
+        public static final int MIN_VALUE = 300;   // evaluateCreature units; LegionsToAshes.MIN_GROUP_VALUE
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            if (combat == null || ph.isPlayerTurn(ai) || !ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || !game.getStack().isEmpty()) {
+                return no;
+            }
+            final Player attacking = combat.getAttackingPlayer();
+            if (attacking == null || !attacking.isOpponentOf(ai)) {
+                return no;
+            }
+            final CardCollection attackers = combat.getAttackers();
+            int theirs = 0;
+            boolean atUs = false;
+            for (final Card c : attackers) {
+                if (!c.getController().isOpponentOf(ai)) {
+                    return no; // one of ours (or a teammate's) would go too
+                }
+                theirs++;
+                atUs |= ai.equals(combat.getDefenderPlayerByAttacker(c)); // us, our walkers, our battles
+            }
+            if (theirs < MIN_ATTACKERS || !atUs) {
+                return no;
+            }
+
+            // Affordability before any approval: after a WillPlay, canPayCost's test payment rolls
+            // (ComputerUtilMana.isManaSourceReserved), so an unpayable window must refuse here. The
+            // estimate counts the words of Produced$ (a Combo dual reads 3), so it is capped by a
+            // per-source count.
+            final Card host = sa.getHostCard();
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int cmc = cost.toManaCost().getCMC();
+            if (Math.min(ComputerUtilMana.getAvailableManaEstimate(ai, true), untappedMana(ai)) < cmc
+                    || !hasBlueSources(ai, host)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            // Danger, after blocks (an RNG-free replica of the life half of lifeInDanger).
+            if (!ai.cantLose()) {
+                final boolean lifeCounts = ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife();
+                int lifeDamage = 0;
+                for (final Card c : combat.getAttackersOf(ai)) {
+                    if (combat.isBlocked(c) && !forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked
+                            .assignCombatDamageAsUnblocked(c)) {
+                        continue;
+                    }
+                    final int dealt = ComputerUtilCombat.damageIfUnblocked(c, ai, combat, true);
+                    lifeDamage += dealt;
+                    if (c.isCommander() && dealt > 0 && dealt + ai.getCommanderDamage(c) >= 21) {
+                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                    }
+                }
+                final int maxThreshold = AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD);
+                if (lifeCounts && ai.getLife() - lifeDamage < Math.min(maxThreshold, ai.getLife())) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+
+            // Value: what leaves their board, minus what our blocks were already killing.
+            int value = 0;
+            for (final Card c : attackers) {
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                if (combat.isBlocked(c) && blocksKill(c, combat)) {
+                    value -= v;
+                } else {
+                    value += v;
+                }
+            }
+            return value >= MIN_VALUE ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : no;
+        }
+
+        // ComputerUtilCombat.attackerWouldBeDestroyed without combatantCantBeDestroyed's
+        // ComputerUtil.canRegenerate, which test-pays the attacker's controller's regeneration
+        // (canPayCost -> isManaSourceReserved rolls MyRandom) on a refusal. A regenerator is read as
+        // killed, and first strike is not split out: every simplification errs toward "killed", which
+        // counts the attacker negative, so it can only cost casts.
+        private static boolean blocksKill(final Card attacker, final Combat combat) {
+            final CardCollection blockers = combat.getBlockers(attacker); // a copy
+            if (blockers.isEmpty() || attacker.hasKeyword(Keyword.INDESTRUCTIBLE)
+                    || attacker.getCounters(CounterEnumType.SHIELD) > 0
+                    || (attacker.getShieldCount() > 0 && attacker.canBeShielded())) {
+                return false;
+            }
+            for (final Card b : blockers) {
+                if (b.hasKeyword(Keyword.DEATHTOUCH) && ComputerUtilCombat.dealsDamageAsBlocker(attacker, b) > 0) {
+                    return true;
+                }
+            }
+            // totalDamageOfBlockers removes index 0 for Godsend, so it gets the copy above
+            return ComputerUtilCombat.totalDamageOfBlockers(attacker, blockers)
+                    >= ComputerUtilCombat.getDamageToKill(attacker, false);
+        }
+
+        // An RNG-free per-source count: floating mana plus, for each untapped source, its best
+        // playable mana ability counted once (its numeric Amount when the activation costs no mana,
+        // else 1). It undercounts two-mana lands (Izzet Boilerworks, Produced$ U R), which can only
+        // cost casts.
+        private static int untappedMana(final Player ai) {
+            int n = ai.getManaPool().totalMana();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay()) {
+                        continue;
+                    }
+                    final String amt = ma.getParamOrDefault("Amount", "1");
+                    final boolean free = ma.getPayCosts().getCostMana() == null;
+                    best = Math.max(best, free && org.apache.commons.lang3.StringUtils.isNumeric(amt)
+                            ? Integer.parseInt(amt) : 1);
+                }
+                n += best;
+            }
+            return n;
+        }
+
+        // GhostlyFlicker's hasBlueSources, copied (never share a predicate with an accepted card):
+        // floating blue plus untapped sources whose printed production could be blue and whose mana
+        // this spell may spend, counted up to the cost's blue shards (UU).
+        private static boolean hasBlueSources(final Player ai, final Card host) {
+            final ManaCost cost = host.getManaCost();
+            final int needed = cost == null ? 0 : cost.getShardCount(forge.card.mana.ManaCostShard.BLUE);
+            final SpellAbility spell = host.getFirstSpellAbility();
+            int blue = ai.getManaPool().getAmountOfColor(MagicColor.BLUE);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (blue >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (spell != null && !ma.getManaPart().meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("U") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        blue++;
+                        break;
+                    }
+                }
+            }
+            return blue >= needed;
+        }
+    }
+
     // Anikthea, Hand of Erebos (dead-card batch 2, row 129; the commander of precon:Enduring
     // Enchantments (CMM))
     // "Whenever Anikthea enters or attacks, exile up to one target non-Aura enchantment card from

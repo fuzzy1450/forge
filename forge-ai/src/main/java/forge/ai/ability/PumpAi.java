@@ -398,6 +398,18 @@ public class PumpAi extends PumpAiBase {
                     }
                 }
             }
+            if (SpecialCardAi.Aetherspouts.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    && !(sa instanceof AbilitySub)) {
+                // Dead-card batch 2, row 48. A bare Pump shell (no Defined, KW, NumAtt/NumDef or
+                // target) whose real effect is its RepeatEach sub: the loop above only asks whether
+                // to pump the host (Defined defaults to Self: the instant itself, toughness 0), so
+                // the refusal below was its answer at every consult. Routed here, after the stock
+                // untargeted checks, so every consult runs exactly the stock path up to that refusal
+                // (grantsUsefulExtraBlockOpts' getPumpedCreature timestamps included) before the
+                // evaluator, which draws no random numbers on any refusal; every other Pump card
+                // takes exactly the path it took before this branch.
+                return SpecialCardAi.Aetherspouts.consider(ai, sa);
+            }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
