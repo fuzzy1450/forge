@@ -15899,6 +15899,227 @@ public class SpecialCardAi {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
     }
+    // Suffer the Past
+    // "Exile X target cards from target player's graveyard. For each card exiled this way, that
+    // player loses 1 life and you gain 1 life." ({X}{B} instant.) The Pump root only chooses the
+    // player; X is the ChangeZone sub's target count (TargetMin$ X | TargetMax$ X), so X is
+    // announced here as exactly the number of cards targeted (the Open into Wonder / Meteor Blast
+    // rule). Targeting ourselves is worthless (we lose X and gain X), so only opponents are
+    // candidates, and X is never 0. Two windows:
+    //  - lethal, any priority window: an opponent who can lose life and the game, whose life is at
+    //    most the X we can pay and whose graveyard holds at least that many targetable cards;
+    //    X = their life (they lose on state-based actions before any trigger can matter);
+    //  - value: the end step of the opponent whose turn comes right before ours, on an empty stack
+    //    (mana that would otherwise go unused; the Song of Inspiration window), X = min(spare,
+    //    their targetable graveyard) >= MIN_X, against the opponent with the largest X (ties:
+    //    lower life, then turn order), skipping an opponent with a leaves-the-graveyard payoff.
+    // Declines a cast that does not pay {X} through its own mana cost (a copy cast without paying
+    // its mana cost would resolve for the announced X while CR 107.3b makes X 0), and declines when
+    // a replacement turns our life gain into a loss (Tainted Remedy, Rain of Gore): every value
+    // cast, and a lethal one when our own life is at most X. Cards: reanimation targets first.
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card, so no decline here may
+    // draw MyRandom. No setMaxXValue (its test payments reach ComputerUtilMana.isManaSourceReserved's
+    // percentTrue) and no lifeInDanger: affordability is an RNG-free count of free non-creature
+    // sources, and AiController.canPlayAndPayForFace runs the real canPayCost only after a
+    // WillPlay. PumpAi.checkApiLogic routes here on the AILogic; ChangeZoneAi.chkDrawback keeps the
+    // card targets chosen here while the root's X is announced.
+    public static class SufferThePast {
+        public static final int MIN_X = 3; // non-lethal: a 6-point life swing and 3 cards exiled
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final AbilitySub cz = sa.getSubAbility();
+            sa.resetTargets();
+            sa.setXManaCostPaid(null);
+            if (sa instanceof AbilitySub || sa.getHostCard() == null || cz == null
+                    || cz.getApi() != ApiType.ChangeZone || !cz.usesTargeting()) {
+                return decline(sa, cz, AiPlayDecision.CantPlayAi); // script shape changed
+            }
+            cz.resetTargets();
+            // X must be paid through this spell's own mana cost. A copy cast without paying its mana
+            // cost (GameActionUtil's PayManaCost.NO option, copyWithNoManaCost) has no mana part, so
+            // the payment never stamps the announced X and the spell would exile and drain for free.
+            // A's hint kept every such copy off the list, so declining here is A-parity.
+            if (sa.hasParam("WithoutManaCost") || sa.getPayCosts() == null || !sa.getPayCosts().hasManaCost()
+                    || sa.getPayCosts().getTotalMana().countX() != 1) {
+                return decline(sa, cz, AiPlayDecision.CantPlayAi);
+            }
+
+            // Cheapest checks first; nothing below draws MyRandom.
+            final int[] mana = freeMana(ai, sa);
+            final int maxX = mana[0] - 1;                      // one free source pays {B}
+            if (maxX < 1 || mana[1] < 1) {                     // and one of them can make black
+                return decline(sa, cz, AiPlayDecision.CantAffordX);
+            }
+            final boolean eot = game.getStack().isEmpty() && ph.is(PhaseType.END_OF_TURN)
+                    && ph.getPlayerTurn().isOpponentOf(ai) && ai.equals(ph.getNextTurn());
+
+            Player best = null;
+            CardCollection bestPool = null;
+            int bestX = 0;
+            boolean lethal = false;
+            for (final Player opp : ai.getOpponents()) {        // turn order
+                if (!opp.canLoseLife() || opp.getLife() < 1 || !sa.canTarget(opp)) {
+                    continue;
+                }
+                final boolean killable = opp.getLife() <= maxX
+                        && !opp.cantLoseForZeroOrLessLife() && !opp.cantLose();
+                if (!killable && !eot) {
+                    continue;                                   // no graveyard scan outside the windows
+                }
+                sa.resetTargets();
+                sa.getTargets().add(opp);                       // ParentTarget: the sub reads it
+                final CardCollection pool =
+                        CardLists.getTargetableCards(opp.getCardsIn(ZoneType.Graveyard), cz);
+                if (killable && pool.size() >= opp.getLife()) {
+                    if (!lethal || opp.getLife() < bestX) {
+                        best = opp;
+                        bestPool = pool;
+                        bestX = opp.getLife();
+                        lethal = true;
+                    }
+                    continue;
+                }
+                if (lethal || !eot || hasLeavesGraveyardPayoff(opp)) {
+                    continue;
+                }
+                final int x = Math.min(maxX, pool.size());
+                if (x > bestX || (x == bestX && best != null && opp.getLife() < best.getLife())) {
+                    best = opp;
+                    bestPool = pool;
+                    bestX = x;
+                }
+            }
+            sa.resetTargets();
+            if (best == null || (!lethal && bestX < MIN_X)) {
+                return decline(sa, cz, eot ? AiPlayDecision.CantPlayAi : AiPlayDecision.WaitForEndOfTurn);
+            }
+            // We gain X too. When a replacement turns that gain into a loss, the value cast is a
+            // symmetric drain, and a lethal one that also takes our own life to 0 is a draw.
+            // lifegainNegative reads replacement effects only: no random draws.
+            if (ComputerUtil.lifegainNegative(ai, sa.getHostCard(), bestX) && (!lethal || ai.getLife() <= bestX)) {
+                return decline(sa, cz, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.getTargets().add(best);
+            sa.setXManaCostPaid(bestX);                         // X = the card-target count
+            for (final Card c : pickCards(bestPool, bestX)) {
+                if (!cz.canTarget(c)) {
+                    return decline(sa, cz, AiPlayDecision.TargetingFailed);
+                }
+                cz.getTargets().add(c);
+            }
+            if (cz.getTargets().size() != bestX || !sa.isTargetNumberValid() || !cz.isTargetNumberValid()) {
+                return decline(sa, cz, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Nothing is held past a decline: root and sub targets and the announced X are cleared.
+        private static AiAbilityDecision decline(final SpellAbility sa, final AbilitySub cz, final AiPlayDecision why) {
+            sa.resetTargets();
+            sa.setXManaCostPaid(null);
+            if (cz != null) {
+                cz.resetTargets();
+            }
+            return new AiAbilityDecision(0, why);
+        }
+
+        // Reanimation targets first (best creature), then the costliest nonland, then lands.
+        // Deterministic (getBestCreatureAI / getMostExpensivePermanentAI), RNG-free.
+        private static CardCollection pickCards(final CardCollection pool, final int x) {
+            final CardCollection left = new CardCollection(pool);
+            final CardCollection picks = new CardCollection();
+            while (picks.size() < x && !left.isEmpty()) {
+                final CardCollection creatures = CardLists.filter(left, CardPredicates.CREATURES);
+                final CardCollection nonland = CardLists.filter(left, CardPredicates.NON_LANDS);
+                final Card c = !creatures.isEmpty() ? ComputerUtilCard.getBestCreatureAI(creatures)
+                        : !nonland.isEmpty() ? ComputerUtilCard.getMostExpensivePermanentAI(nonland)
+                        : left.getFirst();
+                left.remove(c);
+                picks.add(c);
+            }
+            return picks;
+        }
+
+        // Deliberately coarse: a permanent the opponent controls that triggers when cards leave a
+        // graveyard (Syr Konrad pings us, Desecrated Tomb makes Bats) declines the value cast against
+        // that opponent. Not applied to the lethal cast: they lose on state-based actions before any
+        // such trigger is put on the stack.
+        private static boolean hasLeavesGraveyardPayoff(final Player opp) {
+            for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if ((t.getMode() == TriggerType.ChangesZone || t.getMode() == TriggerType.ChangesZoneAll)
+                            && t.hasParam("Origin") && t.getParam("Origin").contains("Graveyard")
+                            && (!t.hasParam("Destination") || t.getParam("Destination").contains("Exile")
+                                || t.getParam("Destination").contains("Any"))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // [0] = floating mana plus one per untapped NON-CREATURE permanent with a mana ability whose
+        // only cost is {T} (or none), that can be activated now, and whose mana this spell may spend
+        // (meetsManaRestrictions against the SA being judged, never host.getFirstSpellAbility(): the
+        // row 77 lesson). Creature mana (Eldrazi Spawn/Scion tokens in Eldrazi Incursion) and
+        // sacrifice/mana/life-cost sources are never counted: X is sized to what the payer spends
+        // first (ComputerUtilMana.getAvailableManaSources puts creatures last), so paying X never
+        // eats tokens. Sources count 1 each (Sol Ring undercounts: a smaller X is safe). Sources
+        // isManaSourceReserved refuses without a roll (held for the next spell or a declare-blockers
+        // trick, ours or the enemy's) are skipped, as in DayOfTheMoon.usableMana; counting them
+        // would turn a WillPlay into a CantAfford re-roll.
+        // [1] = floating black plus those sources that can make black: B, Any, a Chosen colour that
+        // is black, or a Combo whose colours (getComboColors: Command Tower reads the commander's
+        // identity) name B. A Combo production is not read as black unless it names B.
+        private static int[] freeMana(final Player ai, final SpellAbility spell) {
+            int total = ai.getManaPool().totalMana();
+            int black = ai.getManaPool().getAmountOfColor(MagicColor.BLACK);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (src.isCreature()
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)) {
+                    continue;
+                }
+                boolean counted = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    boolean tapOnly = true;
+                    if (ma.getPayCosts() != null) {
+                        for (final CostPart p : ma.getPayCosts().getCostParts()) {
+                            if (!(p instanceof CostTap)) {
+                                tapOnly = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (!tapOnly || !mp.meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    if (!counted) {
+                        total++;
+                        counted = true;
+                    }
+                    final String produced = mp.getOrigProduced();
+                    final String colours = mp.isComboMana() ? mp.getComboColors(ma)
+                            : mp.isAnyMana() ? "B"
+                            : produced.replace("Chosen", mp.getChosenColor(ma));
+                    if (colours.contains("B")) {
+                        black++;
+                        break;
+                    }
+                }
+            }
+            return new int[] {total, black};
+        }
+    }
     // Synthetic Destiny
     // "Exile all creatures you control. At the beginning of the next end step, reveal cards
     // from the top of your library until you reveal that many creature cards, put all creature

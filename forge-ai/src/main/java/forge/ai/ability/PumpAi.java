@@ -192,6 +192,12 @@ public class PumpAi extends PumpAiBase {
             // whose amount counts that opponent's hand. The generic non-curse branch below cannot
             // target an opponent player. The evaluator owns the timing and the target.
             return SpecialCardAi.RecurringInsight.consider(ai, sa, false);
+        } else if ("SufferThePast".equals(aiLogic)) {
+            // Suffer the Past: the Pump only chooses the player; the real effect is the ChangeZone sub,
+            // whose target count is X. The generic non-curse branch below targets the AI itself, and the
+            // sub then finds no opponent card to exile (or, with our graveyard empty, approves X = 0 at
+            // ourselves). The evaluator owns the timing, the opponent, X and the card targets.
+            return SpecialCardAi.SufferThePast.consider(ai, sa);
         } else if ("MoveCounter".equals(aiLogic)) {
             final SpellAbility moveSA = sa.findSubAbilityByType(ApiType.MoveCounter);
 

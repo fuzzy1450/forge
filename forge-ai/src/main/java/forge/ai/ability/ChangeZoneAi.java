@@ -363,6 +363,22 @@ public class ChangeZoneAi extends SpellAbilityAi {
             }
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
+        if (("Suffer the Past".equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                || sa.getHostCard() != null && sa.getHostCard().getRules() != null
+                        && "Suffer the Past".equals(sa.getHostCard().getRules().getName()))
+                && sa.usesTargeting() && sa.getRootAbility().getXManaCostPaid() != null) {
+            // The X graveyard cards were chosen, and X announced as their count, by
+            // SpecialCardAi.SufferThePast.consider against the opponent the root targets.
+            // isPreferredTarget below would re-size X to every spare mana (setMaxXValue, which draws
+            // MyRandom) and re-pick. Without an announced X (an effect-driven cast:
+            // PumpAi.doTriggerNoCost clears the root's X first) the stock path runs as before. The
+            // paper name covers a face-down exiled host (Gonti), whose name reads "": PumpAi routes
+            // it to the evaluator by its AILogic. Same shape as the Spelltwine gate above.
+            if (sa.isTargetNumberValid()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
         if (sa.isHidden()) {
             return hiddenOriginPlayDrawbackAI(aiPlayer, sa);
         }
