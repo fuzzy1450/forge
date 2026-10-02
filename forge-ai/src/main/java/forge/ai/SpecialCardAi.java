@@ -8350,8 +8350,9 @@ public class SpecialCardAi {
     //   first: its cost is calculateManaCost's, commander tax and every ReduceCost and RaiseCost
     //   static included (Krosan Warchief is in the carrier), and its mana is HonestMana (G2),
     //   never getAvailableManaEstimate, which counts this deck's Jungle Shrine 4, its Guildgates
-    //   3 and its Command Tower 2. Residual: one multicolour source counts toward each colour it
-    //   can make.
+    //   3 and its Command Tower 2. G1's residual (one multicolour source counts toward each
+    //   colour it can make) bites Marath's three different pips, so pipsOnSeparateMana adds a
+    //   private Hall check after it.
     // Draws nothing and holds nothing. The activated ability stays off in the script
     // (AILogic$ Never): stock X is min(mana, counters) and would kill Marath for its own cost.
     public static class MarathWillOfTheWild {
@@ -8371,7 +8372,135 @@ public class SpecialCardAi {
             if (!CommanderCastCeiling.affordable(ai, sa)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
+            if (!pipsOnSeparateMana(ai, sa, cost)) {
+                // G1 lets one multicolour source stand for two of R, G and W; see below
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the five coloured shards, in MagicColor.WUBRG order
+        private static final forge.card.mana.ManaCostShard[] PIPS = {
+                forge.card.mana.ManaCostShard.WHITE, forge.card.mana.ManaCostShard.BLUE,
+                forge.card.mana.ManaCostShard.BLACK, forge.card.mana.ManaCostShard.RED,
+                forge.card.mana.ManaCostShard.GREEN };
+        private static final int ANY_COLOUR = MagicColor.WHITE | MagicColor.BLUE | MagicColor.BLACK
+                | MagicColor.RED | MagicColor.GREEN;
+
+        // A private stricter colour check after G1 (shared helpers stay frozen). G1 counts a
+        // multicolour source toward each colour it can make, so Command Tower, a Guildgate,
+        // Rupture Spire or Vivid Crag's charge ability stood for two of Marath's three different
+        // pips. In the W1 replays, 4 of the 14 games that cast Marath ran canPayCost's
+        // isManaSourceReserved rolls in an earlier unpayable main 2 and re-rolled the game with
+        // no cast (655145 Boros Guildgate + Sol Ring + Forest; 784892 Selesnya Guildgate +
+        // Vivid Crag + Vitu-Ghazi; 819054 Boros Guildgate + Rupture Spire + two {C} lands;
+        // 828462 Command Tower + Mosswort Bridge + Opal Palace).
+        // Hall's condition: every set of the cost's coloured pips needs at least as many mana
+        // units that can pay one of them. Units:
+        // - each floating coloured mana;
+        // - for each source HonestMana counts (canPlay, no mana in the ability's cost,
+        //   conditions met, may be spent on sa, not held), HonestMana's best amount of units;
+        // - each unit may pay any colour one of the source's counted abilities makes. A
+        //   reflected, Special or empty production counts as every colour, the safe side.
+        // So Selesnya Sanctuary ("G W") is two units that pay G and W, and Command Tower is one
+        // unit. Mana-cost abilities are not counted, as in HonestMana: canPayCost did not pay
+        // Marath through Opal Palace's {1},{T} (828462, turns 22 and 30). A ceiling, RNG-free,
+        // holds nothing.
+        static boolean pipsOnSeparateMana(final Player ai, final SpellAbility sa, final ManaCostBeingPaid cost) {
+            final int[] need = new int[PIPS.length];
+            int pips = 0;
+            for (int i = 0; i < PIPS.length; i++) {
+                need[i] = cost.getUnpaidShards(PIPS[i]);
+                pips += need[i];
+            }
+            if (pips <= 1) {
+                return true;
+            }
+            final List<Integer> units = new ArrayList<>();
+            for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                for (int k = ai.getManaPool().getAmountOfColor(MagicColor.WUBRG[i]); k > 0; k--) {
+                    units.add((int) MagicColor.WUBRG[i]);
+                }
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (heldSource(ai, src)) {
+                    continue;
+                }
+                int best = 0;
+                int mask = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean reflectedOrSpecial = ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana();
+                    final boolean choice = reflectedOrSpecial || produced.isEmpty() || mp.isComboMana()
+                            || mp.isAnyMana() || produced.contains("Chosen");
+                    best = Math.max(best, choice ? amount : amount * produced.split(" ").length);
+                    if (reflectedOrSpecial || produced.isEmpty() || mp.isAnyMana()) {
+                        mask = ANY_COLOUR;
+                    } else {
+                        final String letters = mp.isComboMana() ? mp.getComboColors(ma)
+                                : produced.contains("Chosen") ? produced.replace("Chosen", mp.getChosenColor(ma)) : produced;
+                        for (final String t : letters.split(" ")) {
+                            if (t.length() == 1) {
+                                mask |= MagicColor.fromName(t.charAt(0)) & ANY_COLOUR;
+                            }
+                        }
+                    }
+                }
+                for (int k = 0; k < best; k++) {
+                    units.add(mask);
+                }
+            }
+            for (int s = 1; s < (1 << PIPS.length); s++) {
+                int needS = 0;
+                int maskS = 0;
+                for (int i = 0; i < PIPS.length; i++) {
+                    if ((s & (1 << i)) != 0) {
+                        needS += need[i];
+                        maskS |= MagicColor.WUBRG[i];
+                    }
+                }
+                if (needS == 0) {
+                    continue;
+                }
+                int have = 0;
+                for (final int u : units) {
+                    if ((u & maskS) != 0) {
+                        have++;
+                    }
+                }
+                if (have < needS) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // HonestMana.isHeld, copied (private there): the sources isManaSourceReserved refuses
+        private static boolean heldSource(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
         }
     }
 
