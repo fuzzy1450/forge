@@ -8491,6 +8491,56 @@ public class SpecialCardAi {
         }
     }
 
+    // Manascape Refractor (dead-card batch 2, row 60)
+    // "Manascape Refractor enters tapped. Manascape Refractor has all activated abilities of all
+    // lands on the battlefield. You may spend mana as though it were mana of any color to pay the
+    // activation costs of Manascape Refractor's abilities." Mana abilities are activated
+    // abilities (CR 605), so it is a 3-mana rock that taps for anything any land on the
+    // battlefield, on either side, can make. The script keeps AI:RemoveDeck:All: what the hint
+    // really suppresses is the borrowed abilities, not the cast. A copied "Sacrifice CARDNAME"
+    // names the Refractor, and ChangeZoneAi.willPayCosts skips the sacrifice check for a
+    // Battlefield destination, so any fetch on the table would trade the rock for a basic; the
+    // hint also keeps it off opposing steal, clone and tutor lists, and sorts the spell behind
+    // nearly everything else (priority -10). The G3 dispatcher (RemoveDeckFilter.readmit) lets
+    // exactly one ability through AiController's filter: this card's own permanent spell, cast
+    // from its owner's hand and not from a Play effect, which consider() judges from
+    // PermanentNoncreatureAi.checkApiLogic (reached in Main 2 only, PermanentAi's
+    // checkPhaseRestrictions). Its mana abilities never went through the filter
+    // (ComputerUtilMana.getAIPlayableMana), so on the battlefield it is the rock A already tapped.
+    public static class ManascapeRefractor {
+        public static final String NAME = "Manascape Refractor";
+
+        public static boolean isOwnHandCast(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return sa.isSpell() && !sa.isCastFromPlayEffect() && host != null
+                    && NAME.equals(host.getName()) && host.isInZone(ZoneType.Hand);
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // RNG parity: the hint kept A from ever evaluating this spell, and every check before
+            // this point is RNG-free. canPayCost (AiController.canPlayAndPayForFace) draws in
+            // ComputerUtilMana.isManaSourceReserved per source it tries, so a window that cannot
+            // pay must stop here, drawing nothing. The cost is the engine's own test-mode
+            // calculateManaCost (cost taxes and every RaiseCost and ReduceCost static, first
+            // static choice, no draw); the mana is HonestMana (G2) with held sources skipped,
+            // never getAvailableManaEstimate, which counts the words of Produced$ (a gainland 3,
+            // Opulent Palace 4, Command Tower and Arcane Signet 2) and so approves windows that
+            // canPayCost then fails after drawing.
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (HonestMana.of(ai, sa, true).total() < cost.getConvertedManaCost()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // Value floor: it is a mana source only if some land on the battlefield, on either side,
+            // has a mana ability the AI would tap without paying mana; the copies keep the land's cost.
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (c.isLand() && !ComputerUtilMana.getAIPlayableMana(c).isEmpty()) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+    }
+
     // Mandate of Abaddon
     // "Choose target creature you control. Destroy all creatures with power less
     // than that creature's power." ChooseCardAi's generic branch only targets
@@ -12215,6 +12265,8 @@ public class SpecialCardAi {
             }
             switch (name) {
                 // one case per G3 readmit row, added by that row's own commit
+                case ManascapeRefractor.NAME:
+                    return ManascapeRefractor.isOwnHandCast(sa);
                 default:
                     return false;
             }

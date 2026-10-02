@@ -3,6 +3,7 @@ package forge.ai.ability;
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtilAbility;
+import forge.ai.SpecialCardAi;
 import forge.game.Game;
 import forge.game.ability.AbilityFactory;
 import forge.game.card.Card;
@@ -32,6 +33,12 @@ public class PermanentNoncreatureAi extends PermanentAi {
         final Card host = sa.getHostCard();
         final String sourceName = ComputerUtilAbility.getAbilitySourceName(sa);
         final Game game = ai.getGame();
+
+        // Manascape Refractor keeps AI:RemoveDeck:All; the G3 dispatcher lets only its owner's hand
+        // cast through, and that cast is judged here (reached in Main 2 only, PermanentAi:38).
+        if (SpecialCardAi.ManascapeRefractor.isOwnHandCast(sa)) {
+            return SpecialCardAi.ManascapeRefractor.consider(ai, sa);
+        }
 
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
