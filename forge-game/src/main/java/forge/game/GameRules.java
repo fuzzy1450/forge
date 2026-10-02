@@ -27,6 +27,12 @@ public class GameRules {
 
     public GameRules(final GameType type) {
         this.gameType = type;
+        // mtgsim: a Commander game applies its own variant. Upstream leaves that to each
+        // caller (HostedMatch, SimulateMatch); the sim harness never did, which switched off
+        // CR 903.9a, the 21-commander-damage loss and War Room's draw in every sim game.
+        if (type == GameType.Commander) {
+            appliedVariants.add(type);
+        }
     }
 
     public GameType getGameType() {
