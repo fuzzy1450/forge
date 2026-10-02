@@ -14288,6 +14288,8 @@ public class SpecialCardAi {
     // getAvailableManaEstimate, which counts the words of Produced$ (a guildgate 3, Command
     // Tower 2) and would send unpayable windows into canPayCost's isManaSourceReserved draws.
     // Residual: cost increases and conditional mana.
+    // Window (checked before the mana count): our own main 2, or the opponent's end step before
+    // our turn, so the return never takes the mana of a main-1 removal spell.
     // Floor: our own permanent card worth a card (see worthReturning); pick: the stock getBestAI
     // ranking (best creature when all are creatures, else the highest mana value), the same
     // one the flashback copy's stock retarget uses. On a decline the root keeps the targets the
@@ -14299,6 +14301,17 @@ public class SpecialCardAi {
             final Card host = sa.getHostCard(); // judge sa itself, never host.getFirstSpellAbility() (row 77)
             if (host == null || !sa.usesTargeting()) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // Window: our own main 2, or the opponent's end step before our turn (only an Elsha of
+            // the Infinite flash cast from the library top reaches that one). A value return must
+            // never pre-empt the main-1 plays the AI sorts behind it: saComparator orders by the
+            // pay cost's mana value (3 from hand, 5 by flashback, against 1 for a {X}{R} removal)
+            // and the first WillPlay is played, so a main-1 Reclamation took the removal's mana.
+            // RNG-free; outside the window it is a decline after the stock call, as the control.
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!(ph.is(PhaseType.MAIN2, ai)
+                    || (ph.is(PhaseType.END_OF_TURN) && !ph.isPlayerTurn(ai) && ai.equals(ph.getNextTurn())))) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
             }
             // A WillPlay goes on to canPayCost, whose test payment draws MyRandom per source it
             // tries; the stock rider veto never reached it, so refuse windows this cast cannot pay.
