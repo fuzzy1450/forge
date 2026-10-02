@@ -5,6 +5,7 @@ import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtilAbility;
 import forge.ai.ComputerUtilCost;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
@@ -126,6 +127,17 @@ public class CountersPutAllAi extends SpellAbilityAi {
             // creatures and artifacts only, so nothing is left to decide here. The stock path drew
             // no random number before that refusal, so skipping it keeps the draw count.
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+        if (SpecialCardAi.UnbreakableFormation.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa.getParent() != null) {
+            // Unbreakable Formation's Addendum rider (DBPutCounters): its ConditionPresent$ Card.wasCast
+            // on Self can never hold while the card is still in hand (castFrom stays null until the
+            // spell is on the stack), so canPlay -> checkConditions (SpellAbilityAi :114-118) refused
+            // every consult with ConditionsNotMet and vetoed the stock PumpAllAi root's yes. The root
+            // already judged the cast; this rider only puts +1/+1 counters on our own creatures and
+            // still resolves or not by its own conditions. The stock path drew no random number
+            // before that refusal, and the evaluator draws none either.
+            return SpecialCardAi.UnbreakableFormation.considerAddendum(ai, sa);
         }
         return canPlay(ai, sa);
     }

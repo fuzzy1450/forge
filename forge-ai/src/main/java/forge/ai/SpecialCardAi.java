@@ -16469,6 +16469,133 @@ public class SpecialCardAi {
         }
     }
 
+    // Unbreakable Formation (dead-card batch 2, row 13)
+    // {2}{W} Instant. "Creatures you control gain indestructible until end of turn. Addendum -- If
+    // you cast this spell during your main phase, put a +1/+1 counter on each of those creatures and
+    // they gain vigilance until end of turn."
+    // No AI:RemoveDeck hint: the stock PumpAllAi root (KW Indestructible, the root Flawless Maneuver
+    // and Heroic Intervention are cast through) judged the spell at every consult, but the
+    // Addendum's last rider, DBPutCounters (PutCounterAll), went CountersPutAllAi.chkDrawback ->
+    // canPlay -> checkConditions, and ConditionPresent$ Card.wasCast on Self is false for a card
+    // in hand. The rider has no sub to fall back to, so ConditionsNotMet vetoed the whole spell.
+    // considerAddendum approves that rider instead. The value floor is the stock root, unchanged
+    // and run first: a stack response that indestructible actually saves a creature of ours from
+    // (pumpAgainstRemoval), a declare-blockers save or kill, or the pre-attack "becomes an
+    // attacker" roll on our own turn (ComputerUtilCard.shouldPumpCard). In front of the approval
+    // sit three RNG-free refusals: no creature of ours (the stock rider's own refusal); our own
+    // upkeep or draw step with an empty stack, where the printed Addendum cannot pay and Main 1
+    // re-runs the same roll with it live; and a window the root's cost cannot be paid in.
+    public static class UnbreakableFormation {
+        public static final String NAME = "Unbreakable Formation";
+
+        public static AiAbilityDecision considerAddendum(final Player ai, final SpellAbility sa) {
+            // The stock checkApiLogic this skips refused only on an empty own board
+            // (CountersPutAllAi :86: hList, Creature.YouCtrl read on an opponent, is always empty).
+            if (ai.getCreaturesInPlay().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // The printed Addendum pays only in a main phase. Before Main 1 on our own turn, with an
+            // empty stack, the root's only yes is shouldPumpCard's pre-attack roll (its
+            // isBefore(COMBAT_DECLARE_ATTACKERS) branch is true in upkeep and draw too), and Main 1
+            // re-runs that roll with the counters and vigilance live: wait for it. A refused here as
+            // well, so the wait draws nothing. Combat's beginning step is left alone: a cast there
+            // still enables the attack.
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (game.getStack().isEmpty() && ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.MAIN1)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // RNG parity: the refusal this replaces drew nothing, and a WillPlay sends the root on to
+            // ComputerUtilCost.canPayCost (AiController.canPlayAndPayFor), whose test payment draws
+            // MyRandom in ComputerUtilMana.isManaSourceReserved. So refuse the windows canPayCost must
+            // refuse anyway, with RNG-free upper bounds judged on the ROOT being cast (row 77: never
+            // host.getFirstSpellAbility()): its cost after reductions and taxes
+            // (calculateManaCost(test=true)) against the mana this spell may spend, and a white source
+            // per W shard. A free Play-effect copy costs 0 and passes.
+            final SpellAbility root = sa.getRootAbility();
+            if (root.getPayCosts() != null) {
+                final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+                if (usableManaEstimate(ai, root) < cost.toManaCost().getCMC()
+                        || !hasWhiteSources(ai, root, cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE))) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // ComputerUtilMana.getAvailableManaEstimate(ai, true), copied, skipping mana abilities whose
+        // mana this spell may not spend (Powerstone mana in the Urza's Iron Alliance carrier would
+        // otherwise inflate it). Playable abilities only (canPlay); no random draw, no memory write.
+        // It keeps the estimate's word count of Produced$, so it can over-count a Combo source: an
+        // over-estimate only re-opens a window canPayCost then refuses (the accepted residual).
+        private static int usableManaEstimate(final Player ai, final SpellAbility root) {
+            int availableMana = 0;
+            int producedWithCost = 0;
+            boolean hasSourcesWithNoManaCost = false;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (src.getManaAbilities().isEmpty()) {
+                    continue;
+                }
+                int maxProduced = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay()) {
+                        continue;
+                    }
+                    if (ma.getManaPart() != null && !ma.getManaPart().meetsManaRestrictions(root)) {
+                        continue;
+                    }
+                    final int costsToActivate = ma.getPayCosts().getCostMana() != null ? ma.getPayCosts().getCostMana().convertAmount() : 0;
+                    final int producedMana = ma.getParamOrDefault("Produced", "").split(" ").length;
+                    final int producedAmount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    final int producedTotal = producedMana * producedAmount - costsToActivate;
+                    if (costsToActivate > 0) {
+                        producedWithCost += producedTotal;
+                    } else if (!hasSourcesWithNoManaCost) {
+                        hasSourcesWithNoManaCost = true;
+                    }
+                    if (producedTotal > maxProduced) {
+                        maxProduced = producedTotal;
+                    }
+                }
+                availableMana += maxProduced;
+            }
+            availableMana += ai.getManaPool().totalMana();
+            if (producedWithCost > 0 && !hasSourcesWithNoManaCost) {
+                availableMana -= producedWithCost; // probably can't activate them, no other mana available
+            }
+            return availableMana;
+        }
+
+        // Floating white plus untapped sources whose printed production could be white and whose
+        // mana the root may spend (MizzixsMastery.hasRedSources, copied for W and judged on the root
+        // being cast instead of host.getFirstSpellAbility()).
+        private static boolean hasWhiteSources(final Player ai, final SpellAbility root, final int needed) {
+            int white = ai.getManaPool().getAmountOfColor(MagicColor.WHITE);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (white >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (!ma.getManaPart().meetsManaRestrictions(root)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("W") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        white++;
+                        break;
+                    }
+                }
+            }
+            return white >= needed;
+        }
+    }
+
     // Unfinished Business
     // Return a creature card from our graveyard, then up to two Aura and/or
     // Equipment cards from our graveyard attached to it. The generic ChangeZone
