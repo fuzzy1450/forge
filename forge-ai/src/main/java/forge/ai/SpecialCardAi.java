@@ -10359,6 +10359,79 @@ public class SpecialCardAi {
         }
     }
 
+    // Ob Nixilis of the Black Oath (dead-card batch 2, row 128)
+    // The commander of precon:Sworn to Darkness (C14). Its AI:RemoveDeck:All hint made
+    // AiController.getSpellAbilityToPlay remove the command-zone spell before any handler, so A
+    // never evaluated it. Behind the hint the stock PermanentNoncreatureAi -> PermanentAi path
+    // approves the cast in MAIN2 (the path that casts Freyalise and Teferi, the unhinted C14
+    // planeswalker commanders), and each loyalty ability already has a stock floor: the -2's
+    // "you lose 2 life" is refused at life 4 or less (LifeLoseAi.chkDrawback), the +2 waits for
+    // MAIN2 unless it kills, and the -8 has no AILogic and is refused (EffectAi). One gate,
+    // RNG-free:
+    // - considerCast, from PermanentAi.checkApiLogic: our own cast from hand or the command zone
+    //   must pass CommanderCastCeiling (G1: calculateManaCost's adjusted cost, commander tax and
+    //   cost statics such as Jet Medallion included, against HonestMana, G2) before canPayCost's
+    //   test payment draws MyRandom in isManaSourceReserved, so an unaffordable window draws
+    //   nothing. A mana multiplier anywhere on the table (a TapsForMana trigger such as Crypt
+    //   Ghast's, a ProduceMana replacement) makes HonestMana an under-count that would delay a
+    //   payable cast, so the gate stands aside there and the stock checks decide. A free or
+    //   Play-effect cast (Geode Golem's, game 221896) or another player's cast keeps A's stock
+    //   path: null.
+    // Holds nothing; nothing outlives a decline.
+    public static class ObNixilisOfTheBlackOath {
+        public static final String NAME = "Ob Nixilis of the Black Oath";
+
+        // Our own cast, from hand or the command zone: CantAfford in a window the RNG-free
+        // ceiling calls unpayable. null = no opinion: the stock PermanentAi checks decide.
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.isCastFromPlayEffect() || sa.hasParam("WithoutManaCost")
+                    || !ai.equals(host.getOwner())
+                    || !(host.isInZone(ZoneType.Command) || host.isInZone(ZoneType.Hand))) {
+                return null; // a free, Play-effect or other player's cast keeps A's stock evaluation
+            }
+            if (hasManaMultiplier(ai.getGame())) {
+                return null;
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return null;
+        }
+
+        // The real payment also runs TapsForMana triggers (ComputerUtilMana.predictMana) and
+        // ProduceMana replacements (predictManaReplacement), which HonestMana does not count.
+        // Either one anywhere, on any side (Mana Flare is symmetric) or in the command zone,
+        // means the count can be low.
+        private static boolean hasManaMultiplier(final Game game) {
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (multiplies(c)) {
+                    return true;
+                }
+            }
+            for (final Card c : game.getCardsIn(ZoneType.Command)) {
+                if (multiplies(c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean multiplies(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() == TriggerType.TapsForMana) {
+                    return true;
+                }
+            }
+            for (final ReplacementEffect re : c.getReplacementEffects()) {
+                if (re.getMode() == ReplacementType.ProduceMana) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Open into Wonder
     // "X U U sorcery: X target creatures can't be blocked this turn and gain 'whenever this
     // creature deals combat damage to a player, draw a card'". X is the TARGET COUNT, and

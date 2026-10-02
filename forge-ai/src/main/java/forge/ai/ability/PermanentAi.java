@@ -93,6 +93,16 @@ public class PermanentAi extends SpellAbilityAi {
             }
         }
 
+        if (SpecialCardAi.ObNixilisOfTheBlackOath.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // The RNG-free commander cast ceiling (G1) for our own cast, answered before
+            // canPayCost's MyRandom probe unless a mana multiplier is on the table; null = the
+            // stock checks below decide.
+            final AiAbilityDecision obNixilis = SpecialCardAi.ObNixilisOfTheBlackOath.considerCast(ai, sa);
+            if (obNixilis != null) {
+                return obNixilis;
+            }
+        }
+
         ManaCost mana = sa.getPayCosts().getTotalMana();
         if (mana.countX() > 0) {
             final int xPay = ComputerUtilCost.setMaxXValue(sa, ai, false);
