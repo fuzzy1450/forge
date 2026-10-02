@@ -54,6 +54,12 @@ public class CharmAi extends SpellAbilityAi {
             chosenList = SpecialCardAi.BrokersConfluence.chooseModes(ai, sa, choices, num);
         } else if ("Promise of Power".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             chosenList = SpecialCardAi.PromiseOfPower.chooseModes(ai, sa, choices);
+        } else if (SpecialCardAi.DoomsdayConfluence.handles(sa)) {
+            // AI:RemoveDeck:All kept the owner's cast off the playable list, so A never reached the
+            // shuffle below for it: this gate sits before that draw, and the evaluator draws nothing
+            // until its mana floor passes. A Play-effect cast (Nathan Drake, Jeleva, Silent-Blade
+            // Oni) and a copy never match, and keep the stock path the hint never covered.
+            chosenList = SpecialCardAi.DoomsdayConfluence.chooseModes(ai, sa, choices);
         } else {
             // only randomize if not all possible together
             if (num < choices.size()) {

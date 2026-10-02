@@ -5087,6 +5087,293 @@ public class SpecialCardAi {
         }
     }
 
+    // Doomsday Confluence
+    // "{X}{X}{B} sorcery: Choose X. You may choose the same mode more than once. - Each player
+    // sacrifices a nonartifact creature. - Create a 3/3 black Dalek artifact creature token with
+    // menace. - Each opponent discards a card."
+    // The script carried AI:RemoveDeck:All. Behind it CharmAi never announces X: CharmNum$ X reads
+    // Count$xPaid while X is unset (0), so the stock picker keeps every distinct mode its handler
+    // approves (never a repeat), the payment pays X = 0 ({B}) and CharmEffect.makeChoices keeps those
+    // modes (the Play-effect thefts on record were cast that way). Announce X here and choose exactly
+    // X modes, repeats allowed (CharmEffect.chainAbilities clones a repeated entry, as for Brokers
+    // Confluence). Reached from CharmAi's name gate (handles: the source's name, or the host's for a
+    // face-down exile cast, whose source name reads ""), never for a Play-effect cast or a copy,
+    // which keep the stock path the hint never covered. Only the owner's cast from hand is judged:
+    // any other zone or controller (a MayPlay thief) stays out, as the hint kept it.
+    // Window: our main 2 on an empty stack; the script's AIActivateLast$ True lets every other play
+    // go first, so X is the mana left over. X: an RNG-free floor on a tight count (spareMana: never
+    // getAvailableManaEstimate, which counts the words of Produced$ - Command Tower 2, a Talisman or
+    // a Combo dual 3, Crumbling Necropolis 4), priced at 2X+1 plus any tax by calculateManaCost in
+    // test mode, and one black source for this spell; only past that floor does setMaxXValue's exact
+    // test payment run (it draws in ComputerUtilMana.isManaSourceReserved) and cap X.
+    // Modes: every slot is a Dalek (TOKEN_VALUE, evaluateCreature's scale) unless the first k slots
+    // as edicts beat k Daleks by EDICT_MARGIN each: the k-th edict costs each opponent the creature
+    // its chooser gives up k-th (ComputerUtil.chooseCardToSacrifice: SacMe by priority, then the
+    // worst creature) and costs us ours the same way; never an edict that would take our commander.
+    // The Daleks are artifacts, so no edict touches them. Discard is never chosen: the opponent
+    // picks its worst card, below a 3/3 menace. An empty list is CantPlayAi in CharmAi; the list is
+    // mutable because chainAbilities sorts it in place. Only a non-empty list leaves X announced.
+    // Reads state only; the only random draws are setMaxXValue's test payments, past the floor.
+    public static class DoomsdayConfluence {
+        public static final String NAME = "Doomsday Confluence";
+        public static final int MIN_X = 1;         // three mana for a 3/3 menace
+        public static final int MAX_X = 8;         // bounds the plan (17 mana)
+        // evaluateCreature on the Dalek token: 80 base + 3*15 power + 3*10 toughness + 3*4 menace
+        // + 1 untapped (a token gets no +20); a constant, because TokenInfo.getProtoType writes the
+        // game's token-edition pins
+        public static final int TOKEN_VALUE = 168;
+        public static final int EDICT_MARGIN = 20; // an edict must beat a Dalek by this much
+
+        public static boolean handles(final SpellAbility sa) {
+            if (sa.isCastFromPlayEffect() || sa.isCopied()) {
+                return false;
+            }
+            if (NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                return true;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && NAME.equals(host.getName()); // face-down exile: source name is ""
+        }
+
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa,
+                                                   final List<AbilitySub> choices) {
+            final List<AbilitySub> chosen = Lists.newArrayList(); // mutable: chainAbilities sorts it
+            sa.setXManaCostPaid(null); // no X held from an earlier pass or a declined payment
+            final Card host = sa.getHostCard();
+            final Game game = ai.getGame();
+            // 1. the owner's cast from hand only; anything else stays out, as the hint kept it
+            if (host == null || !host.isInZone(ZoneType.Hand) || !ai.equals(host.getController())) {
+                return chosen;
+            }
+            // 2. window: our main 2, empty stack (sorcery timing already passed canCastTiming)
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return chosen;
+            }
+            AbilitySub edict = null;
+            AbilitySub dalek = null;
+            for (final AbilitySub sub : choices) {
+                if (sub.getApi() == ApiType.Sacrifice) {
+                    edict = sub;
+                } else if (sub.getApi() == ApiType.Token) {
+                    dalek = sub;
+                }
+            }
+            if (dalek == null) {
+                return chosen; // script drifted: stay out
+            }
+            // 3. X: an RNG-free floor on a tight count, then the exact payable X
+            final int spare = spareMana(ai);
+            final int fixed = costCmc(ai, sa, 0); // {B} plus any tax (CostAdjustment, test mode)
+            int x = Math.min(MAX_X, (spare - fixed) / 2);
+            if (x < MIN_X || costCmc(ai, sa, x) > spare || !hasBlackSource(ai, sa)) {
+                return chosen; // RNG-free decline; X is still unset
+            }
+            // past the floor only: setMaxXValue test-pays (isManaSourceReserved draws), and it is
+            // exact, so it also honours held sources, restrictions and anything the count missed
+            x = Math.min(x, ComputerUtilCost.setMaxXValue(sa, ai, false));
+            if (x < MIN_X) {
+                sa.setXManaCostPaid(null); // setMaxXValue wrote the root's X
+                return chosen;
+            }
+            // 4. the plan: k edicts, then x - k Daleks; the best k by net value
+            int edicts = 0;
+            if (edict != null) {
+                final List<Integer> ours = sacrificeOrder(ai, ai, edict); // null entry = our commander
+                final List<List<Integer>> theirs = Lists.newArrayList();
+                for (final Player opp : ai.getOpponents()) {
+                    theirs.add(sacrificeOrder(opp, ai, edict));
+                }
+                int run = 0;
+                int best = 0;
+                for (int k = 0; k < x; k++) {
+                    int loss = 0;
+                    for (final List<Integer> t : theirs) {
+                        loss += k < t.size() ? (t.get(k) == null ? 0 : t.get(k)) : 0;
+                    }
+                    if (loss == 0) {
+                        break; // no opponent gives anything up past here
+                    }
+                    if (k < ours.size() && ours.get(k) == null) {
+                        break; // the k-th edict would take our commander
+                    }
+                    final int cost = k < ours.size() ? ours.get(k) : 0;
+                    run += loss - cost - TOKEN_VALUE - EDICT_MARGIN;
+                    if (run > best) {
+                        best = run;
+                        edicts = k + 1;
+                    }
+                }
+            }
+            for (int i = 0; i < edicts; i++) {
+                chosen.add(edict);
+            }
+            for (int i = edicts; i < x; i++) {
+                chosen.add(dalek);
+            }
+            sa.setXManaCostPaid(x); // CharmEffect.makeChoices reads X modes; the payment pays 2X+1
+            return chosen;
+        }
+
+        // What p gives up to one edict after another, in its chooser's order
+        // (ComputerUtil.chooseCardToSacrifice: SacMe from priority 6 down to 1, then the worst
+        // creature by evaluateCreature, the first of equals). The pool is SacrificeEffect's own:
+        // the battlefield through SacValid (AbilityUtils.filterListByType) and
+        // canBeSacrificedBy(edict, true). Worth 0 for a SacMe creature or an active undying or
+        // persist one (it comes back); null for our own commander (never traded); otherwise
+        // evaluateCreature.
+        static List<Integer> sacrificeOrder(final Player p, final Player ai, final AbilitySub edict) {
+            final CardCollection pool = CardLists.filter(AbilityUtils.filterListByType(
+                    p.getCardsIn(ZoneType.Battlefield), edict.getParamOrDefault("SacValid", "Self"), edict),
+                    CardPredicates.canBeSacrificedBy(edict, true));
+            final boolean ours = p.equals(ai);
+            final List<Integer> order = Lists.newArrayList();
+            for (int prio = 6; prio > 0; prio--) {
+                for (final Card c : pool) {
+                    if (sacMePriority(c) == prio) {
+                        order.add(ours && c.isCommander() ? null : 0);
+                    }
+                }
+            }
+            final List<Card> rest = Lists.newArrayList();
+            final Map<Card, Integer> value = new HashMap<>();
+            for (final Card c : pool) {
+                final int prio = sacMePriority(c);
+                if (prio < 1 || prio > 6) {
+                    rest.add(c);
+                    value.put(c, ComputerUtilCard.evaluateCreature(c));
+                }
+            }
+            rest.sort(Comparator.comparingInt(value::get)); // stable: the first of equals goes first
+            for (final Card c : rest) {
+                if (ours && c.isCommander()) {
+                    order.add(null);
+                } else if (ComputerUtilCard.hasActiveUndyingOrPersist(c)) {
+                    order.add(0);
+                } else {
+                    order.add(value.get(c));
+                }
+            }
+            return order;
+        }
+
+        // the SacMe priority chooseCardToSacrifice reads; 0 when absent or not a number
+        private static int sacMePriority(final Card c) {
+            if (!c.hasSVar("SacMe")) {
+                return 0;
+            }
+            try {
+                return Integer.parseInt(c.getSVar("SacMe").trim());
+            } catch (final NumberFormatException e) {
+                return 0;
+            }
+        }
+
+        // The spell's mana value at X = k after CostAdjustment: ComputerUtilMana.calculateManaCost in
+        // test mode (the G1 ceiling's call: no MyRandom, the SA's own X untouched); with xCounter 2,
+        // X = k costs 2k+1 plus any tax. At k = 0 it reads the unset X as 0.
+        private static int costCmc(final Player ai, final SpellAbility sa, final int k) {
+            return ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, k, false).getConvertedManaCost();
+        }
+
+        // Spare mana, RNG-free: floating mana, plus, per battlefield source not held (isHeld), its
+        // best ability among ComputerUtilMana.getAIPlayableMana (what the AI's payment uses: a filter
+        // land's {1},{T} ability is not one, so it counts 0) that canPlay() and whose cost is a
+        // reusable resource (no Treasure; Fiery Islet's PayLife is undercounted by one, which
+        // setMaxXValue's exact ceiling makes safe), worth one mana times Amount for a choice (Combo,
+        // Any, Chosen, reflected or empty) and Amount times its symbols otherwise. Commune with
+        // Lava's reusable count over getAIPlayableMana (WAVES-2.md: "45, 56: reusable sources"),
+        // kept private here as that row keeps its own.
+        private static int spareMana(final Player ai) {
+            int total = ai.getManaPool().totalMana();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                int best = 0;
+                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || !ma.getPayCosts().isReusuableResource()) {
+                        continue;
+                    }
+                    final String produced = ma.getParamOrDefault("Produced", "").trim();
+                    final boolean choice = produced.isEmpty() || produced.startsWith("Combo")
+                            || produced.contains("Any") || produced.contains("Chosen");
+                    final int each = choice ? 1 : produced.split(" ").length;
+                    best = Math.max(best, each * AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma));
+                }
+                total += best;
+            }
+            return total;
+        }
+
+        // Floating black, else one untapped source not held whose AI-playable ability canPlay(),
+        // meets this spell's restrictions (the root sa passed in, never host.getFirstSpellAbility():
+        // the row-77 lesson) and makes black. A Combo reads its own letters (getComboColors:
+        // ColorIdentity through the commander's identity, Chosen through the chosen colour), Any is
+        // every colour, Chosen is the chosen colour, a reflected production is none: never "any
+        // Combo is black" (a U/R dual makes no {B}).
+        private static boolean hasBlackSource(final Player ai, final SpellAbility sa) {
+            if (ai.getManaPool().getAmountOfColor(MagicColor.BLACK) > 0) {
+                return true;
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (ma.canPlay() && mp.meetsManaRestrictions(sa) && makesBlack(mp, ma)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean makesBlack(final forge.game.spellability.AbilityManaPart mp, final SpellAbility ma) {
+            if (mp.isAnyMana()) {
+                return true;
+            }
+            final String produced = mp.getOrigProduced().trim();
+            final String letters;
+            if (mp.isComboMana()) {
+                letters = mp.getComboColors(ma);
+            } else if (produced.contains("Chosen")) {
+                letters = produced.replace("Chosen", mp.getChosenColor(ma));
+            } else {
+                letters = produced;
+            }
+            for (final String t : letters.split(" ")) {
+                if ("B".equals(t)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The sources ComputerUtilMana.isManaSourceReserved refuses in this phase: held for the
+        // next spell; held for a block trick outside declare blockers and cleanup; held for Main 2
+        // outside Main 2 and cleanup. A private copy of HonestMana's rule (G2 is frozen and keeps
+        // it private).
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+    }
+
     // Electric Seaweed
     // "When this creature enters, until end of turn, whenever another creature
     // dies, this creature deals 1 damage to each non-Wall creature."
