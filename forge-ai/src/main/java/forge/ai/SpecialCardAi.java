@@ -5889,6 +5889,38 @@ public class SpecialCardAi {
         }
     }
 
+    // Goblin Cadets (dead-card batch 2, row 82)
+    // "Whenever Goblin Cadets blocks or becomes blocked, target opponent gains control of it.
+    // (This removes Goblin Cadets from combat.)" Neither combat AI models that trigger: the
+    // script's SacMe makes AiBlockController take it for a trade-blocker "with an upside" and
+    // AiAttackController for an expendable attacker, so every block or blocked attack hands the
+    // opponent a free 2/1. The script keeps AI:RemoveDeck:All, and with it the -10 sort and every
+    // other isCardRemAIDeck reader (steal, copy, clone and tutor pickers). Its payoff is Zedruu the
+    // Greathearted: "At the beginning of your upkeep, you gain X life and draw X cards, where X is
+    // the number of permanents you own that your opponents control." So the G3 dispatcher
+    // (RemoveDeckFilter.readmit) lets exactly one ability through AiController's filter: the
+    // owner's own creature spell, and only while the owner controls a Zedruu. Then the stock
+    // combat's eagerness is the donation plan (unblocked it deals 2; blocking or blocked it goes
+    // over and Zedruu draws a card and gains a life each upkeep), and the stock cast path
+    // (PermanentCreatureAi, Main 2 wait, affordability) judges the cast. A thief's copy fails the
+    // owner check, and Nathan Drake's DB$ Play never reaches this filter at all
+    // (canPlayFromEffectAI never read the hint), so thefts keep A's evaluation.
+    // Reads the SA, the owner and our battlefield: no random draw, nothing remembered, so a
+    // refusal leaves the list exactly as the hint left it.
+    public static class GoblinCadets {
+        public static final String NAME = "Goblin Cadets";
+        public static final String PAYOFF = "Zedruu the Greathearted";
+
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || !ai.equals(host.getOwner())) {
+                return false;
+            }
+            return ai.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.nameEquals(PAYOFF));
+        }
+    }
+
     // Goblin Polka Band
     public static class GoblinPolkaBand {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
@@ -12267,6 +12299,8 @@ public class SpecialCardAi {
                 // one case per G3 readmit row, added by that row's own commit
                 case ManascapeRefractor.NAME:
                     return ManascapeRefractor.isOwnHandCast(sa);
+                case GoblinCadets.NAME:
+                    return GoblinCadets.readmit(ai, sa);
                 default:
                     return false;
             }
