@@ -198,6 +198,13 @@ public class PumpAi extends PumpAiBase {
             // sub then finds no opponent card to exile (or, with our graveyard empty, approves X = 0 at
             // ourselves). The evaluator owns the timing, the opponent, X and the card targets.
             return SpecialCardAi.SufferThePast.consider(ai, sa);
+        } else if ("DecoyGambit".equals(aiLogic)) {
+            // Decoy Gambit: a Pump targeting shell on each opponent's creature (the real effects are
+            // the Draw and ChangeZoneAll subs, the creature's controller choosing between them). The
+            // generic non-curse branch below only offers our own creatures (getPumpCreatures), and
+            // without an AILogic the 3-arg checkPhaseRestrictions vetoed the instant outside combat.
+            // The evaluator owns the timing and the targets.
+            return SpecialCardAi.DecoyGambit.consider(ai, sa);
         } else if ("MoveCounter".equals(aiLogic)) {
             final SpellAbility moveSA = sa.findSubAbilityByType(ApiType.MoveCounter);
 

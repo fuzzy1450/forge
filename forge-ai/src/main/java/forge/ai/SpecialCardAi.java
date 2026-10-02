@@ -4946,6 +4946,148 @@ public class SpecialCardAi {
         }
     }
 
+    // Decoy Gambit
+    // "For each opponent, choose up to one target creature that player controls, then return that
+    // creature to its owner's hand unless its controller has you draw a card." A Pump targeting
+    // shell: the bounce is the ChangeZoneAll sub, the card is the Draw sub, and each targeted
+    // controller answers through a GenericChoice with AILogic$ Random - an AI opponent flips a coin.
+    // The card we may be paid is always worth it (DrawAi's vetoes on the Draw sub are mirrored
+    // below), so the floor is on the bounce: per opponent, the best removal target among its
+    // targetable creatures that is a real bounce (isRealBounce, checked in this order):
+    //  - never a creature wearing our aura (we would lose the aura);
+    //  - never a creature with ward or a "spells your opponents cast that target it cost more"
+    //    static (the tax lands on this spell, and canPayCost's test payment would draw);
+    //  - one of our own cards they control only while an opponent's aura holds it (Control Magic:
+    //    the aura falls off and the card comes home); any other steal is skipped - a Threaten
+    //    still in force at this end step reverts at cleanup, and the bounce would hand it to us
+    //    to recast instead;
+    //  - never a creature whose own cast trigger or cascade the recast would re-arm (Prossh,
+    //    Kozilek, Hydroid Krasis, Bloodbraid Elf), tokens and commanders included;
+    //  - a token worth >= MIN_TOKEN_VALUE (evaluateCreature; a vanilla 2/2 token): gone for good;
+    //  - never a nontoken card with its own enters trigger (the recast re-arms it);
+    //  - a nontoken card with mana value >= MIN_RECAST_MV (the recast costs them what we spent),
+    //    their commander (tempo, and the tax if it goes to the command zone), or a creature
+    //    wearing an opponent's aura (the aura falls off).
+    // Window: the end step of the opponent whose turn precedes ours, stack empty - mana we would
+    // not spend otherwise, and the creature misses our turn. No combat window: deciding which
+    // attacker our blocks would not kill needs the block and life-in-danger predictors, which draw.
+    // The stock path drew no random numbers for this card (the 3-arg phase veto; target lists that
+    // start from our own creatures, empty under Creature.OppCtrl), so every check here is RNG-free,
+    // mana first: an unpayable approval would reach canPayCost's reservation roll. The count is G2
+    // (HonestMana, held sources skipped, blue read from each source's own letters), never
+    // getAvailableManaEstimate, which counts Command Tower, Arcane Signet and Commander's Sphere
+    // as 2 each. PumpAi.checkApiLogic routes here on the AILogic; PumpAi.doTriggerNoCost (thefts
+    // and free casts) never reaches it.
+    public static class DecoyGambit {
+        public static final int MIN_TOKEN_VALUE = 130; // evaluateCreature of a vanilla 2/2 token
+        public static final int MIN_RECAST_MV = 3;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // FIRST: TargetsForEachPlayer is read against targets already on the SA, and a
+            // declined or unaffordable window must leave none on the card in hand
+            sa.resetTargets();
+            if (sa.getHostCard() == null || !game.getStack().isEmpty() || !ph.is(PhaseType.END_OF_TURN)
+                    || !ph.getPlayerTurn().isOpponentOf(ai) || !ai.equals(ph.getNextTurn())) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // DBDraw's own vetoes, RNG-free (DrawAi.targetAI's untargeted drawback branch; NumCards X
+            // reads 0 before resolution): a library of 3 or fewer, or a hand already over its maximum
+            // (the sub is not a spell, so DrawAi counts this card in hand too)
+            if (ai.getCardsIn(ZoneType.Library).size() <= 3
+                    || ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // judge the SA being cast, not host.getFirstSpellAbility() (row 77)
+            final ManaCost cost = sa.getPayCosts() == null ? ManaCost.ZERO : sa.getPayCosts().getTotalMana();
+            if (cost.getCMC() > 0) {
+                final HonestMana mana = HonestMana.of(ai, sa, true);
+                if (mana.total() < cost.getCMC()
+                        || mana.colour(MagicColor.BLUE) < cost.getShardCount(forge.card.mana.ManaCostShard.BLUE)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            for (final Player opp : ai.getOpponents()) {
+                if (!sa.canAddMoreTarget()) {
+                    break;
+                }
+                final CardCollection pool = CardLists.filter(
+                        CardLists.getTargetableCards(opp.getCreaturesInPlay(), sa),
+                        c -> isRealBounce(ai, c));
+                // deterministic (Aggregates.itemWithMax over evaluateRemovalTargetPriority)
+                final Card pick = ComputerUtilCard.getBestRemovalTargetAI(ai, pool);
+                if (pick != null && sa.canTarget(pick)) {
+                    sa.getTargets().add(pick);
+                }
+            }
+            if (sa.getTargets().isEmpty() || !sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static boolean isRealBounce(final Player ai, final Card c) {
+            for (final Card attached : c.getAttachedCards()) {
+                if (attached.isAura() && ai.equals(attached.getController())) {
+                    return false;
+                }
+            }
+            if (c.hasKeyword(Keyword.WARD) || taxesTargeting(c)) {
+                return false;
+            }
+            if (ai.equals(c.getOwner())) {
+                return wearsOpponentAura(ai, c);
+            }
+            if (rewardsRecast(c)) {
+                return false;
+            }
+            if (c.isToken() || c.isTokenCard()) {
+                return ComputerUtilCard.evaluateCreature(c) >= MIN_TOKEN_VALUE;
+            }
+            if (c.hasETBTrigger(false)) {
+                return false;
+            }
+            return c.getCMC() >= MIN_RECAST_MV || c.isCommander() || wearsOpponentAura(ai, c);
+        }
+
+        // "Spells your opponents cast that target CARDNAME cost {N} more" (Elderwood Scion,
+        // Pursued Whale, Syr Elenora): a RaiseCost static of its own keyed on itself.
+        private static boolean taxesTargeting(final Card c) {
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (st.checkMode(StaticAbilityMode.RaiseCost) && st.hasParam("ValidTarget")
+                        && st.getParam("ValidTarget").contains("Self")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the recast pays them: a cast trigger of its own, or cascade
+        private static boolean rewardsRecast(final Card c) {
+            if (c.hasKeyword(Keyword.CASCADE)) {
+                return true;
+            }
+            for (final Trigger t : c.getTriggers()) {
+                if ((t.getMode() == TriggerType.SpellCast || t.getMode() == TriggerType.SpellCastOrCopy)
+                        && t.hasParam("ValidCard") && t.getParam("ValidCard").contains("Self")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean wearsOpponentAura(final Player ai, final Card c) {
+            for (final Card aura : c.getEnchantedBy()) {
+                if (aura.getController() != null && aura.getController().isOpponentOf(ai)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Deflecting Swat
     // "You may choose new targets for target spell or ability." Cast only in
     // response to an opponent's spell or ability with a single-target part that
