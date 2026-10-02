@@ -75,6 +75,15 @@ public class PermanentAi extends SpellAbilityAi {
             }
         }
 
+        if (SpecialCardAi.DarettiScrapSavant.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // The RNG-free commander cast ceiling (G1) for our own cast, answered before
+            // canPayCost's MyRandom probe; null = the stock checks below decide.
+            final AiAbilityDecision daretti = SpecialCardAi.DarettiScrapSavant.considerCast(ai, sa);
+            if (daretti != null) {
+                return daretti;
+            }
+        }
+
         ManaCost mana = sa.getPayCosts().getTotalMana();
         if (mana.countX() > 0) {
             final int xPay = ComputerUtilCost.setMaxXValue(sa, ai, false);

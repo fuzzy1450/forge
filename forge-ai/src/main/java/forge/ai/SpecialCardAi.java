@@ -3170,6 +3170,90 @@ public class SpecialCardAi {
         }
     }
 
+    // Daretti, Scrap Savant (dead-card batch 2, row 2; the commander of precon:Built from
+    // Scratch (C14), and in the 99 of Invent Superiority, Lorehold Legacies and Heads I Win,
+    // Tails You Lose)
+    // Its AI:RemoveDeck:All hint stripped every spell ability of the card at
+    // AiController.getSpellAbilityToPlay: the command-zone cast and, for a copy on the
+    // battlefield, all three loyalty abilities. Behind the hint the cast is the stock
+    // PermanentNoncreatureAi path that Freyalise and Teferi, the unhinted C14 planeswalker
+    // commanders, take and are cast through; the +2 resolves as discard 0, draw 0 (Optional$,
+    // min 0), and the -10 is AILogic$ Always. Two gates, both RNG-free:
+    // - considerCast, from PermanentAi.checkApiLogic: our own cast from hand or the command zone
+    //   must pass CommanderCastCeiling (G1: calculateManaCost's adjusted cost, commander tax and
+    //   cost statics included, against HonestMana, G2) before canPayCost's test payment draws
+    //   MyRandom in isManaSourceReserved, so an unaffordable window draws nothing. A Play-effect
+    //   cast (Nathan Drake's exile Play) or another player's cast keeps A's stock path: null.
+    // - considerReanimate, from SacrificeAi.canPlay: the -2. Stock approves on the first cheap
+    //   artifact, and resolution sacrifices ComputerUtil.choosePermanentsToSacrifice's pick
+    //   (min 1, not optional) and returns ChangeZoneAi.isPreferredTarget's
+    //   (getMostExpensivePermanentAI over our targetable graveyard artifacts) with nothing
+    //   comparing the two: it trades a Sol Ring for a Wayfarer's Bauble. Here both picks are
+    //   predicted with those same choosers and the returned card must be worth MARGIN more
+    //   than the sacrificed one, MARGIN_LAST_LOYALTY more when the -2 takes Daretti to 0.
+    // Holds nothing; nothing outlives a decline.
+    public static class DarettiScrapSavant {
+        public static final String NAME = "Daretti, Scrap Savant";
+        // what the returned artifact must be worth over the sacrificed one
+        private static final int MARGIN = 2;
+        // ... when the -2 is paid from 2 loyalty and Daretti dies (to the command zone, +2 tax)
+        private static final int MARGIN_LAST_LOYALTY = 4;
+
+        // Our own cast, from hand or the command zone: CantAfford in a window the RNG-free
+        // ceiling calls unpayable. null = no opinion: the stock PermanentAi checks decide.
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (!sa.isSpell() || sa.isCastFromPlayEffect() || host == null || !ai.equals(host.getOwner())
+                    || !(host.isInZone(ZoneType.Hand) || host.isInZone(ZoneType.Command))) {
+                return null; // a theft or a Play-effect cast keeps A's stock evaluation
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return null;
+        }
+
+        // [-2]: Sacrifice an artifact. If you do, return target artifact card from your
+        // graveyard to the battlefield. Approve only a real upgrade.
+        public static AiAbilityDecision considerReanimate(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final SpellAbility sub = sa.getSubAbility();
+            if (sub == null || !sub.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // what SacrificeEffect offers: our artifacts that can be sacrificed
+            CardCollection mine = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), "Artifact", ai, host, sa);
+            mine = CardLists.filter(mine, CardPredicates.canBeSacrificedBy(sa, true));
+            if (mine.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection back = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sub);
+            if (back.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            // the sub's target (ChangeZoneAi, graveyard to battlefield) and the resolution's sacrifice
+            final Card best = ComputerUtilCard.getMostExpensivePermanentAI(back);
+            final CardCollection sac = ComputerUtil.choosePermanentsToSacrifice(ai, mine, 1, sa, false, false);
+            final Card lost = sac.isEmpty() ? null : sac.get(0);
+            final int margin = host.getCurrentLoyalty() <= 2 ? MARGIN_LAST_LOYALTY : MARGIN;
+            if (best == null || lost == null || worth(best) < worth(lost) + margin) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Mana value (a copy token keeps the copied one); a land at least a land drop; a
+        // creature at least half its body, so a 5/5 token with no mana cost (Tuktuk the
+        // Returned) or a Wurm token is not traded away as worthless.
+        private static int worth(final Card c) {
+            if (c.isLand()) {
+                return Math.max(2, c.getCMC());
+            }
+            final int body = c.isCreature() ? (c.getNetPower() + c.getNetToughness()) / 2 : 0;
+            return Math.max(c.getCMC(), body);
+        }
+    }
+
     // Day of the Dragons - judged from its ETB exile trigger (ChangeZoneAllAi.doTriggerNoCost,
     // non-mandatory only): trade our creatures for the same number of 5/5 flying Dragons
     // only when that is a clear upgrade. Reads game state only: no token prototype (TokenDb

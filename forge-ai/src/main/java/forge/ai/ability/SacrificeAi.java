@@ -2,6 +2,7 @@ package forge.ai.ability;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.ComputerUtilAbility;
 import forge.ai.ComputerUtilCard;
 import forge.ai.ComputerUtilCost;
 import forge.ai.SpecialCardAi;
@@ -30,6 +31,11 @@ public class SacrificeAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision canPlay(Player ai, SpellAbility sa) {
+        if (sa.isPwAbility() && SpecialCardAi.DarettiScrapSavant.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Daretti, Scrap Savant's -2: only when the artifact it returns is a real upgrade on
+            // the one resolution will sacrifice. Draws nothing.
+            return SpecialCardAi.DarettiScrapSavant.considerReanimate(ai, sa);
+        }
         return sacrificeTgtAI(ai, sa, false);
     }
 
