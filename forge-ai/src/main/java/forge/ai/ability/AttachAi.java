@@ -85,6 +85,14 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.GiftOfDoom.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.BreathOfFury.NAME.equals(source.getName())) {
+            // Sacrifice-on-connect Aura: the stock Pump preference enchants our BEST attacker
+            // (getBestAI) and the first hit sacrifices it. Judged whole in
+            // SpecialCardAi.BreathOfFury, before attachPreference, so a decline writes no
+            // ATTACHED_THIS_TURN. Play-effect casts (doTriggerNoCost) never come here.
+            return SpecialCardAi.BreathOfFury.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {
@@ -1834,6 +1842,18 @@ public class AttachAi extends SpellAbilityAi {
             // attach-target pick that follows (params "Attachments"). RNG-free; reached only when
             // her +2 resolves, i.e. only in games where she was cast.
             return SpecialCardAi.NahiriTheLithomancer.chooseEquipment(ai, sa, options, params);
+        }
+        final Card host = sa.getHostCard();
+        if (host != null && SpecialCardAi.BreathOfFury.NAME.equals(host.getName())
+                && sa.getApi() == ApiType.Attach && sa.hasParam("Object") && sa.hasParam("Choices")) {
+            // Breath of Fury's trigger: the mandatory "attach this Aura to a creature you
+            // control" after its host is sacrificed. Stock took getWorstPermanentAI(biasEnch,
+            // biasArt): any enchantment or artifact creature first, the commander included.
+            // RNG-free; reached only once the Aura is on a battlefield and its host connects.
+            final Card pick = SpecialCardAi.BreathOfFury.chooseNewHost(ai, options);
+            if (pick != null || isOptional) {
+                return pick;
+            }
         }
         return attachGeneralAI(ai, sa, (List<Card>)options, !isOptional, sa.getHostCard(), sa.getParam("AILogic"));
     }
