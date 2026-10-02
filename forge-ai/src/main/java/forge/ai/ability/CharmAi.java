@@ -60,6 +60,13 @@ public class CharmAi extends SpellAbilityAi {
             // until its mana floor passes. A Play-effect cast (Nathan Drake, Jeleva, Silent-Blade
             // Oni) and a copy never match, and keep the stock path the hint never covered.
             chosenList = SpecialCardAi.DoomsdayConfluence.chooseModes(ai, sa, choices);
+        } else if (SpecialCardAi.ProfaneCommand.routes(ai, sa)) {
+            // AI:RemoveDeck:All kept every path routes() matches off the playable list, so A never
+            // reached the shuffle below on them: the owner's cast from hand (planned by the
+            // evaluator, which draws nothing until its plan passes on the board) and every MayPlay
+            // copy (declined first, RNG-free). A Play-effect cast (Nathan Drake) and a no-mana test
+            // copy (ManaAi's ManaRitual hand scan) never match, and keep the stock path they took in A.
+            chosenList = SpecialCardAi.ProfaneCommand.chooseModes(ai, sa);
         } else {
             // only randomize if not all possible together
             if (num < choices.size()) {

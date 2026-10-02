@@ -13335,6 +13335,236 @@ public class SpecialCardAi {
         }
     }
 
+    // Profane Command
+    // "{X}{B}{B} sorcery. Choose two - Target player loses X life; return target creature card with
+    // mana value X or less from your graveyard to the battlefield; target creature gets -X/-X until
+    // end of turn; up to X target creatures gain fear until end of turn."
+    // The script carried AI:RemoveDeck:All. Behind it the stock charm chooser never announces X
+    // (CharmAi offers the modes at X = 0, so the reanimate mode is never offered), its sub-handlers
+    // set and clear the root's X as a side effect (LifeLoseAi maxes it, PumpAi resets it), and it
+    // shuffles with MyRandom on every pass. Reached from CharmAi's gate (routes) on exactly the paths
+    // the hint closed in A: the owner's cast from hand, which is planned here, and every MayPlay copy
+    // (Theater of Horrors, Tectonic Giant, Thief of Sanity, Daxos of Meletis, Mindleecher), which is
+    // declined before any write. Play-effect casts (Nathan Drake), no-mana test copies (ManaAi's
+    // ManaRitual hand scan) and the copies of cards outside the hand that other evaluators test
+    // reached the stock chooser in A and still do. Residual: a free MayPlay copy has no mana X and
+    // keeps the stock path as well, which A's filter closed (Fallen Shinobi on this card).
+    // Plans, best first, judged against the most X could be:
+    //   LETHAL     an opponent who can lose to it has life <= X: drain + the best other mode; any main.
+    //   KILL+BODY  an opposing creature worth MIN_KILL_EVAL (or a commander) with toughness <= X, and
+    //              a creature card of ours worth MIN_BODY_EVAL with mana value <= X; X = the larger
+    //              need; any main.
+    //   KILL+DRAIN any main; X = the kill's need in main 1, all spare mana in main 2.
+    //   BODY+DRAIN our main 2 only (combat may add better bodies); X = all spare mana.
+    //   DRAIN      our main 2 only, fear on no targets: X >= DRAIN_MIN and 5X >= the weakest killable
+    //              opponent's life (Prisoner's Dilemma's line), or the hand is over its maximum.
+    // Never: -X/-X on our own creature, life loss on us, a legend we already control, a body that
+    // loses us the game or whose ETB is prevented, an AI:RemoveDeck body, a ward, undying or persist
+    // kill target. RNG parity: A never evaluated the card for its owner, so nothing draws until a
+    // plan passes on the board against an RNG-free count (G2's HonestMana: held sources skipped, this
+    // spell's restrictions read on the root, black counted per source); only then does setMaxXValue's
+    // test payment (which draws in ComputerUtilMana.isManaSourceReserved) fix the real X, and the plan
+    // is re-fitted to it (the Gaze of Granite / Commander's Insight idiom). An empty list is CantPlayAi
+    // in CharmAi; the list is mutable because CharmEffect.chainAbilities sorts it in place. Only a
+    // non-empty list leaves X announced. No AiCardMemory holds.
+    public static class ProfaneCommand {
+        public static final String NAME = "Profane Command";
+        public static final int MIN_BODY_EVAL = 200; // Path of the Schemer's "real creature" line
+        public static final int MIN_KILL_EVAL = 160; // a non-token vanilla 2/2 two-drop
+        public static final int DRAIN_MIN = 3;
+        public static final int LIFE_FRACTION = 5;   // Prisoner's Dilemma: a fifth of the life
+
+        private record Plan(AbilitySub first, GameObject firstTgt, AbilitySub second, GameObject secondTgt, int x) {}
+
+        // The paths the AI:RemoveDeck:All hint closed in A (AiController.getSpellAbilityToPlay's
+        // filter, which reads the host's paper card): the owner's cast from hand and every MayPlay
+        // copy. Play-effect casts reached the stock chooser through canPlayFromEffectAI, and ManaAi's
+        // ManaRitual hand scan tests copyWithNoManaCost() copies, which have no mana X: both kept the
+        // stock path in A and still do (the costHasManaX clause is what keeps the latter there).
+        public static boolean routes(final Player ai, final SpellAbility sa) {
+            return isNamed(sa) && sa.isSpell() && !sa.isCastFromPlayEffect() && sa.costHasManaX()
+                    && (sa.getMayPlay() != null || handlesCast(ai, sa));
+        }
+
+        // the source's name, or the paper card's: a face-down exiled host (Thief of Sanity,
+        // Mindleecher) reads "" from getAbilitySourceName, while the hint's filter read its rules
+        private static boolean isNamed(final SpellAbility sa) {
+            if (NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                return true;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // the owner's own cast from hand
+        public static boolean handlesCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return sa.isSpell() && sa.costHasManaX() && host != null && host.isInZone(ZoneType.Hand)
+                    && ai.equals(host.getOwner()) && ai.equals(sa.getActivatingPlayer());
+        }
+
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa) {
+            final List<AbilitySub> chosen = Lists.newArrayList(); // mutable: chainAbilities sorts it
+            // the hint's own refusal, first and before any write: a MayPlay copy (a thief's, or ours
+            // from exile) and anything else that is not the owner's cast from hand stays out
+            if (sa.getMayPlay() != null || !handlesCast(ai, sa)) {
+                return chosen;
+            }
+            sa.setXManaCostPaid(null); // drop a stale X before the cost is read
+            AbilitySub drain = null;
+            AbilitySub body = null;
+            AbilitySub kill = null;
+            AbilitySub fear = null;
+            for (final AbilitySub sub : sa.getAdditionalAbilityList("Choices")) {
+                sub.setActivatingPlayer(ai);
+                sub.resetTargets(); // no stale targets from an earlier window
+                if (sub.getApi() == ApiType.LoseLife) {
+                    drain = sub;
+                } else if (sub.getApi() == ApiType.ChangeZone) {
+                    body = sub;
+                } else if (sub.getApi() == ApiType.Pump && sub.isCurse()) {
+                    kill = sub;
+                } else if (sub.getApi() == ApiType.Pump && sub.hasParam("KW")) {
+                    fear = sub;
+                }
+            }
+            if (drain == null || body == null || kill == null || fear == null) {
+                return chosen; // script drifted: stay out
+            }
+            // cheap preconditions, RNG-free, before any scan: our main phase on an empty stack
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return chosen;
+            }
+            final boolean main2 = ph.is(PhaseType.MAIN2, ai);
+            // the most X could be: G2's count (never getAvailableManaEstimate, which counts the
+            // words of Produced$), held sources skipped by their production, less B B and any tax
+            // priced in test mode with X unset (it counts 0); two black from sources this spell's
+            // restrictions allow, read on the root sa
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int estX = mana.total() - cost.getConvertedManaCost();
+            if (estX < 1 || mana.colour(MagicColor.BLACK) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)) {
+                return chosen;
+            }
+            if (plan(ai, sa, drain, body, kill, fear, main2, estX) == null) {
+                return chosen; // no plan on the board: nothing drew, and X is unset again
+            }
+            // only now the real X (RNG-consuming test payments); re-fit the plan to it
+            final int realX = ComputerUtilCost.setMaxXValue(sa, ai, false);
+            final Plan p = plan(ai, sa, drain, body, kill, fear, main2, realX);
+            if (p == null) {
+                sa.setXManaCostPaid(null); // residual: the count was optimistic
+                return chosen;
+            }
+            sa.setXManaCostPaid(p.x()); // cmcLEX, -X/-X, the drain and the payment all read this X
+            if (!addTarget(p.first(), p.firstTgt()) || !addTarget(p.second(), p.secondTgt())) {
+                sa.setXManaCostPaid(null);
+                drain.resetTargets();
+                body.resetTargets();
+                kill.resetTargets();
+                fear.resetTargets();
+                return chosen;
+            }
+            chosen.add(p.first());
+            chosen.add(p.second());
+            return chosen;
+        }
+
+        // a null target is the zero-target fear mode; any other target is re-checked at the final X
+        private static boolean addTarget(final AbilitySub sub, final GameObject tgt) {
+            if (tgt == null) {
+                return sub.getMinTargets() == 0;
+            }
+            if (!sub.canTarget(tgt)) {
+                return false;
+            }
+            sub.getTargets().add(tgt);
+            return true;
+        }
+
+        // Board-only and RNG-free. Sets the root's X to the bound while body.canTarget reads cmcLEX,
+        // and clears it again.
+        private static Plan plan(final Player ai, final SpellAbility sa, final AbilitySub drain,
+                final AbilitySub body, final AbilitySub kill, final AbilitySub fear,
+                final boolean main2, final int boundX) {
+            if (boundX < 1) {
+                return null;
+            }
+            sa.setXManaCostPaid(boundX);
+            try {
+                // BODY: a creature card in our graveyard with mana value <= X (body.canTarget reads
+                // cmcLEX) that is a real body; the evaluation runs before the replacement-handler and
+                // trigger scans
+                final CardCollection bodies = CardLists.filter(ai.getCardsIn(ZoneType.Graveyard), c ->
+                        c.isCreature() && body.canTarget(c) && !ComputerUtilCard.isCardRemAIDeck(c)
+                        && (c.ignoreLegendRule() || !c.getType().isLegendary() || !ai.isCardInPlay(c.getName()))
+                        && ComputerUtilCard.evaluateCreature(c) >= MIN_BODY_EVAL
+                        && !ComputerUtil.isETBprevented(c) && !PathOfTheSchemer.losesOnEntering(c));
+                final Card bestBody = bodies.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(bodies);
+                // KILL: an opponent's creature that -X/-X kills and that stays dead
+                final CardCollection kills = CardLists.filter(ai.getOpponents().getCreaturesInPlay(), c ->
+                        kill.canTarget(c) && !c.hasKeyword(Keyword.WARD) && !c.hasKeyword(Keyword.UNDYING)
+                        && !c.hasKeyword(Keyword.PERSIST) && c.getNetToughness() >= 1
+                        && c.getNetToughness() <= boundX
+                        && (c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= MIN_KILL_EVAL));
+                final Card bestKill = kills.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(kills);
+                // DRAIN target: a lethal one first, else the weakest opponent who can lose life
+                Player lethal = null;
+                Player weakest = null;
+                for (final Player o : ai.getOpponents()) {
+                    if (!drain.canTarget(o) || !o.canLoseLife()) {
+                        continue;
+                    }
+                    if (!o.cantLoseForZeroOrLessLife() && o.getLife() <= boundX
+                            && (lethal == null || o.getLife() < lethal.getLife())) {
+                        lethal = o;
+                    }
+                    if (weakest == null || o.getLife() < weakest.getLife()) {
+                        weakest = o;
+                    }
+                }
+                final int killNeed = bestKill == null ? 0 : bestKill.getNetToughness();
+                final int bodyNeed = bestBody == null ? 0 : Math.max(1, bestBody.getCMC());
+                if (lethal != null) {
+                    if (bestKill != null) {
+                        return new Plan(drain, lethal, kill, bestKill, boundX);
+                    }
+                    if (bestBody != null) {
+                        return new Plan(drain, lethal, body, bestBody, boundX);
+                    }
+                    return new Plan(drain, lethal, fear, null, boundX);
+                }
+                if (bestKill != null && bestBody != null) {
+                    return new Plan(body, bestBody, kill, bestKill, Math.max(killNeed, bodyNeed));
+                }
+                if (bestKill != null) {
+                    return weakest != null
+                            ? new Plan(drain, weakest, kill, bestKill, main2 ? boundX : killNeed)
+                            : new Plan(kill, bestKill, fear, null, killNeed);
+                }
+                if (!main2) {
+                    return null; // bodies and pure drains wait for main 2
+                }
+                if (bestBody != null) {
+                    return weakest != null
+                            ? new Plan(drain, weakest, body, bestBody, boundX)
+                            : new Plan(body, bestBody, fear, null, bodyNeed);
+                }
+                final boolean overflow = !ai.isUnlimitedHandSize()
+                        && ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize();
+                if (weakest != null && !weakest.cantLoseForZeroOrLessLife() && boundX >= DRAIN_MIN
+                        && (boundX * LIFE_FRACTION >= weakest.getLife() || overflow)) {
+                    return new Plan(drain, weakest, fear, null, boundX);
+                }
+                return null;
+            } finally {
+                sa.setXManaCostPaid(null);
+            }
+        }
+    }
+
     // Promise of Power
     // "Choose one - You draw five cards and you lose 5 life; or create an X/X black Demon creature
     // token with flying, where X is the number of cards in your hand. Entwine {4}"
