@@ -57,6 +57,13 @@ public class DrawAi extends SpellAbilityAi {
             // refuses even that, so the spell could never be cast.
             return SpecialCardAi.TradeSecrets.consider(ai, sa);
         }
+        if ("Secret Rendezvous".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // You and the targeted opponent each draw three. targetAI puts a draw on an opponent only to
+            // mill them, chooseSymmetricDrawOpponent keeps the stock refusal for a root spell, and the
+            // opponent-target veto below refuses even the mill board, so the spell could never be cast.
+            // Effect casts and copies keep the stock path (doTriggerNoCost -> targetAI).
+            return SpecialCardAi.SecretRendezvous.consider(ai, sa);
+        }
         if (("Borrowing 100,000 Arrows".equals(ComputerUtilAbility.getAbilitySourceName(sa))
                 || "Theft of Dreams".equals(ComputerUtilAbility.getAbilitySourceName(sa))) && !(sa instanceof AbilitySub)) {
             // WE draw (Defined$ You); the opponent target only sizes X. targetAI computes X before
@@ -718,7 +725,8 @@ public class DrawAi extends SpellAbilityAi {
                 || sa.getMaxTargets() != 1) {
             return null;
         }
-        // a root spell (Secret Rendezvous) keeps the stock refusal on every route, effect casts included
+        // a root spell keeps the stock refusal here on every route, effect casts included (Secret
+        // Rendezvous's own cast is judged by SpecialCardAi.SecretRendezvous from checkApiLogic)
         if (sa.isSpell() && sa.getParent() == null) {
             return null;
         }

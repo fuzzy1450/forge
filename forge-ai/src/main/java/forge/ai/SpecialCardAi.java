@@ -14120,6 +14120,129 @@ public class SpecialCardAi {
         }
     }
 
+    // Secret Rendezvous (dead-card batch 2, row 21)
+    // {1}{W}{W} sorcery: "You and target opponent each draw three cards." DrawAi never targets an
+    // opponent with a non-curse draw, and the Wedding's symmetric chooser keeps the stock refusal for
+    // a root spell, so it was refused every main 2 (TargetingFailed). We net +2 (the spell is spent)
+    // and the opponent +3, and they act on theirs first; so feed only an opponent already holding
+    // more cards than we do, and never one in topdeck mode: their marginal card is worth less and
+    // nearer a cleanup discard. Judged on the normal cast only (DrawAi.checkApiLogic's name gate);
+    // Play-effect casts and copies keep the stock doTriggerNoCost -> targetAI path. Draws no random
+    // numbers, like the stock refusal it replaces: every decline reads state only, and the
+    // affordability count reads one mana per untapped source, so an unaffordable window is refused
+    // before canPayCost's isManaSourceReserved roll.
+    public static class SecretRendezvous {
+        public static final int DRAW = 3;           // each side's draw
+        public static final int LIBRARY_MARGIN = 3; // DrawAi's own "never draw within 3 of an empty library"
+        public static final int HAND_GAP = 1;       // target's hand minus ours (the spell excluded)
+        public static final int MIN_OPP_HAND = 3;   // never refill an opponent in topdeck mode
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final Card host = sa.getHostCard();
+            sa.resetTargets();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            int hand = ai.getCardsIn(ZoneType.Hand).size();
+            if (host.isInZone(ZoneType.Hand)) {
+                hand--; // the spell itself is spent
+            }
+            // FLOOR 1, our three are whole, safe and kept (cheapest checks first)
+            if (ai.getCardsIn(ZoneType.Library).size() <= DRAW + LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!ai.isUnlimitedHandSize() && hand + DRAW > ai.getMaxHandSize()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // cleanup discard on our turn
+            }
+            // draw-limit statics (Narset, Parter of Veils) count the draws already made this turn
+            if (!ai.canDraw() || StaticAbilityCantDraw.canDrawAmount(ai, DRAW) < DRAW) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // PRECONDITION, RNG-free: an unaffordable WillPlay would reach canPayCost's
+            // isManaSourceReserved roll (a held game re-rolled with no visible cast)
+            if (!canAfford(ai, host)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // FLOOR 2, no draw thief or punisher: any opponent's Drawn trigger or Draw replacement (their
+            // own payoffs count - they draw three too), or a symmetric one of ours; our payoffs pass
+            if (TradeSecrets.tableStealsOrPunishesDraws(ai, game)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            Player best = null;
+            for (final Player opp : ai.getOpponents()) {
+                if (!sa.canTarget(opp) || opp.isCardInPlay("Laboratory Maniac")) {
+                    continue;
+                }
+                if (!opp.canDraw()) {
+                    best = opp; // we draw three, they draw none
+                    break;
+                }
+                final int library = opp.getCardsIn(ZoneType.Library).size();
+                if (library < DRAW && !opp.cantLoseCheck(forge.game.player.GameLossReason.Milled)) {
+                    best = opp; // they draw from an empty library and lose
+                    break;
+                }
+                // FLOOR 4 (row 134): never hand an opponent their last library as a full grip
+                if (library <= DRAW) {
+                    continue;
+                }
+                // FLOOR 3, refill guard: the opponent we feed holds more cards than we do, and is not
+                // topdecking (every card a near-empty hand draws is live)
+                final int oppHand = opp.getCardsIn(ZoneType.Hand).size();
+                if (oppHand < Math.max(hand + HAND_GAP, MIN_OPP_HAND)) {
+                    continue;
+                }
+                // cards are worth least to the fullest hand; game order on ties
+                if (best == null || oppHand > best.getCardsIn(ZoneType.Hand).size()) {
+                    best = opp;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // One mana per untapped source with no mana activation cost, plus floating mana (DrawAi's
+        // castDisplacesManaSource idiom: getAvailableManaEstimate reads "Combo W B" as 3 and Command
+        // Tower / Arcane Signet as 2, so an unaffordable pass would reach canPayCost's
+        // isManaSourceReserved roll). A source counts as white only if its Produced text can make W
+        // (never "any Combo": Combo G U and Combo R G cannot). RNG-free: setActivatingPlayer, canPlay
+        // and the Produced text only.
+        private static boolean canAfford(final Player ai, final Card host) {
+            final ManaCost cost = host.getManaCost();
+            final int needW = cost == null ? 0 : cost.getShardCount(forge.card.mana.ManaCostShard.WHITE);
+            int total = ai.getManaPool().totalMana();
+            int white = ai.getManaPool().getAmountOfColor(MagicColor.WHITE);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                boolean usable = false;
+                boolean makesW = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || ma.getPayCosts().hasManaCost() || !ma.canPlay()) {
+                        continue;
+                    }
+                    usable = true;
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("W") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.contains("ColorI")) {
+                        makesW = true;
+                        break;
+                    }
+                }
+                if (usable) {
+                    total++;
+                }
+                if (makesW) {
+                    white++;
+                }
+            }
+            return total >= host.getCMC() && white >= needW;
+        }
+    }
+
     // Seize the Spotlight
     // "Each opponent chooses fame or fortune. For each opponent who chose fame,
     // gain control of a creature that player controls until end of turn, untap
