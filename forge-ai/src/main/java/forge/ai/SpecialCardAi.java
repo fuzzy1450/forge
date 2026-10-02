@@ -8248,6 +8248,49 @@ public class SpecialCardAi {
         }
     }
 
+    // Marath, Will of the Wild (dead-card batch 2, row 1; the commander of precon:Nature of the
+    // Beast)
+    // Its AI:RemoveDeck:All hint stripped the command-zone spell at
+    // AiController.getSpellAbilityToPlay, so the stock engine never evaluated it. With the hint
+    // gone the stock creature path accepts it: etbCounter is exempt from PermanentCreatureAi's
+    // zero-toughness veto, and the counter replacement passes checkETBEffects through
+    // CountersPutAi's untargeted branch (Ghave, Guru of Spores is the same no-X 0/0 shape).
+    // Value line: it enters with one +1/+1 counter per mana spent (Count$CastTotalManaSpent
+    // counts the commander tax), so every paid cast is an N/N for N >= 3.
+    // - Floor: never a cast whose adjusted cost is no mana (it enters with no counters and dies
+    //   as a 0/0). An optional free cast through a Play effect reaches this gate through
+    //   PermanentAi.doTriggerNoCost.
+    // - Ceiling: the MyRandom draws in ComputerUtilCost.canPayCost's test payment
+    //   (ComputerUtilMana.isManaSourceReserved) must not be reached in a window that cannot pay,
+    //   or a held game re-rolls with no cast. CommanderCastCeiling (G1) answers those windows
+    //   first: its cost is calculateManaCost's, commander tax and every ReduceCost and RaiseCost
+    //   static included (Krosan Warchief is in the carrier), and its mana is HonestMana (G2),
+    //   never getAvailableManaEstimate, which counts this deck's Jungle Shrine 4, its Guildgates
+    //   3 and its Command Tower 2. Residual: one multicolour source counts toward each colour it
+    //   can make.
+    // Draws nothing and holds nothing. The activated ability stays off in the script
+    // (AILogic$ Never): stock X is min(mana, counters) and would kill Marath for its own cost.
+    public static class MarathWillOfTheWild {
+        public static final String NAME = "Marath, Will of the Wild";
+
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (!sa.isSpell()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            // what this cast pays: the printed pips, the commander tax and the cost statics
+            // (test mode, no RNG), the same number the ceiling prices
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (cost.getConvertedManaCost() <= 0) {
+                // no mana spent: no counters, a 0/0 that dies at once
+                return new AiAbilityDecision(0, AiPlayDecision.WouldBecomeZeroToughnessCreature);
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // March from Velis Vel
     //
     // Each land we control of a chosen nonbasic type becomes a hasty copy of

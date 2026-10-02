@@ -198,6 +198,14 @@ public class PermanentCreatureAi extends PermanentAi {
             // ask whether a surviving copy exists). Draws no random numbers.
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
+        if (SpecialCardAi.MarathWillOfTheWild.NAME.equals(card.getName())) {
+            // Cast floor and the RNG-free commander cast ceiling (G1), answered before
+            // canPayCost's MyRandom probe; see the class comment.
+            final AiAbilityDecision marath = SpecialCardAi.MarathWillOfTheWild.considerCast(ai, sa);
+            if (!marath.willingToPlay()) {
+                return marath;
+            }
+        }
         final ManaCost mana = card.getManaCost();
         final Game game = ai.getGame();
 
