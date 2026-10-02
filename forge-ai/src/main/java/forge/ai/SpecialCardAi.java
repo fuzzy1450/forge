@@ -12279,6 +12279,8 @@ public class SpecialCardAi {
             }
             switch (name) {
                 // one case per G3 keep-off row, added by that row's own commit
+                case TrenchGorger.NAME:
+                    return TrenchGorger.keepOffList(ai, sa);
                 default:
                     return false;
             }
@@ -14888,6 +14890,83 @@ public class SpecialCardAi {
 
         private static boolean namesASide(final String valid) {
             return valid != null && (valid.contains("You") || valid.contains("Opp"));
+        }
+    }
+
+    // Trench Gorger (dead-card batch 2, row 68)
+    // {6}{U}{U} 6/6 trample. "When this creature enters, you may search your library for any number
+    // of land cards, exile them, then shuffle. If you do, this creature has base power and base
+    // toughness each equal to the number of cards exiled this way." A declined search keeps the
+    // printed 6/6; an accepted one sets base P/T to the lands exiled (0 exiled = a 0/0 that dies).
+    // The script's AI:RemoveDeck:All hint is gone (it took the spell off AiController's playable
+    // list before any handler ran, so its owner never cast it); two RNG-free hooks replace it:
+    // - keepOffList, the G3 dispatcher's keep-off case (RemoveDeckFilter.keepOff): outside a window
+    //   the stock path would cast it in, the spell stays off the playable list exactly as the hint
+    //   kept it, so a held Gorger moves neither sortCreatureSpells' creature slots nor canPayCost's
+    //   reservation roll (ComputerUtilMana.isManaSourceReserved).
+    // - shouldSearch (ChangeZoneAi.doTriggerNoCost, AILogic$ TrenchGorger): the optional search runs
+    //   only when exiling every land (the stock chooser takes them all) beats the printed 6/6,
+    //   leaves a library to draw from, and the body is still ours to grow and stays. The stock
+    //   hiddenTriggerAI approved it on a single land, and under Aven Mindcensor or a can't-search
+    //   effect, where it shrinks the body or leaves a 0/0.
+    public static class TrenchGorger {
+        public static final String NAME = "Trench Gorger";
+        public static final String LOGIC = "TrenchGorger";
+        public static final int PRINTED_SIZE = 6;      // the 6/6 a declined search keeps
+        public static final int MIN_LIBRARY_LEFT = 10; // DanceWithCalamity.MIN_LIBRARY_TO_CONTINUE
+
+        public static boolean keepOffList(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || !NAME.equals(host.getName())) {
+                return false; // not the creature spell: kept, as an unhinted ability always is
+            }
+            return !castWindow(ai, sa);
+        }
+
+        // The windows the stock path would cast it in: our own sorcery-speed main phase with an
+        // empty stack (it has no flash), Main 2, or Main 1 when castPermanentInMain1 says so
+        // (PermanentAi.checkPhaseRestrictions :38), and mana that can pay. The cost is the engine's
+        // own test-mode calculateManaCost (Animar's reduction, taxes, every RaiseCost and ReduceCost
+        // static; no draw); the mana is HonestMana (G2) with held sources skipped, in total and in
+        // blue. Never getAvailableManaEstimate, which counts the words of Produced$ (this deck's
+        // Kazandu Refuge 3, Command Tower 2), nor an "any Combo is blue" source count (Kazandu
+        // Refuge's Combo R G): either admits a window that canPayCost then fails after drawing.
+        private static boolean castWindow(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !game.getStack().isEmpty()) {
+                return false;
+            }
+            sa.setActivatingPlayer(ai); // getAllPossibleAbilities already set it; harmless
+            if (ph.is(PhaseType.MAIN1)) {
+                if (!ComputerUtil.castPermanentInMain1(ai, sa)) {
+                    return false;
+                }
+            } else if (!ph.is(PhaseType.MAIN2)) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLUE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+
+        public static boolean shouldSearch(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Card live = host == null ? null : ai.getGame().getCardState(host, null);
+            if (live == null || !live.equalsWithGameTimestamp(host) || !live.isInPlay()
+                    || !ai.equals(live.getController())) {
+                return false; // no body to grow: the search would only exile lands
+            }
+            if (live.hasSVar("EndOfTurnLeavePlay")) {
+                return false; // a body that leaves at end of turn: exiling every land would be pure loss
+            }
+            if (ai.hasKeyword("LimitSearchLibrary") || !ai.canSearchLibraryWith(sa, ai)) {
+                return false; // Aven Mindcensor / can't search: a smaller body, or a 0/0 (ChangeZoneEffect :1023-1038)
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            final int lands = AbilityUtils.filterListByType(library, sa.getParam("ChangeType"), sa).size();
+            return lands > PRINTED_SIZE && library.size() - lands >= MIN_LIBRARY_LEFT;
         }
     }
 

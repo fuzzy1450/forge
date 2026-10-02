@@ -389,6 +389,15 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        } else if (SpecialCardAi.TrenchGorger.LOGIC.equals(aiLogic)) {
+            // Trench Gorger's optional ETB search (the stock hiddenTriggerAI approved it on a single
+            // land, and under Aven Mindcensor or a can't-search effect): only when exiling every land
+            // beats the printed 6/6, leaves a library, and the body is still ours and stays; the
+            // mandatory call is the trigger going on the stack, approved as hiddenTriggerAI did
+            if (mandatory || SpecialCardAi.TrenchGorger.shouldSearch(aiPlayer, sa)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
         if (sa.isHidden()) {
