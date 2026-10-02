@@ -5889,6 +5889,111 @@ public class SpecialCardAi {
         }
     }
 
+    // Gift of Doom (dead-card batch 2, row 104)
+    // "Enchant creature. Enchanted creature has deathtouch and indestructible. Morph - Sacrifice
+    // another creature. As Gift of Doom is turned face up, you may attach it to a creature."
+    // The script keeps AI:RemoveDeck:All. Behind it the face-down cast is a Spell with no API and
+    // no floor (stock would cast a vanilla 2/2 whenever {3} is open, for free under Kadena), and
+    // stock never flips it (SetStateAi.compareCards :179: the face-up Aura has toughness 0), so a
+    // face-down Gift could never become the Aura. Both stay filtered, as do the -10 sort and every
+    // other isCardRemAIDeck reader (steal, copy, clone and tutor pickers). The G3 dispatcher
+    // (RemoveDeckFilter.readmit) lets exactly one ability through AiController's filter: the
+    // face-up Aura spell from our own hand, in our own Main 2 with an empty stack, with no mana
+    // reservation live (RemoveDeckFilter.noManaHeld), when {4}{B} as the engine prices it
+    // (test-mode calculateManaCost) fits HonestMana (G2) in total and in black. Main 2 only: in
+    // Main 1 every permanent spell that waits for Main 2 (PermanentAi.checkPhaseRestrictions :38)
+    // would lose its mana to the Aura; in Main 2 they sort ahead of it (the hint's -10) and claim
+    // the mana first. Never getAvailableManaEstimate, which counts the words of Produced$ (the
+    // carrier's guildgates and gainlands 3, Opulent Palace 4, Command Tower 2), nor an "any Combo
+    // is black" source count (Simic Guildgate's Combo G U): either admits a window that canPayCost
+    // then fails after its isManaSourceReserved draws. AttachAi.checkApiLogic then calls
+    // consider() for that same shape only (isOwnHandCast): it enchants our best creature worth
+    // MIN_VALUE or more, or declines. Every other probe of the card (Nathan Drake's Play-effect
+    // theft through doTriggerNoCost, targetPlayableSpellCard, hasReasonToPlayCardThisTurn) takes
+    // the stock path. Draws no random number, holds no mana and writes no memory set, so a
+    // refusal at either step is the old filter.
+    public static class GiftOfDoom {
+        public static final String NAME = "Gift of Doom";
+        // a vanilla 4/4 for four (CreatureEvaluator: 80+20+60+40+20+1 = 221) qualifies;
+        // a 3/3 for three (191), Seedborn Muse (196), face-down 2/2s (151-161) and tokens never do
+        public static final int MIN_VALUE = 210;
+        // the re-cast tax and the deck's engine: Kadena, Slinking Sorcerer (196) qualifies at 246
+        public static final int COMMANDER_BONUS = 50;
+
+        // the readmit's own shape: our face-up Aura spell in our hand, not cast face down, not
+        // from a Play effect, not a copy
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && ai.equals(host.getController()) && sa.isSpell()
+                    && !sa.isCastFaceDown() && sa.getApi() == ApiType.Attach
+                    && !sa.isCastFromPlayEffect() && !sa.isCopied()
+                    && !host.isFaceDown() && host.isInZone(ZoneType.Hand);
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())
+                    || !isOwnHandCast(ai, sa)) {
+                return false; // the face-down cast, the flip, a theft and a copy keep the filter
+            }
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // also keeps AttachAi's advanced-flash rolls (:222-225) out of reach
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLACK) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK);
+        }
+
+        // AttachAi.checkApiLogic's name gate: choose the creature to enchant, or don't cast
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card aura = sa.getHostCard();
+            sa.resetTargets();
+            Card best = null;
+            int bestValue = Integer.MIN_VALUE;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!isHolder(ai, aura, c) || !sa.canTarget(c)) {
+                    continue;
+                }
+                final int v = holderValue(ai, c);
+                if (v >= MIN_VALUE && v > bestValue) {
+                    best = c;
+                    bestValue = v;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // AttachAi.attachAIPumpPreference's own exclusions (getSafeTargets :1351,
+        // not-enchanted-unless-hexproof :1357, EndOfTurnLeavePlay :1361, not crewed this turn
+        // :1381), plus: ours, not already indestructible (the Aura's main grant) and not useless
+        // (detained, can't attack or block, tapped and won't untap)
+        private static boolean isHolder(final Player ai, final Card aura, final Card c) {
+            return c.isCreature() && c.isInPlay() && ai.equals(c.getController())
+                    && !c.hasKeyword(Keyword.INDESTRUCTIBLE)
+                    && (!c.isEnchanted() || c.hasKeyword(Keyword.HEXPROOF))
+                    && !c.hasSVar("EndOfTurnLeavePlay")
+                    && c.getTimesCrewedThisTurn() == 0
+                    && !"Dies".equals(c.getSVar("Targeting")) && !"Counter".equals(c.getSVar("Targeting"))
+                    && !ComputerUtilCard.isUselessCreature(ai, c)
+                    && c.canBeAttached(aura, null);
+        }
+
+        private static int holderValue(final Player ai, final Card c) {
+            int v = ComputerUtilCard.evaluateCreature(c);
+            if (c.isRealCommander() && ai.equals(c.getOwner())) {
+                v += COMMANDER_BONUS;
+            }
+            return v;
+        }
+    }
+
     // Goblin Cadets (dead-card batch 2, row 82)
     // "Whenever Goblin Cadets blocks or becomes blocked, target opponent gains control of it.
     // (This removes Goblin Cadets from combat.)" Neither combat AI models that trigger: the
@@ -12301,6 +12406,8 @@ public class SpecialCardAi {
                     return ManascapeRefractor.isOwnHandCast(sa);
                 case GoblinCadets.NAME:
                     return GoblinCadets.readmit(ai, sa);
+                case GiftOfDoom.NAME:
+                    return GiftOfDoom.readmit(ai, sa);
                 default:
                     return false;
             }

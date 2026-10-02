@@ -75,6 +75,16 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.InfiniteReflection.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.GiftOfDoom.NAME.equals(source.getName())
+                && SpecialCardAi.GiftOfDoom.isOwnHandCast(ai, sa)) {
+            // Judged whole in SpecialCardAi.GiftOfDoom: the stock Pump preference has no floor
+            // (Indestructible is "useful" on a 1/1 token, isUsefulAttachKeyword) and writes
+            // ATTACHED_THIS_TURN on a decline. Only the shape the G3 readmit lets through (our
+            // hand, face up, not a Play effect or a copy) comes here; every other probe of the
+            // card, Nathan Drake's theft through doTriggerNoCost included, is the stock path.
+            return SpecialCardAi.GiftOfDoom.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {
