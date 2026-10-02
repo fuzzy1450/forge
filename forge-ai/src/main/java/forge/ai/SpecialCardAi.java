@@ -12190,6 +12190,86 @@ public class SpecialCardAi {
         }
     }
 
+    // RemoveDeck filter dispatcher (dead-card batch 2, shared generalization G3)
+    // AiController.getSpellAbilityToPlay drops every spell ability whose host carries
+    // AI:RemoveDeck:All (ComputerUtilCard.isCardRemAIDeck) before any handler runs, and keeps every
+    // other non-land ability. Eight batch-2 rows need a card-specific exception at that one line,
+    // so the line asks this class instead of carrying eight conditions:
+    // - readmit(ai, sa) is asked only for a hinted host. True puts that one ability back on the
+    //   list. The card keeps its hint, so the -10 sort (ComputerUtilAbility.saEvaluator) and every
+    //   other isCardRemAIDeck reader (steal, copy, clone and tutor pickers) still refuse it.
+    // - keepOff(ai, sa) is asked only for an unhinted host. True takes that one ability off the
+    //   list, as a hint would, outside the window its row casts it in.
+    // Both switch on the paper name, host.getRules().getName(): it is the rules isCardRemAIDeck
+    // reads, and a face-down host's getName() is "". A card no case names answers false from both,
+    // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
+    // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
+    // to that class: readmit for rows 36, 41, 60, 63, 82, 89 and 104, keepOff for row 68. A case
+    // must draw no random number and hold nothing, so that its false is exactly the old filter.
+    // Frozen once accepted: a row that needs other semantics keeps a private copy.
+    public static class RemoveDeckFilter {
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final String name = paperName(sa);
+            if (name == null) {
+                return false;
+            }
+            switch (name) {
+                // one case per G3 readmit row, added by that row's own commit
+                default:
+                    return false;
+            }
+        }
+
+        public static boolean keepOff(final Player ai, final SpellAbility sa) {
+            final String name = paperName(sa);
+            if (name == null) {
+                return false;
+            }
+            switch (name) {
+                // one case per G3 keep-off row, added by that row's own commit
+                default:
+                    return false;
+            }
+        }
+
+        // The morph family's held-mana precondition (rows 104, 41, 89 and 63): true when no
+        // HELD_MANA_SOURCES_* reservation is live that ComputerUtilMana.isManaSourceReserved would
+        // honour now. A re-admitted ability that then needs a reserved source reaches
+        // ComputerUtilCost.canPayCost, whose test payment draws MyRandom per source it tries and
+        // fails: a held game re-rolled with no cast (batch 1's W12 and row 159). The test is per
+        // set, not per source, so any live reservation refuses; a refusal only waits.
+        // - held for the next spell: honoured in every phase;
+        // - held for a block trick (ours or the enemy's): honoured outside declare blockers and
+        //   cleanup, and checked here in both windows (the B3 amendment of rows 104, 41, 89 and 63:
+        //   the first sketch skipped it at sorcery speed, but a main phase honours it);
+        // - held for Main 2: honoured outside Main 2 and cleanup (exempted here in Main 2 only).
+        // sorcerySpeed names the caller's window: true for a cast in our own main phase (a
+        // face-down cast, Gift of Doom's Aura), false for an instant-speed flip. Since B3 both
+        // windows test the same sets, so it does not change the answer; every reviewed call site
+        // passes it. Reads AiCardMemory only: no random number, nothing the game can see.
+        public static boolean noManaHeld(final Player ai, final boolean sorcerySpeed) {
+            if (!AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return false;
+            }
+            if (!AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || !AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)) {
+                return false;
+            }
+            return ai.getGame().getPhaseHandler().is(PhaseType.MAIN2)
+                    || AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+
+        // the name every face of the host answers to; null for a host with no paper card
+        private static String paperName(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return null;
+            }
+            final forge.card.CardRules rules = host.getRules();
+            return rules == null ? null : rules.getName();
+        }
+    }
+
     // Reverse the Sands
     //
     // LifeSetAi refuses every Redistribute SetLife outright; this is the cast

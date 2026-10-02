@@ -1578,7 +1578,13 @@ public class AiController {
         saList.removeIf(spellAbility -> {
             // don't include removedAI cards if somehow the AI can play the ability or gain control of unsupported card
             // TODO allow when experimental profile?
-            return spellAbility.isLandAbility() || (spellAbility.getHostCard() != null && ComputerUtilCard.isCardRemAIDeck(spellAbility.getHostCard()));
+            // The RemoveDeck dispatcher (SpecialCardAi.RemoveDeckFilter): a hinted card's own row may
+            // re-admit one of its abilities, an unhinted card's own row may keep one off outside its
+            // cast window. Both answer false for every card no row names: the filter as it was.
+            return spellAbility.isLandAbility() || (spellAbility.getHostCard() != null
+                    && (ComputerUtilCard.isCardRemAIDeck(spellAbility.getHostCard())
+                            ? !SpecialCardAi.RemoveDeckFilter.readmit(player, spellAbility)
+                            : SpecialCardAi.RemoveDeckFilter.keepOff(player, spellAbility)));
         });
         //removed skipped SA
         skipped = saList.stream().filter(SpellAbility::isSkip).collect(Collectors.toList());
