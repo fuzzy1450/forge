@@ -26,6 +26,16 @@ public class DigAi extends SpellAbilityAi {
      */
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        if (SpecialCardAi.CommuneWithLava.handles(sa)) {
+            // AI:RemoveDeck:All stripped the card before any handler ran on a normal pass, so A drew
+            // nothing for it there (ManaAi's ritual scan judged a no-cost copy, which setMaxXValue
+            // answered with 0 before any test payment: an RNG-free CantPlayAi). The evaluator draws
+            // no random number on any decline before its last step, and is routed before
+            // choosePreferredDefenderPlayer, which rolls with two or more opponents.
+            // doTriggerNoCost (Play-effect thefts, free casts, copies) keeps the stock path, and
+            // every other Dig card takes exactly the path it took before.
+            return SpecialCardAi.CommuneWithLava.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         Player opp = AiAttackController.choosePreferredDefenderPlayer(ai);
         final Card host = sa.getHostCard();

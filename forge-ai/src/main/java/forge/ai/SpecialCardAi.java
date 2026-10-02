@@ -2793,6 +2793,248 @@ public class SpecialCardAi {
         }
     }
 
+    // Commune with Lava
+    // "Exile the top X cards of your library. Until the end of your next turn, you may play those
+    // cards." ({X}{R}{R} instant.) AI:RemoveDeck:All stripped it from the playable list before any
+    // handler ran; behind the hint DigAi announced the largest payable X through setMaxXValue
+    // (Treasures included, MyRandom drawn on every test payment) and accepted any X >= 1, with no
+    // library guard (its decking check needs DestinationZone2). Routed from the first statement of
+    // DigAi.checkApiLogic by name: the source's, or the host's for a face-down exile cast (Gonti),
+    // whose source name reads "". The value is the printed one: X cards we can play through the
+    // end of our next turn. So it is cast only in the end step of the player whose turn comes
+    // right before ours, with nothing on the stack: mana that would empty unused pays for it, and
+    // the whole next turn - every land and rock untapped again, plus the land drop - is left for
+    // the exiled cards. X spends only mana that untaps: one-shot sources (Treasure, Gold, Lotus
+    // Petal - any mana ability whose cost is not a reusable resource) are kept for that turn.
+    // Floor: X >= MIN_X, so the card replaces itself and nets one. Cap: every resolution one cast
+    // can make (resolutions(): the spell, plus our cast triggers that copy it, each multiplied by
+    // CopySpell replacements - Kalamax, Swarm Intelligence, Melek, Twinning Staff) exiles at most
+    // half of the library above LIBRARY_RESERVE, so a fully copied cast never decks us. A copy is
+    // never judged here and its X is never touched (it keeps the original's). Mana, RNG-free:
+    // floating mana plus, per untapped source not held for another spell or a block, its best
+    // reusable mana ability, a choice counting one mana; two of those sources (or floating red)
+    // must make red for this spell, a Combo read through its own letters. RNG parity: A never
+    // evaluated the card with a draw, so every veto is RNG-free and runs first, cheapest first;
+    // only the last step, setMaxXValue's exact test payments (ComputerUtilMana.
+    // isManaSourceReserved), draws, and it runs only once the tight count says the floor is
+    // payable. Only a WillPlay leaves X announced.
+    public static class CommuneWithLava {
+        public static final String NAME = "Commune with Lava";
+        public static final int MIN_X = 2;
+        private static final int LIBRARY_RESERVE = 3;
+
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub) {
+                return false;
+            }
+            if (NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                return true;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && NAME.equals(host.getName()); // face-down exile: source name is ""
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || sa.isCopied()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // never touch a copy's X
+            }
+            sa.setXManaCostPaid(null); // an X a declined payment (CantAfford after WillPlay) left behind
+            if (!sa.costHasManaX()) {
+                // ManaAi's ritual scan judges a no-cost copy: X would be 0 (RNG-free, as in A)
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.getNextTurn() != ai || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // AtOppEOT, nothing to answer
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            final int n = library.size() - (library.contains(host) ? 1 : 0); // Melek casts it from the top
+            final int xCap = (n - LIBRARY_RESERVE) / (2 * resolutions(ai)); // all resolutions <= half the library
+            if (xCap < MIN_X) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (redSources(ai, sa) < 2) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int floorCost = costCmc(ai, sa, MIN_X); // {MIN_X}{R}{R} after taxes and reductions
+            final int reusable = reusableMana(ai);
+            if (floorCost > reusable) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int spare = reusable - (floorCost - MIN_X); // the X that mana which untaps can pay
+            // Every RNG-free veto has passed; now the exact payable X.
+            int x = ComputerUtilCost.setMaxXValue(sa, ai, false);
+            x = Math.min(x, Math.min(spare, xCap));
+            if (x < MIN_X) {
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            sa.setXManaCostPaid(x);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Resolutions one cast can make, from our battlefield, RNG-free and conservative (an
+        // over-count only lowers X): the spell, plus one copy event per cast trigger whose ability
+        // copies a spell (Kalamax, Swarm Intelligence, Melek; their conditions ignored), each
+        // event making one more copy per CopySpell replacement (Twinning Staff). The trigger's
+        // ability is read without building it (CloneLegion.isHarmfulChain's rule: building one
+        // allocates a SpellAbility id, and ids feed SpellAbility.hashCode). Activated and ETB
+        // copies (Twinning Staff's {7}, Dualcaster Mage) are not counted: they need mana this cast
+        // has spent, and the half-library margin absorbs one.
+        private static int resolutions(final Player ai) {
+            int events = 0;
+            int extra = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if ((t.getMode() == TriggerType.SpellCast || t.getMode() == TriggerType.SpellCastOrCopy)
+                            && copiesSpell(t)) {
+                        events++;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.CopySpell) {
+                        extra++;
+                    }
+                }
+            }
+            return 1 + events * (1 + extra);
+        }
+
+        private static boolean copiesSpell(final Trigger t) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                return built.getApi() == ApiType.CopySpellAbility;
+            }
+            if (!t.hasParam("Execute")) {
+                return false;
+            }
+            final String text = t.getSVar(t.getParam("Execute"));
+            if (text.isEmpty()) {
+                return false;
+            }
+            final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+            String api = params.get("DB");
+            if (api == null) {
+                api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+            }
+            return ApiType.CopySpellAbility.name().equals(api);
+        }
+
+        // The spell's mana value at X = k after CostAdjustment: ComputerUtilMana.calculateManaCost
+        // in test mode (the G1 ceiling's call: no MyRandom, the SA's own X untouched).
+        private static int costCmc(final Player ai, final SpellAbility sa, final int k) {
+            return ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, k, false).getConvertedManaCost();
+        }
+
+        // Untapped mana that untaps again, RNG-free: floating mana, plus, per battlefield source
+        // not held (isHeld), its best mana ability that canPlay() and whose cost is a reusable
+        // resource (Cost.isReusuableResource: no sacrifice, so no Treasure, Gold or Lotus Petal),
+        // worth one mana times Amount for a choice (Combo, Any, Chosen, reflected or empty) and
+        // Amount times its symbols otherwise, net of the ability's own mana cost (a Signet or a
+        // filter land nets one). Tighter than getAvailableManaEstimate, which counts the words of
+        // Produced$ (Command Tower, Arcane Signet and Commander's Sphere 2, a Talisman 3).
+        private static int reusableMana(final Player ai) {
+            int total = ai.getManaPool().totalMana();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || !ma.getPayCosts().isReusuableResource()) {
+                        continue;
+                    }
+                    final String produced = ma.getParamOrDefault("Produced", "").trim();
+                    final boolean choice = produced.isEmpty() || produced.startsWith("Combo")
+                            || produced.contains("Any") || produced.contains("Chosen");
+                    final int each = choice ? 1 : produced.split(" ").length;
+                    final CostPartMana cm = ma.getPayCosts().getCostMana();
+                    final int paid = cm == null ? 0 : cm.getMana().getCMC();
+                    final int net = each * AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma)
+                            - paid;
+                    best = Math.max(best, net);
+                }
+                total += best;
+            }
+            return total;
+        }
+
+        // Floating red plus the sources that can make red for this spell, one per source: an
+        // untapped source not held, through a reusable ability (Treasures and other one-shot
+        // sources are kept for the next turn) whose restrictions allow sa (the row-77 lesson). A
+        // Combo reads its own letters (getComboColors: ColorIdentity through the commander's
+        // identity, Chosen through the chosen colour), Any is every colour, Chosen is the chosen
+        // colour, a reflected production is none: never "any Combo is red" (G2's colour rule).
+        private static int redSources(final Player ai, final SpellAbility sa) {
+            int red = ai.getManaPool().getAmountOfColor(MagicColor.RED);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (red >= 2) {
+                    break;
+                }
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || !ma.getPayCosts().isReusuableResource() || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    if (makesRed(mp, ma)) {
+                        red++;
+                        break;
+                    }
+                }
+            }
+            return red;
+        }
+
+        private static boolean makesRed(final forge.game.spellability.AbilityManaPart mp, final SpellAbility ma) {
+            if (mp.isAnyMana()) {
+                return true;
+            }
+            final String produced = mp.getOrigProduced().trim();
+            final String letters;
+            if (mp.isComboMana()) {
+                letters = mp.getComboColors(ma);
+            } else if (produced.contains("Chosen")) {
+                letters = produced.replace("Chosen", mp.getChosenColor(ma));
+            } else {
+                letters = produced;
+            }
+            for (final String t : letters.split(" ")) {
+                if ("R".equals(t)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The sources ComputerUtilMana.isManaSourceReserved refuses in this phase: held for the
+        // next spell; held for a block trick outside declare blockers and cleanup; held for Main 2
+        // outside Main 2 and cleanup (every AI profile reserves at 100%). A private copy of
+        // HonestMana's rule (G2 is frozen and keeps it private).
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+    }
+
     // Cosmic Intervention
     // "If a permanent you control would be put into a graveyard from the battlefield this
     // turn, exile it instead. Return it to the battlefield under its owner's control at the
