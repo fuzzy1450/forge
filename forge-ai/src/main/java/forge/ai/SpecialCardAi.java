@@ -1758,9 +1758,12 @@ public class SpecialCardAi {
     // priority and refused it without drawing RNG, and no decline here draws any either.
     // One window, never proactive: an OPPONENT's spell or ability on top of the stack that
     // destroys, exiles, steals, -X/-X's or deals lethal damage to nonland permanents we control
-    // (ComputerUtil.predictThreatenedObjects, null saviour, top only). Only those are targeted:
-    // phasing them out answers every such route (a sweep finds nothing, a targeted spell
-    // fizzles), they phase back in at our untap step, and nothing the threat spares is given up.
+    // (ComputerUtil.predictThreatenedObjects, null saviour, top only), or sacrifices or sweeps
+    // them off the battlefield by a route that predictor has no branch for (sweepVictims: an
+    // unconditional SacrificeAll, a ChangeZoneAll to exile, graveyard or library). Only those
+    // are targeted: phasing them out answers every such route (a sweep finds nothing, a
+    // targeted spell fizzles), they phase back in at our untap step, and nothing the threat
+    // spares is given up.
     // Divided damage is re-checked per target against its own allocation (the predictor applies
     // the whole NumDmg to every target), so a target its share does not kill is not phased out.
     // Floor (Cosmic Intervention's bars, plus Brokers Confluence's commander and planeswalker):
@@ -1825,6 +1828,8 @@ public class SpecialCardAi {
                 }
             }
             doomed.removeAll(survivesDividedDamage(threat));
+            // not in mayAfford's convoke count: the chooser's add-back reads only the predictor
+            doomed.addAll(sweepVictims(ai, threat));
             final CardCollection saved = new CardCollection();
             for (final Card c : doomed) {
                 if (c.isInPlay() && ai.equals(c.getController()) && !c.isLand()
@@ -1898,6 +1903,45 @@ public class SpecialCardAi {
                     if (dmg == null || ComputerUtilCombat.predictDamageTo(c, dmg, cur.getHostCard(), false)
                             < ComputerUtilCombat.getDamageToKill(c, false)) {
                         out.add(c);
+                    }
+                }
+            }
+            return out;
+        }
+
+        // Sweeps the predictor has no branch for, filtered as their effects filter them, over our
+        // own battlefield. An unconditional SacrificeAll (Cosmic Intervention's sacrificeAllVictims
+        // form, mirrored privately: the battlefield by ValidCards, then canBeSacrificedBy). A
+        // ChangeZoneAll from the battlefield to exile, graveyard or library (Urza's Ruinous Blast,
+        // Sunfall: the list ChangeZoneAllEffect.resolve builds, ChangeType over the origin) that
+        // is untargeted or targets us. A ChangeZoneAll to hand (Evacuation) is left out: a bounce
+        // loses no nontoken card, so the floor's card count would overstate it. Defined,
+        // Controller, Optional and TypeLimit variants are skipped: under-count only. Every card it
+        // returns is ours and is filtered nonland and targetable before it is targeted.
+        private static final Set<String> SWEEP_DESTINATIONS = Set.of("Exile", "Graveyard", "Library");
+
+        private static CardCollection sweepVictims(final Player ai, final SpellAbility threat) {
+            final CardCollection out = new CardCollection();
+            final CardCollectionView ours = ai.getCardsIn(ZoneType.Battlefield);
+            for (SpellAbility cur = threat; cur != null; cur = cur.getSubAbility()) {
+                final ApiType api = cur.getApi();
+                if (api == ApiType.SacrificeAll && !cur.hasParam("Defined") && !cur.hasParam("Controller")) {
+                    final CardCollectionView list = cur.hasParam("ValidCards")
+                            ? AbilityUtils.filterListByType(ours, cur.getParam("ValidCards"), cur) : ours;
+                    for (final Card c : list) {
+                        if (c.canBeSacrificedBy(cur, true)) {
+                            out.add(c);
+                        }
+                    }
+                } else if (api == ApiType.ChangeZoneAll && cur.hasParam("ChangeType")
+                        && cur.getParamOrDefault("Origin", "").contains("Battlefield")
+                        && SWEEP_DESTINATIONS.contains(cur.getParamOrDefault("Destination", ""))
+                        && !cur.hasParam("Optional") && !cur.hasParam("TypeLimit")) {
+                    final boolean all = (!cur.usesTargeting() && !cur.hasParam("Defined"))
+                            || cur.hasParam("UseAllOriginZones");
+                    final boolean us = cur.usesTargeting() && cur.getTargets().contains(ai);
+                    if (all || us) {
+                        out.addAll(AbilityUtils.filterListByType(ours, cur.getParam("ChangeType"), cur));
                     }
                 }
             }
