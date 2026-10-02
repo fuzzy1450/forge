@@ -21,6 +21,15 @@ import java.util.function.Predicate;
 public class PhasesAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision canPlay(Player aiPlayer, SpellAbility sa) {
+        // Clever Concealment: phasesPrefTargeting below is an unconditional stub, so every targeted
+        // Phases spell was refused here and the card was never cast. While the card is in hand a
+        // save window is judged instead (SpecialCardAi.CleverConcealment); the graveyard, exile
+        // and library canPlaySa probes keep the stub, and effect casts and thefts keep
+        // doTriggerNoCost. Draws no RNG on a decline, as the stub drew none.
+        if (SpecialCardAi.CleverConcealment.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa.usesTargeting() && sa.getHostCard() != null && sa.getHostCard().isInZone(ZoneType.Hand)) {
+            return SpecialCardAi.CleverConcealment.consider(aiPlayer, sa);
+        }
         // This still needs to be fleshed out
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         final Card source = sa.getHostCard();

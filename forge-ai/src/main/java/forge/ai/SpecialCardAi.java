@@ -1748,6 +1748,163 @@ public class SpecialCardAi {
         }
     }
 
+    // Clever Concealment
+    // "Convoke. Any number of target nonland permanents you control phase out. (Treat them and
+    // anything attached to them as though they don't exist until your next turn.)" (printed text =
+    // Oracle = script.) Reached from the name gate at the top of PhasesAi.canPlay, only while the
+    // card is in hand: the cast from hand and the canPlaySa probes over hand cards. Effect casts
+    // and thefts keep PhasesAi.doTriggerNoCost, and the graveyard, exile and library probes keep
+    // the stock phasesPrefTargeting, a stub that returns false: A judged the card at every
+    // priority and refused it without drawing RNG, and no decline here draws any either.
+    // One window, never proactive: an OPPONENT's spell or ability on top of the stack that
+    // destroys, exiles, steals, -X/-X's or deals lethal damage to nonland permanents we control
+    // (ComputerUtil.predictThreatenedObjects, null saviour, top only). Only those are targeted:
+    // phasing them out answers every such route (a sweep finds nothing, a targeted spell
+    // fizzles), they phase back in at our untap step, and nothing the threat spares is given up.
+    // Divided damage is re-checked per target against its own allocation (the predictor applies
+    // the whole NumDmg to every target), so a target its share does not kill is not phased out.
+    // Floor (Cosmic Intervention's bars, plus Brokers Confluence's commander and planeswalker):
+    // our commander, a planeswalker, a creature at CreatureEvaluator 200+, a noncreature at CMC
+    // 4+, two nontoken permanents, or three counting creature tokens (a phased-out token
+    // survives). A noncreature token (a Treasure) never counts toward the three, though it is
+    // still targeted once the floor passes on other grounds. Declines a threat chain with a
+    // Condition* link (the predictor counts kicker / threshold / revolt branches as happening) or
+    // a LoseControl link (a temporary steal ends by itself), as Synthetic Destiny does.
+    // Affordability, RNG-free and last: the printed cost against HonestMana (G2, held sources
+    // skipped, restrictions read on this sa) plus the creatures the convoke chooser
+    // (PlayerControllerAi.chooseCardsForConvokeOrImprovise) could tap, in total and in white.
+    // None on our own turn before attackers (the chooser convokes nothing there); where the
+    // chooser holds likely blockers back (the opponent's turn before blockers, our turn after
+    // combat begins) only the threatened ones, a lower bound of what it adds back that never
+    // counts a held blocker; elsewhere every untapped creature without a mana ability. Never
+    // getAvailableManaEstimate (it counts the words of Produced$), and never
+    // calculateManaCost(test): its CostAdjustment.adjust runs that convoke chooser, whose
+    // getLikelyBlockers reaches AiBlockController's MyRandom. A WillPlay goes on to canPayCost,
+    // whose test payment draws; that is the card's own decision.
+    public static class CleverConcealment {
+        public static final String NAME = "Clever Concealment";
+        public static final int MIN_CREATURE_VALUE = 200;   // ~ a non-token 3/3 with an ability
+        public static final int MIN_NONCREATURE_CMC = 4;    // real artifacts and enchantments
+        public static final int MIN_NONTOKEN = 2;           // two cards saved: card advantage
+        public static final int MIN_WITH_TOKENS = 3;        // a creature-token board survives the wipe
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (!sa.getTargets().isEmpty()) {
+                sa.resetTargets(); // A never set targets: drop any left by an earlier pass
+            }
+            final Game game = ai.getGame();
+            // cheapest precondition first: almost every priority has an empty stack (row 152)
+            if (game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility top = game.getStack().peekAbility();
+            if (top == null || top.getActivatingPlayer() == null || !top.getActivatingPlayer().isOpponentOf(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // PhasesAi overrides canPlay, so mirror the base restriction check (Synthetic Destiny)
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final SpellAbility threat = top instanceof WrappedAbility w ? w.getWrappedAbility() : top;
+            for (SpellAbility s = threat; s != null; s = s.getSubAbility()) {
+                if (s.hasParam("LoseControl")) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // the steal ends by itself
+                }
+                for (final String k : s.getMapParams().keySet()) {
+                    if (k.startsWith("Condition")) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // the predictor ignores it
+                    }
+                }
+            }
+
+            final List<GameObject> threatened = ComputerUtil.predictThreatenedObjects(ai, null, true);
+            final CardCollection doomed = new CardCollection();
+            for (final GameObject o : threatened) {
+                if (o instanceof Card c) {
+                    doomed.add(c);
+                }
+            }
+            doomed.removeAll(survivesDividedDamage(threat));
+            final CardCollection saved = new CardCollection();
+            for (final Card c : doomed) {
+                if (c.isInPlay() && ai.equals(c.getController()) && !c.isLand()
+                        && !saved.contains(c) && sa.canTarget(c)) {
+                    saved.add(c);
+                }
+            }
+            if (!passesFloor(saved)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!mayAfford(ai, sa, threatened)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            for (final Card c : saved) {
+                sa.getTargets().add(c);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static boolean passesFloor(final CardCollection saved) {
+            int nontoken = 0;
+            int creatureTokens = 0;
+            for (final Card c : saved) {
+                if (c.isCommander() || c.isPlaneswalker()
+                        || (c.isCreature() ? ComputerUtilCard.evaluateCreature(c) >= MIN_CREATURE_VALUE
+                                           : c.getCMC() >= MIN_NONCREATURE_CMC)) {
+                    return true;
+                }
+                if (!c.isToken()) {
+                    nontoken++;
+                } else if (c.isCreature()) {
+                    creatureTokens++;
+                }
+            }
+            return nontoken >= MIN_NONTOKEN || nontoken + creatureTokens >= MIN_WITH_TOKENS;
+        }
+
+        // An RNG-free ceiling: false only when the spell cannot be paid even with every counted
+        // source and convoker (see the class comment for which creatures count in which phase).
+        private static boolean mayAfford(final Player ai, final SpellAbility sa, final List<GameObject> threatened) {
+            final ManaCost cost = sa.getPayCosts() == null ? ManaCost.ZERO : sa.getPayCosts().getTotalMana();
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            final boolean ourTurn = ph.isPlayerTurn(ai);
+            CardCollectionView convokers = CardCollection.EMPTY;
+            if (!(ourTurn && ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS))) {
+                convokers = CardLists.filter(ai.getCreaturesInPlay(), c -> c.canTap() && c.getManaAbilities().isEmpty());
+                if ((ourTurn && ph.getPhase().isAfter(PhaseType.COMBAT_BEGIN))
+                        || (!ourTurn && ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS))) {
+                    convokers = CardLists.filter(convokers, threatened::contains);
+                }
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int whiteConvokers = CardLists.count(convokers, c -> c.getColor().hasWhite());
+            return mana.total() + convokers.size() >= cost.getCMC()
+                    && mana.colour(MagicColor.WHITE) + whiteConvokers
+                            >= cost.getShardCount(forge.card.mana.ManaCostShard.WHITE);
+        }
+
+        // Targets of a DividedAsYouChoose DealDamage link whose own allocation does not kill them
+        // (a missing allocation counts as no damage). A private copy of Cosmic Intervention's
+        // survivesDividedDamage (an accepted card's predicate is never called or refactored).
+        // Removing them can only lower the count.
+        private static CardCollection survivesDividedDamage(final SpellAbility threat) {
+            final CardCollection out = new CardCollection();
+            for (SpellAbility cur = threat; cur != null; cur = cur.getSubAbility()) {
+                if (cur.getApi() != ApiType.DealDamage || !cur.isDividedAsYouChoose()) {
+                    continue;
+                }
+                for (final Card c : cur.getTargets().getTargetCards()) {
+                    final Integer dmg = cur.getDividedValue(c);
+                    if (dmg == null || ComputerUtilCombat.predictDamageTo(c, dmg, cur.getHostCard(), false)
+                            < ComputerUtilCombat.getDamageToKill(c, false)) {
+                        out.add(c);
+                    }
+                }
+            }
+            return out;
+        }
+    }
+
     // Clone Legion
     // "For each creature target player controls, create a token that's a copy
     // of that creature." CopyPermanentAi's DuplicatePerms count reads
