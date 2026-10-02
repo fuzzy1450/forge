@@ -9676,6 +9676,76 @@ public class SpecialCardAi {
         }
     }
 
+    // Nahiri, the Lithomancer (dead-card batch 2, row 5; the commander of precon:Forged in Stone
+    // (C14))
+    // Its AI:RemoveDeck:All hint stripped every spell ability of the card at
+    // AiController.getSpellAbilityToPlay: the command-zone cast and, for a copy on the
+    // battlefield, all three loyalty abilities. Behind the hint the cast is the stock
+    // PermanentNoncreatureAi path that Freyalise and Teferi, the unhinted C14 planeswalker
+    // commanders, take and are cast through; the +2 is TokenAi's planeswalker WillPlay, the -2
+    // ChangeZoneAi's hidden-origin fetch (refused with no Equipment card in hand or graveyard),
+    // the -10 TokenAi. Two gates, both RNG-free:
+    // - considerCast, from PermanentAi.checkApiLogic: our own cast from hand or the command zone
+    //   must pass CommanderCastCeiling (G1: calculateManaCost's adjusted cost, commander tax and
+    //   cost statics such as Pearl Medallion included, against HonestMana, G2) before
+    //   canPayCost's test payment draws MyRandom in isManaSourceReserved, so an unaffordable
+    //   window draws nothing. A Play-effect cast or another player's cast keeps A's stock path:
+    //   null.
+    // - chooseEquipment, from AttachAi.chooseSingleCard: the +2's "You may attach an Equipment
+    //   you control to it". Stock takes the cheapest Equipment on the battlefield
+    //   (attachGeneralAI -> chooseUnpreferred -> getWorstPermanentAI) whatever it is equipping,
+    //   and AttachAi.confirmAction always confirms, so every turn it would strip e.g. Swiftfoot
+    //   Boots off Sun Titan onto a summoning-sick 1/1. Here only an idle Equipment moves
+    //   (unattached, or on a creature we do not control), never a curse Equipment (an Attach
+    //   ability with IsCurse, such as Bloodthirsty Blade's goad), the highest mana value first
+    //   (the proxy for the equip cost the free attach saves); none: null, and the "may" is
+    //   declined (AttachEffect returns before its Optional confirm).
+    // Holds nothing; nothing outlives a decline.
+    public static class NahiriTheLithomancer {
+        public static final String NAME = "Nahiri, the Lithomancer";
+
+        // Our own cast, from hand or the command zone: CantAfford in a window the RNG-free
+        // ceiling calls unpayable. null = no opinion: the stock PermanentAi checks decide.
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (!sa.isSpell() || sa.isCastFromPlayEffect() || host == null || !ai.equals(host.getOwner())
+                    || !(host.isInZone(ZoneType.Hand) || host.isInZone(ZoneType.Command))) {
+                return null; // a theft or a Play-effect cast keeps A's stock evaluation
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return null;
+        }
+
+        // [+2]'s attach: the Equipment to move onto the new Kor Soldier (params "Target"), or
+        // null to decline the "may".
+        public static Card chooseEquipment(final Player ai, final SpellAbility sa,
+                final Iterable<Card> options, final Map<String, Object> params) {
+            final Object target = params == null ? null : params.get("Target");
+            Card best = null;
+            for (final Card c : options) {
+                if (!c.isEquipment() || !ai.equals(c.getController())) {
+                    continue;
+                }
+                final Card holder = c.getEquipping();
+                if (holder != null && holder.isCreature() && ai.equals(holder.getController())) {
+                    continue; // already working on one of our creatures
+                }
+                if (c.getSpellAbilities().anyMatch(s -> s.getApi() == ApiType.Attach && s.isCurse())) {
+                    continue; // a curse Equipment would turn on its own bearer
+                }
+                if (target instanceof Card tok && !tok.canBeAttached(c, sa)) {
+                    continue;
+                }
+                if (best == null || c.getCMC() > best.getCMC()) {
+                    best = c;
+                }
+            }
+            return best; // null: AttachEffect returns, the attach is skipped
+        }
+    }
+
     // Nanogene Conversion
     // One window: our precombat main phase with the stack empty. Every other
     // creature (both sides) becomes a nonlegendary copy of the target until end of

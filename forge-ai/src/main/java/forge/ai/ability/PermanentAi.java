@@ -84,6 +84,15 @@ public class PermanentAi extends SpellAbilityAi {
             }
         }
 
+        if (SpecialCardAi.NahiriTheLithomancer.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // The RNG-free commander cast ceiling (G1) for our own cast, answered before
+            // canPayCost's MyRandom probe; null = the stock checks below decide.
+            final AiAbilityDecision nahiri = SpecialCardAi.NahiriTheLithomancer.considerCast(ai, sa);
+            if (nahiri != null) {
+                return nahiri;
+            }
+        }
+
         ManaCost mana = sa.getPayCosts().getTotalMana();
         if (mana.countX() > 0) {
             final int xPay = ComputerUtilCost.setMaxXValue(sa, ai, false);

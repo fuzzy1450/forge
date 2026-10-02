@@ -1817,6 +1817,14 @@ public class AttachAi extends SpellAbilityAi {
 
     @Override
     protected Card chooseSingleCard(Player ai, SpellAbility sa, Iterable<Card> options, boolean isOptional, Player targetedPlayer, Map<String, Object> params) {
+        if (SpecialCardAi.NahiriTheLithomancer.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa.hasParam("Choices") && (params == null || !params.containsKey("Attachments"))) {
+            // Nahiri, the Lithomancer's +2: "You may attach an Equipment you control to it" (the
+            // new Kor Soldier). Only AttachEffect's Equipment pick (params "Target"), never the
+            // attach-target pick that follows (params "Attachments"). RNG-free; reached only when
+            // her +2 resolves, i.e. only in games where she was cast.
+            return SpecialCardAi.NahiriTheLithomancer.chooseEquipment(ai, sa, options, params);
+        }
         return attachGeneralAI(ai, sa, (List<Card>)options, !isOptional, sa.getHostCard(), sa.getParam("AILogic"));
     }
 
