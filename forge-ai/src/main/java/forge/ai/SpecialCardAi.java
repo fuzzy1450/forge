@@ -15624,6 +15624,162 @@ public class SpecialCardAi {
         }
     }
 
+    // Winter, Cynical Opportunist (commander of precon:Death Toll (DSC))
+    // "Delirium -- At the beginning of your end step, you may exile any number of cards from
+    // your graveyard with four or more card types among them. If you do, put a permanent card
+    // from among them onto the battlefield with a finality counter on it."
+    // AI:RemoveDeck:All kept it in the command zone for 5,505 games; behind the hint the cast is
+    // a plain 2/5 deathtouch. The hint's reason is this trigger: ChangeZoneEffect's one-at-a-time
+    // loop runs to changeNum = the whole graveyard and stops only on a null pick, and the stock
+    // own-card exile branch (getWorstAI, `c = first`) never returns null, so the AI exiled its
+    // WHOLE graveyard every end step for one permanent. Plan instead: the best permanent card
+    // worth returning (MIN_PICK_VALUE, Path of the Schemer's line; not a land, not a Room - one
+    // put onto the battlefield uncast enters with both doors locked -, not a legend we control,
+    // not AI:RemoveDeck, not a lose-on-entering card, and not a card whose own NeedsToPlay floor
+    // fails - Deadbridge Chant's mill ten on a thin library), plus the fewest cheapest-to-lose
+    // cards that bring the set to four DISTINCT card types (the printed rule; the engine's
+    // per-card sum at ChangeZoneEffect:1239 is looser, so the plan always passes it), and only
+    // while those fillers are worth less than the pick. No filler we could return is worth as
+    // much as the pick, so the return lands on the pick. Stateless: picks leave fetchList but
+    // stay in the graveyard until the move, so every call rebuilds the same plan and returns its
+    // first card still offered, then null. Reads game state only: no random draw.
+    public static class WinterCynicalOpportunist {
+        public static final int MIN_PICK_VALUE = 200;  // PathOfTheSchemer's "real body" line
+        static final int TYPES_NEEDED = 4;             // "four or more card types among them"
+        static final int GRAVEYARD_BONUS = 100;        // a filler that still acts from the graveyard
+
+        // CalamityOfTheTitans' scale: creatures by evaluateCreature, other permanents 100 + 25/MV
+        static int value(final Card c) {
+            return c.isCreature() ? ComputerUtilCard.evaluateCreature(c) : 100 + 25 * c.getCMC();
+        }
+
+        static boolean returnable(final Player ai, final Card c) {
+            return c.getType().isPermanent() && !c.isLand()
+                    // a Room put onto the battlefield uncast enters with both doors locked
+                    // (GameAction:573 unlocks only a cast Room); in the graveyard its combined
+                    // MV (7 for Polluted Cistern // Dim Oubliette) made it the top pick at 275
+                    && !c.isRoom()
+                    && !(c.getType().isLegendary() && ai.isCardInPlay(c.getName()))
+                    && !ComputerUtilCard.isCardRemAIDeck(c)
+                    && !PathOfTheSchemer.losesOnEntering(c)
+                    // the card's own cast floor - Deadbridge Chant (NeedsToPlayVar Y GE15)
+                    // mills ten on entering and would deck a thin library. sa = null on purpose:
+                    // the card's SVars, not Winter's X, must resolve the comparison.
+                    && ComputerUtilCard.checkNeedsToPlayReqs(c, null) == AiPlayDecision.WillPlay;
+        }
+
+        // what exiling a filler costs: a land nothing, a spell 25/MV, a permanent its value,
+        // plus a bonus for a card that still acts from the graveyard
+        static int keep(final Card c) {
+            int v = c.isLand() && !c.isCreature() ? 0
+                    : c.getType().isPermanent() ? value(c) : 25 * c.getCMC();
+            if (actsFromGraveyard(c)) {
+                v += GRAVEYARD_BONUS;
+            }
+            return v;
+        }
+
+        static boolean actsFromGraveyard(final Card c) {
+            if (c.hasKeyword(Keyword.FLASHBACK) || c.hasKeyword(Keyword.RETRACE) || c.hasKeyword(Keyword.ESCAPE)
+                    || c.hasKeyword(Keyword.UNEARTH) || c.hasKeyword(Keyword.EMBALM) || c.hasKeyword(Keyword.ETERNALIZE)
+                    || c.hasKeyword(Keyword.SCAVENGE) || c.hasKeyword(Keyword.JUMP_START) || c.hasKeyword(Keyword.DISTURB)
+                    || c.hasKeyword(Keyword.AFTERMATH) || c.hasKeyword(Keyword.ENCORE)) {
+                return true;
+            }
+            for (final SpellAbility a : c.getSpellAbilities()) {
+                if (a.getRestrictions() != null && a.getRestrictions().getZone() == ZoneType.Graveyard) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /** The exile plan, its permanent first; null = exile nothing. */
+        static List<Card> plan(final Player ai, final SpellAbility sa) {
+            final CardCollectionView gy = AbilityUtils.filterListByType(ai.getCardsIn(ZoneType.Graveyard),
+                    sa.getParam("ChangeType"), sa);
+            Card pick = null;
+            int pickValue = MIN_PICK_VALUE - 1;
+            for (final Card c : gy) {
+                if (returnable(ai, c) && value(c) > pickValue) {
+                    pick = c;
+                    pickValue = value(c);
+                }
+            }
+            if (pick == null) {
+                return null;                      // nothing worth a graveyard's worth of cards
+            }
+            final List<Card> plan = Lists.newArrayList(pick);
+            final Set<CardType.CoreType> types = EnumSet.noneOf(CardType.CoreType.class);
+            types.addAll(pick.getType().getCoreTypes());
+            while (types.size() < TYPES_NEEDED) {
+                Card add = null;
+                int addKeep = Integer.MAX_VALUE, addFresh = 0;
+                for (final Card c : gy) {
+                    if (plan.contains(c) || (returnable(ai, c) && value(c) >= pickValue)) {
+                        continue;                 // never out-rank the pick at the return
+                    }
+                    int fresh = 0;
+                    for (final CardType.CoreType t : c.getType().getCoreTypes()) {
+                        if (!types.contains(t)) {
+                            fresh++;
+                        }
+                    }
+                    if (fresh == 0) {
+                        continue;
+                    }
+                    final int k = keep(c);
+                    if (k < addKeep || (k == addKeep && fresh > addFresh)) {
+                        add = c;
+                        addKeep = k;
+                        addFresh = fresh;
+                    }
+                }
+                if (add == null) {
+                    return null;                  // four types only by spending better cards
+                }
+                plan.add(add);
+                types.addAll(add.getType().getCoreTypes());
+            }
+            int spent = 0;
+            for (int i = 1; i < plan.size(); i++) {
+                spent += keep(plan.get(i));
+            }
+            if (spent >= pickValue) {
+                return null;                      // the fillers are worth more than the return
+            }
+            return plan;
+        }
+
+        public static Card considerCardToExile(final Player ai, final SpellAbility sa, final CardCollection fetchList) {
+            if (fetchList.isEmpty() || !ai.equals(sa.getActivatingPlayer())) {
+                return null;                      // someone else deciding our exile: exile nothing
+            }
+            final List<Card> plan = plan(ai, sa);
+            if (plan == null) {
+                return null;
+            }
+            for (final Card c : plan) {
+                if (fetchList.contains(c)) {
+                    return c;
+                }
+            }
+            return null;                          // plan exiled: end the search
+        }
+
+        public static Card chooseReturn(final Player ai, final CardCollection fetchList) {
+            Card pick = null;
+            int pickValue = Integer.MIN_VALUE;
+            for (final Card c : fetchList) {
+                if (returnable(ai, c) && value(c) > pickValue) {
+                    pick = c;
+                    pickValue = value(c);
+                }
+            }
+            return pick;
+        }
+    }
+
     // Witch's Mark
     // "You may discard a card. If you do, draw two cards. Create a Wicked Role token attached to
     // up to one target creature you control." Its Role sub targets through TokenAi.chkDrawback;

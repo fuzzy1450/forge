@@ -1731,6 +1731,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
                     AiCardMemory.forgetCard(decider, pick, AiCardMemory.MemorySet.THE_MASTER_BODY);
                 }
                 return pick;
+            } else if ("WinterCynicalOpportunist".equals(logic)) {
+                // Winter's delirium exile: a null pick ENDS this "any number" exile (not
+                // Mandatory, so confirmAction answers true), so the AI exiles its plan
+                // instead of its whole graveyard; the Mandatory return takes the plan's
+                // permanent. Neither draws a random number.
+                if (ZoneType.Exile.equals(destination)) {
+                    return SpecialCardAi.WinterCynicalOpportunist.considerCardToExile(decider, sa, fetchList);
+                }
+                final Card back = SpecialCardAi.WinterCynicalOpportunist.chooseReturn(decider, fetchList);
+                if (back != null) {
+                    return back;
+                }
+                // nothing our filter would return: the stock Battlefield pick below
             } else if ("Intuition".equals(logic)) {
                 if (!multipleCardsToChoose.isEmpty()) {
                     Card choice = multipleCardsToChoose.get(0);
