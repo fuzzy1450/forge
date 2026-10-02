@@ -47,6 +47,15 @@ public class PumpAllAi extends PumpAiBase {
             }
         }
         
+        if (SpecialCardAi.DauntlessEscort.NAME.equals(source.getName())
+                && ComputerUtilCost.isSacrificeSelfCost(abCost)
+                && !SpecialCardAi.DauntlessEscort.worthSacrificing(ai, sa)) {
+            // Dead-card batch 2, row 30: the sacrifice and value floors run before the
+            // shouldPumpCard loop below, which draws two random numbers per creature and
+            // can simulate an attack per creature. Draws none itself.
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
         final Player opp = ai.getStrongestOpponent();
 
         if (sa.usesTargeting()) {

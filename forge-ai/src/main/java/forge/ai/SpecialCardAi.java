@@ -3807,6 +3807,39 @@ public class SpecialCardAi {
         }
     }
 
+    // Dauntless Escort (Dead-card batch 2, row 30): "Sacrifice Dauntless Escort: Creatures you
+    // control gain indestructible until end of turn." on a 3/3 for {1}{G}{W}. AI:RemoveDeck:All
+    // was its only gate (Selfless Spirit carries the same ability unhinted). The stock PumpAllAi
+    // path loops shouldPumpCard over every creature we control -- two random numbers each, and an
+    // attack simulation per creature before our attack -- BEFORE willPayCosts applies the real
+    // floor, checkSacrificeCost(important): the Escort pays only when it is dying this turn anyway
+    // and not trading in combat. That floor runs first here. On a non-empty stack a threat on it
+    // must also hit another creature we control: a spot kill aimed at the Escort alone saves
+    // nothing, and fizzling Beast Within or Pongify costs us their token. The whole stack is read
+    // (indestructible lasts the turn, so in a pod a Murder on our commander under a Bolt on the
+    // Escort is still answered) -- the same scan predictCreatureWillDieThisTurn has just made for
+    // the floor; stock pumpAgainstRemoval then judges the top. Called only for the printed
+    // self-sacrifice ability. RNG-free on every decline; nothing is held or remembered.
+    public static class DauntlessEscort {
+        public static final String NAME = "Dauntless Escort";
+
+        public static boolean worthSacrificing(final Player ai, final SpellAbility sa) {
+            final Card source = sa.getHostCard();
+            if (!ComputerUtilCost.checkSacrificeCost(ai, sa.getPayCosts(), source, sa, true)) {
+                return false;
+            }
+            if (ai.getGame().getStack().isEmpty()) {
+                return true; // combat: the stock loop decides; shouldPumpCard skips the Escort itself
+            }
+            for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, sa)) {
+                if (o instanceof Card c && !c.equals(source) && c.isCreature() && ai.equals(c.getController())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Day of the Dragons - judged from its ETB exile trigger (ChangeZoneAllAi.doTriggerNoCost,
     // non-mandatory only): trade our creatures for the same number of 5/5 flying Dragons
     // only when that is a clear upgrade. Reads game state only: no token prototype (TokenDb
