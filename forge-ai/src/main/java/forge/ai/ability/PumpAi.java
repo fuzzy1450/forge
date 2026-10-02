@@ -552,7 +552,11 @@ public class PumpAi extends PumpAiBase {
         // Filter AI-specific targets if provided
         list = ComputerUtil.filterAITgts(sa, ai, list, true);
 
-        if (list.isEmpty() && (mandatory || ComputerUtil.activateForCost(sa, ai))) {
+        // Dead-card batch 2, row 32 (here and in the loop below): the optional for-cost fallback
+        // aims a curse at our own worst creature when no opposing creature is targetable;
+        // Phyrexian Plaguelord refuses that case. Mandatory paths are untouched. Draws nothing.
+        if (list.isEmpty() && (mandatory || (ComputerUtil.activateForCost(sa, ai)
+                && !SpecialCardAi.PhyrexianPlaguelord.vetoOwnBoardFallback(ai, sa)))) {
             return pumpMandatoryTarget(ai, sa);
         }
 
@@ -581,7 +585,8 @@ public class PumpAi extends PumpAiBase {
 
             if (list.isEmpty()) {
                 if (!sa.isMinTargetChosen() || sa.isZeroTargets()) {
-                    if (mandatory || ComputerUtil.activateForCost(sa, ai)) {
+                    if (mandatory || (ComputerUtil.activateForCost(sa, ai)
+                            && !SpecialCardAi.PhyrexianPlaguelord.vetoOwnBoardFallback(ai, sa))) {
                         return pumpMandatoryTarget(ai, sa);
                     }
 

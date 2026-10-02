@@ -12267,6 +12267,27 @@ public class SpecialCardAi {
         }
     }
 
+    // Phyrexian Plaguelord (Dead-card batch 2, row 32): a 4/4 for {3}{B}{B} with "{T}, Sacrifice
+    // Phyrexian Plaguelord: Target creature gets -4/-4 until end of turn." and "Sacrifice a
+    // creature: Target creature gets -1/-1 until end of turn." AI:RemoveDeck:All was its only gate.
+    // Both abilities take the stock PumpAi curse path: getCurseCreatures keeps only opposing
+    // creatures the -N/-N kills, and checkSacrificeCost pays only with a creature dying anyway.
+    // With nothing it can kill, PumpAi's optional for-cost fallback (pumpTgtAI ->
+    // pumpMandatoryTarget) aims the curse at our own worst creature whenever no opposing creature
+    // is targetable (none, shroud, hexproof, protection from black). Refuse that case only; an
+    // opposing target, killable or not, keeps the stock path. Judged on the activated ability's
+    // source name (original host first), so a granted copy is covered too. Called only from
+    // pumpTgtAI's two non-mandatory fallback sites. Draws no random numbers.
+    public static class PhyrexianPlaguelord {
+        public static final String NAME = "Phyrexian Plaguelord";
+
+        public static boolean vetoOwnBoardFallback(final Player ai, final SpellAbility sa) {
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    && sa.isCurse()
+                    && CardLists.filterControlledBy(CardUtil.getValidCardsToTarget(sa), ai.getOpponents()).isEmpty();
+        }
+    }
+
     // Phyrexian Revoker
     // As it enters, the AI names a card; activated abilities of sources with that
     // name can't be activated. The lock is symmetric and, unlike Pithing Needle's,
