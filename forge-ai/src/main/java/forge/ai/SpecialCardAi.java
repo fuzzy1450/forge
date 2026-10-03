@@ -13734,6 +13734,136 @@ public class SpecialCardAi {
         }
     }
 
+    // Netherborn Altar (dead-card batch 2, row 103; precon:Symbiotic Swarm (C20))
+    // "{T}, Put a soul counter on this artifact: Put your commander into your hand from the command
+    // zone. Then you lose 3 life for each soul counter on this artifact." Its only value is commander
+    // tax (a cast from the hand pays none, CostAdjustment adds it only for a cast from the command
+    // zone), and the counter goes on as a cost, so the n-th use costs 3n life. A cast from hand
+    // never raises commanderCast (MagicStack), so every use dodges the same tax.
+    //  - Cast (PermanentNoncreatureAi, paid casts only): once a commander of ours has been cast from
+    //    the command zone (its next return is taxed), at a life that can pay one activation and keep
+    //    LIFE_MARGIN, and only into a window real mana can pay for: the cost as the engine prices it
+    //    (test-mode calculateManaCost) against HonestMana (G2, held sources skipped), a B source
+    //    whose mana this spell may spend included.
+    //  - Activate (ChangeZoneAi): our own turn, empty stack, Main 2 (or Main 1 when the stock
+    //    creature AI would cast the commander there, castPermanentInMain1); exactly one commander of
+    //    ours in the command zone, already taxed, castable from hand right now (HonestMana for the
+    //    count, a colour-aware test payment last); after the loss life >= LIFE_MARGIN and safe from
+    //    the opponents' next unblocked swing; and either the altar is what makes the cast
+    //    affordable this turn, or the life paid is at most 1.5 per mana of tax dodged.
+    // Never getAvailableManaEstimate, which counts the words of Produced$ (this deck's Sandsteppe
+    // Citadel 4, Caves of Koilos 3, Command Tower, Arcane Signet and Commander's Sphere 2). Every
+    // decline before the last colour check draws no RNG; nothing is held or remembered.
+    public static class NetherbornAltar {
+        public static final String NAME = "Netherborn Altar";
+        public static final int LIFE_PER_COUNTER = 3;
+        public static final int LIFE_MARGIN = 10;
+
+        // PermanentNoncreatureAi.checkApiLogic's name gate, after the stock approval, paid casts only
+        // (the caller leaves Play-effect casts stock). Returns only a decline or a WillPlay.
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (ai.getTotalCommanderCast() < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards); // no tax to dodge yet
+            }
+            if (ai.canLoseLife() && ai.getLife() - LIFE_PER_COUNTER < LIFE_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // could never activate it
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLACK) < Math.max(1, cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // ChangeZoneAi.checkApiLogic's name gate: the {T}, soul counter fetch
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final PhaseType phase = ph.getPhase();
+            if (!ph.isPlayerTurn(ai) || (phase != PhaseType.MAIN1 && phase != PhaseType.MAIN2)
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Card host = sa.getHostCard();
+            final CardCollection cmdrs = CardLists.getValidCards(ai.getCardsIn(ZoneType.Command),
+                    sa.getParamOrDefault("ChangeType", "Card.IsCommander+YouOwn"), ai, host, sa);
+            if (cmdrs.size() != 1) {
+                // none: the mandatory fetch finds nothing and the life is lost anyway;
+                // two (partners): the resolution's pick is not ours to judge here
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card cmdr = cmdrs.getFirst();
+            final int casts = ai.getCommanderCast(cmdr);
+            final ManaCost base = cmdr.getManaCost();
+            if (casts < 1 || base == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // untaxed: nothing to dodge
+            }
+            final int loss = ai.canLoseLife() ? LIFE_PER_COUNTER * (host.getCounters(CounterEnumType.SOUL) + 1) : 0;
+            if (loss > 0 && ai.getLife() - loss < LIFE_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the commander's own spell: the cast this fetch is for
+            final SpellAbility cast = cmdr.getFirstSpellAbility();
+            if (cast == null || !cast.isSpell()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            cast.setActivatingPlayer(ai);
+            final int avail = HonestMana.of(ai, cast, true).total();
+            if (avail < base.getCMC()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford); // not castable from hand this turn
+            }
+            final boolean enables = avail < base.getCMC() + 2 * casts; // the CZ cast is out of reach today
+            if (!enables && loss > LIFE_PER_COUNTER * casts) {
+                // the cast happens anyway: dodge 2*casts mana only at <= 1.5 life per mana
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (loss > 0 && inDangerAfter(ai, loss)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // Main 1 only when the stock creature AI would cast the commander there too
+            // (PermanentAi.checkPhaseRestrictions holds it for Main 2 otherwise, and the life would
+            // be paid a turn early); asked last of the RNG-free checks
+            if (phase == PhaseType.MAIN1 && !ComputerUtil.castPermanentInMain1(ai, cast)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            // colours: the one check that test-pays (isManaSourceReserved may draw), kept last
+            if (!ComputerUtilMana.canPayManaCost(new ManaCostBeingPaid(base), cast, ai, false)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // SeizeTheSpotlight.inDangerNextCombat with the activation's life loss as payment: each
+        // opponent attacks with every creature that can attack next turn, nothing blocks.
+        // lifeInSeriousDanger, or lifeInDanger's poison and threshold rules without its MyRandom
+        // walk (ComputerUtilCombat.lifeInDanger). Deterministic and a little more cautious.
+        private static boolean inDangerAfter(final Player ai, final int loss) {
+            final int threshold = AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_THRESHOLD);
+            for (final Player opp : ai.getOpponents()) {
+                final Combat combat = new Combat(opp);
+                boolean any = false;
+                for (final Card att : opp.getCreaturesInPlay()) {
+                    if (ComputerUtilCombat.canAttackNextTurn(att, ai)) {
+                        combat.addAttacker(att, ai);
+                        any = true;
+                    }
+                }
+                if (!any) {
+                    continue;
+                }
+                if (ComputerUtilCombat.lifeInSeriousDanger(ai, combat, loss)
+                        || ComputerUtilCombat.resultingPoison(ai, combat) > Math.max(7, ai.getPoisonCounters())
+                        || (!ai.cantLoseForZeroOrLessLife()
+                            && ComputerUtilCombat.lifeThatWouldRemain(ai, combat) - loss < Math.min(threshold, ai.getLife()))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // New Blood
     // The spell is judged by the stock ControlGainAi.canPlay, which targets the
     // best opposing creature that has combat damage > 0 and can attack, can be

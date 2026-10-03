@@ -151,6 +151,20 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.LongTermPlans.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.NetherbornAltar.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Put our commander into our hand from the command zone, then lose 3 life per soul
+            // counter (the one this activation's cost adds included). The stock hidden-origin path
+            // below fetches whenever a commander sits in the command zone from Main 2 on: untaxed
+            // on turn 1, never checked for a cast from hand, and on any life total, because
+            // LifeLoseAi.chkDrawback reads X before the cost's counter, so the first activation is
+            // never life-checked. AI:RemoveDeck:All stripped the card before any handler ran, so
+            // the stock path drew no random numbers for it. Ahead of multipleCardsToChoose.clear(),
+            // as Long-Term Plans: in A the card never reached that clear either, so a decline here
+            // leaves no state. Every other ChangeZone card takes exactly the path it took before
+            // this branch.
+            return SpecialCardAi.NetherbornAltar.consider(aiPlayer, sa);
+        }
+
         multipleCardsToChoose.clear();
 
         if ("Spelltwine".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {

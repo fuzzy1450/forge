@@ -111,6 +111,20 @@ public class PermanentNoncreatureAi extends PermanentAi {
             }
         }
 
+        // Netherborn Altar dropped AI:RemoveDeck:All. Behind the stock approval it would be cast as a
+        // blank in any Main 2: paid casts (from hand, or a MayPlay thief's) only once a commander of
+        // ours has been taxed, at a life that can pay one activation, into a window real mana can
+        // pay for. Every decline draws no random numbers and returns before canPlaySa's canPayCost
+        // test payment. A Play-effect cast (Nathan Drake's attack trigger casts it from our
+        // library; PermanentAi.doTriggerNoCost ends in this checkApiLogic) keeps the stock answer
+        // it had while the hint was on the card: the hint never applied there.
+        if (SpecialCardAi.NetherbornAltar.NAME.equals(sourceName) && !sa.isCastFromPlayEffect()) {
+            final AiAbilityDecision cast = SpecialCardAi.NetherbornAltar.considerCast(ai, sa);
+            if (!cast.willingToPlay()) {
+                return cast;
+            }
+        }
+
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
             // TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?
