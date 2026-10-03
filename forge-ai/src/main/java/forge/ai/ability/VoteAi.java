@@ -2,6 +2,7 @@ package forge.ai.ability;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.card.Card;
 import forge.game.card.CardLists;
@@ -18,6 +19,12 @@ public class VoteAi extends SpellAbilityAi {
      */
     @Override
     protected AiAbilityDecision canPlay(Player aiPlayer, SpellAbility sa) {
+        // Mob Verdict has no AILogic, so the fallthrough below declined it at every priority.
+        // Name-gated to its own evaluator, whose declines draw no random number (nor did the
+        // fallthrough's); every other Vote spell, and every Vote sub (chkDrawback), stays stock.
+        if (SpecialCardAi.MobVerdict.handles(sa)) {
+            return SpecialCardAi.MobVerdict.consider(aiPlayer, sa);
+        }
         // TODO: add ailogic
         String logic = sa.getParam("AILogic");
         final Card host = sa.getHostCard();

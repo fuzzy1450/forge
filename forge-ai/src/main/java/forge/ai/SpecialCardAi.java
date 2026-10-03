@@ -11640,6 +11640,166 @@ public class SpecialCardAi {
         }
     }
 
+    // Mob Verdict
+    // "Secret council - Each player secretly votes for another player, then those votes are
+    // revealed. For each vote an opponent received, Mob Verdict deals 2 damage to that player and
+    // each creature that player controls. For each vote you received, draw a card." ({2}{R}{R}
+    // sorcery.) The script has no AILogic, so VoteAi.canPlay fell through to CantPlayAi at every
+    // priority (held 1,342 times, never cast by its owner); VoteAi now routes the spell here by
+    // name. In 1v1 the vote is forced - we vote for the lone opponent, the opponent votes for us -
+    // so the card reads "2 damage to the opponent and to each creature it controls, draw a card"
+    // and never touches our life or our creatures. In a pod the stock ComputerUtil.vote picks a
+    // random other player (no AILogic is added, so vote choice stays stock), so every other player
+    // must be an opponent worth one vote's 2 damage. Per opponent:
+    // - lethal face damage passes it outright (it leaves the game with its triggers);
+    // - otherwise a creature of theirs that punishes being dealt damage (Phyrexian Obliterator,
+    //   Stuffy Doll, Brash Taunter, Boros Reckoner) vetoes - every one of them is dealt damage,
+    //   killed or not;
+    // - the kill must be worth MIN_KILL_VALUE: DestroyAllAi's sweep predicate (no indestructible,
+    //   shield-countered or SacMe body counts as killed) on DamageAllAi's killable test, and an
+    //   undying or persist body dies but is worth nothing;
+    // - no killed creature may set off an opposing death trigger that drains, damages or edicts
+    //   us (Butcher of Malakir, Grave Pact, Blood Artist, Zulaport Cutthroat).
+    // We draw one card per vote we receive, so a library that small declines. The stock
+    // fallthrough drew no random number and no decline here does either: affordability first -
+    // the cost as the engine prices it (test-mode calculateManaCost: taxes and reductions)
+    // against HonestMana (G2) in total and in red, never getAvailableManaEstimate, which counts
+    // the words of Produced$ - then board reads only (predictDamageTo, getDamageToKill,
+    // evaluateCreatureList, trigger params). No ComputerUtil.canRegenerate (its canPayCost
+    // draws). Nothing is held past a decline: no target, no X, no memory set.
+    public static class MobVerdict {
+        public static final String NAME = "Mob Verdict";
+        // CreatureEvaluator: a vanilla nontoken 1/1 for one is 80+20+15+10+5 = 130 and a 1/1 token
+        // 105, so one real creature or two tokens qualify and a lone token never does. Below
+        // DamageAllAi's 200, which prices symmetric sweeps: in 1v1 every cast draws a card back, so
+        // any real kill is card-positive.
+        public static final int MIN_KILL_VALUE = 130;
+
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && sa.isSpell() && !(sa instanceof AbilitySub)
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // a WillPlay goes on to canPayCost, whose test payment can draw MyRandom
+            // (ComputerUtilMana.isManaSourceReserved), so an unpayable window is refused first,
+            // judged on the root sa (never host.getFirstSpellAbility(): row 77)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.RED) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final PlayerCollection others = ai.getAllOtherPlayers();
+            if (others.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            int votesForUs = 0;
+            for (final Player p : others) {
+                if (!p.isOpponentOf(ai)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // a vote could hit a teammate
+                }
+                votesForUs += 1 + p.getAdditionalVotesAmount();
+            }
+            // we draw one card per vote we receive: never deck ourselves
+            if (!ai.cantLoseCheck(forge.game.player.GameLossReason.Milled)
+                    && ai.getCardsIn(ZoneType.Library).size() <= votesForUs) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 1v1: all our votes land on the lone opponent; a pod: one vote, at a random other player
+            final int dmg = 2 * (others.size() == 1 ? 1 + ai.getAdditionalVotesAmount() : 1);
+            List<Trigger> deathWatchers = null; // collected once, when a kill first needs them
+            for (final Player opp : others) {
+                if (opp.canLoseLife() && !opp.cantLoseForZeroOrLessLife()
+                        && ComputerUtilCombat.predictDamageTo(opp, dmg, host, false) >= opp.getLife()) {
+                    continue; // the face damage finishes them
+                }
+                final CardCollection creatures = opp.getCreaturesInPlay();
+                for (final Card c : creatures) {
+                    if (punishesDamage(c, host)) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                }
+                final CardCollection killed = CardLists.filter(creatures,
+                        c -> !c.hasKeyword(Keyword.INDESTRUCTIBLE) && c.getCounters(CounterEnumType.SHIELD) <= 0
+                                && !c.hasSVar("SacMe")
+                                && ComputerUtilCombat.predictDamageTo(c, dmg, host, false)
+                                        >= ComputerUtilCombat.getDamageToKill(c, false));
+                if (ComputerUtilCard.evaluateCreatureList(CardLists.filter(killed,
+                        c -> !ComputerUtilCard.hasActiveUndyingOrPersist(c))) < MIN_KILL_VALUE) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                if (deathWatchers == null) {
+                    deathWatchers = deathWatchers(ai);
+                }
+                for (final Card c : killed) {
+                    if (punishesDeath(deathWatchers, c)) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // FireCovenant.punishesDamage, copied (never share a predicate with an accepted card):
+        // damage dealt to the creature punishes us.
+        private static boolean punishesDamage(final Card c, final Card source) {
+            for (final Trigger t : c.getTriggers()) {
+                final TriggerType mode = t.getMode();
+                if ((mode == TriggerType.DamageDone || mode == TriggerType.DamageDoneOnce)
+                        && t.hasParam("ValidTarget") && t.matchesValidParam("ValidTarget", c)
+                        && t.matchesValidParam("ValidSource", source)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // FireCovenant.punishesDeath, copied and split so the opposing board is scanned once per
+        // consult instead of once per kill: every opposing permanent's ChangesZone(All) trigger
+        // that may fire on a creature going from the battlefield to the graveyard.
+        private static List<Trigger> deathWatchers(final Player ai) {
+            final List<Trigger> out = new ArrayList<>();
+            for (final Card host : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : host.getTriggers()) {
+                    if (t.getMode() != TriggerType.ChangesZone && t.getMode() != TriggerType.ChangesZoneAll) {
+                        continue;
+                    }
+                    final String origin = t.getParamOrDefault("Origin", "Any");
+                    final String destination = t.getParamOrDefault("Destination", "Any");
+                    if (("Any".equals(origin) || origin.contains("Battlefield"))
+                            && ("Any".equals(destination) || destination.contains("Graveyard"))) {
+                        out.add(t);
+                    }
+                }
+            }
+            return out;
+        }
+
+        // the creature's death drains, damages or edicts us: a watcher that matches it (YouCtrl
+        // resolved against the trigger's host, as FireCovenant does) and whose chain loses life,
+        // deals damage or sacrifices; over-excluding only costs a cast
+        private static boolean punishesDeath(final List<Trigger> watchers, final Card c) {
+            for (final Trigger t : watchers) {
+                if (!t.matchesValidParam(t.getMode() == TriggerType.ChangesZone ? "ValidCard" : "ValidCards", c)) {
+                    continue;
+                }
+                for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    if (api == ApiType.LoseLife || api == ApiType.DealDamage || api == ApiType.DamageAll
+                            || api == ApiType.Sacrifice || api == ApiType.SacrificeAll) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Momir Vig, Simic Visionary Avatar
     public static class MomirVigAvatar {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
