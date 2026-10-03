@@ -7878,8 +7878,9 @@ public class SpecialCardAi {
         }
 
         private static boolean isCombatWindow(final Game game, final PhaseHandler ph) {
-            return game.getCombat() != null
-                    && (ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) || ph.is(PhaseType.COMBAT_FIRST_STRIKE_DAMAGE));
+            // declare blockers only: at the first-strike damage step that damage is already marked and the stock
+            // predictors (canDestroyAttacker / canDestroyBlocker) apply it a second time
+            return game.getCombat() != null && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS);
         }
 
         // Called at the decision (consider, then checkSacrificeCost) and at the payment (chooseSacrificeType),
