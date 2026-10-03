@@ -325,7 +325,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.FootbottomFeast.consider(aiPlayer, sa);
         }
 
-        if (SpecialCardAi.HourOfEternity.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+        if (SpecialCardAi.HourOfEternity.isHour(sa) && !(sa instanceof AbilitySub)) {
             // X is the TARGET COUNT and every target is a creature card in OUR graveyard
             // (ValidTgts$ Creature.YouOwn): the generic known-origin path below sizes X with
             // setMaxXValue (whose test payments draw MyRandom) and then keeps only opponents'

@@ -9873,6 +9873,16 @@ public class SpecialCardAi {
         public static final String NAME = "Hour of Eternity";
         static final int BLUE_PIPS = 3;
 
+        // getAbilitySourceName reads "" for a card cast face down from exile (an opponent's Petty
+        // Larceny or Siphon Insight): read the host's name (the face-up LKI canPlayAndPayFor switched
+        // in) or the card state's name, row 106's isMeteor idiom.
+        public static boolean isHour(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
             final Game game = ai.getGame();
             final PhaseHandler ph = game.getPhaseHandler();
