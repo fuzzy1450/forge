@@ -707,6 +707,15 @@ public class PumpAi extends PumpAiBase {
                 return decision;
             }
         }
+        if (sa.usesTargeting() && SpecialCardAi.CarpetOfFlowers.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Carpet of Flowers' main-phase trigger counts the Islands of the opponent it targets: aim it
+            // at the one with the most, where the cast floor looked (stock: the first targetable one,
+            // the same player in a 2-seat game). None targetable: the stock path below. No random draw.
+            final AiAbilityDecision carpet = SpecialCardAi.CarpetOfFlowers.chooseTrigTarget(ai, sa);
+            if (carpet != null) {
+                return carpet;
+            }
+        }
         final SpellAbility root = sa.getRootAbility();
         final String numDefense = sa.getParamOrDefault("NumDef", "");
         final String numAttack = sa.getParamOrDefault("NumAtt", "");

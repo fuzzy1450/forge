@@ -75,6 +75,14 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.ActOfAuthority.considerCast(ai, sa);
         }
 
+        // Carpet of Flowers dropped AI:RemoveDeck:All. A paid cast (hand, or Yasmin Khan's / The
+        // Flux's may-play from exile) only against Islands its trigger can count; a free cascade
+        // cast (isCastFromPlayEffect) keeps the stock WillPlay, as in A (SpecialCardAi.CascadeShell
+        // counts on it). Draws no random numbers.
+        if (SpecialCardAi.CarpetOfFlowers.NAME.equals(sourceName) && !sa.isCastFromPlayEffect()) {
+            return SpecialCardAi.CarpetOfFlowers.considerCast(ai, sa);
+        }
+
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
             // TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?

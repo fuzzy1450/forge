@@ -1945,6 +1945,59 @@ public class SpecialCardAi {
         }
     }
 
+    // Carpet of Flowers
+    // "At the beginning of each of your main phases, if you haven't added mana with this ability this
+    // turn, you may add X mana of any one color, where X is the number of Islands target opponent
+    // controls." Worth exactly the Islands of the opponent its trigger targets. AI:RemoveDeck:All kept
+    // it out of every hand evaluation (AiController.getSpellAbilityToPlay), so A drew no random numbers
+    // for it; the floor draws none and declines inside checkApiLogic, before canPlaySa's LKI copy and
+    // canPayCost. The free cascade cast (isCastFromPlayEffect) is not judged here.
+    public static class CarpetOfFlowers {
+        public static final String NAME = "Carpet of Flowers";
+        // X the trigger would add today: 1 is Wild Growth parity, 0 is a blank
+        static final int MIN_ISLANDS = 1;
+
+        // the Island subtype, as the script's Island.TargetedPlayerCtrl counts it
+        static int islands(final Player p) {
+            return CardLists.count(p.getCardsIn(ZoneType.Battlefield), CardPredicates.isType("Island"));
+        }
+
+        // PermanentNoncreatureAi.checkApiLogic name gate (paid casts only)
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            int most = 0;
+            for (final Player opp : ai.getOpponents()) {
+                if (opp.canBeTargetedBy(sa)) { // hexproof/shroud players give X = 0
+                    most = Math.max(most, islands(opp));
+                }
+            }
+            return most >= MIN_ISLANDS ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+        }
+
+        // PumpAi.doTriggerNoCost name gate: point the trigger at the opponent with the most Islands
+        // (stock takes the first targetable one; ties keep turn order). null = none targetable: fall
+        // through to stock.
+        public static AiAbilityDecision chooseTrigTarget(final Player ai, final SpellAbility sa) {
+            Player best = null;
+            int most = -1;
+            for (final Player opp : ai.getOpponents()) {
+                if (sa.canTarget(opp)) {
+                    final int n = islands(opp);
+                    if (n > most) {
+                        best = opp;
+                        most = n;
+                    }
+                }
+            }
+            if (best == null) {
+                return null;
+            }
+            sa.resetTargets();
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Cascade shells: Throes of Chaos, Into the Time Vortex (AILogic$ CascadeShell)
     // Spells whose only effect is the Cascade cast trigger (plus Retrace / Rebound), scripted as a
     // no-op SP$ Pump. All the value is the free cascade hit, and that hit is still judged, optionally,
