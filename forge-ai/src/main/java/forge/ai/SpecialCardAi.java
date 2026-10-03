@@ -128,6 +128,121 @@ public class SpecialCardAi {
         return res;
     }
 
+    // Act of Authority
+    // "When this enchantment enters, you may exile target artifact or enchantment. At the
+    // beginning of your upkeep, you may exile target artifact or enchantment. If you do, its
+    // controller gains control of this enchantment." A sorcery-speed Revoke Existence that stays
+    // on the battlefield. AI:RemoveDeck:All kept it out of every evaluation; behind the hint the
+    // stock path casts it into an empty board (checkETBEffects skips an optional ETB,
+    // AiController:326) and approves the upkeep give-away blindly (ControlGainAi.chkDrawback).
+    // Three routes, every refusal RNG-free:
+    // - considerCast (PermanentNoncreatureAi.checkApiLogic, after the stock approval; a thief's
+    //   Play-effect cast too): cast only when the ETB will exile a worthy opposing card. A hand
+    //   cast must first fit HonestMana (G2) in total and in white against the cost as the engine
+    //   prices it (test-mode calculateManaCost), so an approval reaches canPayCost's
+    //   isManaSourceReserved draws only in a window G2 believes payable. Never
+    //   getAvailableManaEstimate, which counts the words of Produced$.
+    // - chooseEtbTarget (ChangeZoneAi.doTriggerNoCost, AILogic ActOfAuthorityETB): the same
+    //   chooser at stack time and in confirmTrigger; no worthy target, the trigger is not stacked.
+    // - the upkeep (AILogic ActOfAuthorityUpkeep) is declined in ChangeZoneAi, always: each use
+    //   hands this card to the exiled card's controller and starts a one-for-one trade chain
+    //   against our own artifacts and enchantments.
+    // pickTarget replaces getBestRemovalTargetAI, whose evaluateBoardPosition term misses the
+    // AiCache into a predicted block assignment that draws MyRandom (ComputerUtilCombat
+    // .lifeInDanger). Without that term (a constant per controller in 1v1) it ranks a creature by
+    // CreatureEvaluator and anything else 50 + 30 * CMC (+10 per loyalty), first max wins, and
+    // skips what is not worth a card and three mana: a noncreature token (Treasure, Clue, Food), a
+    // creature token under MIN_TOKEN_BODY, a ward permanent (the trigger is countered unless the
+    // ward is paid right after the 3 mana), and an opponent's card enchanted by our own Aura
+    // (stock isPreferredTarget). Holds nothing and remembers nothing.
+    public static class ActOfAuthority {
+        public static final String NAME = "Act of Authority";
+        // a creature token worth a card and three mana: roughly a 3/3 (CreatureEvaluator)
+        static final int MIN_TOKEN_BODY = 160;
+
+        // PermanentNoncreatureAi.checkApiLogic's name gate, after the stock approval
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // hand casts only, judged on the spell being cast (never host.getFirstSpellAbility():
+            // row 77); a Play-effect cast (Nathan Drake's exile-and-cast) was already priced by
+            // SpellAbilityAi.doTrigger's canPayCost, with the caster's own conversions
+            if (host.isInZone(ZoneType.Hand)) {
+                final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+                final HonestMana mana = HonestMana.of(ai, sa, true);
+                if (mana.total() < cost.getConvertedManaCost()
+                        || mana.colour(MagicColor.WHITE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            final SpellAbility etb = etbCopy(ai, host);
+            if (etb == null || pickTarget(ai, etb) == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // AILogic ActOfAuthorityETB: stack time (mandatory, for targeting) and confirmTrigger. No
+        // worthy target -> declined, so the optional trigger is never stacked aimed at our own card.
+        public static AiAbilityDecision chooseEtbTarget(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Card pick = pickTarget(ai, sa);
+            if (pick == null || !sa.canTarget(pick)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the RNG-free chooser shared by the cast floor and the resolution
+        public static Card pickTarget(final Player ai, final SpellAbility exile) {
+            CardCollection list = CardLists.getTargetableCards(ai.getGame().getCardsIn(ZoneType.Battlefield), exile);
+            list = CardLists.filterControlledBy(list, ai.getOpponents());
+            list = CardLists.filter(list, c -> worthy(ai, c));
+            return Aggregates.itemWithMax(list, c -> c.isCreature() ? ComputerUtilCard.evaluateCreature(c)
+                    : 50 + 30 * c.getCMC() + (c.isPlaneswalker() ? 10 * c.getCounters(CounterEnumType.LOYALTY) : 0));
+        }
+
+        private static boolean worthy(final Player ai, final Card c) {
+            for (final Card aura : c.getEnchantedBy()) { // stock isPreferredTarget
+                if (c.getOwner().isOpponentOf(ai) && aura.getController().equals(ai)) {
+                    return false;
+                }
+            }
+            if (c.hasKeyword(Keyword.WARD)) {
+                return false;
+            }
+            return !c.isToken() || (c.isCreature() && ComputerUtilCard.evaluateCreature(c) >= MIN_TOKEN_BODY);
+        }
+
+        // the enters trigger as it would fire now, null when an ETB-disabling static applies (Elesh
+        // Norn, Mother of Machines): TheMasterFormedAnew.etbVerdict's idiom
+        private static SpellAbility etbCopy(final Player ai, final Card host) {
+            for (final Trigger tr : host.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone
+                        || !ZoneType.Battlefield.toString().equals(tr.getParam("Destination"))) {
+                    continue;
+                }
+                final Map<forge.game.ability.AbilityKey, Object> runParams = forge.game.ability.AbilityKey.mapFromCard(host);
+                runParams.put(forge.game.ability.AbilityKey.Destination, ZoneType.Battlefield.name());
+                if (forge.game.staticability.StaticAbilityDisableTriggers.disabled(ai.getGame(), tr, runParams)) {
+                    return null;
+                }
+                final SpellAbility exSA = tr.ensureAbility();
+                if (exSA == null) {
+                    return null;
+                }
+                final SpellAbility copy = exSA.copy(ai);
+                copy.setTrigger(tr);
+                copy.setTriggeringObject(forge.game.ability.AbilityKey.Card, host);
+                return copy;
+            }
+            return null;
+        }
+    }
+
     // Aethersnatch
     // Commandeer's window (an opponent's spell on top, no chosen targets anywhere
     // in its chain, no "...All" api, CMC >= 5 counting announced X), which the card

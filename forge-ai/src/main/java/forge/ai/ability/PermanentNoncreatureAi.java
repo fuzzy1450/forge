@@ -67,6 +67,14 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.LavabrinkFloodgates.consider(ai, sa);
         }
 
+        // Act of Authority dropped AI:RemoveDeck:All. Its ETB exile is optional, so checkETBEffects
+        // skips it (AiController:326) and the stock approval above would cast it into an empty
+        // board: cast only when the ETB will exile a worthy opposing card, judged RNG-free. A
+        // thief's Play-effect cast (PermanentAi.doTriggerNoCost) is judged by the same floor.
+        if (SpecialCardAi.ActOfAuthority.NAME.equals(sourceName)) {
+            return SpecialCardAi.ActOfAuthority.considerCast(ai, sa);
+        }
+
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
             // TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?

@@ -445,6 +445,16 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        } else if ("ActOfAuthorityETB".equals(aiLogic)) {
+            // Act of Authority's optional ETB exile: the RNG-free chooser its cast was approved on
+            // (the stock getBestRemovalTargetAI's board term can draw), at stack time (mandatory,
+            // for targeting) and in confirmTrigger; no worthy opposing target -> declined, so the
+            // trigger is never stacked aimed at our own card
+            return SpecialCardAi.ActOfAuthority.chooseEtbTarget(aiPlayer, sa);
+        } else if ("ActOfAuthorityUpkeep".equals(aiLogic)) {
+            // its upkeep exile hands the card to the exiled card's controller (ControlGainAi
+            // .chkDrawback approves that sub blindly): never taken, so never stacked either
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
         if (sa.isHidden()) {
