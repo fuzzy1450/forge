@@ -15124,6 +15124,262 @@ public class SpecialCardAi {
         }
     }
 
+    // Night Soil
+    // "{1}, Exile two creature cards from a single graveyard: Create a 1/1 green Saproling
+    // creature token." ({G}{G} enchantment; AB$ Token | Cost$ 1 ExileSameGrave<2/Creature>.)
+    // Behind its AI:RemoveDeck:All the AI could not pay that cost at all:
+    // AiCostDecision.visit(CostExile) returns null for a same-graveyard exile (zoneRestriction 0,
+    // which only this script uses), so every activation would fail at payment and be skipped.
+    // The hint is gone and the ability carries AILogic$ AtOppEOT: it is judged only in the end
+    // step before our own turn (SpellAbilityAi.checkPhaseRestrictions), so TokenAi's own
+    // checkPhaseRestrictions, its spawnToken card ids and its 80% roll are never reached for it.
+    // One deterministic chooser, choosePayment, serves the cast floor (PermanentNoncreatureAi),
+    // the activation floor (TokenAi) and the payment (AiCostDecision): the pair priced is the
+    // pair paid, and a mismatch returns null, so the activation fails through setSkip and never
+    // falls back to a greedy pick.
+    // choosePayment: an opponent's graveyard first, the one whose two best creature cards
+    // (evaluateCreature, then card id) are worth the most, never their commander (exiling it only
+    // hands its owner the command-zone choice again); else our own, only when it holds at least
+    // KEEP_OWN more eligible cards with no graveyard use than the two it takes, and then our two
+    // worst, so Hua Tuo, Golgari Guildmage, Reincarnation and Charnelhoard Wurm keep their best
+    // targets. A graveyard is skipped when a permanent of ours counts it (Count$ValidGraveyard:
+    // the carrier's Wight of Precinct Six counts opponents' creature cards), or when its cards
+    // leaving pays an opponent (a ChangesZone or ChangesZoneAll trigger from a graveyard to exile
+    // on an opponent's battlefield: Syr Konrad, the Grim, Tormod, the Desecrator, Desecrated Tomb).
+    // Mana is G2 (HonestMana): the activation's {1}, and a paid cast's {G}{G} in total and in
+    // green, so Sol Ring, Kher Keep or Temple of the False God beside one Forest is no window.
+    // Every decline draws no random numbers and allocates no card id.
+    public static class NightSoil {
+        public static final String NAME = "Night Soil";
+        static final int KEEP_OWN = 2; // our best creature cards stay as recursion targets
+        private static final Set<Keyword> FROM_GRAVEYARD = EnumSet.of(Keyword.FLASHBACK,
+                Keyword.ESCAPE, Keyword.DISTURB, Keyword.UNEARTH, Keyword.EMBALM, Keyword.ETERNALIZE,
+                Keyword.JUMP_START, Keyword.RETRACE, Keyword.SCAVENGE, Keyword.ENCORE,
+                Keyword.AFTERMATH, Keyword.DREDGE, Keyword.HARMONIZE, Keyword.MAYHEM);
+
+        // this card's own same-graveyard exile cost (the AiCostDecision gate)
+        public static boolean isOwnSameGraveCost(final SpellAbility sa, final CostExile cost) {
+            return cost != null && cost.zoneRestriction == 0 && sa != null && !sa.isSpell()
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        // the TokenAi gate: our own activated ability with that cost
+        public static boolean isOwnActivation(final SpellAbility sa) {
+            return sa.isActivatedAbility() && sa.getPayCosts() != null
+                    && isOwnSameGraveCost(sa, sa.getPayCosts().getCostPartByType(CostExile.class));
+        }
+
+        // TokenAi.checkApiLogic, first statement: reached only in the AtOppEOT window, after
+        // CostExile.canPay found a pair
+        public static AiAbilityDecision considerActivation(final Player ai, final SpellAbility sa) {
+            if (!affords(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final CostExile cost = sa.getPayCosts().getCostPartByType(CostExile.class);
+            if (choosePayment(ai, sa, cost, cost.getAbilityAmount(sa), false) == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // PermanentNoncreatureAi.checkApiLogic, after the stock approval: cast only while an
+        // activation would be paid right now. A paid cast is screened by G2 first; a Play-effect
+        // cast or a copy pays no mana this way and meets the pair floor alone.
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility spell) {
+            final Card host = spell.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!spell.isCastFromPlayEffect() && !spell.isCopied() && !affords(ai, spell)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // the card's own Token ability, never host.getFirstSpellAbility() (the spell itself)
+            SpellAbility ab = null;
+            for (final SpellAbility s : host.getSpellAbilities()) {
+                if (s.isActivatedAbility() && s.getApi() == ApiType.Token) {
+                    ab = s;
+                    break;
+                }
+            }
+            final CostExile cost = ab == null || ab.getPayCosts() == null ? null
+                    : ab.getPayCosts().getCostPartByType(CostExile.class);
+            if (cost == null || cost.zoneRestriction != 0
+                    || choosePayment(ai, ab, cost, cost.getAbilityAmount(ab), false) == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.NeedsToPlayCriteriaNotMet);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // G2: this sa's own mana cost, in total and in green
+        private static boolean affords(final Player ai, final SpellAbility sa) {
+            final ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            if (cost == null) {
+                return true;
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getCMC()
+                    && mana.colour(MagicColor.GREEN) >= cost.getShardCount(forge.card.mana.ManaCostShard.GREEN);
+        }
+
+        // The cost's cards from ONE graveyard, or null: an opponent's best pair first, else our
+        // own worst pair. Decision and payment (AiCostDecision) alike; deterministic.
+        public static CardCollection choosePayment(final Player ai, final SpellAbility ab, final CostExile cost,
+                final int amount, final boolean effect) {
+            if (cost == null || amount <= 0) {
+                return null;
+            }
+            final Set<Player> paysOpponent = leavingPaysOpponent(ai);
+            CardCollection best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (final Player opp : ai.getOpponents()) { // game order: deterministic
+                if (paysOpponent.contains(opp)) {
+                    continue;
+                }
+                final CardCollection pool = CardLists.filter(eligible(ai, opp, ab, cost, effect),
+                        c -> !c.isCommander());
+                if (pool.size() < amount || countsGraveyard(ai, opp)) {
+                    continue;
+                }
+                sortValueDesc(pool);
+                final CardCollection pick = new CardCollection(pool.subList(0, amount)); // deny their best
+                final int score = totalValue(pick);
+                if (score > bestScore) {
+                    best = pick;
+                    bestScore = score;
+                }
+            }
+            if (best != null) {
+                return best;
+            }
+            if (paysOpponent.contains(ai)) {
+                return null;
+            }
+            final CardCollection own = CardLists.filter(eligible(ai, ai, ab, cost, effect), c -> !hasGraveyardUse(c));
+            if (own.size() < amount + KEEP_OWN || countsGraveyard(ai, ai)) {
+                return null;
+            }
+            sortValueDesc(own);
+            return new CardCollection(own.subList(own.size() - amount, own.size())); // our worst
+        }
+
+        // the cards CostExile.canPay counts in this owner's graveyard
+        private static CardCollection eligible(final Player ai, final Player owner, final SpellAbility ab,
+                final CostExile cost, final boolean effect) {
+            final CardCollection valid = CardLists.getValidCards(owner.getCardsIn(ZoneType.Graveyard),
+                    cost.getType().split(";"), ai, ab.getHostCard(), ab);
+            return CardLists.filter(valid, CardPredicates.canExiledBy(ab, effect));
+        }
+
+        // evaluateCreature descending, then card id ascending
+        private static void sortValueDesc(final CardCollection list) {
+            final Map<Card, Integer> value = new HashMap<>();
+            for (final Card c : list) {
+                value.put(c, ComputerUtilCard.evaluateCreature(c));
+            }
+            list.sort(Comparator.comparingInt((Card c) -> -value.get(c)).thenComparingInt(Card::getId));
+        }
+
+        private static int totalValue(final CardCollection list) {
+            int total = 0;
+            for (final Card c : list) {
+                total += ComputerUtilCard.evaluateCreature(c);
+            }
+            return total;
+        }
+
+        // A permanent of ours counts this graveyard (Count$ValidGraveyard ...): Wight of Precinct
+        // Six (Card.Creature+OppOwn) counts opponents'; an unqualified count feeds on every one.
+        private static boolean countsGraveyard(final Player ai, final Player owner) {
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final String v : c.getSVars().values()) {
+                    if (!v.startsWith("Count$ValidGraveyard")) {
+                        continue;
+                    }
+                    final boolean opp = v.contains("Opp");
+                    final boolean you = v.contains("YouOwn") || v.contains("YouCtrl");
+                    if (owner.equals(ai) ? you || !opp : opp || !you) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // The graveyards whose cards leaving for exile pays an opponent: a ChangesZone or
+        // ChangesZoneAll trigger on an opponent's battlefield whose Origin covers the graveyard
+        // and whose Destination covers exile. One naming only its controller's cards (YouOwn,
+        // YouCtrl: Syr Konrad, Tormod, Desecrated Tomb) closes that controller's graveyard; any
+        // other closes every graveyard.
+        private static Set<Player> leavingPaysOpponent(final Player ai) {
+            final Set<Player> closed = new HashSet<>();
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if ((t.getMode() != TriggerType.ChangesZone && t.getMode() != TriggerType.ChangesZoneAll)
+                                || !covers(t, "Origin", "Graveyard") || !covers(t, "Destination", "Exile")) {
+                            continue;
+                        }
+                        final String valid = t.getParamOrDefault("ValidCard", t.getParamOrDefault("ValidCards", ""));
+                        if ((valid.contains("YouOwn") || valid.contains("YouCtrl")) && !valid.contains("Opp")) {
+                            closed.add(opp);
+                        } else {
+                            closed.addAll(ai.getGame().getPlayers());
+                            return closed;
+                        }
+                    }
+                }
+            }
+            return closed;
+        }
+
+        // absent or Any covers every zone, as in TriggerChangesZone and TriggerChangesZoneAll
+        private static boolean covers(final Trigger t, final String param, final String zone) {
+            if (!t.hasParam(param) || "Any".equals(t.getParam(param))) {
+                return true;
+            }
+            for (final String z : t.getParam(param).split(",")) {
+                if (zone.equals(z.trim())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // a card of ours the AI can still use from the graveyard: DiscardMe, a graveyard keyword,
+        // a spell ability restricted to the graveyard, or a trigger, static or replacement active there
+        private static boolean hasGraveyardUse(final Card c) {
+            if (c.hasSVar("DiscardMe")) {
+                return true;
+            }
+            for (final Keyword k : FROM_GRAVEYARD) {
+                if (c.hasKeyword(k)) {
+                    return true;
+                }
+            }
+            for (final SpellAbility s : c.getSpellAbilities()) {
+                if (s.getRestrictions() != null && s.getRestrictions().getZone() == ZoneType.Graveyard) {
+                    return true;
+                }
+            }
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getActiveZone() != null && t.getActiveZone().contains(ZoneType.Graveyard)) {
+                    return true;
+                }
+            }
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (st.getActiveZone() != null && st.getActiveZone().contains(ZoneType.Graveyard)) {
+                    return true;
+                }
+            }
+            for (final ReplacementEffect re : c.getReplacementEffects()) {
+                if (re.getActiveZone() != null && re.getActiveZone().contains(ZoneType.Graveyard)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Null Brooch
     public static class NullBrooch {
         public static boolean consider(final Player ai, final SpellAbility sa) {

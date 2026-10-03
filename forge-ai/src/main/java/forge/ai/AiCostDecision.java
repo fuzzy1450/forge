@@ -222,6 +222,11 @@ public class AiCostDecision extends CostDecisionMakerBase {
             return PaymentDecision.card(player.getCardsIn(ZoneType.Library, c));
         }
         else if (cost.zoneRestriction == 0) {
+            if (SpecialCardAi.NightSoil.isOwnSameGraveCost(ability, cost)) {
+                // the pair its floor priced, from one graveyard; null fails through setSkip
+                final CardCollection chosen = SpecialCardAi.NightSoil.choosePayment(player, ability, cost, c, isEffect());
+                return chosen == null ? null : PaymentDecision.card(chosen);
+            }
             // TODO Determine exile from same zone for AI
             return null;
         } else {

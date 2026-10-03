@@ -125,6 +125,19 @@ public class PermanentNoncreatureAi extends PermanentAi {
             }
         }
 
+        // Night Soil dropped AI:RemoveDeck:All. Behind the stock approval it would be cast as a
+        // do-nothing {G}{G} in any Main 2: cast only while some graveyard holds a pair its
+        // activation would pay with right now (the chooser its activation and AiCostDecision
+        // use). A paid cast (from hand, or a MayPlay thief's) is screened by G2 first; a
+        // Play-effect cast (Nathan Drake's attack trigger) meets the pair floor alone, judged for
+        // the thief. Every decline draws no random numbers.
+        if (sa.isSpell() && SpecialCardAi.NightSoil.NAME.equals(sourceName)) {
+            final AiAbilityDecision soil = SpecialCardAi.NightSoil.considerCast(ai, sa);
+            if (!soil.willingToPlay()) {
+                return soil;
+            }
+        }
+
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
             // TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?

@@ -132,6 +132,13 @@ public class TokenAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision checkApiLogic(final Player ai, final SpellAbility sa) {
+        // Night Soil dropped AI:RemoveDeck:All. Its ability carries AILogic$ AtOppEOT, so it is
+        // reached only in the end step before our own turn, after CostExile.canPay found a pair
+        // in one graveyard; judged here, before spawnToken allocates a card id and before the
+        // 80% roll below. Draws no random numbers.
+        if (SpecialCardAi.NightSoil.isOwnActivation(sa)) {
+            return SpecialCardAi.NightSoil.considerActivation(ai, sa);
+        }
         final Game game = ai.getGame();
         final Player opp = ai.getWeakestOpponent();
 
