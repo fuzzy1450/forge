@@ -59,6 +59,14 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.ManascapeRefractor.consider(ai, sa);
         }
 
+        // Lavabrink Floodgates dropped AI:RemoveDeck:All. Its own cast is judged here, after the
+        // stock approval (own Main 2 in practice, PermanentAi.checkPhaseRestrictions); a Play-effect
+        // cast (Etali's free cast, Nathan Drake's attack trigger) keeps the stock answer, as in A.
+        if (SpecialCardAi.LavabrinkFloodgates.NAME.equals(host.getName()) && sa.isSpell()
+                && !sa.isCastFromPlayEffect()) {
+            return SpecialCardAi.LavabrinkFloodgates.consider(ai, sa);
+        }
+
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
             // TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?

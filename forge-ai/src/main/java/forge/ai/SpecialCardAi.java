@@ -9820,6 +9820,142 @@ public class SpecialCardAi {
         }
     }
 
+    // Lavabrink Floodgates (dead-card batch 2, row 61; precon:Arcane Maelstrom (C20))
+    // "{T}: Add {R}{R}. At the beginning of each player's upkeep, that player may put a doom
+    // counter on Lavabrink Floodgates or remove a doom counter from it. Then if it has three or
+    // more doom counters on it, sacrifice Lavabrink Floodgates. When you do, it deals 6 damage to
+    // each creature." AI:RemoveDeck:All kept the spell out of every evaluation (the filter in
+    // AiController.getSpellAbilityToPlay), so A never drew RNG for it; behind the hint
+    // PermanentNoncreatureAi approves it in own Main 2 as a plain rock. The stock doom policy keeps
+    // the clock at 0-1 (confirmAction defaults to yes; at 0 counters the effect adds one; with one
+    // present CountersPutOrRemoveAi.chooseBinary judges from the controller and removes the
+    // Negative DOOM counter), so the wipe never fires and the card is cast only as ramp. Routed
+    // from PermanentNoncreatureAi.checkApiLogic after the stock approval, for a spell that is not
+    // a Play-effect cast (Etali's and Nathan Drake's casts keep the stock answer, as in A).
+    // - Affordability, RNG-free and before canPayCost, whose test payment draws MyRandom in
+    //   ComputerUtilMana.isManaSourceReserved per source: usableMana (a private copy in the spirit
+    //   of DayOfTheMoon.usableMana, one per usable source; never getAvailableManaEstimate, which
+    //   counts the words of Produced$: Command Tower and Arcane Signet 2, a gainland 3, Frontier
+    //   Bivouac 4) must reach the mana value with at least one red source.
+    // - Demand, the ramp has a use: an X spell in hand passes; otherwise the other nonland cards
+    //   in hand plus each commander in the command zone (with tax) must cost more than next
+    //   turn's mana without the rock (nextTurnMana). Nothing to ramp into is CantPlayAi.
+    // Draws nothing and holds nothing; its only write is setActivatingPlayer on the mana
+    // abilities it reads, as the estimate does.
+    public static class LavabrinkFloodgates {
+        public static final String NAME = "Lavabrink Floodgates";
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final int[] usable = usableMana(ai, sa);
+            if (usable[0] < host.getCMC() || usable[1] < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            int demand = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c == host || c.isLand()) {
+                    continue;
+                }
+                if (c.getManaCost() != null && c.getManaCost().countX() > 0) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // more mana, a bigger X
+                }
+                demand += c.getCMC();
+            }
+            for (final Card cmdr : ai.getCommanders()) {
+                if (cmdr.isInZone(ZoneType.Command)) {
+                    demand += cmdr.getCMC() + 2 * ai.getCommanderCast(cmdr);
+                }
+            }
+            if (demand <= nextTurnMana(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // nothing to ramp into
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // RNG-free count of the mana canPayCost could use for this spell: floating mana plus one
+        // per battlefield source with a usable mana ability. Skipped: sources isManaSourceReserved
+        // refuses without a roll (held for the next spell or a block trick), {T} abilities on
+        // tapped sources or sick creatures, abilities with a mana cost, and abilities whose
+        // restrictions reject this spell (sa, the root being judged). [0] = total; [1] = sources
+        // whose printed production could be red: R, Any, Chosen, or ColorIdentity under a red
+        // commander identity. A Combo production is red only when it names R (Thornwood Falls'
+        // "Combo G U" is not).
+        private static int[] usableMana(final Player ai, final SpellAbility sa) {
+            int total = ai.getManaPool().totalMana();
+            int red = ai.getManaPool().getAmountOfColor(MagicColor.RED);
+            final ColorSet identity = ai.getCommanderColorID();
+            final boolean identityRed = identity != null && identity.hasRed();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)) {
+                    continue;
+                }
+                boolean counted = false;
+                boolean countedRed = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (ma.getPayCosts().hasTapCost() && (src.isTapped() || src.isCreature() && src.isSick())) {
+                        continue;
+                    }
+                    if (ma.getPayCosts().getCostMana() != null) {
+                        continue;
+                    }
+                    if (!ma.getManaPart().meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    if (!counted) {
+                        total++;
+                        counted = true;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (!countedRed && (produced.contains("R") || produced.contains("Any") || produced.contains("Chosen")
+                            || identityRed && produced.contains("ColorIdentity"))) {
+                        red++;
+                        countedRed = true;
+                    }
+                }
+            }
+            return new int[] {total, red};
+        }
+
+        // Next turn's mana without the rock: every battlefield mana source the player controls,
+        // tapped and summoning-sick ones included, at its best mana ability with no mana in its own
+        // cost - Amount times the symbols of a plain production ("U R" 2, Sol Ring's "C" with
+        // Amount 2 is 2), Amount once for a choice production (Combo, Any, Chosen, ColorIdentity,
+        // a reflected, Special or empty one) - plus one for a land in hand. RNG-free.
+        private static int nextTurnMana(final Player ai) {
+            int supply = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null || ma.getPayCosts().hasManaCost()) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean choice = produced.isEmpty() || ma.getApi() == ApiType.ManaReflected
+                            || mp.isSpecialMana() || mp.isComboMana() || mp.isAnyMana()
+                            || produced.contains("Chosen") || produced.contains("ColorIdentity");
+                    best = Math.max(best, choice ? amount : amount * produced.split(" ").length);
+                }
+                supply += best;
+            }
+            if (ai.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.LANDS)) {
+                supply++;
+            }
+            return supply;
+        }
+    }
+
     // Legions to Ashes
     // Exile target nonland permanent an opponent controls and every token that
     // player controls with the same name (a Pump targeting shell; the exile is
