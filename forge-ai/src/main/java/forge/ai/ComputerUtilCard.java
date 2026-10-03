@@ -1140,6 +1140,13 @@ public class ComputerUtilCard {
         Player ai = sa.getActivatingPlayer();
         final Game game = ai.getGame();
         Player opp = ai.getStrongestOpponent();
+        // Brave the Elements (dead-card batch 2, row 54): the colour the cast was judged on,
+        // worked out again from the stack or the blocks (never the stock MostProminentAttackers
+        // pick, which is our own colour out of combat).
+        if (SpecialCardAi.BraveTheElements.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            chosen.add(SpecialCardAi.BraveTheElements.chooseColor(ai, sa, colorChoices));
+            return chosen;
+        }
         if (sa.hasParam("AILogic")) {
             final String logic = sa.getParam("AILogic");
 

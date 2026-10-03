@@ -2189,6 +2189,288 @@ public class SpecialCardAi {
         }
     }
 
+    // Brave the Elements (dead-card batch 2, row 54; precon:Forged in Stone (C14))
+    // "Choose a color. White creatures you control gain protection from the chosen color until
+    // end of turn." ({W} Instant. Printed text = Oracle: ONLY our white creatures, read from the
+    // ProtectionAll sub's own ValidCards, Creature.White+YouCtrl, taken at resolution.) Never cast
+    // by its owner: AI:RemoveDeck:All dropped it before any handler ran; behind the hint
+    // ChooseColorAi.checkApiLogic has no MostProminentAttackers branch (an unconditional WillPlay,
+    // no value floor) and ComputerUtilCard.chooseColor picks the AI's own colour out of combat
+    // (white for a white deck: worthless). Routed by name from the top of
+    // ChooseColorAi.checkApiLogic (the hand cast and every effect cast, Play effects and copies
+    // alike) and from ComputerUtilCard.chooseColor, which works the colour out again at resolution
+    // from the same state. Spent only to SAVE white creatures of ours, in two windows
+    // (TimeLordRegeneration's):
+    // - STACK: an opponent's object on top of the stack whose host has a colour, when
+    //   predictThreatenedObjects (null saviour: every branch) says it kills, exiles, steals or
+    //   -X/-X's white creatures of ours, and protection from a host colour stops every harmful
+    //   link of its chain (stoppedByProtection);
+    // - COMBAT: declare blockers with an empty stack, white combatants of ours that
+    //   combatantWouldBeDestroyed says die (and combatantCantBeDestroyed does not save), each only
+    //   against opposing combatants that ALL share one colour and whose damage can be prevented.
+    // Floor: a commander, or one creature at MIN_CREATURE_VALUE (160, a nontoken vanilla 2/2,
+    // DeflectingSwat's bar), or MIN_SAVED (2) or more creatures. A colour whose protection would
+    // knock an attachment of ours of that colour off an affected creature is never chosen; ties
+    // prefer a non-white colour (protection from white also stops our own white spells and
+    // abilities from targeting those creatures until end of turn), then WUBRG order.
+    // RNG: in A the owner never evaluated it (the hint) and effect casts took ChooseColorAi's
+    // WillPlay without a draw, so every decline here draws nothing: the window, the battlefield
+    // read, HonestMana (G2), predictThreatenedObjects, the combat predictors (never lifeInDanger,
+    // never getBestAI) and evaluateCreature. The mana screen runs before the threat predictor and
+    // the floor, on this spell's own cost, except for a Play-effect cast (doTrigger's canPayCost
+    // already ran, in A and B alike) and a copy (it pays nothing). Nothing is held or remembered.
+    public static class BraveTheElements {
+        public static final String NAME = "Brave the Elements";
+        public static final int MIN_CREATURE_VALUE = 160;
+        public static final int MIN_SAVED = 2;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // 1. the window, O(1): almost every priority stops here (row 152)
+            final boolean stackWindow = !game.getStack().isEmpty();
+            final boolean combatWindow = !stackWindow && game.getCombat() != null
+                    && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS);
+            if (!stackWindow && !combatWindow) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // 2. the white creatures of ours the grant reaches
+            final CardCollection ours = affected(ai, sa);
+            if (ours.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            // 3. affordable from real mana: a WillPlay goes on into canPayCost, whose test payment
+            //    draws per source it tries (row 159). G2 on this spell's own cost (row 77), never
+            //    getAvailableManaEstimate (it counts the words of Produced$).
+            if (!sa.isCastFromPlayEffect() && !sa.isCopied() && !affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // 4. what the window saves, per colour, and the floor
+            final Map<String, CardCollection> saves = stackWindow
+                    ? stackSaves(ai, ours) : combatSaves(ai, game.getCombat(), ours);
+            final String best = bestColor(saves, ours, MagicColor.Constant.ONLY_COLORS);
+            if (best == null || !passesFloor(saves.get(best))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // At resolution this spell is still on the stack (MagicStack.resolveStack removes it after
+        // it resolves), so the threat it answered is the first item below it.
+        public static String chooseColor(final Player ai, final SpellAbility sa, final List<String> choices) {
+            final Game game = ai.getGame();
+            final CardCollection ours = affected(ai, sa);
+            Map<String, CardCollection> saves = new LinkedHashMap<>();
+            final SpellAbility below = ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+            if (below != null && below != sa && below.getActivatingPlayer() != null
+                    && below.getActivatingPlayer().isOpponentOf(ai)) {
+                final SpellAbility threat = below.isWrapper() ? ((WrappedAbility) below).getWrappedAbility() : below;
+                for (final String col : colorsOf(threat.getHostCard())) {
+                    saves.put(col, ours); // any host colour stops every link of the chain
+                }
+            } else if (game.getCombat() != null && game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS)) {
+                saves = combatSaves(ai, game.getCombat(), ours);
+            }
+            final String best = bestColor(saves, ours, choices);
+            if (best != null) {
+                return best;
+            }
+            // a forced or mandatory cast with no window: the opponents' creatures' main colour
+            final CardCollection theirs = CardLists.filter(ai.getOpponents().getCardsIn(ZoneType.Battlefield),
+                    CardPredicates.CREATURES);
+            return ComputerUtilCard.getMostProminentColor(theirs, choices);
+        }
+
+        private static CardCollection affected(final Player ai, final SpellAbility sa) {
+            final SpellAbility grant = sa.findSubAbilityByType(ApiType.ProtectionAll);
+            if (grant == null || !grant.hasParam("ValidCards")) {
+                return new CardCollection();
+            }
+            return CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), grant.getParam("ValidCards"),
+                    ai, sa.getHostCard(), grant);
+        }
+
+        // Bathe in Light's screen: HonestMana (G2, held sources skipped, restrictions read on sa)
+        // covers this spell's own cost, in total and in white pips.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            final int need = cost == null ? sa.getHostCard().getCMC() : cost.getCMC();
+            final int whitePips = cost == null ? 1 : cost.getShardCount(forge.card.mana.ManaCostShard.WHITE);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= need && mana.colour(MagicColor.WHITE) >= whitePips;
+        }
+
+        private static Map<String, CardCollection> stackSaves(final Player ai, final CardCollection ours) {
+            final Map<String, CardCollection> out = new LinkedHashMap<>();
+            final SpellAbility top = ai.getGame().getStack().peekAbility();
+            if (top == null || top.getActivatingPlayer() == null || !top.getActivatingPlayer().isOpponentOf(ai)) {
+                return out;
+            }
+            final SpellAbility threat = top.isWrapper() ? ((WrappedAbility) top).getWrappedAbility() : top;
+            final List<String> colors = colorsOf(threat.getHostCard());
+            if (colors.isEmpty() || !stoppedByProtection(threat)) {
+                return out;
+            }
+            final CardCollection saved = new CardCollection();
+            for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, null, true)) {
+                if (o instanceof Card c && ours.contains(c) && !saved.contains(c)) {
+                    saved.add(c);
+                }
+            }
+            if (!saved.isEmpty()) {
+                for (final String col : colors) {
+                    out.put(col, saved);
+                }
+            }
+            return out;
+        }
+
+        // True when protection from the host's colour stops every harmful link for our creatures.
+        // A link that targets only cards is stopped: a protected white creature is an illegal
+        // target. A link that targets a player (an edict, a sweep of "creatures target player
+        // controls": skeptic H1) is judged by its API like an untargeted one. An untargeted
+        // destroy, sacrifice, control, attach or battlefield-leaving link, a -X/-X curse, or
+        // damage that is not the host's or cannot be prevented declines the whole chain.
+        private static boolean stoppedByProtection(final SpellAbility threat) {
+            final Card src = threat.getHostCard();
+            for (SpellAbility part = threat; part != null; part = part.getSubAbility()) {
+                final ApiType api = part.getApi();
+                if (api == null) {
+                    continue;
+                }
+                if (part.usesTargeting() && !part.getTargets().getTargetPlayers().iterator().hasNext()) {
+                    continue; // targets cards only
+                }
+                switch (api) {
+                    case DealDamage:
+                    case DamageAll:
+                        if (part.hasParam("DamageSource") || !src.canDamagePrevented(false)) {
+                            return false;
+                        }
+                        break;
+                    case Destroy: case DestroyAll: case Sacrifice: case SacrificeAll:
+                    case GainControl: case ExchangeControl: case Attach:
+                        return false;
+                    case Pump: case PumpAll:
+                        if (part.isCurse() || part.getParamOrDefault("NumDef", "").startsWith("-")) {
+                            return false;
+                        }
+                        break;
+                    case ChangeZone: case ChangeZoneAll: {
+                        final String origin = part.getParamOrDefault("Origin", "");
+                        if (origin.isEmpty() || origin.contains("Battlefield")) {
+                            return false;
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+            return true;
+        }
+
+        // Skeptic H2: the colours every foe shares (and whose damage can be prevented) come
+        // first, so the death predictors, and combatantCantBeDestroyed's regeneration scan, run
+        // only for a combatant some colour could save.
+        private static Map<String, CardCollection> combatSaves(final Player ai, final Combat combat,
+                                                               final CardCollection ours) {
+            final Map<String, CardCollection> out = new LinkedHashMap<>();
+            for (final Card c : ours) {
+                final boolean attacking = combat.isAttacking(c);
+                if (!attacking && !combat.isBlocking(c)) {
+                    continue; // cheap: outside combat
+                }
+                final List<Card> foes = attacking ? combat.getBlockers(c) : combat.getAttackersBlockedBy(c);
+                if (foes == null || foes.isEmpty()) {
+                    continue;
+                }
+                final List<String> shared = new ArrayList<>();
+                for (final byte color : MagicColor.WUBRG) {
+                    boolean all = true;
+                    for (final Card f : foes) {
+                        if (!f.getColor().hasAnyColor(color) || !f.canDamagePrevented(true)) {
+                            all = false;
+                            break;
+                        }
+                    }
+                    if (all) {
+                        shared.add(MagicColor.toLongString(color));
+                    }
+                }
+                if (shared.isEmpty() || !ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                        || ComputerUtilCombat.combatantCantBeDestroyed(ai, c)) {
+                    continue;
+                }
+                for (final String col : shared) {
+                    out.computeIfAbsent(col, k -> new CardCollection()).add(c);
+                }
+            }
+            return out;
+        }
+
+        // Highest saved value; a colour that would shed an attachment of ours is never picked; ties
+        // prefer non-white, then WUBRG order. Deterministic: no getBestAI (its all-lands branch
+        // rolls).
+        private static String bestColor(final Map<String, CardCollection> saves, final CardCollection ours,
+                                        final List<String> choices) {
+            String best = null;
+            int bestValue = -1;
+            for (final byte b : MagicColor.WUBRG) {
+                final String col = MagicColor.toLongString(b);
+                final CardCollection saved = saves.get(col);
+                if (saved == null || saved.isEmpty() || !choices.contains(col) || shedsOwnAttachment(ours, b)) {
+                    continue;
+                }
+                int value = 0;
+                for (final Card c : saved) {
+                    value += ComputerUtilCard.evaluateCreature(c);
+                }
+                if (value > bestValue || (value == bestValue && MagicColor.Constant.WHITE.equals(best))) {
+                    best = col;
+                    bestValue = value;
+                }
+            }
+            return best;
+        }
+
+        // Protection sheds Auras and Equipment of its colour from every affected creature.
+        private static boolean shedsOwnAttachment(final CardCollection ours, final byte color) {
+            for (final Card c : ours) {
+                for (final Card a : c.getAttachedCards()) {
+                    if (a.getController() == c.getController() && a.getColor().hasAnyColor(color)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean passesFloor(final CardCollection saved) {
+            if (saved == null || saved.isEmpty()) {
+                return false;
+            }
+            if (saved.size() >= MIN_SAVED) {
+                return true;
+            }
+            final Card c = saved.get(0);
+            return c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= MIN_CREATURE_VALUE;
+        }
+
+        private static List<String> colorsOf(final Card src) {
+            final List<String> out = new ArrayList<>();
+            if (src == null) {
+                return out;
+            }
+            for (final byte b : MagicColor.WUBRG) {
+                if (src.getColor().hasAnyColor(b)) {
+                    out.add(MagicColor.toLongString(b));
+                }
+            }
+            return out;
+        }
+    }
+
     // Brokers Confluence
     // "Choose three. You may choose the same mode more than once." CharmAi's multi-mode picker
     // (chooseMultipleOptionsAi) ignores CanRepeatModes and needs three distinct modes that each pass

@@ -20,6 +20,15 @@ public class ChooseColorAi extends SpellAbilityAi {
         final String sourceName = ComputerUtilAbility.getAbilitySourceName(sa);
         final PhaseHandler ph = game.getPhaseHandler();
 
+        // Brave the Elements (dead-card batch 2, row 54): judged whole in
+        // SpecialCardAi.BraveTheElements (a stack or after-blocks save with a value floor).
+        // AI:RemoveDeck:All kept the owner's cast out of every evaluation, and effect casts
+        // reached the unconditional WillPlay below without a draw, so a decline here draws
+        // nothing on either path.
+        if (SpecialCardAi.BraveTheElements.NAME.equals(sourceName)) {
+            return SpecialCardAi.BraveTheElements.consider(ai, sa);
+        }
+
         if (!sa.hasParam("AILogic")) {
             return new AiAbilityDecision(0, AiPlayDecision.MissingLogic);
         }
