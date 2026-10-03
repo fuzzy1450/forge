@@ -25,8 +25,21 @@ public class PermanentNoncreatureAi extends PermanentAi {
     // canPlayFromEffectAI uses for Play effects (Nathan Drake's exile-and-cast), goes straight to
     // checkApiLogic; that path never read the hint, so it stays stock. The hook runs only after
     // the stock checks (restrictions, the main-2 wait, checkApiLogic, willPayCosts) approved.
+    //
+    // Misleading Signpost dropped AI:RemoveDeck:All. It has Flash, so the stock approval below
+    // would cast it at almost every priority outside our own Main 1; its window (an end step
+    // before our own turn, empty stack, payable by G2) is judged first, before super.canPlay and
+    // before canPlaySa's canPayCost, so every decline draws nothing. Reached via
+    // AiController.canPlaySa (the cast path and its other public callers); a Play-effect cast
+    // (Nathan Drake's attack trigger) never comes here and keeps A's stock approval.
     @Override
     protected AiAbilityDecision canPlay(final Player ai, final SpellAbility sa) {
+        if (sa.isSpell() && SpecialCardAi.MisleadingSignpost.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            final AiAbilityDecision window = SpecialCardAi.MisleadingSignpost.consider(ai, sa);
+            if (!window.willingToPlay()) {
+                return window;
+            }
+        }
         final AiAbilityDecision decision = super.canPlay(ai, sa);
         if (decision.willingToPlay() && sa.isSpell()
                 && SpecialCardAi.ImprobableAlliance.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {

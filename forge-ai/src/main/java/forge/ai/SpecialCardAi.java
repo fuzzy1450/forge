@@ -12321,6 +12321,52 @@ public class SpecialCardAi {
         }
     }
 
+    // Misleading Signpost (dead-card batch 2, row 86)
+    // "Flash / When this artifact enters during the declare attackers step, you may reselect
+    // which player or permanent target attacking creature is attacking. / {T}: Add {U}."
+    // ChangeCombatantsAi.doTriggerNoCost declines every optional trigger, so in AI hands this is
+    // a 3-mana blue rock. Flash lets the stock PermanentAi approval fire at every priority outside
+    // our own Main 1: our upkeep before the land drop and the draw, in response to any spell, or
+    // on the opponent's turn with the mana our flash creatures and counterspells want. Cast it
+    // only in an end step after which our own turn comes next, with an empty stack: the three
+    // mana would be lost at our untap anyway, and the rock is untapped for our next turn exactly
+    // as a Main 2 cast would be. In that window the enters trigger cannot fire.
+    // Reached from PermanentNoncreatureAi.canPlay, i.e. via AiController.canPlaySa (the cast path
+    // and its other public callers), never from canPlayFromEffectAI: a Play effect (Nathan
+    // Drake's attack trigger) goes through PermanentAi.doTriggerNoCost and keeps A's approval.
+    // RNG: AI:RemoveDeck:All kept A from ever evaluating this card. Both declines come before
+    // canPlayAndPayForFace's canPayCost, whose test payment draws MyRandom
+    // (ComputerUtilMana.isManaSourceReserved). The bound is G2 (HonestMana, held sources
+    // skipped), never getAvailableManaEstimate (it counts the words of Produced$: Command Tower
+    // or Arcane Signet 2, a Talisman 3), so a held Signpost leaves the stored stream only where
+    // it is cast, or where the count still over-counts.
+    // Not a script AILogic$ AtOppEOT on an explicit SP$ line: that has no affordability bound
+    // and no empty-stack check, and it would turn the SpellPermanent into a SpellApiBased spell.
+    public static class MisleadingSignpost {
+        public static final String NAME = "Misleading Signpost";
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // O(1) window first: no scan at all outside it
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.getNextTurn() != ai || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // judged on this spell's own cost (never host.getFirstSpellAbility(): row 77)
+            final ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            final int bluePips = cost == null ? 1 : cost.getShardCount(forge.card.mana.ManaCostShard.BLUE);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < host.getCMC() || mana.colour(MagicColor.BLUE) < bluePips) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Mizzix's Mastery
     // "Exile target card that's an instant or sorcery from your graveyard. For
     // each card exiled this way, copy it, and you may cast the copy without
