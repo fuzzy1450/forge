@@ -85,6 +85,14 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.GiftOfDoom.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.ShieldedByFaith.NAME.equals(source.getName())) {
+            // Judged whole in SpecialCardAi.ShieldedByFaith: the stock Pump preference has no
+            // floor (Indestructible is "useful" on a 1/1 token, isUsefulAttachKeyword) and writes
+            // ATTACHED_THIS_TURN on a decline. A Play-effect cast (a thief's DB$ Play) comes
+            // through doTriggerNoCost, never here, and keeps the stock path.
+            return SpecialCardAi.ShieldedByFaith.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {
@@ -968,6 +976,17 @@ public class AttachAi extends SpellAbilityAi {
             targets = sa.getTargets();
         }
 
+        if (!mandatory && tgt == null && !sa.isSpell() && !targets.isEmpty()
+                && SpecialCardAi.ShieldedByFaith.NAME.equals(card.getName())
+                && targets.get(0) instanceof Card entering) {
+            // "Whenever a creature enters, you may attach Shielded by Faith to that creature": the
+            // answer below is yes for every creature (the Equipment branch is the only veto), an
+            // opponent's included. Only the resolution-time ask (confirmTrigger, mandatory false)
+            // comes here; the stack-time call (orderAndPlaySimultaneousSa, mandatory true) stays
+            // stock, so the trigger still goes on the stack.
+            return SpecialCardAi.ShieldedByFaith.considerMove(ai, card, entering);
+        }
+
         if (!mandatory && card.isEquipment() && !targets.isEmpty()) {
             Card newTarget = (Card) targets.get(0);
             if (newTarget.getController().isOpponentOf(ai)) {
@@ -1822,6 +1841,21 @@ public class AttachAi extends SpellAbilityAi {
 
     @Override
     public boolean confirmAction(Player player, SpellAbility sa, PlayerActionConfirmMode mode, String message, Map<String, Object> params) {
+        if (sa.hasParam("Optional") && "TriggeredCardLKICopy".equals(sa.getParam("Object"))) {
+            // An optional "attach the Aura that entered" (Ajani's Chosen: "If that enchantment is
+            // an Aura, you may attach it to the token"). Shielded by Faith alone is judged, by its
+            // own move rule, so a 2/2 Cat never takes it off a real holder; every other answer is
+            // the stock yes.
+            for (final Card obj : AbilityUtils.getDefinedCards(sa.getHostCard(), "TriggeredCardLKICopy", sa)) {
+                if (!SpecialCardAi.ShieldedByFaith.NAME.equals(obj.getName())) {
+                    continue;
+                }
+                final Card aura = player.getGame().getCardState(obj, null);
+                final List<Card> dest = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa);
+                return aura != null && dest.size() == 1
+                        && SpecialCardAi.ShieldedByFaith.considerMove(player, aura, dest.get(0)).willingToPlay();
+            }
+        }
         return true;
     }
 

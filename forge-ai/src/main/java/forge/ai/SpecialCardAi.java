@@ -14978,6 +14978,127 @@ public class SpecialCardAi {
         }
     }
 
+    // Shielded by Faith (dead-card batch 2, row 28)
+    // "Enchant creature. Enchanted creature has indestructible. Whenever a creature enters, you
+    // may attach Shielded by Faith to that creature." The card carried AI:RemoveDeck:All
+    // (AiController.getSpellAbilityToPlay dropped it before any handler), so the spell was never
+    // evaluated and drew no random number. Behind the hint the stock Pump preference has no floor
+    // (it would enchant a 1/1 token), the stock trigger answer (AttachAi.doTriggerNoCost) moves the
+    // Aura onto every creature that enters, an opponent's included, and Ajani's Chosen's optional
+    // attach (AttachAi.confirmAction, always yes) moves it onto a 2/2 Cat token. Three name gates
+    // route here:
+    // - consider (AttachAi.checkApiLogic, the Aura spell): enchant our best holder worth MIN_VALUE
+    //   or more, when the cost as the engine prices it with that target in place (test-mode
+    //   calculateManaCost: Transcendent Envoy's Aura reduction and a ValidTarget reducer such as
+    //   Killian, Ink Duelist count) fits HonestMana (G2) in total and in white; otherwise decline
+    //   with no target left set. Never getAvailableManaEstimate, which counts the words of
+    //   Produced$, so an approval reaches canPayCost's isManaSourceReserved draws only in a window
+    //   G2 believes payable.
+    // - considerMove (AttachAi.doTriggerNoCost at resolution, and AttachAi.confirmAction for
+    //   Ajani's Chosen): move only onto a live holder of ours worth MIN_VALUE or more, and only
+    //   when it beats the current holder of ours by MOVE_MARGIN; freely when the Aura guards
+    //   nothing of ours. Never onto an opponent's creature.
+    // Holder: a creature we control, not already indestructible, not useless, not leaving at end
+    // of turn, not crewed this turn, not a Targeting Dies/Counter body (AttachAi's own pump
+    // exclusions: getSafeTargets, EndOfTurnLeavePlay, getTimesCrewedThisTurn), that this Aura can
+    // enchant. An enchanted creature qualifies: indestructible guards its other Auras too. Value:
+    // CreatureEvaluator, minus its indestructible bonus (the current holder has it from this
+    // Aura), plus COMMANDER_BONUS for our own commander. Draws no random number, holds no mana and
+    // writes no memory set, so a decline leaves the control's random stream untouched.
+    public static class ShieldedByFaith {
+        public static final String NAME = "Shielded by Faith";
+        // a vanilla non-token 2/2 for two (CreatureEvaluator: 80+20+30+20+10 = 160) qualifies;
+        // 1/1 and 2/2 tokens (<= 131), Daxos's Spirits below four experience and Mesa Enchantress
+        // (136) never do
+        public static final int MIN_VALUE = 160;
+        // the re-cast tax and the deck's engine (Daxos the Returned, Killian, Decisive Mentor)
+        public static final int COMMANDER_BONUS = 50;
+        // about +2 power: no sidegrade shuffles
+        public static final int MOVE_MARGIN = 30;
+        // CreatureEvaluator's indestructible ("darksteel") bonus
+        private static final int INDESTRUCTIBLE_VALUE = 70;
+
+        // AttachAi.checkApiLogic's name gate: choose the creature to enchant, or don't cast
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card aura = sa.getHostCard();
+            sa.resetTargets();
+            Card best = null;
+            int bestValue = Integer.MIN_VALUE;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!isHolder(ai, aura, c) || !sa.canTarget(c)) {
+                    continue;
+                }
+                final int v = holderValue(ai, c);
+                if (v >= MIN_VALUE && v > bestValue) {
+                    best = c;
+                    bestValue = v;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            if (!affordable(ai, sa)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // AttachAi.doTriggerNoCost's and AttachAi.confirmAction's name gates: move the Aura onto
+        // the creature that entered (an LKI copy from TriggeredCardLKICopy, or Ajani's Cat), or not
+        public static AiAbilityDecision considerMove(final Player ai, final Card aura, final Card enteringLki) {
+            // AttachEffect's own liveness idiom: an LKI whose card is gone or has changed zones
+            // since is not a holder (Game.getCardState would hand the LKI back, still "in play")
+            final Card entering = ai.getGame().getCardState(enteringLki, null);
+            if (entering == null || !enteringLki.equalsWithGameTimestamp(entering) || !isHolder(ai, aura, entering)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int gain = holderValue(ai, entering);
+            if (gain < MIN_VALUE) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card current = aura.getEnchantingCard();
+            if (current == null || !current.isInPlay() || !ai.equals(current.getController())) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // it guards nothing of ours now
+            }
+            return gain >= holderValue(ai, current) + MOVE_MARGIN
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        private static boolean isHolder(final Player ai, final Card aura, final Card c) {
+            return c.isCreature() && c.isInPlay() && ai.equals(c.getController())
+                    && !c.hasKeyword(Keyword.INDESTRUCTIBLE)
+                    && !c.hasSVar("EndOfTurnLeavePlay")
+                    && c.getTimesCrewedThisTurn() == 0
+                    && !"Dies".equals(c.getSVar("Targeting")) && !"Counter".equals(c.getSVar("Targeting"))
+                    && !ComputerUtilCard.isUselessCreature(ai, c)
+                    && c.canBeAttached(aura, null);
+        }
+
+        private static int holderValue(final Player ai, final Card c) {
+            int v = ComputerUtilCard.evaluateCreature(c);
+            if (c.hasKeyword(Keyword.INDESTRUCTIBLE)) {
+                v -= INDESTRUCTIBLE_VALUE; // the current holder's bonus is this Aura's own
+            }
+            if (c.isRealCommander() && ai.equals(c.getOwner())) {
+                v += COMMANDER_BONUS;
+            }
+            return v;
+        }
+
+        // The cost after CostAdjustment with the chosen target in place (calculateManaCost in
+        // test mode, the G1 ceiling's call: no MyRandom, nothing written to the SA) against G2's
+        // total and white.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
+        }
+    }
+
     // Sin, Unending Cataclysm
     // "As Sin enters, remove all counters from any number of artifacts, creatures, and
     // enchantments. Sin enters with X +1/+1 counters, where X is twice the number removed."
