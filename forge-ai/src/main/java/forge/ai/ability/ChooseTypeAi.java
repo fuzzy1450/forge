@@ -28,6 +28,12 @@ public class ChooseTypeAi extends SpellAbilityAi {
             // exactly the path it took before this branch.
             return SpecialCardAi.MarchFromVelisVel.consider(aiPlayer, sa);
         }
+        if (SpecialCardAi.WindingWay.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // No AILogic (MissingLogic below). The cast floor and the creature-or-land pick
+            // are judged together in SpecialCardAi.WindingWay; the Dig sub still goes through
+            // DigAi.chkDrawback (library > DigNum + 2, Main 2) after this returns.
+            return SpecialCardAi.WindingWay.consider(aiPlayer, sa);
+        }
         String aiLogic = sa.getParamOrDefault("AILogic", "");
 
         if (aiLogic.isEmpty()) {

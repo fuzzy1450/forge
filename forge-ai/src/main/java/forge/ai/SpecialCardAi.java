@@ -22304,6 +22304,126 @@ public class SpecialCardAi {
         }
     }
 
+    // Winding Way (dead-card batch 2, row 49)
+    // "Choose creature or land. Reveal the top four cards of your library. Put all cards of the
+    // chosen type revealed this way into your hand and the rest into your graveyard." ({1}{G}
+    // Sorcery.) Stock never judged it: AI:RemoveDeck:All dropped it from the playable list
+    // (AiController.getSpellAbilityToPlay), behind the hint ChooseTypeAi answered MissingLogic (no
+    // AILogic), and the "Card" chooser fell to Aggregates.random at resolution. Routed by name
+    // from ChooseTypeAi.canPlay (the cast) and ComputerUtil.chooseSomeType (the pick). The pick is
+    // the type whose expected hits among the top four are worth most, a land counting in full only
+    // while the AI is short of lands (only one land a turn can be played). In order, every decline
+    // before any WillPlay:
+    // - the base class's restriction check, which the routing bypasses, else CantPlaySa;
+    // - window: our own Main 2 with an empty stack, else AnotherTime. DigAi.checkApiLogic refuses
+    //   the Dig sub before Main 2 anyway, and a land found in Main 2 can still be played;
+    // - a library of MIN_LIBRARY or more (DigAi's own "don't deck yourself" line refuses at
+    //   DigNum + 2 or fewer), else CantPlayAi;
+    // - room in the hand after the cast (hits past our own cleanup are discarded: BorrowingArrows'
+    //   "kept" rule), else CantPlayAi;
+    // - affordable, else CantAfford: HonestMana (G2, held sources skipped, restrictions read on
+    //   this spell) covers this spell's own cost (sa.getPayCosts(), never
+    //   host.getFirstSpellAbility(): row 77), in total and in green pips. Never
+    //   getAvailableManaEstimate here: it counts the words of Produced$ (Command Tower 2, a tri-land
+    //   3). G2 also skips a mana ability with mana in its own cost, so a filter land (Painted
+    //   Bluffs, Conduit Pylons: {1},{T}: Any) is not a green source. An approval in an unpayable
+    //   window would reach canPayCost's isManaSourceReserved roll with no cast;
+    // - the pick's weighted expected hits, capped by that room, at least FLOOR_X100 (the pick
+    //   replaces the card in expectation), else CantPlayAi.
+    // The graveyard half ("the rest into your graveyard") is valued at 0. Every check is a read
+    // that draws nothing; nothing is targeted, held or remembered, so a decline costs exactly what
+    // the hint cost (nothing).
+    public static class WindingWay {
+        public static final String NAME = "Winding Way";
+        static final int DIG = 4;                 // DigNum$ 4
+        static final int MIN_LIBRARY = DIG + 3;   // DigAi.checkApiLogic declines at library <= DigNum + 2
+        static final int LAND_GOAL = 5;           // fewer lands in play than this: a land is wanted
+        static final int FLOOR_X100 = 100;        // weighted expected hits, hundredths of a card
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // Routing from ChooseTypeAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            // cheapest first; DigAi.checkApiLogic refuses the Dig sub before Main 2 anyway
+            if (!ph.is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (library.size() < MIN_LIBRARY) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // hits past our own cleanup are discarded: count only what the hand can keep
+            int room = Integer.MAX_VALUE / 100;
+            if (!ai.isUnlimitedHandSize()) {
+                final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
+                room = ai.getMaxHandSize() - (hand.size() - (hand.contains(host) ? 1 : 0));
+                if (room <= 0) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // judged on this spell's own cost (never host.getFirstSpellAbility(): row 77), from
+            // G2 and never the bare estimate; RNG-free, so an unaffordable window is refused here
+            // exactly as the hint refused it, before canPayCost's isManaSourceReserved roll
+            final ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            final int need = cost == null ? host.getCMC() : cost.getCMC();
+            final int greenPips = cost == null ? 1 : cost.getShardCount(forge.card.mana.ManaCostShard.GREEN);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < need || mana.colour(MagicColor.GREEN) < greenPips) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int[] pick = weigh(ai, library);
+            return Math.min(pick[1], room * 100) >= FLOOR_X100
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // Resolution (ComputerUtil.chooseSomeType, "Card"): the same pick, deterministic; never
+        // empty, so the Aggregates.random fallback is never reached for this card.
+        public static String chooseType(final Player ai, final Collection<String> validTypes) {
+            final String t = weigh(ai, ai.getCardsIn(ZoneType.Library))[0] == 1 ? "Land" : "Creature";
+            if (validTypes.contains(t)) {
+                return t;
+            }
+            return validTypes.isEmpty() ? "Creature" : validTypes.iterator().next();
+        }
+
+        // {0 = Creature | 1 = Land, weighted expected hits among the top four x100}.
+        // Expected hits of a type = 400 * count / library (library composition only, never its
+        // order: the same knowledge as the decklist; a land creature counts for both). A land
+        // counts in full while land-short: no land in hand and fewer than LAND_GOAL lands in play,
+        // or a nonland card in hand costing more than the lands in play. Otherwise it counts half,
+        // since only one land a turn can be played. A tie goes to Land only when land-short.
+        private static int[] weigh(final Player ai, final CardCollectionView library) {
+            final int size = library.size();
+            if (size == 0) {
+                return new int[] {0, 0};
+            }
+            int creatures = 0;
+            int lands = 0;
+            for (final Card c : library) {
+                if (c.isCreature()) {
+                    creatures++;
+                }
+                if (c.isLand()) {
+                    lands++;
+                }
+            }
+            final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
+            final int landsInPlay = ai.getLandsInPlay().size();
+            final boolean landShort = !hand.anyMatch(CardPredicates.LANDS)
+                    && (landsInPlay < LAND_GOAL || hand.anyMatch(c -> !c.isLand() && c.getCMC() > landsInPlay));
+            final int creatureX100 = 400 * creatures / size;
+            final int landX100 = (landShort ? 400 : 200) * lands / size;
+            return landX100 > creatureX100 || (landShort && landX100 == creatureX100)
+                    ? new int[] {1, landX100} : new int[] {0, creatureX100};
+        }
+    }
+
     // Winter, Cynical Opportunist (commander of precon:Death Toll (DSC))
     // "Delirium -- At the beginning of your end step, you may exile any number of cards from
     // your graveyard with four or more card types among them. If you do, put a permanent card

@@ -2444,7 +2444,12 @@ public class ComputerUtil {
             // TODO
             // computer will need to choose a type based on whether it needs a creature or land,
             // otherwise, lib search for most common type left then, reveal chosenType to Human
-            if (game.getPhaseHandler().is(PhaseType.UNTAP) && logic == null) { // Storage Matrix
+            if (SpecialCardAi.WindingWay.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // The pick SpecialCardAi.WindingWay.consider judged the cast on, made again at
+                // resolution (so a card lost in response is counted; a thief or a copier picks
+                // for its own library). Every other "Card" chooser keeps the branches below.
+                chosen = SpecialCardAi.WindingWay.chooseType(ai, validTypes);
+            } else if (game.getPhaseHandler().is(PhaseType.UNTAP) && logic == null) { // Storage Matrix
                 double amount = 0;
                 for (String type : validTypes) {
                     CardCollection list = CardLists.filter(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.isType(type), CardPredicates.TAPPED);
