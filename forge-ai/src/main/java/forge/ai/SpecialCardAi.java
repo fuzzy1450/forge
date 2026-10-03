@@ -16404,6 +16404,70 @@ public class SpecialCardAi {
         }
     }
 
+    // Surreal Memoir
+    // "Return an instant card at random from your graveyard to your hand. Rebound." ({3}{R}
+    // sorcery.) AI:RemoveDeck:All kept it out of every playable list, so its owner never cast it
+    // from hand (1,200 held games, 0 owner casts); the hint is gone and ChangeZoneAi.checkApiLogic
+    // routes the cast from hand here by name. Rebound's free upkeep cast keeps the stock
+    // hiddenTriggerAI path, which approves exactly when an instant is there to return - the right
+    // floor for a free cast. The pick is uniform over the instant cards resolution will see, so the
+    // floor is on that pool: at least one card the AI will actually cast (not AI:RemoveDeck:All)
+    // and at least half the pool such cards - on average one useful instant across the cast and
+    // its rebound. The returned card must fit under the maximum hand size. Our main 2 (the stock
+    // hidden-origin wait), main 1 only with nothing else in hand; the script's AIActivateLast$ True
+    // makes it the last thing cast there. Never while a static of ours grants our spells a copy
+    // keyword the AI pays whenever it can (Wort, the Raidmother's Conspire would tap two held-back
+    // blockers for one more random instant). An approval goes on to canPayCost, whose test payment
+    // draws MyRandom (ComputerUtilMana.isManaSourceReserved), and the stock engine never evaluated
+    // this card, so every check here is RNG-free and affordability - the cost as the engine prices
+    // it (test-mode calculateManaCost: taxes and reductions) against HonestMana (G2) in total and
+    // in red, never getAvailableManaEstimate, which counts the words of Produced$ - is refused
+    // before any WillPlay, judged on the root sa (never host.getFirstSpellAbility(): row 77). No
+    // targets, no X, no memory set, nothing held.
+    public static class SurrealMemoir {
+        public static final String NAME = "Surreal Memoir";
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
+            if (!ph.is(PhaseType.MAIN2, ai) && !(ph.is(PhaseType.MAIN1, ai) && hand.size() <= 1)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            // the card leaves the hand and one instant arrives: it must fit at cleanup
+            if (!ai.isUnlimitedHandSize() && hand.size() > ai.getMaxHandSize()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the pool exactly as ChangeZoneEffect's hidden resolution builds it
+            final CardCollectionView pool = AbilityUtils.filterListByType(
+                    ai.getCardsIn(ZoneType.Graveyard), sa.getParam("ChangeType"), sa);
+            if (pool.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            final int useful = CardLists.count(pool, c -> !ComputerUtilCard.isCardRemAIDeck(c));
+            if (useful < 1 || 2 * useful < pool.size()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (HuntersInsight.grantsCopyKeyword(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.RED) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Survival of the Fittest
     public static class SurvivalOfTheFittest {
         public static Card considerDiscardTarget(final Player ai) {

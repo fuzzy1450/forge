@@ -270,6 +270,21 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.CurseOfTheSwine.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.SurrealMemoir.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)
+                && sa.getHostCard() != null && sa.getHostCard().isInZone(ZoneType.Hand)) {
+            // The cast from hand only (Rebound, and so the card's two-instant value line, exists
+            // only for that cast). The stock hidden-origin path below approves in our main 2 on
+            // any instant in the graveyard: no hand-size check (checkPhaseRestrictions returns
+            // before its Graveyard->Hand veto for hidden spells), no look at what the random pick
+            // can be, and an approval in an unpayable window goes on to canPayCost's MyRandom
+            // draw. AI:RemoveDeck:All stripped the card before any handler ran, so the stock path
+            // drew no random numbers for it. Rebound's free upkeep cast and every Play-effect
+            // cast (doTriggerNoCost -> hiddenTriggerAI), and a Memoir in any other zone
+            // (targetPlayableSpellCard's probes), keep the stock path; every other ChangeZone
+            // card takes exactly the path it took before this branch.
+            return SpecialCardAi.SurrealMemoir.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
