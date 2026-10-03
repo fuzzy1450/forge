@@ -1,7 +1,7 @@
 Name:Berserker's Frenzy
 ManaCost:2 R
 Types:Instant
-A:SP$ RollDice | ActivationPhases$ Upkeep->Declare Attackers | Amount$ 2 | Sides$ 20 | IgnoreLower$ 1 | ResultSubAbilities$ 1-14:MustBlock,15-20:ChooseBlock | SpellDescription$ Cast this spell only before combat or during combat before blockers are declared. Roll two d20 and ignore the lower roll.
+A:SP$ RollDice | ActivationPhases$ Upkeep->Declare Attackers | Amount$ 2 | Sides$ 20 | IgnoreLower$ 1 | ResultSubAbilities$ 1-14:MustBlock,15-20:ChooseBlock | AILogic$ BerserkersFrenzy | SpellDescription$ Cast this spell only before combat or during combat before blockers are declared. Roll two d20 and ignore the lower roll.
 SVar:MustBlock:DB$ ChooseCard | Choices$ Creature | Amount$ X | MinAmount$ 0 | ChoiceTitle$ Choose any number of creatures | SubAbility$ DBEffect | SpellDescription$ 1—14 VERT Choose any number of creatures. They block this turn if able.
 SVar:DBEffect:DB$ Effect | StaticAbilities$ StaticBlock
 SVar:StaticBlock:Mode$ MustBlock | ValidCreature$ Card.ChosenCardStrict | Description$ The chosen creatures block this turn if able.

@@ -2,6 +2,7 @@ package forge.ai.ability;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.Game;
 import forge.game.card.Card;
@@ -22,6 +23,15 @@ public class RollDiceAi extends SpellAbilityAi {
         PhaseHandler ph = game.getPhaseHandler();
         Cost cost = sa.getPayCosts();
         String logic = sa.getParamOrDefault("AILogic", "");
+
+        // Dead-card batch 2, row 80: berserkers_frenzy.txt is the only script with this logic.
+        // The mana-cost default below accepts only at the opponent's end step, which the card's
+        // own ActivationPhases (Upkeep->Declare Attackers) excludes. RollDiceAi draws no RNG on
+        // any path and every decline in the evaluator is RNG-free, so the router's position is
+        // parity-neutral. Play-effect casts (doTriggerNoCost) never reach checkApiLogic.
+        if ("BerserkersFrenzy".equals(logic)) {
+            return SpecialCardAi.BerserkersFrenzy.consider(aiPlayer, sa);
+        }
 
         if (logic.equals("Combat")) {
             boolean result = ph.inCombat() && ((game.getCombat().isAttacking(source) && game.getCombat().isUnblocked(source)) || game.getCombat().isBlocking(source));

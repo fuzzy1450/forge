@@ -976,6 +976,60 @@ public class SpecialCardAi {
         }
     }
 
+    // Berserker's Frenzy (dead-card batch 2, row 80; precon:Draconic Rage (AFC))
+    // "Cast this spell only before combat or during combat before blockers are declared. Roll two
+    // d20 and ignore the lower roll. 1-14: Choose any number of creatures. They block this turn if
+    // able. 15-20: You choose which creatures block this turn and how those creatures block." Never
+    // cast by its owner (992 held games): no hint, but RollDiceAi's mana-cost default accepts only
+    // at the opponent's end step, which the card's own ActivationPhases (Upkeep->Declare
+    // Attackers) excludes. Routed from the top of RollDiceAi.checkApiLogic on AILogic
+    // BerserkersFrenzy, carried by berserkers_frenzy.txt alone.
+    //
+    // The 15-20 half is Master Warcraft's block half word for word, and that declaration already
+    // works for us (PlayerControllerAi.declareBlockers makes only the forced blocks, and
+    // AiAttackController drops the optional blockers while getDeclaresBlockers names us). So the
+    // value floor is MasterWarcraft.consider, called unchanged (shared from here on; a change to it
+    // moves both cards): our own turn, MAIN1 through COMBAT_BEGIN, empty stack, one opponent, and
+    // only when the planner's all-out attack is lethal ONLY if we declare the defender's blocks.
+    // That half lands 51% of the time (1 - (14/20)^2; 66% with Barbarian Class out). The 1-14 half
+    // picks every creature (ChooseCardAi's getBestAI loop): ours never block on our own turn, and
+    // theirs lose only the option NOT to block, never worse for us than their free choice, and our
+    // attack is declared after the roll. A miss costs the card and three mana. The window is
+    // inside the card's own: on an opponent's turn the 1-14 half would force OUR creatures to block.
+    //
+    // RNG: the stock evaluation drew nothing, so every veto before the planner is RNG-free. The
+    // mana check comes before it: an approval goes on to canPayCost, whose test payment draws
+    // MyRandom (ComputerUtilMana.isManaSourceReserved), so an unaffordable WillPlay would re-roll
+    // a game with no visible cast (W12). The cost is priced as the engine prices it
+    // (calculateManaCost in test mode: taxes, reductions, a free copy at 0) against HonestMana
+    // (G2, held sources skipped, restrictions read on sa), never getAvailableManaEstimate, which
+    // counts the words of Produced$. A window that passes every guard runs the planner, with
+    // MasterWarcraft's accepted residual. Holds nothing and remembers nothing.
+    public static class BerserkersFrenzy {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // cheapest first: most consults are an opponent's turn or our upkeep and draw
+            if (!ph.isPlayerTurn(ai) || ph.getPhase().isBefore(PhaseType.MAIN1)
+                    || ph.getPhase().isAfter(PhaseType.COMBAT_BEGIN) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return MasterWarcraft.consider(ai, sa);
+        }
+
+        // The cost after CostAdjustment (calculateManaCost in test mode, the G1 ceiling's call: no
+        // MyRandom, nothing written to the SA) against G2's total and red.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+    }
+
     // Biomantic Mastery
     // Draw a card for each creature target player controls, then draw a card for each creature
     // ANOTHER target player controls. Both draws go to us (Defined$ You); the two targets only
