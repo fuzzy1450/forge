@@ -810,9 +810,11 @@ public class AiController {
     private AiPlayDecision canPlayAndPayFor(final SpellAbility sa) {
         final Card host = sa.getHostCard();
 
-        if (sa.isSpell() && host != null && SpecialCardAi.HierophantBioTitan.NAME.equals(host.getName())) {
-            // drop a counter X left by an evaluation that declined after choosing it:
-            // canPlayFromHost checks the additional cost against it before chooseX runs again
+        if (sa.isSpell() && host != null && (SpecialCardAi.HierophantBioTitan.NAME.equals(host.getName())
+                || SpecialCardAi.SkeletalScrying.NAME.equals(host.getName()))) {
+            // drop a counter X (Hierophant) or a graveyard-exile X (Skeletal Scrying) left by an
+            // evaluation that declined after choosing it: canPlayFromHost checks the additional
+            // cost against it before chooseX runs again
             sa.setXManaCostPaid(null);
         }
 

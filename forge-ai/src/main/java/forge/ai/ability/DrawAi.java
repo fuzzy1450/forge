@@ -96,6 +96,12 @@ public class DrawAi extends SpellAbilityAi {
             // anything else falls through to the stock floors below.
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
+        if (SpecialCardAi.SkeletalScrying.handles(sa.getHostCard()) && !(sa instanceof AbilitySub)) {
+            // X is one number for the mana, the exile and the draw/life: judged whole there
+            // (window, life, hand, library, graveyard fodder). A Play-effect cast (Nathan
+            // Drake) goes through doTriggerNoCost and keeps its stock path.
+            return SpecialCardAi.SkeletalScrying.consider(ai, sa);
+        }
 
         Card hostCard = sa.getHostCard();
         PhaseHandler ph = ai.getGame().getPhaseHandler();

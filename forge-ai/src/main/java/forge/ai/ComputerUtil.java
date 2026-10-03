@@ -647,6 +647,11 @@ public class ComputerUtil {
             return null;
         }
 
+        if (SpecialCardAi.SkeletalScrying.handles(activate) && ai.equals(activate.getOwner())) {
+            // the draw decision capped X at this fodder; pay with it, protected cards last
+            return SpecialCardAi.SkeletalScrying.chooseExile(typeList, amount);
+        }
+
         CardLists.sortByPowerAsc(typeList);
         if (sa.isCraft()) {
             // remove anything above 3 CMC so that high tier stuff doesn't get exiled with this

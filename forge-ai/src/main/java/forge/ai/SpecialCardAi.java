@@ -17769,6 +17769,259 @@ public class SpecialCardAi {
         }
     }
 
+    // Skeletal Scrying
+    // "As an additional cost to cast this spell, exile X cards from your graveyard. You draw X
+    // cards and you lose X life." ({X}{B} instant.) The script carried AI:RemoveDeck:All. Behind the
+    // hint DrawAi's xPaid path would spend every leftover mana at any MAIN2-or-later pass
+    // (setMaxXValue's test payments draw MyRandom each time), floored only by LifeLoseAi's
+    // X + 3 <= life, with a card-neutral X = 1 and no draw-punisher check, and the exile payment
+    // (ComputerUtil.chooseExileFromList) takes the lowest-power cards, flashback spells and
+    // reanimation targets included. Reached from DrawAi.checkApiLogic for the normal cast only (a
+    // Play-effect cast goes through doTriggerNoCost). One window: the end step right before our
+    // turn, empty stack; the mana left there is what we held through our own turn, wasted
+    // otherwise. X = the mana left after {B}, capped by library - 4, hand room, draw-limit statics,
+    // life (at least MIN_LIFE_AFTER left and more than AI_IN_DANGER_MAX_THRESHOLD after the
+    // opponents' unblocked next-turn attack, and never past LifeLoseAi.chkDrawback's X + 3 <= life
+    // veto, which ignores canLoseLife) and the graveyard FODDER: cards neither usable from the
+    // graveyard nor one of the KEEP_CREATURES best creature cards, the Scrying itself left out;
+    // chooseExile pays with exactly that fodder. X >= MIN_X. No opposing draw punisher or thief.
+    // The mana screen is an RNG-free lower bound (enoughMana), not getAvailableManaEstimate, which
+    // counts Command Tower, Arcane Signet and Commander's Sphere as 2 and ignores colour. Every
+    // RNG-free test runs before setMaxXValue; every decline clears X.
+    public static class SkeletalScrying {
+        public static final String NAME = "Skeletal Scrying";
+        static final int MIN_X = 2;              // X = 1 is a card-neutral cycle for {1}{B}
+        static final int LIBRARY_MARGIN = 3;     // DrawAi.targetAI's deck-out margin
+        static final int MIN_LIFE_AFTER = 10;    // Promise of Power's floor, same carrier
+        static final int CHKDRAWBACK_MARGIN = 3; // LifeLoseAi.chkDrawback declines X + 3 > life
+        static final int KEEP_CREATURES = 2;     // reanimation targets kept (Victimize returns two)
+        private static final Set<Keyword> FROM_GRAVEYARD = EnumSet.of(Keyword.FLASHBACK,
+                Keyword.ESCAPE, Keyword.DISTURB, Keyword.UNEARTH, Keyword.EMBALM, Keyword.ETERNALIZE,
+                Keyword.JUMP_START, Keyword.RETRACE, Keyword.SCAVENGE, Keyword.ENCORE,
+                Keyword.AFTERMATH, Keyword.DREDGE, Keyword.HARMONIZE, Keyword.MAYHEM);
+
+        public static boolean handles(final Card host) {
+            return host != null && NAME.equals(host.getName());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            root.setXManaCostPaid(null); // no stale X from an earlier window
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai) || !ai.equals(ph.getNextTurn())
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Card host = sa.getHostCard();
+            final CostExile exile = sa.getPayCosts() == null ? null
+                    : sa.getPayCosts().getCostPartByType(CostExile.class);
+            if (exile == null || !ai.canDraw() || opposingDrawPunisher(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            int cap = ai.getCardsIn(ZoneType.Library).size() - LIBRARY_MARGIN - 1;
+            if (!ai.isUnlimitedHandSize()) {
+                int hand = ai.getCardsIn(ZoneType.Hand).size();
+                if (host.isInZone(ZoneType.Hand)) {
+                    hand--; // the Scrying itself is spent
+                }
+                cap = Math.min(cap, ai.getMaxHandSize() - hand);
+            }
+            cap = Math.min(cap, StaticAbilityCantDraw.canDrawAmount(ai, Integer.MAX_VALUE));
+            cap = Math.min(cap, lifeRoom(ai));
+            // unconditional: chkDrawback vetoes X + 3 > life even when we cannot lose life
+            cap = Math.min(cap, ai.getLife() - CHKDRAWBACK_MARGIN);
+            if (cap >= MIN_X) {
+                final CardCollection valid = CardLists.filter(CardLists.getValidCards(
+                        ai.getCardsIn(ZoneType.Graveyard), exile.getType().split(";"), ai, host, sa),
+                        CardPredicates.canExiledBy(sa, false));
+                valid.remove(host); // cast from the graveyard, it is on the stack when the cost is paid
+                cap = Math.min(cap, fodder(valid).size());
+            }
+            if (cap < MIN_X || !enoughMana(ai, sa, MIN_X + 1)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // first random draw: setMaxXValue's test payments (ComputerUtilMana.isManaSourceReserved)
+            final int x = Math.min(ComputerUtilCost.setMaxXValue(sa, ai, false), cap);
+            if (x < MIN_X) {
+                root.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+            root.setXManaCostPaid(x);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // life we can spend: at least MIN_LIFE_AFTER left, and more than the danger threshold
+        // after every opponent's next-turn attackers connect unblocked (RNG-free)
+        static int lifeRoom(final Player ai) {
+            if (!ai.canLoseLife()) {
+                return Integer.MAX_VALUE;
+            }
+            int unblocked = 0;
+            for (final Player opp : ai.getOpponents()) {
+                unblocked += ComputerUtilCombat.sumDamageIfUnblocked(CardLists.filter(opp.getCreaturesInPlay(),
+                        c -> ComputerUtilCombat.canAttackNextTurn(c, ai)), ai);
+            }
+            final int threshold = AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD);
+            return Math.min(ai.getLife() - MIN_LIFE_AFTER, ai.getLife() - unblocked - threshold - 1);
+        }
+
+        // An RNG-free LOWER bound on the mana we can make here: untapped battlefield sources not
+        // held in an AiCardMemory mana reservation (at END_OF_TURN isManaSourceReserved refuses all
+        // four sets), each counted once through an AI-playable ability
+        // (ComputerUtilMana.getAIPlayableMana: no mana in its own cost) that canPlay() and may be
+        // spent on this spell, at least one of them a {B} maker. getAvailableManaEstimate counts the
+        // words of Produced$ and ignores colour, so on the carriers it approved windows that
+        // setMaxXValue then declined after its draws. Sol Ring's second mana is not counted: a
+        // missed window now and then, never a re-roll.
+        static boolean enoughMana(final Player ai, final SpellAbility sa, final int need) {
+            int sources = 0;
+            boolean black = false;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (src.isTapped() || isHeld(ai, src)) {
+                    continue;
+                }
+                boolean counted = false;
+                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    counted = true;
+                    if (ma.canProduce("B")) {
+                        black = true;
+                        break;
+                    }
+                }
+                if (counted) {
+                    sources++;
+                }
+            }
+            return black && sources >= need;
+        }
+
+        private static boolean isHeld(final Player ai, final Card src) {
+            return AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+
+        static boolean usableFromGraveyard(final Card c) {
+            for (final Keyword k : FROM_GRAVEYARD) {
+                if (c.hasKeyword(k)) {
+                    return true;
+                }
+            }
+            for (final SpellAbility s : c.getSpellAbilities()) {
+                if (s.getRestrictions() != null && s.getRestrictions().getZone() == ZoneType.Graveyard) {
+                    return true;
+                }
+            }
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getActiveZone() != null && t.getActiveZone().contains(ZoneType.Graveyard)) {
+                    return true;
+                }
+            }
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (st.getActiveZone() != null && st.getActiveZone().contains(ZoneType.Graveyard)) {
+                    return true;
+                }
+            }
+            for (final ReplacementEffect re : c.getReplacementEffects()) {
+                if (re.getActiveZone() != null && re.getActiveZone().contains(ZoneType.Graveyard)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the protected cards: graveyard-usable ones and the KEEP_CREATURES best creature cards
+        static CardCollection protectedCards(final CardCollection valid) {
+            final CardCollection kept = new CardCollection();
+            final List<Card> creatures = Lists.newArrayList();
+            for (final Card c : valid) {
+                if (usableFromGraveyard(c)) {
+                    kept.add(c);
+                } else if (c.isCreature()) {
+                    creatures.add(c);
+                }
+            }
+            creatures.sort((a, b) -> {
+                final int d = ComputerUtilCard.evaluateCreature(b) - ComputerUtilCard.evaluateCreature(a);
+                return d != 0 ? d : Integer.compare(a.getId(), b.getId());
+            });
+            kept.addAll(creatures.subList(0, Math.min(KEEP_CREATURES, creatures.size())));
+            return kept;
+        }
+
+        // fodder in the stock payment order (stable sortByPowerAsc over graveyard order)
+        static CardCollection fodder(final CardCollection valid) {
+            final CardCollection f = new CardCollection(valid);
+            f.removeAll(protectedCards(valid));
+            CardLists.sortByPowerAsc(f);
+            return f;
+        }
+
+        // the payment (ComputerUtil.chooseExileFromList, owner's cast only): fodder first, then the
+        // protected cards least valuable first, graveyard-usable ones last. Never null: the caller
+        // already checked typeList.size() >= amount.
+        public static CardCollection chooseExile(final CardCollection typeList, final int amount) {
+            final CardCollection order = fodder(typeList);
+            final CardCollection rest = protectedCards(typeList);
+            rest.sort((a, b) -> {
+                final int ua = usableFromGraveyard(a) ? 1 : 0, ub = usableFromGraveyard(b) ? 1 : 0;
+                if (ua != ub) {
+                    return ua - ub;
+                }
+                final int d = worth(a) - worth(b);
+                return d != 0 ? d : Integer.compare(a.getId(), b.getId());
+            });
+            order.addAll(rest);
+            return order.subList(0, amount);
+        }
+
+        private static int worth(final Card c) {
+            return c.isCreature() ? ComputerUtilCard.evaluateCreature(c) : 0;
+        }
+
+        // A private copy of CommandersInsight.opposingDrawPunisher (never unify the draw-punisher
+        // scans): an opposing Mode$ Drawn trigger whose ValidCard names opponents, an owner or
+        // nothing at all (Orcish Bowmasters, Nekusar, Sheoldred), or an opposing Draw/DrawCards
+        // replacement that applies to us (Notion Thief, Hullbreacher). Our own Bowmasters is skipped.
+        private static boolean opposingDrawPunisher(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() != TriggerType.Drawn) {
+                            continue;
+                        }
+                        final String valid = t.getParamOrDefault("ValidCard", "Card");
+                        if (valid.contains("Opp") || valid.equals("Card") || valid.contains("OwnedBy")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (ai.equals(c.getController())) {
+                    continue;
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Slate of Ancestry
     // "{4}, {T}, Discard your hand: Draw a card for each creature you control." The script carries the
     // floors (cast only with 3+ creatures; activate only in the opponent's end step before our turn, only
