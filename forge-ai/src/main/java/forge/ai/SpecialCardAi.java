@@ -20496,7 +20496,9 @@ public class SpecialCardAi {
     // whole spell, from hand and foretold alike. The script now approves that sub with
     // AILogic$ Always (row 25's idiom), and the value floor is the stock root, unchanged:
     // evaluateDamageAll's creature trade (the weakest opponent's killed creatures minus ours, more
-    // than 200, or 126 in Main 1 when none of ours dies).
+    // than 200, or 126 in Main 1 when none of ours dies). cascadeOutweighs (W10 retry) adds one
+    // decline ahead of it, for creatures of ours that trade misses because they die only after
+    // the sweep.
     // With the veto gone a floor pass reaches canPayCost, whose test payment draws MyRandom in
     // ComputerUtilMana.isManaSourceReserved; the veto used to stop every window before it.
     // canAfford refuses, RNG-free, the windows that payment must refuse anyway: the cost after
@@ -20524,6 +20526,98 @@ public class SpecialCardAi {
             final HonestMana mana = HonestMana.of(ai, sa, true);
             return mana.total() >= cost.getConvertedManaCost()
                     && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // The stock floor's own side (evaluateDamageAll) leaves out a creature of ours that is
+        // indestructible, or tough past the damage, NOW. Damage stays marked, so one kept alive only
+        // by a Continuous static of a creature of ours the same damage kills (Bastion Protector's
+        // +2/+2 and indestructible on Cloud), or by a counted boost (Conqueror's Flail, AddToughness$
+        // X, which shrinks as the dead leave), dies right after. Count those as lost too, to a
+        // fixpoint. When that adds anyone, re-run the stock trade on the true losses (the weakest
+        // opponent's killed creatures minus ours minus 200) and report true when it fails. When it
+        // adds no one, return false: the stock floor decides as before. Only the stock floor's own
+        // calls plus table reads: RNG-free.
+        public static boolean cascadeOutweighs(final Player ai, final SpellAbility sa) {
+            final Card source = sa.getHostCard();
+            final Player opp = ai.getWeakestOpponent();
+            if (source == null || opp == null || !sa.hasParam("NumDmg")) {
+                return false;
+            }
+            final int dmg = AbilityUtils.calculateAmount(source, sa.getParam("NumDmg"), sa);
+            final String valid = sa.getParamOrDefault("ValidCards", "Creature");
+            final CardCollection ours = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), valid, source.getController(), source, sa);
+            // counted boosts (AddToughness$ X and the like) can shrink as the dead leave: never rely on them
+            final Set<Integer> deadStatics = new HashSet<>();
+            for (final Card p : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final StaticAbility st : p.getStaticAbilities()) {
+                    if (st.checkMode(StaticAbilityMode.Continuous) && st.hasParam("AddToughness")
+                            && !st.getParam("AddToughness").matches("-?\\d+")) {
+                        deadStatics.add(st.getId());
+                    }
+                }
+            }
+            // the stock floor's own list of our losses
+            final CardCollection stock = new CardCollection();
+            for (final Card c : ours) {
+                if (!c.hasKeyword(Keyword.INDESTRUCTIBLE)
+                        && ComputerUtilCombat.predictDamageTo(c, dmg, source, false) >= ComputerUtilCombat.getDamageToKill(c, false)) {
+                    stock.add(c);
+                }
+            }
+            final CardCollection lost = new CardCollection();
+            boolean grew = true;
+            while (grew) {
+                grew = false;
+                for (final Card c : ours) {
+                    if (lost.contains(c)) {
+                        continue;
+                    }
+                    int shed = 0;
+                    for (final Table.Cell<Long, Long, Pair<Integer, Integer>> cell : c.getPTBoostTable().cellSet()) {
+                        final Integer t = cell.getValue().getRight();
+                        if (t != null && t > 0 && deadStatics.contains(cell.getColumnKey().intValue())) {
+                            shed += t;
+                        }
+                    }
+                    boolean indestructible = c.hasKeyword(Keyword.INDESTRUCTIBLE);
+                    if (indestructible && !c.getCurrentState().hasIntrinsicKeyword(Keyword.INDESTRUCTIBLE)) {
+                        // granted: it holds only while a grant from a static not lost still gives it
+                        // (equipment such as Darksteel Plate stays; Bastion Protector, once lost, does not)
+                        boolean live = false;
+                        for (final Table.Cell<Long, Long, forge.game.keyword.KeywordsChange> cell : c.getChangedCardKeywords().cellSet()) {
+                            if (deadStatics.contains(cell.getColumnKey().intValue())) {
+                                continue;
+                            }
+                            for (final forge.game.keyword.KeywordInterface k : cell.getValue().getKeywords()) {
+                                if (k.getKeyword() == Keyword.INDESTRUCTIBLE) {
+                                    live = true;
+                                    break;
+                                }
+                            }
+                            if (live) {
+                                break;
+                            }
+                        }
+                        indestructible = live;
+                    }
+                    if (!indestructible && ComputerUtilCombat.predictDamageTo(c, dmg, source, false)
+                            >= ComputerUtilCombat.getDamageToKill(c, false) - shed) {
+                        lost.add(c);
+                        grew = true;
+                        for (final StaticAbility st : c.getStaticAbilities()) {
+                            deadStatics.add(st.getId());
+                        }
+                    }
+                }
+            }
+            if (lost.size() <= stock.size()) {
+                return false; // nothing cascades (stock is a subset of lost): the stock floor decides
+            }
+            final CardCollection theirs = CardLists.filter(CardLists.getNotKeyword(
+                    CardLists.getValidCards(opp.getCardsIn(ZoneType.Battlefield), valid, source.getController(), source, sa),
+                    Keyword.INDESTRUCTIBLE),
+                    c -> ComputerUtilCombat.predictDamageTo(c, dmg, source, false) >= ComputerUtilCombat.getDamageToKill(c, false));
+            return ComputerUtilCard.evaluateCreatureList(theirs) - ComputerUtilCard.evaluateCreatureList(lost) - 200 <= 0;
         }
     }
 

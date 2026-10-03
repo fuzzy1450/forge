@@ -33,6 +33,12 @@ public class  DamageAllAi extends SpellAbilityAi {
             // name is ""); every other DamageAll card takes exactly the path it took before.
             return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
         }
+        if (SpecialCardAi.UltimateMagicMeteor.isMeteor(sa)
+                && SpecialCardAi.UltimateMagicMeteor.cascadeOutweighs(ai, sa)) {
+            // The stock floor below misses creatures of ours that die only after the sweep (their
+            // indestructible or toughness came from a creature of ours it kills); RNG-free.
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
 
         int x = -1;
         final String damage = sa.getParam("NumDmg");
