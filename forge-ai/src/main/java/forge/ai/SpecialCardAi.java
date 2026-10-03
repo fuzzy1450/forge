@@ -1993,6 +1993,182 @@ public class SpecialCardAi {
         }
     }
 
+    // Chainer, Nightmare Adept
+    // "Discard a card: You may cast a creature spell from your graveyard this turn. Activate only once
+    // each turn." (printed text = Oracle = script: ActivationLimit$ 1, STYardCast's MayPlayLimit$ 1.)
+    // The permission is not a discount: the creature's full cost is paid later, by the stock creature
+    // path. Reached from the name gate in EffectAi.checkApiLogic, before the randomReturn roll, for the
+    // abilities AiController's RemoveDeck filter stripped while the script carried AI:RemoveDeck:All
+    // (hostIsChainer). Worth its card only when the card is junk and a real creature is castable from
+    // the mana the AI leaves idle:
+    // - own MAIN2, empty stack: a creature is sorcery-speed, and the stock path holds a graveyard
+    //   creature to Main 2 anyway (ComputerUtil.hasACardGivingHaste does not see Chainer's haste
+    //   trigger), so Main 1 buys nothing. The script's AIActivateLast$ True sorts the ability behind
+    //   every other play (ComputerUtilAbility.saComparator); without it the 0-cmc rule would consult it
+    //   ahead of the hand and its +50 graveyard cast would take the turn's mana from a hand spell
+    //   (batch-1 row 77's reverted round 1).
+    // - the discard is the payment's own pick: ComputerUtil.getCardPreference "DiscardCost", the call
+    //   both willPayCosts (ComputerUtilCost.checkDiscardCost) and the payment
+    //   (AiController.getCardsToDiscard) make first -- a DiscardMe card, a land the AI does not need,
+    //   or a lone flashback/escape/disturb card. None, or DoNotDiscardIfAble: no. Two or more replay
+    //   cards: no, before the pick, whose Aggregates.random over them would draw.
+    // - a creature card in our graveyard the AI would then cast: not AI:RemoveDeck:All
+    //   (getSpellAbilityToPlay strips those), no X, not refused by PermanentAi.checkApiLogic's legend
+    //   check (mirrored), payable from capacity() in total, in coloured shards and per colour, and
+    //   worth at least a vanilla 2/2 (evaluateCreature).
+    // RNG: none on any path: the phase and stack reads, CardLists.count, getCardPreference short of its
+    // replay-card draw and its declare-blockers branch (not a main phase), the capacity reads,
+    // isCardRemAIDeck, isCardInPlay and evaluateCreature draw nothing. Nothing is remembered or
+    // targeted; the only writes are setActivatingPlayer on the target's spell and the mana abilities
+    // read, as DamageDealAi.explosionManaCapacity does.
+    public static class ChainerNightmareAdept {
+        public static final String NAME = "Chainer, Nightmare Adept";
+        public static final int MIN_TARGET_VALUE = 160; // evaluateCreature of a vanilla 2/2 for {2}
+
+        // The filter keyed the hint on the ability's host's own paper rules (isCardRemAIDeck reads
+        // getRules()), so only a host whose rules are Chainer's had this ability stripped.
+        public static boolean hostIsChainer(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return false;
+            }
+            final forge.card.CardRules rules = host.getRules();
+            return rules != null && NAME.equals(rules.getName());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
+            if (hand.isEmpty() || CardLists.count(hand, c -> c.hasKeyword(Keyword.FLASHBACK)
+                    || c.hasKeyword(Keyword.ESCAPE) || c.hasKeyword(Keyword.DISTURB)) >= 2) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card fodder = ComputerUtil.getCardPreference(ai, sa.getHostCard(), "DiscardCost",
+                    new CardCollection(hand));
+            if (fodder == null || fodder.hasSVar("DoNotDiscardIfAble")) {
+                return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                if (!c.isCreature() || c.isLand() || ComputerUtilCard.isCardRemAIDeck(c)) {
+                    continue;
+                }
+                final ManaCost cost = c.getManaCost();
+                if (cost == null || cost.countX() > 0) {
+                    continue;
+                }
+                final SpellAbility spell = c.getSpellPermanent();
+                if (spell == null) {
+                    continue;
+                }
+                spell.setActivatingPlayer(ai);
+                // PermanentAi.checkApiLogic's legend check: any card of that NAME on our battlefield
+                if (!c.ignoreLegendRule() && ai.isCardInPlay(c.getName()) && !c.hasSVar("AILegendaryException")) {
+                    continue;
+                }
+                if (!fits(capacity(ai, spell), cost)) {
+                    continue;
+                }
+                if (ComputerUtilCard.evaluateCreature(c) >= MIN_TARGET_VALUE) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // A copy of DamageDealAi.explosionManaCapacity (copied, not shared: no accepted card's path
+        // moves). What the AI payment could use now, as [total, W, U, B, R, G, any color]: the sources
+        // ComputerUtilMana.getAvailableManaSources/groupSourcesByManaColor would offer, without the RNG
+        // roll in isManaSourceReserved. A Combo source counts once (getAvailableManaEstimate counts the
+        // words of Produced$: a Combo dual 3, Command Tower 2); sources held in AiCardMemory for the next
+        // spell or for blocks are skipped; mana restrictions are read against the target's own spell.
+        // Errs low.
+        private static int[] capacity(final Player ai, final SpellAbility spell) {
+            final int[] cap = new int[7];
+            cap[0] = ai.getManaPool().totalMana();
+            for (int i = 0; i < 5; i++) {
+                final int n = ai.getManaPool().getAmountOfColor(MagicColor.WUBRG[i]);
+                cap[1 + i] += n;
+                cap[6] += n;
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (src.getManaAbilities().isEmpty()
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)) {
+                    continue;
+                }
+                int best = 0;
+                int colors = 0;
+                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+                    ma.setActivatingPlayer(ai);
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null || !ma.canPlay() || !ma.checkRestrictions(ai) || !mp.meetsManaRestrictions(spell)
+                            || ma.getPayCosts().hasSpecificCostType(forge.game.cost.CostPayLife.class)) {
+                        continue;
+                    }
+                    final String[] tokens = mp.getOrigProduced().split(" ");
+                    final boolean combo = "Combo".equals(tokens[0]);
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    final int net = (combo ? 1 : tokens.length) * amount;
+                    if (net <= 0) {
+                        continue;
+                    }
+                    best = Math.max(best, net);
+                    if (ma.getSubAbility() != null) {
+                        continue; // the payment may refuse the drawback (a Talisman's pain): no colors from it
+                    }
+                    for (int t = combo ? 1 : 0; t < tokens.length; t++) {
+                        if (tokens[t].length() == 1 && "WUBRG".contains(tokens[t])) {
+                            colors |= MagicColor.fromName(tokens[t].charAt(0));
+                        } else if (!"C".equals(tokens[t])) {
+                            colors |= MagicColor.ALL_COLORS;
+                        }
+                    }
+                }
+                cap[0] += best;
+                if (colors != 0) {
+                    cap[6] += best;
+                    for (int i = 0; i < 5; i++) {
+                        if ((colors & MagicColor.WUBRG[i]) != 0) {
+                            cap[1 + i] += best;
+                        }
+                    }
+                }
+            }
+            return cap;
+        }
+
+        // A copy of DamageDealAi.explosionFits for one cost: total mana, each color's mono shards, and
+        // every colored shard (a hybrid needs some color). Phyrexian and 2/C shards are left to generic.
+        // An upper bound.
+        private static boolean fits(final int[] cap, final ManaCost cost) {
+            final int[] need = new int[7];
+            need[0] = cost.getCMC();
+            for (final forge.card.mana.ManaCostShard s : cost) {
+                if (s.isPhyrexian() || s.isOr2Generic() || (s.getColorMask() & MagicColor.ALL_COLORS) == 0) {
+                    continue;
+                }
+                need[6]++;
+                if (s.isMonoColor()) {
+                    for (int i = 0; i < 5; i++) {
+                        if (s.isColor(MagicColor.WUBRG[i])) {
+                            need[1 + i]++;
+                        }
+                    }
+                }
+            }
+            for (int k = 0; k < 7; k++) {
+                if (cap[k] < need[k]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
     // Chain of Acid
     public static class ChainOfAcid {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

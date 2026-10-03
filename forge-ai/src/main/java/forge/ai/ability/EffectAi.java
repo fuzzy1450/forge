@@ -71,6 +71,19 @@ public class EffectAi extends SpellAbilityAi {
             // exactly the path it took before this branch.
             return SpecialCardAi.MasterWarcraft.consider(ai, sa);
         }
+        if ("Chainer, Nightmare Adept".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !sa.isCopiedTrait()
+                && SpecialCardAi.ChainerNightmareAdept.hostIsChainer(sa)) {
+            // "Discard a card: You may cast a creature spell from your graveyard this turn."
+            // Routed before the randomReturn roll: the card used to carry AI:RemoveDeck:All, so
+            // AiController.getSpellAbilityToPlay stripped this ability for every controller (its
+            // owner and a thief alike) and the stock engine never drew for it; every refusal in
+            // the evaluator draws no RNG either. Only the abilities that filter stripped come here:
+            // a copy borrowed through GainsAbilitiesOf (isCopiedTrait) or a Clone's copy (its host's
+            // paper rules are the Clone's) was filtered on its own host's hint, never Chainer's, so
+            // A drew the roll for it whenever it got this far, and it keeps that stock path. Every
+            // other Effect card takes exactly the path it took before this branch.
+            return SpecialCardAi.ChainerNightmareAdept.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final PhaseHandler phase = game.getPhaseHandler();
         boolean randomReturn = MyRandom.getRandom().nextFloat() <= .6667;
