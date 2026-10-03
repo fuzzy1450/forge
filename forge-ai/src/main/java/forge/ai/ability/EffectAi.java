@@ -120,6 +120,16 @@ public class EffectAi extends SpellAbilityAi {
             return SpecialCardAi.TheoreticalDuplication.consider(ai, sa);
         }
 
+        if ("Don't Blink".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Shuffles away the creatures that enter from exile or after being cast from exile
+            // this turn. The no-AILogic fallthrough below refused it every time. Routed after the
+            // randomReturn roll: the card has no RemoveDeck hint, so the stock engine evaluated
+            // it and drew here before refusing, and the evaluator draws no RNG. A name gate, not
+            // an AILogic$, so doTriggerNoCost's AILogic pre-call never runs for it. Every other
+            // Effect card takes exactly the path it took before this branch.
+            return SpecialCardAi.DontBlink.consider(ai, sa);
+        }
+
         if (sa.hasParam("AILogic")) {
             logic = sa.getParam("AILogic");
             if (logic.equals("BeginningOfOppTurn")) {

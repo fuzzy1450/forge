@@ -6126,6 +6126,91 @@ public class SpecialCardAi {
         }
     }
 
+    // Don't Blink
+    // "Until end of turn, if one or more creatures would enter from exile or after being cast
+    // from exile, their owners shuffle them into their libraries instead." ({1}{U} instant; its
+    // cycling is the Draw API and stays with DrawAi)
+    // EffectAi's no-AILogic fallthrough refused it every time. Reached from
+    // EffectAi.checkApiLogic's name gate after the randomReturn roll (the card is unhinted, so
+    // the stock engine drew that roll before refusing); every check here is RNG-free, so a
+    // decline draws exactly what the stock path drew. Worth casting only against an opponent's
+    // creature SPELL that was cast from exile (Nathan Drake's attack trigger, Hostage Taker,
+    // cascade, discover, suspend, foretell, plot, Etali): the replacement's own
+    // Creature.wasCastFromExile test (castFrom Exile and a castSA) on a stack item that is not a
+    // copy and not a mutate merge (it does not enter), activated by an opponent, whose creature
+    // evaluates >= MIN_VALUE. A card of ours an opponent stole and cast counts: its owner, us,
+    // shuffles it back. Declines whenever a creature spell of our own cast from exile is
+    // anywhere on the stack (it would be shuffled too), and always on our own turn: the effect is
+    // symmetric, and our own exile plays (Rassilon, Ensnared by the Mara) and Death in Heaven's
+    // chapter III return land on our turn. Blinks are not answered: their returns are read from
+    // sub-ability chains and delayed triggers, and "until leaves" exiles (Fiend Hunter, Hostage
+    // Taker) return our own creatures. Affordability last and only in the window, because an
+    // approval goes on into canPayCost's mana-reservation rolls, which the stock refusal never
+    // reached: the printed cost of the SA being cast against G2 (HonestMana, held sources
+    // skipped, restrictions read on this sa), in total and in blue, never
+    // getAvailableManaEstimate, which counts the words of Produced$. Draws no RNG and holds
+    // nothing.
+    public static class DontBlink {
+        // a nontoken vanilla 2/2 for 2 on evaluateCreature's scale: 80 + 20 + 2*15 + 2*10 + 2*5
+        public static final int MIN_VALUE = 160;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            if (game.getPhaseHandler().isPlayerTurn(ai) || game.getStack().isEmpty()) { // the common case: O(1) out
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!hasWorthyExileCast(ai, game)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // judge the SA being cast, not host.getFirstSpellAbility() (row 77): a free
+            // Play-effect cast carries no mana cost
+            final ManaCost cost = sa.getPayCosts() == null ? ManaCost.ZERO : sa.getPayCosts().getTotalMana();
+            if (cost.getCMC() > 0) {
+                final HonestMana mana = HonestMana.of(ai, sa, true);
+                if (mana.total() < cost.getCMC()
+                        || mana.colour(MagicColor.BLUE) < cost.getShardCount(forge.card.mana.ManaCostShard.BLUE)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // An opponent's creature spell the replacement will catch, mirroring ValidCard$
+        // Creature.wasCastFromExile. The whole stack is walked, not just its top: our own such
+        // spell anywhere on it vetoes the cast.
+        private static boolean hasWorthyExileCast(final Player ai, final Game game) {
+            boolean worthy = false;
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                if (!si.isSpell()) {
+                    continue;
+                }
+                try {
+                    final SpellAbility item = si.getSpellAbility();
+                    if (item == null || item.isCopied() || item.isMutate()
+                            || item.getApi() != ApiType.PermanentCreature) {
+                        continue;
+                    }
+                    final Player activator = item.getActivatingPlayer();
+                    final Card c = item.getHostCard();
+                    if (activator == null || c == null || !c.isCreature() || c.getCastSA() == null
+                            || c.getCastFrom() == null || c.getCastFrom().getZoneType() != ZoneType.Exile) {
+                        continue;
+                    }
+                    if (activator.equals(ai)) {
+                        return false; // our own exile-cast creature would be shuffled too
+                    }
+                    if (activator.isOpponentOf(ai) && ComputerUtilCard.evaluateCreature(c) >= MIN_VALUE) {
+                        worthy = true;
+                    }
+                } catch (final RuntimeException e) {
+                    // an unresolved stack item that throws counts as no target: the consult runs
+                    // inside the Game AI Eval task
+                }
+            }
+            return worthy;
+        }
+    }
+
     // Doomsday Confluence
     // "{X}{X}{B} sorcery: Choose X. You may choose the same mode more than once. - Each player
     // sacrifices a nonartifact creature. - Create a 3/3 black Dalek artifact creature token with
