@@ -17190,6 +17190,105 @@ public class SpecialCardAi {
             return new int[] {total, black};
         }
     }
+
+    // Summary Dismissal
+    // "Exile all other spells and counter all abilities." Everything else on the stack goes, ours
+    // included (unlike Glen Elendra's Answer, which spares its caster's side), and spells are
+    // exiled, so "can't be countered" does not save them. Stock AI: AI:RemoveDeck:All stripped it
+    // from the playable list (AiController.getSpellAbilityToPlay), ChangeZoneAllAi.canPlay
+    // declines every Origin$ Stack sweep, and its Counter half never reaches the counterspell
+    // branch (getPlayableCounters takes top-level Counter only). Free casts were the opposite:
+    // ChangeZoneAllAi.doTriggerNoCost approves any Stack-origin sweep, so Apex Devastator's
+    // cascade cast it onto its own stack and exiled the Devastator.
+    // Window: every item on the stack is an opponent's, and one of them is worth a card and four
+    // mana - a spell of mana value 4 or more (stack CMC counts announced X), or a spell or ability
+    // the threat predictor says would destroy, deal lethal damage to, shrink to death (-X/-X),
+    // exile or steal a permanent of ours worth keeping, or deal us lethal damage. The predictor
+    // does not see bounce, tuck, edicts or fight, so those alone never pass. A cast from hand
+    // also needs the mana: HonestMana (G2, held sources skipped, restrictions read on the root
+    // sa) covering the mana value and both blue pips, checked before canPayCost's reservation
+    // roll can be reached. A free cast skips the mana and zone checks: its effect gives both.
+    // RNG: every check is RNG-free. The hint kept the card out of every main-path evaluation, and
+    // the stock free-cast path drew nothing.
+    public static class SummaryDismissal {
+        public static final String NAME = "Summary Dismissal";
+        public static final int MIN_SPELL_CMC = 4;
+        public static final int MIN_CREATURE_VALUE = 180; // evaluateCreature: about a 3/3 card or a 4/4 token
+        public static final int MIN_PERMANENT_CMC = 3;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean free) {
+            final Game game = ai.getGame();
+            final SpellAbility root = sa.getRootAbility();   // never host.getFirstSpellAbility() (row 77)
+            final Card host = root.getHostCard();
+            // ChangeZoneAllAi overrides canPlay, so mirror the base restriction check. A free cast
+            // is the effect's own permission (from exile, the library top).
+            if (!free && root.getRestrictions() != null && !root.getRestrictions().canPlay(host, root)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            if (game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // Nothing of ours (or a teammate's) on the stack: it would be exiled or countered too.
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility item = si.getSpellAbility();
+                final Player controller = item == null ? null : item.getActivatingPlayer();
+                if (controller == null || !controller.isOpponentOf(ai) || ai.getYourTeam().contains(controller)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // G2, never getAvailableManaEstimate (it counts the words of Produced$: Command Tower 2,
+            // a Combo dual 3), so an unpayable window never reaches canPayCost's draws.
+            if (!free) {
+                final ManaCost cost = host.getManaCost();
+                final int bluePips = cost == null ? 0 : cost.getShardCount(forge.card.mana.ManaCostShard.BLUE);
+                final HonestMana mana = HonestMana.of(ai, root, true);
+                if (mana.total() < host.getCMC() || mana.colour(MagicColor.BLUE) < bluePips) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            // a spell big enough to be worth the card
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility item = si.getSpellAbility();
+                if (item.isSpell() && item.getHostCard() != null && item.getHostCard().getCMC() >= MIN_SPELL_CMC) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            // or something on it takes a permanent worth keeping, or our life. Every item is an
+            // opponent's, so every threat found here is one this spell removes.
+            for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, null, false)) {
+                if (ai.equals(o)) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+                if (o instanceof Card c && c.isInPlay() && ai.equals(c.getController()) && worthKeeping(ai, c)) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // our commander; a creature worth about a 3/3 card (a token from about a 4/4) that is not
+        // useless and does not come back by itself; a planeswalker or a nontoken permanent of mana
+        // value 3+. Never a land: Ghost Quarter-type removal is not worth a card and four mana.
+        private static boolean worthKeeping(final Player ai, final Card c) {
+            if (c.isCommander()) {
+                return true;
+            }
+            if (c.isLand()) {
+                return false; // also covers animated manlands
+            }
+            if (c.isCreature()) {
+                if (ComputerUtilCard.hasActiveUndyingOrPersist(c) || ComputerUtilCard.isUselessCreature(ai, c)) {
+                    return false;
+                }
+                return ComputerUtilCard.evaluateCreature(c) >= MIN_CREATURE_VALUE;
+            }
+            if (c.isToken()) {
+                return false; // Treasure, Clue, Food
+            }
+            return c.isPlaneswalker() || c.getCMC() >= MIN_PERMANENT_CMC; // a planeswalker's X is 0 on the battlefield
+        }
+    }
+
     // Synthetic Destiny
     // "Exile all creatures you control. At the beginning of the next end step, reveal cards
     // from the top of your library until you reveal that many creature cards, put all creature

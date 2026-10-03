@@ -51,6 +51,13 @@ public class ChangeZoneAllAi extends SpellAbilityAi {
             return SpecialCardAi.SyntheticDestiny.consider(ai, sa);
         }
 
+        if (SpecialCardAi.SummaryDismissal.NAME.equals(sourceName)) {
+            // Answers a stack of opponents' items only. Ahead of the run-away roll below:
+            // AI:RemoveDeck:All kept this card out of every evaluation until now, so the gate
+            // must draw no random number, and the evaluator draws none.
+            return SpecialCardAi.SummaryDismissal.consider(ai, sa, false);
+        }
+
         // prevent run-away activations - first time will always return true
         boolean chance = MyRandom.getRandom().nextFloat() <= Math.pow(.6667, sa.getActivationsThisTurn());
 
@@ -320,6 +327,15 @@ public class ChangeZoneAllAi extends SpellAbilityAi {
             // A cascade hit (PlayEffect, Optional) is judged here. Same X = 0 blindness as canPlay: the
             // Battlefield branch below compares two empty lists and declines. No random draw either way.
             return SpecialCardAi.CalamityOfTheTitans.consider(ai, sa, true);
+        }
+        if (!mandatory && SpecialCardAi.SummaryDismissal.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa.getHostCard() != null && ai.equals(sa.getHostCard().getOwner())) {
+            // A free cast our own effect offers (Apex Devastator's cascade, a Hidden land's
+            // discover). The stock path below approves every Stack-origin sweep, and the cascade
+            // cast exiled its own Apex Devastator. Judged like a cast from hand, without the mana
+            // or zone checks. The stock path drew no random number here either. Owner only:
+            // a thief's Play-effect cast (Nathan Drake, Gonti) keeps the stock path.
+            return SpecialCardAi.SummaryDismissal.consider(ai, sa, true);
         }
         CardCollectionView humanType = ai.getOpponents().getCardsIn(origin);
         humanType = AbilityUtils.filterListByType(humanType, sa.getParam("ChangeType"), sa);
