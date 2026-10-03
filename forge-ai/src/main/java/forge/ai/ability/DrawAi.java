@@ -89,6 +89,13 @@ public class DrawAi extends SpellAbilityAi {
             // payable one falls through to the stock floors below.
             return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
         }
+        if (SpecialCardAi.SlateOfAncestry.handles(sa) && SpecialCardAi.SlateOfAncestry.isPunished(ai, sa)) {
+            // Discard the whole hand, then draw X: an opponent's draw thief, a draw cap or a draw/discard
+            // punisher turns the activation against us, and a big repeated draw can deck us. Reached only
+            // inside the script's AtOppEOT window after its AICheckSVar (creatures - hand >= 2) passed;
+            // anything else falls through to the stock floors below.
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
 
         Card hostCard = sa.getHostCard();
         PhaseHandler ph = ai.getGame().getPhaseHandler();

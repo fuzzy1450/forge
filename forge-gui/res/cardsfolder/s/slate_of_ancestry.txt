@@ -1,7 +1,10 @@
 Name:Slate of Ancestry
 ManaCost:4
 Types:Artifact
-A:AB$ Draw | Cost$ 4 T Discard<1/Hand> | NumCards$ X | SpellDescription$ Draw a card for each creature you control.
+A:AB$ Draw | Cost$ 4 T Discard<1/Hand> | NumCards$ X | AILogic$ AtOppEOT | AICheckSVar$ Z | AISVarCompare$ GE2 | SpellDescription$ Draw a card for each creature you control.
 SVar:X:Count$Valid Creature.YouCtrl
-AI:RemoveDeck:All
+SVar:Y:Count$CardsInYourHand
+SVar:Z:Count$Valid Creature.YouCtrl/Minus.Y
+SVar:AIPreference:DiscardCost$Card
+SVar:NeedsToPlayVar:X GE3
 Oracle:{4}, {T}, Discard your hand: Draw a card for each creature you control.

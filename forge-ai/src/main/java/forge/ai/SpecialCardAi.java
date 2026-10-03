@@ -17396,6 +17396,41 @@ public class SpecialCardAi {
         }
     }
 
+    // Slate of Ancestry
+    // "{4}, {T}, Discard your hand: Draw a card for each creature you control." The script carries the
+    // floors (cast only with 3+ creatures; activate only in the opponent's end step before our turn, only
+    // when creatures - hand >= 2; the AIPreference prices the discarded hand). What a script cannot see is
+    // whether the draw comes to us at all: an opponent's Notion Thief or Alms Collector takes it, Narset
+    // caps it, Consecrated Sphinx / Orcish Bowmasters / Spiteful Visions / Nekusar punish it, Waste Not /
+    // Megrim punish the discard, and a token board repeats a 5-15 card draw once a round. DrawAi vetoes
+    // the activation here. RNG-free: loops and counts only.
+    public static class SlateOfAncestry {
+        static final int MIN_LIBRARY_LEFT = 10; // repeated once-a-round activations must not deck us
+
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && !(sa instanceof AbilitySub) && sa.isActivatedAbility()
+                    && "Slate of Ancestry".equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        public static boolean isPunished(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final int x = AbilityUtils.calculateAmount(host, sa.getParam("NumCards"), sa);
+            if (x <= 0) {
+                return false; // targetAI refuses a zero draw itself
+            }
+            if (StaticAbilityCantDraw.canDrawAmount(ai, x) < x) {
+                return true; // Narset, Parter of Veils; Leovold; Spirit of the Labyrinth
+            }
+            if (ai.getCardsIn(ZoneType.Library).size() - x < MIN_LIBRARY_LEFT) {
+                return true;
+            }
+            // Notion Thief / Alms Collector (Draw/DrawCards replacements), Sphinx / Bowmasters / Nekusar /
+            // Spiteful Visions / Xyris (Drawn), Waste Not / Megrim (Discarded, against our hand). Batch 1's
+            // helper, called unchanged (private, but nested classes share access inside SpecialCardAi).
+            return KnollspineDragon.drawOrDiscardIsPunished(ai, host);
+        }
+    }
+
     // Song of Inspiration
     // Both d20 results return the targets, so this is a five-mana instant Regrowth for up to two
     // permanent cards (15+ also gains life equal to their total mana value). The script uses Pump as
