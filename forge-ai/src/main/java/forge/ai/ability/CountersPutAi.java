@@ -135,6 +135,15 @@ public class CountersPutAi extends CountersAi {
         final boolean divided = sa.isDividedAsYouChoose();
         final String logic = sa.getParamOrDefault("AILogic", "");
         PhaseHandler ph = game.getPhaseHandler();
+        if (SpecialCardAi.LocalizedDestruction.NAME.equals(sourceName)) {
+            // Dead-card batch 2, row 113. The root only gives us {E}; the card is its "Destroy all
+            // creatures" sub. The untargeted branch below reads Defined$ You as a card list, finds
+            // none and answers MissingNeededCards, so the cast was never made. Only a regular cast
+            // comes here: effect casts (Aetherworks Marvel, Etali) go through doTriggerNoCost and
+            // keep the stock sub judge. Every other PutCounter card takes exactly the path it took
+            // before this branch.
+            return SpecialCardAi.LocalizedDestruction.consider(ai, sa);
+        }
         final String[] types;
         if (sa.hasParam("CounterType")) {
             // TODO some cards let you choose types, should check each

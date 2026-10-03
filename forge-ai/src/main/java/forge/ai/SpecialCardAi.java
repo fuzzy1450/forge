@@ -12472,6 +12472,148 @@ public class SpecialCardAi {
         }
     }
 
+    // Localized Destruction (dead-card batch 2, row 113)
+    // "You get {E}, then you may pay one or more {E}. If you do, each creature you control with
+    // power equal to the amount of {E} paid this way gains indestructible until end of turn.
+    // Destroy all creatures." The root is SP$ PutCounter | Defined$ You; with no AILogic,
+    // CountersPutAi.checkApiLogic reads Defined$ You as a card list, finds none and answers
+    // MissingNeededCards, so the cast was never made. Routed from there by name (regular casts
+    // only; effect casts take CountersPutAi.doTriggerNoCost and keep the stock sub judge).
+    // Affordability first, RNG-free, on THIS SA's own cost (0 for a no-mana-cost probe copy):
+    // untappedMana against its mana value and hasWhiteSources against its white shards. Not
+    // getAvailableManaEstimate: it counts every word of Produced$, so the carrier's Port Town,
+    // Temples, painlands, Snarls and Talismans read 3, Mystic Monastery 4, Command Tower and
+    // Arcane Signet 2, Mystic Gate 5, and three lands passed a 5-mana floor; the approval then
+    // re-rolled the game in canPayCost's isManaSourceReserved draws with no cast (row 159).
+    // The cast floor is the DestroyAll sub's own Main-1 margin against the FIRST opponent
+    // (DestroyAllAi.doMassRemovalLogic: 200 / opponents), over the sub's own ValidCards lists,
+    // every creature of ours counted as dying. The sub then approves on that Main-1 check and
+    // never reaches its main-2 survival branch, which draws MyRandom (Mandate of Abaddon's
+    // rule). The {E} is chosen at resolution by chooseEnergy, never the stock "Max". RNG-free on
+    // every path; holds nothing, writes no AiCardMemory; its only write is setActivatingPlayer
+    // on the mana abilities it reads, as the estimate does.
+    public static class LocalizedDestruction {
+        public static final String NAME = "Localized Destruction";
+        private static final int COMMANDER_TAX = 100; // recast tax (Deadly Tempest / Gaze of Granite scale)
+
+        // DestroyAllAi's private predicate (DestroyAllAi.java:20), mirrored as MandateOfAbaddon does.
+        private static boolean destroyable(final Card c) {
+            return !(c.hasKeyword(Keyword.INDESTRUCTIBLE) || c.getCounters(CounterEnumType.SHIELD) > 0 || c.hasSVar("SacMe"));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // RNG-free precondition on THIS SA's own cost (0 for a no-mana-cost probe copy): an
+            // unaffordable WillPlay goes on to canPayCost's test payment, which draws MyRandom, and
+            // re-rolls the game with no cast (row 159).
+            final ManaCost cost = sa.getPayCosts() == null ? ManaCost.ZERO : sa.getPayCosts().getTotalMana();
+            if (untappedMana(ai) < cost.getCMC()
+                    || !hasWhiteSources(ai, sa, cost.getShardCount(forge.card.mana.ManaCostShard.WHITE))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            SpellAbility sweep = sa.getSubAbility();
+            while (sweep != null && sweep.getApi() != ApiType.DestroyAll) {
+                sweep = sweep.getSubAbility();
+            }
+            final PlayerCollection opps = ai.getOpponents();
+            if (sweep == null || opps.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // exactly the sub's lists (DestroyAllAi.doMassRemovalLogic): same ValidCards, controller, host and SA
+            final String valid = sweep.getParamOrDefault("ValidCards", "");
+            final CardCollection theirs = CardLists.filter(CardLists.getValidCards(
+                    opps.getFirst().getCardsIn(ZoneType.Battlefield), valid, host.getController(), host, sweep),
+                    LocalizedDestruction::destroyable);
+            if (theirs.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // the sub's own empty-list refusal
+            }
+            final CardCollection ours = CardLists.filter(CardLists.getValidCards(
+                    ai.getCardsIn(ZoneType.Battlefield), valid, host.getController(), host, sweep),
+                    LocalizedDestruction::destroyable);
+            final int margin = 200 / opps.size(); // CREATURE_EVAL_THRESHOLD for an untargeted sub
+            if (ComputerUtilCard.evaluateCreatureList(ours) + margin < ComputerUtilCard.evaluateCreatureList(theirs)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // The ChooseNumber at resolution (max = our {E}, the spell's own already added): the
+        // power 1..max whose destroyable creatures of ours are worth the most, the smaller power
+        // on a tie; min (0: pay nothing, keep the {E}) when no creature of ours could be saved.
+        public static int chooseEnergy(final Player ai, final SpellAbility sa, final int min, final int max) {
+            if (max < 1) {
+                return min;
+            }
+            final int[] saved = new int[max + 1];
+            for (final Card c : ai.getCreaturesInPlay()) {
+                final int p = c.getNetPower();
+                if (p >= 1 && p <= max && destroyable(c)) {
+                    saved[p] += ComputerUtilCard.evaluateCreature(c) + (c.isCommander() ? COMMANDER_TAX : 0);
+                }
+            }
+            int best = 0; // saved[0] stays 0
+            for (int p = 1; p <= max; p++) {
+                if (saved[p] > saved[best]) {
+                    best = p;
+                }
+            }
+            return best > 0 ? Math.max(min, best) : min;
+        }
+
+        // The row 51 (Crown of Doom) skeptic's count, as a private copy (never share a predicate
+        // with an accepted card; G2 HonestMana also reads restrictions and conditions, so it is
+        // not this count): the floating pool plus, per untapped source, its best mana ability that
+        // canPlay() and costs no mana, worth Amount for a Combo production, else Amount times its
+        // symbols (Sol Ring 2, a bounce land 2, Coveted Jewel 3, a Combo dual or Talisman 1).
+        private static int untappedMana(final Player ai) {
+            int total = ai.getManaPool().totalMana();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay() || ma.getPayCosts().getCostMana() != null) {
+                        continue; // filters (Mystic Gate's {W/U} ability) skipped: an under-count only declines
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    final int each = produced.startsWith("Combo") ? 1 : produced.split(" ").length;
+                    best = Math.max(best, each * AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma));
+                }
+                total += best;
+            }
+            return total;
+        }
+
+        // Floating white plus untapped sources whose printed production could be white and whose
+        // mana this spell may spend (WakeTheDead's hasBlackSources, for white; judged against the
+        // SA under evaluation, not host.getFirstSpellAbility(), per row 77). Unlike the precedent,
+        // a "Combo" list counts only if it names W, Any or ColorIdentity: this deck's Talisman of
+        // Creativity (Combo U R) cannot pay W.
+        private static boolean hasWhiteSources(final Player ai, final SpellAbility spell, final int needed) {
+            int white = ai.getManaPool().getAmountOfColor(MagicColor.WHITE);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (white >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (!ma.getManaPart().meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("W") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.contains("ColorIdentity")) {
+                        white++;
+                        break;
+                    }
+                }
+            }
+            return white >= needed;
+        }
+    }
+
     // Long-Term Plans (dead-card batch 2, row 87)
     // "Search your library for a card, then shuffle and put that card third from the top."
     // ({2}{U} Instant.) A slow tutor for any card: the pick is drawn on the third draw after the

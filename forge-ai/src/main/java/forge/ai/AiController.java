@@ -1903,6 +1903,11 @@ public class AiController {
         if ("Squee's Revenge".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             return SpecialCardAi.SqueesRevenge.chooseNumber(player, sa, min, max);
         }
+        if (SpecialCardAi.LocalizedDestruction.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dead-card batch 2, row 113: the stock "Max" below pays every {E} we have and protects
+            // only creatures with that power
+            return SpecialCardAi.LocalizedDestruction.chooseEnergy(player, sa, min, max);
+        }
         final Card source = sa.getHostCard();
         final String logic = sa.getParamOrDefault("AILogic", "Max");
         if ("GainLife".equals(logic)) {
