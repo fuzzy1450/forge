@@ -2004,6 +2004,15 @@ public class AiController {
                 }
 
                 return Aggregates.random(options);
+            case RollDice:
+                // Dead-card batch 2, row 96: Valiant Endeavor's chosen die sets the destroy threshold
+                // and the other die the Knight count; the default below always took the first die as
+                // the threshold. Every other dice card (Arcane, Grave, Reckless and Wild Endeavor
+                // among them) keeps that default.
+                if (SpecialCardAi.ValiantEndeavor.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                    return SpecialCardAi.ValiantEndeavor.chooseResult(player, sa, options);
+                }
+                return options.get(0);
             default:
                 return options.get(0);
         }

@@ -21643,6 +21643,163 @@ public class SpecialCardAi {
         }
     }
 
+    // Valiant Endeavor (dead-card batch 2, row 96; precon:Aura of Courage (AFC))
+    // "Roll two d6 and choose one result. Destroy each creature with power greater than or equal
+    // to that result. Then create a number of 2/2 white Knight creature tokens with vigilance
+    // equal to the other result." ({4}{W}{W} sorcery.) Never cast by its owner (876 held games):
+    // no hint, but RollDiceAi's mana-cost default accepts only at the opponent's end step, which
+    // sorcery timing excludes. Routed from RollDiceAi.checkApiLogic on AILogic ValiantEndeavor,
+    // carried by valiant_endeavor.txt alone (after row 80's router); the result is chosen by
+    // chooseResult from AiController.chooseNumber's RollDice case on this name, where the stock
+    // default always took the first die as the threshold.
+    //
+    // consider() prices all 36 ordered rolls with the choice chooseResult() makes at resolution.
+    // At threshold t each side loses the evaluateCreature value of its destroyable creatures with
+    // power >= t (power 0 never dies; ours: a commander costs COMMANDER_TAX more, SacMe is free;
+    // theirs: SacMe and active undying/persist are worth nothing; a creature we own or control is
+    // ours, the Wave of Reckoning rule), each Aura going down with its creature at AURA_CARD; the
+    // other die is KNIGHT per token. Cast only when the expected net clears MIN_EV (two Knights)
+    // and at most MAX_NEG of the 36 rolls still lose value; when some roll's choice kills one of
+    // ours, wait for main 2 so our attackers swing first (row 11's rule). The DestroyAll sub
+    // carries AILogic Always, so it never re-judges the cast as a full wrath at X = 0 (or a stale
+    // X) after the roll has been priced here.
+    //
+    // RNG: the stock evaluation drew nothing (RollDiceAi has no MyRandom), so every decline here
+    // is RNG-free. The mana check comes first: the cost as the engine prices it (calculateManaCost
+    // in test mode, row 80's call) against G2 (HonestMana, held sources skipped, restrictions read
+    // on sa), total and white: never getAvailableManaEstimate, which counts the words of Produced$
+    // (Seaside Citadel 4, the Thriving lands 3, Command Tower and Arcane Signet 2 in the carrier).
+    // Then a board scan and CreatureEvaluator; no ComputerUtil.canRegenerate, which reaches
+    // canPayCost. Only a WillPlay goes on to canPayCost's test payment (W12). Holds nothing, writes
+    // no SVar and remembers nothing; chooseResult re-scans the board at resolution.
+    public static class ValiantEndeavor {
+        public static final String NAME = "Valiant Endeavor";
+        // CreatureEvaluator on a 2/2 vigilance token: 80 base + 2*15 power + 2*10 toughness + 20 vigilance
+        static final int KNIGHT = 150;
+        static final int MIN_EV = 2 * KNIGHT;   // the expected net is worth at least two clean Knights
+        static final int MAX_NEG = 6;           // of 36 ordered rolls: at most 1 in 6 loses value
+        static final int COMMANDER_TAX = 100;   // our commander dies: +2 to recast
+        static final int AURA_CARD = 50;        // an Aura goes to the graveyard with its creature
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int[] opp = new int[7], mine = new int[7], net = new int[7];
+            scan(ai, opp, mine);
+            for (int t = 1; t <= 6; t++) {
+                net[t] = opp[t] - mine[t];
+            }
+
+            long sum = 0;
+            int neg = 0;
+            boolean oursDie = false;
+            for (int a = 1; a <= 6; a++) {
+                for (int b = 1; b <= 6; b++) {
+                    final int t = pick(net, a, b);
+                    final int v = net[t] + (t == a ? b : a) * KNIGHT;
+                    sum += v;
+                    if (v < 0) {
+                        neg++;
+                    }
+                    if (mine[t] > 0) {
+                        oursDie = true;
+                    }
+                }
+            }
+            if (sum < 36L * MIN_EV || neg > MAX_NEG) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (oursDie && ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.MAIN2)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2); // our doomed creatures swing first (row 11)
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // RollDiceEffect: the chosen result sets X (the threshold); "other" sets Y (the Knights), the
+        // first roll after rolls.get(0) that differs from the chosen one, else rolls.get(0) -- the
+        // effect's loop verbatim. Re-scans the board at resolution, from the roller's side.
+        public static int chooseResult(final Player ai, final SpellAbility sa, final List<Integer> rolls) {
+            final int[] opp = new int[7], mine = new int[7];
+            scan(ai, opp, mine);
+            int best = rolls.get(0);
+            int bestV = Integer.MIN_VALUE;
+            for (final int t : rolls) {
+                int other = rolls.get(0);
+                for (int i = 1; i < rolls.size(); ++i) {
+                    if (rolls.get(i) != t) {
+                        other = rolls.get(i);
+                        break;
+                    }
+                }
+                final int tt = Math.max(1, Math.min(t, 6));
+                final int v = opp[tt] - mine[tt] + other * KNIGHT;
+                if (v > bestV || (v == bestV && t > best)) {
+                    bestV = v;
+                    best = t;
+                }
+            }
+            return best;
+        }
+
+        // The cost after CostAdjustment (calculateManaCost in test mode, the G1 ceiling's and row
+        // 80's call: no MyRandom, nothing written to the SA) against G2's total and white: two white
+        // sources (or floating white) for {W}{W}.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
+        }
+
+        // DestroyAllAi's predicate (no shield counter) plus canBeDestroyed (indestructible, phased out)
+        private static boolean dies(final Card c) {
+            return c.canBeDestroyed() && c.getCounters(CounterEnumType.SHIELD) == 0;
+        }
+
+        // opp[t] / mine[t], t = 1..6: the value each side loses when the threshold is t
+        private static void scan(final Player ai, final int[] opp, final int[] mine) {
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isCreature() || !dies(c)) {
+                    continue;
+                }
+                final int p = Math.min(c.getNetPower(), 6);
+                if (p < 1) {
+                    continue; // power 0 or less never dies: the smallest result is 1
+                }
+                final boolean ours = ai.equals(c.getController()) || ai.equals(c.getOwner()); // Wave of Reckoning
+                int v;
+                if (ours) {
+                    v = c.hasSVar("SacMe") ? 0 : ComputerUtilCard.evaluateCreature(c)
+                            + (c.isCommander() ? COMMANDER_TAX : 0);
+                } else {
+                    v = (c.hasSVar("SacMe") || ComputerUtilCard.hasActiveUndyingOrPersist(c)) ? 0
+                            : ComputerUtilCard.evaluateCreature(c);
+                }
+                for (final Card aura : c.getEnchantedBy()) {
+                    // an Aura goes down with its creature: ours lowers the net, theirs raises it,
+                    // whoever's creature it was on (v feeds mine[] when ours, opp[] otherwise)
+                    v += ai.equals(aura.getController()) == ours ? AURA_CARD : -AURA_CARD;
+                }
+                for (int t = 1; t <= p; t++) {
+                    if (ours) {
+                        mine[t] += v;
+                    } else {
+                        opp[t] += v;
+                    }
+                }
+            }
+        }
+
+        // the threshold chooseResult picks for the ordered roll (a, b); ties: the higher threshold
+        private static int pick(final int[] net, final int a, final int b) {
+            final int va = net[a] + b * KNIGHT;
+            final int vb = net[b] + a * KNIGHT;
+            return va > vb || (va == vb && a >= b) ? a : b;
+        }
+    }
+
     // Veil of Summer
     public static class VeilOfSummer {
         public static boolean consider(final Player ai, final SpellAbility sa) {
