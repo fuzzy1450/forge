@@ -330,6 +330,12 @@ public class ComputerUtil {
                 // both DrawAi.willPayCosts and the payment's chooseSacrificeType)
                 return SpecialCardAi.LifesLegacy.chooseSacrifice(ai, activate, typeList);
             }
+            if (SpecialCardAi.DiabolicIntent.handles(activate) && ai.equals(activate.getOwner())) {
+                // the creature DiabolicIntent.consider priced: serves ChangeZoneAi.willPayCosts
+                // (checkSacrificeCost) and the payment (chooseSacrificeType) alike, ahead of the SacMe
+                // shuffle. A stolen copy (Nathan Drake's attack trigger) keeps the stock path.
+                return SpecialCardAi.DiabolicIntent.chooseSacrifice(ai, typeList, sa);
+            }
             // search for permanents with SacMe. priority 1 is the lowest, priority 5 the highest
             for (int ip = 0; ip < 6; ip++) {
                 final int priority = 6 - ip;

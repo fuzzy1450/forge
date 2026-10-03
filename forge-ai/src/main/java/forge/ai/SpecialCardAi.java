@@ -6077,6 +6077,208 @@ public class SpecialCardAi {
         }
     }
 
+    // Diabolic Intent
+    // "As an additional cost to cast this spell, sacrifice a creature. Search your library for a card,
+    // put that card into your hand, then shuffle." The payoff is one card, whatever is sacrificed (the
+    // stock tutor pick, ChangeZoneAi.chooseCardToHiddenOriginChangeZone - Diabolic Tutor's pick in the
+    // same deck), so the floor is on the cost: only a body leaving anyway (blitz, a token with an
+    // end-of-turn leave), a SacMe body or an undying/persist creature of our own (tier 0), or a token
+    // no better than the profile's own cheap-sacrifice bar (tier 1), is sold for it. A real nontoken
+    // body never is, a frozen one included (it keeps its statics and triggers, so the stock
+    // isUselessCreature test is not used), nor the commander or a mana creature. Own main 2 only,
+    // after combat.
+    // Mana: affordsUpperBound is a local, honest upper bound on {1}{B}. getAvailableManaEstimate
+    // counts the words of Produced$ (a Combo dual 3, Command Tower 2, Relic of Sauron 8), and
+    // WakeTheDead's black test calls any Combo or Chosen source black. Under-counting only loses a
+    // cast; over-counting approves an unpayable window whose canPayCost test payment draws MyRandom
+    // (ComputerUtilMana.isManaSourceReserved) and re-rolls the game with no cast.
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card, so nothing here draws a
+    // random number, and every refusal returns before AiController.canPlayAndPayForFace reaches
+    // canPayCost. One chooser answers the decision, willPayCosts and the payment
+    // (ComputerUtil.getCardPreference's SacCost hook, owner only), so the creature priced is the
+    // creature paid. That hook also serves the owner's Play-effect casts (a cascade from Call Forth
+    // the Tempest), which never reach consider: there it is the only floor. A non-owner declines at
+    // ChangeZoneAi's router; a Play-effect theft keeps the stock path.
+    public static class DiabolicIntent {
+        public static final String NAME = "Diabolic Intent";
+
+        public static boolean handles(final Card source) {
+            return source != null && NAME.equals(source.getName());
+        }
+
+        // getAbilitySourceName reads "" for a card cast face down from exile (Gonti, Thief of
+        // Sanity): read the host's name or the card state's name too (row 106's isMeteor idiom), so
+        // a face-down stolen copy still meets the router's owner check.
+        public static boolean isIntent(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card source = sa.getHostCard();
+            // creatures attack first; stock tutors wait for main 2 too (hiddenOriginCanPlayAI's
+            // main-1 rule)
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            // something worth a creature, from a library we may search and can afford to thin
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (!ai.canSearchLibraryWith(sa, ai) || library.size() < 3
+                    || !library.anyMatch(c -> !c.isLand() && !NAME.equals(c.getName()))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // RNG-free, honest upper bound on {1}{B} before any WillPlay (WAVES.md row 159)
+            if (!affordsUpperBound(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final CostSacrifice sac = sa.getPayCosts() == null ? null
+                    : sa.getPayCosts().getCostPartByType(CostSacrifice.class);
+            if (sac == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection options = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                    sac.getType().split(";"), ai, source, sa);
+            return chooseSacrifice(ai, options, sa) == null
+                    ? new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable)
+                    : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // A function of the board alone: consider, willPayCosts and the payment get the same creature.
+        // Mana is paid (paymentOrder 0) before the sacrifice (15); the bound counts no mana source that
+        // sacrifices another permanent, so the mana it approves does not need one.
+        public static Card chooseSacrifice(final Player ai, final Iterable<Card> options, final SpellAbility sa) {
+            // Default.ai:315 = 135: a 2/2 vanilla token (131) passes, a 3/3 (156) does not
+            final int maxEval = AiProfileUtil.getIntProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL);
+            Boolean safe = null; // survivesUnblocked, computed at most once per call
+            Card best = null;
+            int bestTier = 0, bestEval = 0;
+            for (final Card c : options) {
+                if (!c.isCreature() || !ai.equals(c.getController()) || c.isCommander()
+                        || !c.getManaAbilities().isEmpty() // keeps the mana upper bound honest
+                        || (sa != null && !c.canBeSacrificedBy(sa, false))) {
+                    continue;
+                }
+                // "leaving anyway": blitz sacrifices it at the end step; a token with any end-of-turn
+                // leave ceases to exist
+                final boolean leaving = "Blitz".equals(c.getSVar("EndOfTurnLeavePlay"))
+                        || (c.isToken() && c.hasSVar("EndOfTurnLeavePlay"));
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                final int tier;
+                if (leaving || c.hasSVar("SacMe")
+                        // a stolen undying/persist creature returns to its owner's battlefield
+                        || (ComputerUtilCard.hasActiveUndyingOrPersist(c) && ai.equals(c.getOwner()))) {
+                    tier = 0;
+                } else if (c.isToken() && eval <= maxEval) {
+                    tier = 1;
+                } else {
+                    continue; // a real body is never sold for a tutor
+                }
+                if (!leaving) {
+                    if (safe == null) {
+                        safe = survivesUnblocked(ai);
+                    }
+                    if (!safe) {
+                        continue; // it may be a blocker we need
+                    }
+                }
+                // lowest tier, then the least valuable body, then card id
+                if (best == null || tier < bestTier || (tier == bestTier && (eval < bestEval
+                        || (eval == bestEval && c.getId() < best.getId())))) {
+                    best = c;
+                    bestTier = tier;
+                    bestEval = eval;
+                }
+            }
+            return best;
+        }
+
+        // The floating pool plus, for each battlefield source, its best mana ability that can be
+        // activated now (a tapped source fails CostTap.canPay), whose mana THIS spell may spend
+        // (row 77: never host.getFirstSpellAbility()), with no mana in its own cost (a filter land
+        // nets at most +1 and needs coloured input) and no sacrifice of anything but itself
+        // (Phyrexian Altar would sacrifice a creature the chooser never priced; Lotus Petal still
+        // counts), worth its Amount, never the word count of Produced$. Black: the pool holds black,
+        // or a counted ability makes Any, a B letter, ColorIdentity or Chosen (an upper bound), or
+        // has no plain production (ManaReflected: Exotic Orchard, Fellwar Stone; Special). Draws
+        // nothing and holds nothing; its only write is setActivatingPlayer on the mana abilities it
+        // reads, as the estimate does.
+        private static boolean affordsUpperBound(final Player ai, final SpellAbility sa) {
+            int total = ai.getManaPool().totalMana();
+            boolean black = ai.getManaPool().getAmountOfColor(MagicColor.BLACK) > 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final Cost cost = ma.getPayCosts();
+                    if (cost != null && (cost.hasManaCost() || sacrificesAnother(cost))) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    best = Math.max(best, amount);
+                    if (mayMakeBlack(ma, mp)) {
+                        black = true;
+                    }
+                }
+                total += best;
+            }
+            return total >= 2 && black;
+        }
+
+        private static boolean sacrificesAnother(final Cost cost) {
+            for (final CostPart part : cost.getCostParts()) {
+                if (part instanceof CostSacrifice && !part.payCostFromSource()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean mayMakeBlack(final SpellAbility ma, final forge.game.spellability.AbilityManaPart mp) {
+            final String produced = mp.getOrigProduced().trim();
+            if (ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana() || produced.isEmpty()
+                    || mp.isAnyMana() || produced.contains("ColorIdentity") || produced.contains("Chosen")) {
+                return true;
+            }
+            for (final String t : produced.split(" ")) {
+                if ("B".equals(t)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Deterministic next-turn safety: the AI survives every opponent's next attack even if nothing
+        // blocks, so no creature it cashes in was a needed blocker. Independent of the candidate.
+        // LifesLegacy.survivesUnblocked, copied verbatim (an accepted helper is not refactored).
+        private static boolean survivesUnblocked(final Player ai) {
+            if (ai.cantLose()) {
+                return true;
+            }
+            int damage = 0, poison = 0;
+            for (final Player opp : ai.getOpponents()) {
+                final CardCollection attackers = CardLists.filter(opp.getCreaturesInPlay(),
+                        c -> ComputerUtilCombat.canAttackNextTurn(c, ai));
+                damage += ComputerUtilCombat.sumDamageIfUnblocked(attackers, ai);
+                poison += ComputerUtilCombat.sumPoisonIfUnblocked(attackers, ai);
+            }
+            final boolean lifeSafe = ai.cantLoseForZeroOrLessLife()
+                    || ai.getLife() - damage >= AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_THRESHOLD);
+            return lifeSafe && ai.getPoisonCounters() + poison < 7;
+        }
+    }
+
     // Donate
     public static class Donate {
         public static AiAbilityDecision considerTargetingOpponent(final Player ai, final SpellAbility sa) {

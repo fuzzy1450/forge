@@ -338,6 +338,23 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.HourOfEternity.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.DiabolicIntent.isIntent(sa) && !(sa instanceof AbilitySub)) {
+            // A tutor whose additional cost is a creature. The stock hidden-origin path below has no
+            // floor on what is sacrificed, and its willPayCosts veto (checkSacrificeCost's SacCost
+            // preference, off under Default.ai) refuses every ordinary board. AI:RemoveDeck:All
+            // stripped the card before any handler ran, so the stock path drew no random numbers
+            // for it. A non-owner (a static "you may cast it" theft: Gonti, Thief of Sanity, an
+            // impulse exile) declines here, RNG-free, as A's filter refused it; Play-effect casts
+            // (Nathan Drake's attack trigger, a cascade) go through doTriggerNoCost and never reach
+            // checkApiLogic. Every other ChangeZone card takes exactly the path it took before
+            // this branch.
+            final Card host = sa.getHostCard();
+            if (host == null || !aiPlayer.equals(host.getOwner())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return SpecialCardAi.DiabolicIntent.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
