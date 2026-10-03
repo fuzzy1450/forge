@@ -14498,6 +14498,110 @@ public class SpecialCardAi {
         }
     }
 
+    // Patron of the Nezumi (dead-card batch 2, row 97)
+    // "Rat offering. Whenever a permanent is put into an opponent's graveyard, that player loses
+    // 1 life." ({5}{B}{B} legendary 6/6.) AI:RemoveDeck:All kept the creature spell out of every
+    // playable list (AiController.getSpellAbilityToPlay's removeIf), so the stock path drew no
+    // random numbers for it. Two RNG-free gates replace the hint:
+    //  - the Offering optional cost is never chosen (PermanentCreatureAi.chooseOptionalCosts).
+    //    SpellAbilityAi.chooseOptionalCosts takes it only when the FULL {5}{B}{B} plus a Rat is
+    //    payable, so it never buys a cheaper cast, it only sacrifices a Rat (Nezumi Graverobber in
+    //    the carrier) to save mana that is already there; and its canPayCost probe rolls
+    //    ComputerUtilMana.isManaSourceReserved on every list build, castable or not.
+    //  - the plain spell is judged (PermanentCreatureAi.checkApiLogic, after The Mimeoplasm and the
+    //    earlier name floors) only when untapped mana covers its mana value and its {B} pips, so an
+    //    unaffordable Main 2 is refused before canPayCost rolls anything.
+    // Play-effect casts (an opponent's Nathan Drake) keep the stock path untouched: the floor skips
+    // isCastFromPlayEffect(), and ComputerUtil.playStack never chooses optional costs.
+    // Necessary, never sufficient: canPayCost still judges every approval. Draws nothing and holds
+    // nothing; its only write is setActivatingPlayer on the mana abilities it reads, as the estimate
+    // does.
+    public static class PatronOfTheNezumi {
+        public static final String NAME = "Patron of the Nezumi";
+
+        public static boolean isHost(final SpellAbility sa) {
+            final Card host = sa == null ? null : sa.getHostCard();
+            return host != null && NAME.equals(host.getName());
+        }
+
+        // BorderlandExplorer.considerEtb's shape. The mana value and the {B} pips come from the cost
+        // being judged, sa's own pay cost (the printed {5}{B}{B} for the plain spell), never
+        // host.getFirstSpellAbility() (row 77).
+        public static boolean canPayNow(final Player ai, final SpellAbility sa) {
+            final ManaCost cost = sa.getPayCosts() == null ? ManaCost.ZERO : sa.getPayCosts().getTotalMana();
+            if (manaEstimate(ai) < cost.getCMC()) {
+                return false;
+            }
+            final int needed = cost.getShardCount(forge.card.mana.ManaCostShard.BLACK);
+            return blackSources(ai, sa, needed) >= needed;
+        }
+
+        // ComputerUtilMana.getAvailableManaEstimate(ai, true), copied, with one change: a Combo
+        // production counts as one mana per Amount, not one per word of Produced$ (the estimate
+        // reads Jwar Isle Refuge's "Combo U B" as 3 and Command Tower's "Combo ColorIdentity" as 2,
+        // so with both untapped it can read 7 while 4 is real, and canPayCost would then roll).
+        // The estimate itself is left as it is.
+        private static int manaEstimate(final Player ai) {
+            int availableMana = 0;
+            int producedWithCost = 0;
+            boolean hasSourcesWithNoManaCost = false;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int maxProduced = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay()) {
+                        continue;
+                    }
+                    final int costsToActivate = ma.getPayCosts().getCostMana() != null ? ma.getPayCosts().getCostMana().convertAmount() : 0;
+                    final String produced = ma.getParamOrDefault("Produced", "");
+                    final int producedMana = produced.startsWith("Combo") ? 1 : produced.split(" ").length;
+                    final int producedAmount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    final int producedTotal = producedMana * producedAmount - costsToActivate;
+                    if (costsToActivate > 0) {
+                        producedWithCost += producedTotal;
+                    } else if (!hasSourcesWithNoManaCost) {
+                        hasSourcesWithNoManaCost = true;
+                    }
+                    if (producedTotal > maxProduced) {
+                        maxProduced = producedTotal;
+                    }
+                }
+                availableMana += maxProduced;
+            }
+            availableMana += ai.getManaPool().totalMana();
+            if (producedWithCost > 0 && !hasSourcesWithNoManaCost) {
+                availableMana -= producedWithCost; // as the estimate: probably can't activate them
+            }
+            return availableMana;
+        }
+
+        // Floating black plus untapped sources whose printed production could be black and whose
+        // mana THIS spell may spend (WakeTheDead.hasBlackSources, judged on sa itself, never
+        // host.getFirstSpellAbility() - the row 77 lesson). Each source counts once.
+        private static int blackSources(final Player ai, final SpellAbility sa, final int needed) {
+            int black = ai.getManaPool().getAmountOfColor(MagicColor.BLACK);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (black >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()
+                            || !ma.getManaPart().meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("B") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        black++;
+                        break;
+                    }
+                }
+            }
+            return black;
+        }
+    }
+
     // Phyrexian Dreadnought
     public static class PhyrexianDreadnought {
         public static CardCollection reviseCreatureSacList(final Player ai, final SpellAbility sa, final CardCollection choices) {

@@ -1,5 +1,6 @@
 package forge.ai.ability;
 
+import com.google.common.collect.Lists;
 import forge.ai.*;
 import forge.card.mana.ManaCost;
 import forge.game.Game;
@@ -12,12 +13,16 @@ import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.spellability.OptionalCost;
+import forge.game.spellability.OptionalCostValue;
 import forge.game.spellability.SpellAbility;
 import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityMode;
 import forge.game.zone.ZoneType;
 import forge.util.MyRandom;
 import org.apache.commons.lang3.StringUtils;
+
+import java.util.List;
 
 /**
  * AbilityFactory for Creature Spells.
@@ -220,6 +225,13 @@ public class PermanentCreatureAi extends PermanentAi {
             // keeps the stock path it took before. No random draw; see the class comment.
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
+        if (SpecialCardAi.PatronOfTheNezumi.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
+                && !SpecialCardAi.PatronOfTheNezumi.canPayNow(ai, sa)) {
+            // RNG-free affordability floor: refuse before canPlayAndPayForFace's canPayCost rolls
+            // ComputerUtilMana.isManaSourceReserved. A Play-effect cast (a thief) keeps the stock
+            // path it took before. See the class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
         final ManaCost mana = card.getManaCost();
         final Game game = ai.getGame();
 
@@ -248,5 +260,17 @@ public class PermanentCreatureAi extends PermanentAi {
         }
 
         return new AiAbilityDecision(0, AiPlayDecision.WouldBecomeZeroToughnessCreature);
+    }
+
+    @Override
+    public List<OptionalCostValue> chooseOptionalCosts(Player payer, SpellAbility chosen, List<OptionalCostValue> optionalCostValues) {
+        if (SpecialCardAi.PatronOfTheNezumi.isHost(chosen)) {
+            // never sacrifice a Rat for a cost the AI pays in full anyway; dropping the Offering
+            // before the stock canPayCost probe also draws nothing (see SpecialCardAi.PatronOfTheNezumi)
+            final List<OptionalCostValue> rest = Lists.newArrayList(optionalCostValues);
+            rest.removeIf(o -> o.getType() == OptionalCost.Offering);
+            optionalCostValues = rest;
+        }
+        return super.chooseOptionalCosts(payer, chosen, optionalCostValues);
     }
 }
