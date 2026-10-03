@@ -2,6 +2,7 @@ package forge.ai.ability;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
@@ -19,6 +20,15 @@ public class InvestigateAi extends SpellAbilityAi {
     protected AiAbilityDecision canPlay(Player aiPlayer, SpellAbility sa) {
         PhaseHandler ph = aiPlayer.getGame().getPhaseHandler();
         boolean result = ph.is(PhaseType.END_OF_TURN) && ph.getNextTurn() == aiPlayer;
+        if (!result && sa.isSpell() && sa.getHostCard() != null
+                && SpecialCardAi.FollowTheBodies.NAME.equals(sa.getHostCard().getName())) {
+            // Follow the Bodies is a sorcery: the end-step window above never opens
+            // for it, so its owner held it all game. It is judged in its own Main 2
+            // instead, and only where the stock line declines: a window that line
+            // approves (a flash enabler) keeps exactly the stock answer, and every
+            // other Investigate card takes exactly the path it took before this branch.
+            return SpecialCardAi.FollowTheBodies.consider(aiPlayer, sa);
+        }
         return result ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.TimingRestrictions);
     }
 

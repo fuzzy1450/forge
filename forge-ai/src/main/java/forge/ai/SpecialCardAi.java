@@ -7506,6 +7506,76 @@ public class SpecialCardAi {
         }
     }
 
+    // Follow the Bodies (dead-card batch 2, row 110)
+    // "Gravestorm (When you cast this spell, copy it for each permanent put into a graveyard from
+    // the battlefield this turn.) Investigate." ({2}{U} Sorcery.) InvestigateAi.canPlay approves
+    // an Investigate spell only in the end step before our turn, a window in which a sorcery never
+    // has priority, so its owner held it 730 times and never cast it. Routed by name from
+    // InvestigateAi.canPlay, only where that stock line declines. In order, every decline before
+    // any WillPlay:
+    // - the base class's restriction check, which the override bypasses (Rile's idiom), else
+    //   CantPlaySa;
+    // - window: our own Main 2 with an empty stack, else WaitForMain2. Combat's deaths, Clue
+    //   cracks and a Main 1 sweeper are in the gravestorm count by then; never Main 1. O(1), no
+    //   scan outside it;
+    // - affordable, else CantAfford: HonestMana (G2, held sources skipped, restrictions read on
+    //   this spell) covers this spell's own cost (sa.getPayCosts(), never
+    //   host.getFirstSpellAbility(): row 77), in total and in blue pips. Never
+    //   getAvailableManaEstimate here: it counts the words of Produced$ (a Talisman or a Temple 3,
+    //   Command Tower or Arcane Signet 2), the GhostlyFlicker blue test reads every Combo source as
+    //   blue (Talisman of Unity, Temple of Plenty), and an approval in an unpayable window would
+    //   reach canPayCost's isManaSourceReserved roll;
+    // - COPIES: a permanent (any player's, tokens included) went to a graveyard from the
+    //   battlefield this turn, the engine's own GravestormCount, which only grows before the cast
+    //   resolves. The cast makes 2+ Clues for 3 mana, at no life, card or sacrifice: WillPlay;
+    // - LONE CLUE (no copy), else CantPlayAi: only into mana nothing else in hand can use (any
+    //   other nonland card whose mana value fits the count declines it), and, with a Clue of ours
+    //   already waiting, only with CLUE_CRACK more mana for that Clue's crack; then WillPlay.
+    // The stock path drew no random numbers for this card (two phase reads), and every check here
+    // is a read that draws nothing; nothing is targeted, held or remembered.
+    public static class FollowTheBodies {
+        public static final String NAME = "Follow the Bodies";
+        static final int CLUE_CRACK = 2;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // Routing from InvestigateAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final Game game = ai.getGame();
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            // judged on this spell's own cost (never host.getFirstSpellAbility(): row 77)
+            final ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            final int need = cost == null ? host.getCMC() : cost.getCMC();
+            final int bluePips = cost == null ? 1 : cost.getShardCount(forge.card.mana.ManaCostShard.BLUE);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int avail = mana.total();
+            if (avail < need || mana.colour(MagicColor.BLUE) < bluePips) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // COPIES: the gravestorm count the cast will see, at least one copy
+            if (!CardUtil.getThisTurnEntered(ZoneType.Graveyard, ZoneType.Battlefield, "Permanent",
+                    host, sa, ai).isEmpty()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            // LONE CLUE: only into mana nothing else in hand can use
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (!c.equals(host) && !c.isLand() && c.getCMC() <= avail) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            if (avail < need + CLUE_CRACK
+                    && ai.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.isType("Clue"))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Footbottom Feast
     // "Put any number of target creature cards from your graveyard on top of your library. Draw a
     // card." ({2}{B} Instant.) One target only, so the Feast's own draw takes exactly that creature
