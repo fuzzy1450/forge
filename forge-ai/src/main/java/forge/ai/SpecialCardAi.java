@@ -3982,6 +3982,53 @@ public class SpecialCardAi {
         }
     }
 
+    // Cream of the Crop
+    // "Whenever a creature you control enters, you may look at the top X cards of your library, where X
+    // is that creature's power. If you do, put one of those cards on top of your library and the rest on
+    // the bottom of your library in any order." Routed from DigAi.chooseSingleCard by AILogic$ CreamOfTheCrop,
+    // only for a dig of the chooser's own library (dead-card batch 2, row 92). The stock chooser (getBestAI ->
+    // getMostExpensivePermanentAI on a mixed list) keeps the highest-CMC nonland on top and bottoms every
+    // land, even on a board stuck on two lands. Keep instead a card the AI's own scry heuristic
+    // (ComputerUtil.scryWillMoveCardToBottomOfLibrary) would keep on top, Ponder-like but keeping ONE:
+    // - a kept land (the one nearest the top) when we control two mana lands or fewer, when no kept spell is
+    //   offered, or when the hand holds a nonland next turn's mana estimate cannot cast;
+    // - otherwise the best kept spell (getBestAI over nonlands: the best creature, else the most expensive);
+    // - with nothing kept, the cheapest card, nearest the top on ties.
+    // Deterministic: no RNG (never getBestLandAI, whose nonbasic and basic tie-breaks draw from the game
+    // stream), no memory, nothing held. A single offered card is returned as it is.
+    public static class CreamOfTheCrop {
+        public static final String LOGIC = "CreamOfTheCrop";
+
+        public static Card chooseCardToKeepOnTop(final Player ai, final Iterable<Card> valid) {
+            final CardCollection options = new CardCollection(valid);
+            if (options.size() <= 1) {
+                return options.isEmpty() ? null : options.getFirst();
+            }
+            // options keep the dig's order (top of the library first), and so do these filters
+            final CardCollection keep = CardLists.filter(options,
+                    c -> !ComputerUtil.scryWillMoveCardToBottomOfLibrary(ai, c));
+            final CardCollection keepLands = CardLists.filter(keep, CardPredicates.LANDS);
+            final CardCollection keepSpells = CardLists.filter(keep, CardPredicates.NON_LANDS);
+            if (!keepLands.isEmpty()) {
+                final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
+                final int lands = CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS_PRODUCING_MANA);
+                final boolean landInHand = hand.anyMatch(CardPredicates.LANDS_PRODUCING_MANA);
+                // the scry heuristic's own castability measure: every source, tapped or not, i.e. next turn
+                final int manaNextTurn = ComputerUtilMana.getAvailableManaEstimate(ai, false) + (landInHand ? 1 : 0);
+                final boolean handNeedsMana = hand.anyMatch(c -> !c.isLand() && c.getCMC() > manaNextTurn);
+                // a land the scry heuristic keeps (it already refuses lands at 7+ or a land-heavy hand)
+                if (lands <= 2 || keepSpells.isEmpty() || handNeedsMana) {
+                    return keepLands.getFirst();
+                }
+            }
+            if (!keepSpells.isEmpty()) {
+                return ComputerUtilCard.getBestAI(keepSpells);
+            }
+            // nothing worth a guaranteed draw: the most castable card, nearest the top on ties
+            return Aggregates.itemWithMin(options, Card::getCMC);
+        }
+    }
+
     // Curious Herd
     // "Choose target opponent. You create X 3/3 green Beast creature tokens, where X is the
     // number of artifacts that player controls." Routed from PumpAi.checkApiLogic by

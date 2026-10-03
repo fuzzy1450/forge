@@ -165,6 +165,11 @@ public class DigAi extends SpellAbilityAi {
                 }
             }
             return null;
+        } else if (SpecialCardAi.CreamOfTheCrop.LOGIC.equals(sa.getParam("AILogic"))
+                && (relatedPlayer == null || ai.equals(relatedPlayer))) {
+            // Cream of the Crop (dead-card batch 2, row 92): keep one card of our own library's dig on top.
+            // A dig of anyone else's library falls through to the stock branches below, unchanged.
+            return SpecialCardAi.CreamOfTheCrop.chooseCardToKeepOnTop(ai, valid);
         }
 
         if (sa.getActivatingPlayer().isOpponentOf(ai) && relatedPlayer.isOpponentOf(ai)) {
