@@ -284,6 +284,17 @@ public class DamageDealAi extends DamageAiBase {
             return SpecialCardAi.FireCovenant.consider(ai, sa);
         }
 
+        if (SpecialCardAi.AcornCatapult.NAME.equals(sourceName)) {
+            // The Squirrel goes to the controller of what was hit. The generic
+            // targeting below looks only at the opponent's side: it pings their
+            // face in their end step (freePing; a Squirrel a turn for them) or
+            // under 5 life (shouldTgtP), and kills any X/1, even a vanilla
+            // token, for a Squirrel back. It never pings our own creature,
+            // which is the card's value. Every other DamageDeal card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.AcornCatapult.consider(ai, sa);
+        }
+
         final String damage = sa.getParam("NumDmg");
         int dmg = calculateDamageAmount(sa, source, damage);
 

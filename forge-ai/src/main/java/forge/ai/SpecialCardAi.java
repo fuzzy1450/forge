@@ -128,6 +128,187 @@ public class SpecialCardAi {
         return res;
     }
 
+    // Acorn Catapult (dead-card batch 2, row 100; precon:Counterpunch (CMD))
+    // "{1}, {T}: Acorn Catapult deals 1 damage to any target. That permanent's controller or that
+    // player creates a 1/1 green Squirrel creature token." AI:RemoveDeck:All kept it out of every
+    // evaluation, and the stock DamageDealAi line behind the hint feeds the opponent a Squirrel a
+    // turn (the end-step face ping, any X/1 token killed) while never touching our own creatures.
+    // The printed card (CMD #241) gives the Squirrel to the controller of the creature that was hit,
+    // so a ping on our own creature is a free Squirrel for us. Three lines only:
+    //  1. lethal: an opponent the 1 damage kills, at any priority;
+    //  2. in the end step before our turn, stack empty: kill an opponent's planeswalker, or a
+    //     creature worth at least a Squirrel + KILL_MARGIN (they get the Squirrel);
+    //  3. else, same window: ping our own creature that survives it (Rile's screen) for OUR
+    //     Squirrel; the damage is gone at that cleanup and the catapult untaps in our untap step.
+    //     Never under wither (Everlasting Torment): the -1/-1 counter would stay.
+    // Never the opponent's face short of lethal, never ourselves, never a body we lose. Draws no
+    // RNG: every decline returns before canPayCost, behind an RNG-free affordability screen, the
+    // cost as the engine prices it (test-mode calculateManaCost: Aura of Silence, Thalia, Sphere
+    // of Resistance included) against HonestMana (G2, held sources skipped, restrictions read on
+    // this sa). Never getAvailableManaEstimate, which counts the words of Produced$ (this deck's
+    // Command Tower counts 2).
+    public static class AcornCatapult {
+        public static final String NAME = "Acorn Catapult";
+        // CreatureEvaluator: a vanilla untapped 1/1 token = 80 + 15 + 10 + 1
+        static final int SQUIRREL_VALUE = 106;
+        // a non-token vanilla 1/1 one-drop scores 131: the cheapest card that is worth the trade
+        static final int KILL_MARGIN = 25;
+
+        // PermanentNoncreatureAi.checkApiLogic's name gate, after the stock approval, paid casts only
+        // (the caller leaves Play-effect casts stock): affordability, nothing else. The cast has no
+        // drawback; Main 2 timing and the rest are stock.
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // DamageDealAi.canPlay's name gate: the {1}, {T} ping
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // routed from DamageDealAi.canPlay, which bypasses the base restriction check
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            sa.resetTargets();
+            final Card source = sa.getHostCard();
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+
+            Player lethal = null;                       // O(opponents), the cheap guard first
+            for (final Player opp : ai.getOpponents()) {
+                if (opp.getLife() <= 3 && sa.canTarget(opp) && opp.canLoseLife()
+                        && !opp.cantLoseForZeroOrLessLife()
+                        && ComputerUtilCombat.predictDamageTo(opp, 1, source, false) >= opp.getLife()) {
+                    lethal = opp;
+                    break;
+                }
+            }
+            // the AtOppEOT window (SpellAbilityAi.checkPhaseRestrictions), stack empty
+            final boolean eot = ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn())
+                    && game.getStack().isEmpty();
+            if (lethal == null && !eot) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForEndOfTurn);
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (lethal != null) {
+                sa.getTargets().add(lethal);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+
+            // 2. kill: a planeswalker first, then the best creature over the floor. The value floor
+            // runs before dies(), whose replacement and regeneration scans are the costly reads.
+            Card kill = null;
+            int killValue = Integer.MIN_VALUE;
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.getController().isOpponentOf(ai) || !(c.isCreature() || c.isPlaneswalker())
+                        || !sa.canTarget(c)) {
+                    continue;
+                }
+                final int v = c.isPlaneswalker() ? Integer.MAX_VALUE : ComputerUtilCard.evaluateCreature(c);
+                if (v < SQUIRREL_VALUE + KILL_MARGIN) {
+                    continue;
+                }
+                if (v > killValue && dies(game, c, source, sa)) {
+                    kill = c;
+                    killValue = v;
+                }
+            }
+            if (kill != null) {
+                sa.getTargets().add(kill);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+
+            // 3. our Squirrel: Rile's survivor screen and ranking. Under wither the ping is a
+            // -1/-1 counter that never wears off, so no own target at all.
+            if (source.isWitherDamage()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            Card best = null;
+            boolean bestUpside = false;
+            int bestMargin = Integer.MIN_VALUE;
+            int bestValue = Integer.MAX_VALUE;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!sa.canTarget(c)
+                        || ComputerUtilCombat.getEnoughDamageToKill(c, 1, source, false) <= 1
+                        || Rile.damageWouldBeReplaced(game, c, source, sa)
+                        || c.hasSVar("Targeting") || c.hasSVar("SacMe")
+                        || Rile.hasCostlySelfTrigger(c, source)) {
+                    continue;
+                }
+                final boolean upside = Rile.hasUpsideDamageTrigger(c, source)
+                        && ComputerUtilCombat.predictDamageTo(c, 1, source, false) > 0;
+                final int margin = c.getNetToughness() - c.getDamage();
+                final int value = ComputerUtilCard.evaluateCreature(c);
+                final boolean better;
+                if (best == null) {
+                    better = true;
+                } else if (upside != bestUpside) {
+                    better = upside;
+                } else if (upside) {
+                    better = value > bestValue;         // the best enrage body
+                } else {
+                    better = margin > bestMargin || (margin == bestMargin && value < bestValue);
+                }
+                if (better) {
+                    best = c;
+                    bestUpside = upside;
+                    bestMargin = margin;
+                    bestValue = value;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // RNG-free: the cost after reductions and taxes (test-mode calculateManaCost, the
+        // Illusionist's Gambit and Mizzix's Mastery screen) against G2's count of this sa's mana
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final int need = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false)
+                    .toManaCost().getCMC();
+            return need <= 0 || HonestMana.of(ai, sa, true).total() >= need;
+        }
+
+        // 1 damage from the catapult kills c, with no way back. Stock's killable filters
+        // (DamageDealAi.dealDamageChooseTgtC), minus ComputerUtil.canRegenerate: that one test-pays
+        // the controller's regeneration cost, which rolls isManaSourceReserved for an AI opponent.
+        // Here any activated Regenerate ability on the controller's side over-excludes instead.
+        // Ward is excluded (the activation would be countered unless we pay). Damage replacement
+        // (prevention, redirection, shields, and amplifiers too) excludes: over-excluding only
+        // costs an activation. The cheap lethality read runs before the two scans.
+        private static boolean dies(final Game game, final Card c, final Card source, final SpellAbility sa) {
+            if (c.hasKeyword(Keyword.WARD) || c.hasSVar("SacMe") || ComputerUtilCard.hasActiveUndyingOrPersist(c)) {
+                return false;
+            }
+            if ("Dies".equals(c.getSVar("Targeting"))) {
+                return true;
+            }
+            if (ComputerUtilCombat.getEnoughDamageToKill(c, 1, source, false) > 1) {
+                return false;
+            }
+            return !Rile.damageWouldBeReplaced(game, c, source, sa) && !mayRegenerate(c);
+        }
+
+        private static boolean mayRegenerate(final Card c) {
+            if (!c.isCreature() || !c.canBeShielded()) {
+                return false;
+            }
+            for (final Card p : c.getController().getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ab : p.getSpellAbilities()) {
+                    if (ab.isActivatedAbility() && ab.getApi() == ApiType.Regenerate) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Act of Authority
     // "When this enchantment enters, you may exile target artifact or enchantment. At the
     // beginning of your upkeep, you may exile target artifact or enchantment. If you do, its

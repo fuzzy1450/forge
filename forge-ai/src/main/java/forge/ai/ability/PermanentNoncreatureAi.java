@@ -96,6 +96,21 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.CarpetOfFlowers.considerCast(ai, sa);
         }
 
+        // Acorn Catapult dropped AI:RemoveDeck:All. A paid cast (from hand, or a MayPlay thief's) is
+        // screened for affordability here, drawing no random numbers, before canPlaySa's LKI copy and
+        // canPayCost, whose test payment rolls isManaSourceReserved. The isCastFromPlayEffect guard is
+        // load-bearing: PermanentAi.doTriggerNoCost ends in this checkApiLogic, and in A Nathan
+        // Drake's attack-trigger cast (PlayAi.chooseSingleCard -> canPlayFromEffectAI, :210) took the
+        // stock WillPlay and then rolled ComputerUtilCost.canPayCost (PlayAi:214) even when it could
+        // not pay; screening that path would decline before the roll and desync those games, so it
+        // stays stock.
+        if (SpecialCardAi.AcornCatapult.NAME.equals(sourceName) && !sa.isCastFromPlayEffect()) {
+            final AiAbilityDecision cast = SpecialCardAi.AcornCatapult.considerCast(ai, sa);
+            if (!cast.willingToPlay()) {
+                return cast;
+            }
+        }
+
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
             // TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?
