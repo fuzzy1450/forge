@@ -7325,6 +7325,113 @@ public class SpecialCardAi {
         }
     }
 
+    // Footbottom Feast
+    // "Put any number of target creature cards from your graveyard on top of your library. Draw a
+    // card." ({2}{B} Instant.) One target only, so the Feast's own draw takes exactly that creature
+    // card back: the dead card in hand becomes the best creature in our graveyard that we can cast
+    // next turn, paid with mana that would otherwise untap unused. Routed by name from
+    // ChangeZoneAi.checkApiLogic for the root spell: the generic known-origin targeting there
+    // targets EVERY creature card it can (isPreferredTarget's canAddMoreTarget loop), stacking the
+    // library in an order nobody chose (orderMoveToZoneList has no Library branch), so that many
+    // fresh draws become known, mostly expensive creatures.
+    // In order, every decline before any WillPlay:
+    // - window: the end step of an opponent whose next turn is ours (getNextTurn, extra turns
+    //   included), with an empty stack, else AnotherTime. O(1), no scan outside it; it is the
+    //   stock Graveyard->Library window, and the creature is in hand for our main phase;
+    // - affordable: HonestMana (G2, held sources skipped, restrictions read on this spell) covers
+    //   the card's mana value with at least one black mana, else CantAfford. Never
+    //   getAvailableManaEstimate here: it counts the words of Produced$ (Command Tower 2), and an
+    //   approval in an unpayable window would reach canPayCost's isManaSourceReserved roll;
+    // - a library above 4 (the Draw sub's own DrawAi check), else CantPlayAi;
+    // - a pick: a targetable creature card we own, not a commander, mana value >= MIN_PICK_CMC,
+    //   castable with next turn's mana, and not a second copy of a legend we control; the best of
+    //   them by getBestCreatureAI, else TargetingFailed. Next turn's mana is the measure the stock
+    //   chooseCreature uses for its nearTerm list (getAvailableManaEstimate(ai, false): every
+    //   source, tapped or not, plus a land drop if we hold one). It only shapes the pick, never
+    //   gates a payment, and it asks about next turn, when HonestMana would miss tapped sources;
+    // - the draw must reach our hand and pay no opponent, else CantPlayAi: it lands on an
+    //   opponent's end step (never our draw step's first card), DrawAi skips canDraw for a
+    //   drawback and saSideEffects counts only SpellCast triggers. Notion Thief / Hullbreacher
+    //   replace it, Narset or a can't-draw static stops it (the creature would then replace our
+    //   next random draw), Nekusar / Spiteful Visions / Sheoldred / Bowmasters / Consecrated
+    //   Sphinx / Smothering Tithe punish it;
+    // - else exactly one target and WillPlay 100. Never a 3-mana cycle with zero targets, never
+    //   several targets.
+    // AI:RemoveDeck:All stripped the card before any handler ran, so the stock path drew no random
+    // numbers for it. Every check here is a read and draws nothing; nothing is held or remembered,
+    // and the target is added only on WillPlay (resetTargets first, so a downstream decline's
+    // target is cleared at the next consult).
+    public static class FootbottomFeast {
+        public static final String NAME = "Footbottom Feast";
+        static final int MIN_PICK_CMC = 3;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            sa.resetTargets();
+            if (!ph.is(PhaseType.END_OF_TURN) || !ai.equals(ph.getNextTurn()) || ph.isPlayerTurn(ai)
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < host.getCMC() || mana.colour(MagicColor.BLACK) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (ai.getCardsIn(ZoneType.Library).size() <= 4) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // next turn's mana: every source, tapped or not, plus a land drop if we hold one
+            int nextTurn = ComputerUtilMana.getAvailableManaEstimate(ai, false);
+            if (CardLists.count(ai.getCardsIn(ZoneType.Hand), CardPredicates.LANDS_PRODUCING_MANA) > 0) {
+                nextTurn++;
+            }
+            final int nextTurnMana = nextTurn;
+            final CardCollection picks = CardLists.filter(
+                    CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa),
+                    c -> c.isCreature() && ai.equals(c.getOwner()) && !c.isCommander()
+                            && c.getCMC() >= MIN_PICK_CMC && c.getCMC() <= nextTurnMana
+                            && (c.ignoreLegendRule() || !ai.isCardInPlay(c.getName())));
+            if (picks.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final Card best = ComputerUtilCard.getBestCreatureAI(picks);
+            if (best == null || !sa.canTarget(best)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            if (!ai.canDraw() || drawPaysAnOpponent(ai, best)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // An opponent's permanent whose Drawn trigger matches the card we would draw, or whose Draw
+        // replacement matches us (an absent ValidCard/ValidPlayer matches: a conservative decline).
+        // An opponent's own-draw trigger (Psychosis Crawler, Chasm Skulker: Card.YouCtrl) does not
+        // match our card. Parameter reads only.
+        private static boolean drawPaysAnOpponent(final Player ai, final Card drawn) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.Drawn && t.matchesValidParam("ValidCard", drawn)) {
+                            return true;
+                        }
+                    }
+                    for (final ReplacementEffect re : c.getReplacementEffects()) {
+                        if (re.getMode() == ReplacementType.Draw && re.matchesValidParam("ValidPlayer", ai)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Force of Will
     public static class ForceOfWill {
         public static boolean consider(final Player ai, final SpellAbility sa) {

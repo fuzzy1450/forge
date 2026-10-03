@@ -285,6 +285,20 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.SurrealMemoir.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.FootbottomFeast.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // "Put any number of target creature cards from your graveyard on top of your
+            // library. Draw a card." The generic known-origin targeting below targets EVERY
+            // creature card it can (isPreferredTarget's canAddMoreTarget loop), stacking the
+            // library in an order nobody chose (orderMoveToZoneList has no Library branch)
+            // and replacing that many fresh draws. One target makes the draw return that card.
+            // AI:RemoveDeck:All stripped the card before any handler ran, so the stock path
+            // drew no random numbers for it. Play-effect casts (Nathan Drake's attack trigger,
+            // Planar Portal) and copy retargets go through doTriggerNoCost and never reach
+            // checkApiLogic. Every other ChangeZone card takes exactly the path it took before
+            // this branch.
+            return SpecialCardAi.FootbottomFeast.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
