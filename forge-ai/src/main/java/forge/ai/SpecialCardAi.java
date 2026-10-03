@@ -10374,6 +10374,174 @@ public class SpecialCardAi {
         }
     }
 
+    // Maestros Confluence (dead-card batch 2, row 67)
+    // "Choose three. You may choose the same mode more than once. Return target monocolored
+    // instant or sorcery card from your graveyard to your hand; target creature gets -3/-3 until
+    // end of turn; goad each creature target player controls." {3}{U}{B}{R} sorcery.
+    // CharmAi's chooseMultipleOptionsAi wants three DISTINCT modes passing at once and ignores
+    // CanRepeatModes, and the goad mode (ValidTgts$ Player) never passes GoadAi.checkApiLogic,
+    // which only looks for card targets, so the card was declined on every evaluation. One line:
+    // stack the -3/-3 on ONE opposing creature it kills (1-3 instances) and spend a spare slot on
+    // returning a spell, when the kill is worth the card: evaluateCreature >= MIN_KILL_EVAL or a
+    // commander, or >= MIN_PAIR_EVAL with a mana value 2+ spell coming back beside it. Never a
+    // warded creature (ward taxes the spell itself: canPayCost adds it, this bound does not, so
+    // the same pick would fail CantAfford on every consult) and never a SacMe creature (it wants
+    // to die). Goad is never chosen.
+    // Every entry is one of the card's own Choices subs with one target each: chainAbilities
+    // clones a sub's target into every instance, and a copied sub would keep the hand card as its
+    // host after moveToStack (setHostCard re-hosts the Choices list, not chosenList).
+    // RNG parity: the card is unhinted, so A ran the stock chooser on every evaluation; CharmAi
+    // still runs it first and asks this chooser only when it came back empty. Every decline path
+    // here draws nothing and leaves no target, memory or mana hold behind; targets are written
+    // only on approval. Affordability is the cost as the engine prices it (test-mode
+    // calculateManaCost: taxes and reductions) against HonestMana (G2) in total and per colour,
+    // never getAvailableManaEstimate, which counts the words of Produced$ (Command Tower and
+    // Arcane Signet 2, a Talisman 3, a tri-land 4), so canPayCost's test payment
+    // (ComputerUtilMana.isManaSourceReserved draws) is reached only in a near-castable window.
+    // Known residual (stock DestroyAi and PumpAi share it): a kill whose death trigger hurts us
+    // (Kokusho with us at low life) is not vetoed.
+    public static class MaestrosConfluence {
+        public static final String NAME = "Maestros Confluence";
+        public static final int MIN_KILL_EVAL = 180;  // a threat worth the card alone (~ non-token 3/3 three-drop)
+        public static final int MIN_PAIR_EVAL = 130;  // worth it with a returned spell beside it
+        public static final int MIN_RETURN_CMC = 2;   // a returned spell that pays for its slot
+        public static final int RETURN_BONUS = 100;   // prefer a kill that leaves the Return slot free
+
+        // the owner's own cast; Jeleva's steal and any copy keep the stock chooser
+        public static boolean handles(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    && sa.isSpell() && !sa.isCopied() && !sa.isTrigger()
+                    && ai.equals(sa.getActivatingPlayer()) && ai.equals(host.getOwner());
+        }
+
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa,
+                                                   final List<AbilitySub> choices, final int num) {
+            final List<AbilitySub> chosen = Lists.newArrayList(); // mutable: chainAbilities sorts it
+            AbilitySub curse = null;
+            AbilitySub ret = null;
+            for (final AbilitySub sub : choices) {
+                if (sub.getApi() == ApiType.Pump && sub.isCurse()) {
+                    curse = sub; // offered only while some creature is targetable
+                } else if (sub.getApi() == ApiType.ChangeZone) {
+                    ret = sub;   // offered only with a monocolored instant/sorcery of ours in the graveyard
+                }
+            }
+            if (curse == null || num < 1 || num > 3) {
+                return chosen; // nothing to kill, or the script drifted: stay out
+            }
+            final Card host = sa.getHostCard();
+            final int per = -AbilityUtils.calculateAmount(host, curse.getParamOrDefault("NumDef", "0"), curse);
+            if (per < 1) {
+                return chosen;
+            }
+
+            // 1. cheap: is there any opposing creature this mode can target at all?
+            final CardCollection opps = new CardCollection();
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCreaturesInPlay()) {
+                    if (curse.canTarget(c)) {
+                        opps.add(c);
+                    }
+                }
+            }
+            if (opps.isEmpty()) {
+                return chosen;
+            }
+
+            // 2. RNG-free affordability: the cost after taxes and reductions (Goblin Electromancer)
+            //    against G2, in total and per coloured shard, judged on the root sa (row 77).
+            //    canPlayAndPayForFace runs the real canPayCost only after approval.
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLUE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE)
+                    || mana.colour(MagicColor.BLACK) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)
+                    || mana.colour(MagicColor.RED) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)) {
+                return chosen;
+            }
+
+            // 3. the spell for a spare slot: our most expensive returnable card the AI will play
+            Card back = null;
+            if (ret != null) {
+                final CardCollection pool = new CardCollection();
+                for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                    if (ret.canTarget(c) && !ComputerUtilCard.isCardRemAIDeck(c)) {
+                        pool.add(c);
+                    }
+                }
+                back = ComputerUtilCard.getMostExpensivePermanentAI(pool); // null when empty
+            }
+            final boolean worthyBack = back != null && back.getCMC() >= MIN_RETURN_CMC;
+
+            // 4. the kill: the opposing creature the stacked -per/-per puts in the graveyard
+            Card best = null;
+            int bestK = 0;
+            int bestScore = Integer.MIN_VALUE;
+            for (final Card c : opps) {
+                if (returnsAfterDeath(c) || c.hasKeyword(Keyword.WARD) || c.hasSVar("SacMe")) {
+                    continue; // ward taxes the spell itself (canPayCost adds it; the RNG-free bound does not); SacMe wants to die
+                }
+                final int k = instancesToKill(c, per, num);
+                if (k < 1) {
+                    continue;
+                }
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                final boolean spare = k < num && back != null;
+                if (!(eval >= MIN_KILL_EVAL || c.isCommander()
+                        || (eval >= MIN_PAIR_EVAL && k < num && worthyBack))) {
+                    continue; // the floor
+                }
+                final int score = eval + (spare ? RETURN_BONUS : 0);
+                if (score > bestScore) {
+                    best = c;
+                    bestK = k;
+                    bestScore = score;
+                }
+            }
+            if (best == null) {
+                return chosen;
+            }
+
+            // 5. approve: one target per sub, then fill every slot
+            curse.resetTargets(); // drop the stock pass's pick
+            curse.getTargets().add(best);
+            if (back != null && bestK < num) {
+                ret.resetTargets();
+                ret.getTargets().add(back);
+                chosen.add(ret);
+            }
+            while (chosen.size() < num) {
+                chosen.add(curse); // bestK instances kill; any extra is margin against a pump in response
+            }
+            return chosen;
+        }
+
+        // the fewest -per/-per instances (<= max) that kill c. Toughness 0 dies through
+        // indestructible; the damage path is an explicit lethal-damage test, never
+        // ComputerUtilCombat.getDamageToKill, which reads 1 for any DestroyWhenDamaged creature
+        // (Frozen Solid) although -N/-N is not damage, and a regeneration shield or a SHIELD
+        // counter saves a creature from lethal damage, never from toughness 0
+        static int instancesToKill(final Card c, final int per, final int max) {
+            for (int k = 1; k <= max; k++) {
+                final int x = per * k;
+                if (c.getNetToughness() <= x || "Dies".equals(c.getSVar("Targeting"))
+                        || (c.getDamage() > 0 && c.getNetToughness() - c.getDamage() <= x
+                            && !c.hasKeyword(Keyword.INDESTRUCTIBLE) && c.getShieldCount() == 0
+                            && c.getCounters(CounterEnumType.SHIELD) == 0)) {
+                    return k;
+                }
+            }
+            return 0;
+        }
+
+        // undying/persist brings it straight back: not a kill worth the card
+        static boolean returnsAfterDeath(final Card c) {
+            return (c.hasKeyword(Keyword.UNDYING) && c.getCounters(CounterEnumType.P1P1) == 0)
+                    || (c.hasKeyword(Keyword.PERSIST) && c.getCounters(CounterEnumType.M1M1) == 0);
+        }
+    }
+
     // Manascape Refractor (dead-card batch 2, row 60)
     // "Manascape Refractor enters tapped. Manascape Refractor has all activated abilities of all
     // lands on the battlefield. You may spend mana as though it were mana of any color to pay the

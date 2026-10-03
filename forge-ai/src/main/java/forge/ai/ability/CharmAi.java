@@ -87,6 +87,17 @@ public class CharmAi extends SpellAbilityAi {
                     : chooseOptionsAi(sa, choices, ai, timingRight, num, min);
         }
 
+        // Maestros Confluence: the stock chooser above can never fill the card's three slots
+        // (its goad mode targets a player and GoadAi.checkApiLogic looks only for card targets),
+        // so it always returns empty here. It still runs first, exactly as before, so every
+        // random draw it makes stays in step with the stock engine; only then is the card's own
+        // chooser asked. Every other charm takes exactly the path it took before. This assumes
+        // the stock chooser never fills this card: a stock refill of chooseMultipleOptionsAi
+        // under CanRepeatModes would bypass this gate and its floor.
+        if (chosenList.isEmpty() && SpecialCardAi.MaestrosConfluence.handles(ai, sa)) {
+            chosenList = SpecialCardAi.MaestrosConfluence.chooseModes(ai, sa, choices, num);
+        }
+
         if (chosenList.isEmpty()) {
             if (timingRight) {
                 // Set minimum choices for triggers where chooseMultipleOptionsAi() returns null
