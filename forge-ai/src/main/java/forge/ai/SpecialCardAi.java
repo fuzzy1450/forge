@@ -19747,6 +19747,47 @@ public class SpecialCardAi {
         }
     }
 
+    // Ultimate Magic: Meteor (dead-card batch 2, row 106)
+    // {5}{R} Sorcery. "Ultimate Magic: Meteor deals 7 damage to each creature. If this spell was
+    // cast from exile, for each opponent, choose an artifact or land that player controls. Destroy
+    // the chosen permanents. Foretell {5}{R}"
+    // No AI:RemoveDeck hint: the stock DamageAllAi root judged the sweep at every consult, but its
+    // DestroyAll sub (ValidCards$ Permanent.IsRemembered) was judged before RepeatEach/ChooseCard
+    // remember anything, so DestroyAllAi.doMassRemovalLogic saw no opposing card and vetoed the
+    // whole spell, from hand and foretold alike. The script now approves that sub with
+    // AILogic$ Always (row 25's idiom), and the value floor is the stock root, unchanged:
+    // evaluateDamageAll's creature trade (the weakest opponent's killed creatures minus ours, more
+    // than 200, or 126 in Main 1 when none of ours dies).
+    // With the veto gone a floor pass reaches canPayCost, whose test payment draws MyRandom in
+    // ComputerUtilMana.isManaSourceReserved; the veto used to stop every window before it.
+    // canAfford refuses, RNG-free, the windows that payment must refuse anyway: the cost after
+    // reductions and taxes (calculateManaCost in test mode, the G1 ceiling's call; a free cast
+    // costs 0) against HonestMana (G2, held sources skipped, restrictions read on this sa), in
+    // total and in red. Never getAvailableManaEstimate: it counts the words of Produced$ (the
+    // carrier's Combo lands 3, Jungle Shrine 4, Command Tower and Arcane Signet 2).
+    // The foretold cast is a copy whose original host is the face-down exiled card, so
+    // getAbilitySourceName reads "" there: isMeteor reads the host's name (the face-up LKI while
+    // AiController.canPlayAndPayFor judges it, the real card in hand) or the card state's name.
+    public static class UltimateMagicMeteor {
+        public static final String NAME = "Ultimate Magic: Meteor";
+
+        public static boolean isMeteor(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static boolean canAfford(final Player ai, final SpellAbility sa) {
+            if (sa.getPayCosts() == null) {
+                return true;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+    }
+
     // Unbreakable Formation (dead-card batch 2, row 13)
     // {2}{W} Instant. "Creatures you control gain indestructible until end of turn. Addendum -- If
     // you cast this spell during your main phase, put a +1/+1 counter on each of those creatures and

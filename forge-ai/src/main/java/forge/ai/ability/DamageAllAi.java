@@ -24,6 +24,15 @@ public class  DamageAllAi extends SpellAbilityAi {
         if (!ai.getGame().getStack().isEmpty()) {
             return new AiAbilityDecision(0, AiPlayDecision.StackNotEmpty);
         }
+        if (SpecialCardAi.UltimateMagicMeteor.isMeteor(sa)
+                && !SpecialCardAi.UltimateMagicMeteor.canAfford(ai, sa)) {
+            // Its DestroyAll sub now passes (the script's AILogic$ Always), so a floor pass below
+            // goes on to canPayCost, whose test payment draws MyRandom; before, the sub's veto
+            // stopped every window ahead of it. Refuse the windows that test payment must refuse
+            // anyway, RNG-free. Gated on the host or card-state name (a foretold copy's source
+            // name is ""); every other DamageAll card takes exactly the path it took before.
+            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
 
         int x = -1;
         final String damage = sa.getParam("NumDmg");
