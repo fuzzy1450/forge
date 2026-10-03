@@ -6,5 +6,4 @@ A:AB$ FlipCoin | Cost$ R T | ValidTgts$ Artifact | WinSubAbility$ DBDestroy | Lo
 SVar:DBDestroy:DB$ Destroy | Defined$ Targeted | SubAbility$ DBUntapSelf
 SVar:DBUntapSelf:DB$ Untap | Defined$ Self
 SVar:DBSacSelf:DB$ Sacrifice
-AI:RemoveDeck:All
 Oracle:{R}, {T}: Flip a coin. If you win the flip, destroy target artifact and untap Goblin Archaeologist. If you lose the flip, sacrifice Goblin Archaeologist.

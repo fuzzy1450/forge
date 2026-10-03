@@ -212,6 +212,14 @@ public class PermanentCreatureAi extends PermanentAi {
             // canPayCost's MyRandom mana probe; see the class comment.
             return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
         }
+        if (SpecialCardAi.GoblinArchaeologist.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
+                && !SpecialCardAi.GoblinArchaeologist.worthCasting(ai, card, sa)) {
+            // Value floor: the body is a 1/2; its worth is the artifact-killing flip. Cast it only
+            // while an opponent controls an artifact that flip would kill, and only when the spell is
+            // affordable (canPayCost's test payment draws MyRandom). A Play-effect cast (a thief)
+            // keeps the stock path it took before. No random draw; see the class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
         final ManaCost mana = card.getManaCost();
         final Game game = ai.getGame();
 

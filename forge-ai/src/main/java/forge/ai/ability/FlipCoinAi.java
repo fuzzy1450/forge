@@ -30,6 +30,13 @@ public class FlipCoinAi extends SpellAbilityAi {
             // Frenetic Efreet keeps the stock PhaseOut branch below.
             return SpecialCardAi.FreneticSliver.consider(ai, sa);
         }
+        if (SpecialCardAi.GoblinArchaeologist.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Artifact removal on a coin flip. The stock fallthrough below never picks a target
+            // (isTargetNumberValid on an empty list), so the ability was TargetingFailed forever even
+            // without the RemoveDeck hint. The owner's and a thief's alike; reads game state only, no
+            // random draw. Every other FlipCoin card takes exactly the path it took before this branch.
+            return SpecialCardAi.GoblinArchaeologist.consider(ai, sa);
+        }
         if (sa.hasParam("AILogic")) {
             String ailogic = sa.getParam("AILogic");
             if (ailogic.equals("PhaseOut")) {

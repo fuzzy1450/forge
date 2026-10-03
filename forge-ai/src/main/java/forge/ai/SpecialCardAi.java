@@ -7835,6 +7835,119 @@ public class SpecialCardAi {
         }
     }
 
+    // Goblin Archaeologist (dead-card batch 2, row 74)
+    // "{R}, {T}: Flip a coin. If you win the flip, destroy target artifact and untap this creature.
+    // If you lose the flip, sacrifice this creature." ({1}{R} 1/2.) AI:RemoveDeck:All kept both the
+    // creature spell and the ability out of every playable list, and behind the hint stock FlipCoinAi
+    // never chose a target for a FlipCoin with no AILogic, so the ability was TargetingFailed forever.
+    // A won flip kills an opponent's artifact and untaps the Archaeologist (it can go again for another
+    // R and target); a lost flip costs a 2-mana 1/2. Zndrsplt draws on every won flip, and Krark's
+    // Thumb makes a win 3 in 4.
+    // Ability (FlipCoinAi, owner or thief): an opponent's end step before our turn, stack empty. The
+    // mana would empty anyway, their combat is over, and a win untaps it for our turn; after a win the
+    // AI gets priority again and re-runs this against what is left, stopping at a loss, no target or
+    // no R. Then affordability, then the opponents' best artifact a win destroys for good.
+    // Cast (PermanentCreatureAi, never a Play-effect cast): the same affordability on the creature
+    // spell, and an opponent controls such an artifact.
+    // An approval goes on to canPayCost, whose test payment draws MyRandom
+    // (ComputerUtilMana.isManaSourceReserved), and the stock engine never evaluated this card, so
+    // every check here is RNG-free and comes before any WillPlay. Affordability is the cost as the
+    // engine prices it (test-mode calculateManaCost: taxes and reductions) against HonestMana (G2) in
+    // total and in red, never getAvailableManaEstimate, which counts the words of Produced$; it is
+    // judged on the sa being considered, never host.getFirstSpellAbility() (row 77). Targets are
+    // reset on every path; no X, no memory, nothing held.
+    public static class GoblinArchaeologist {
+        public static final String NAME = "Goblin Archaeologist";
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Card host = sa.getHostCard();
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (host == null || !ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai)
+                    || !ai.equals(ph.getNextTurn()) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int hostValue = ComputerUtilCard.evaluateCreature(host);
+            Card best = null;
+            int bestValue = Integer.MIN_VALUE;
+            for (final Card c : CardLists.getTargetableCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa)) {
+                if (!worthDestroying(ai, hostValue, c)) {
+                    continue;
+                }
+                final int v = value(c);
+                if (v > bestValue) { // the first in list order wins a tie
+                    bestValue = v;
+                    best = c;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Cast floor: affordable now, and an opponent controls an artifact the ability would kill.
+        // `spell` is the creature Spell being judged (row 77's NullPointerException came from
+        // judging host.getFirstSpellAbility() instead of the root).
+        public static boolean worthCasting(final Player ai, final Card host, final SpellAbility spell) {
+            if (!affordable(ai, spell)) {
+                return false;
+            }
+            final int hostValue = ComputerUtilCard.evaluateCreature(host);
+            for (final Card c : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                if (worthDestroying(ai, hostValue, c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The cost as the engine prices it (taxes such as Sphere of Resistance or Suppression Field,
+        // and reductions) against HonestMana (G2, held sources skipped, mana restrictions read on sa):
+        // the whole cost in total, and at least one red (the unpaid R shards, if more).
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= Math.max(1, cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED));
+        }
+
+        // An opponent's artifact that a won flip destroys for good, and one worth risking the
+        // Archaeologist for:
+        //  - it dies: not indestructible or phased out (canBeDestroyed), no regeneration shield, no
+        //    shield counter (a destroy only removes the counter), and for a creature no active
+        //    undying or persist (it comes straight back);
+        //  - not one its controller wants gone (SacMe);
+        //  - a noncreature artifact only if nontoken (Treasure, Clue, Food, Blood, Map: one-shot,
+        //    often cracked in response);
+        //  - an artifact creature only if it is worth at least the Archaeologist (hostValue).
+        // ComputerUtil.canRegenerate and DestroyAi's sacrifice-in-response filter are left out on
+        // purpose: both call ComputerUtilCost.canPayCost, which draws MyRandom. A target cracked in
+        // response only fizzles the ability: no flip, no loss.
+        private static boolean worthDestroying(final Player ai, final int hostValue, final Card c) {
+            if (!c.isArtifact() || !c.getController().isOpponentOf(ai) || !c.canBeDestroyed()
+                    || c.getShieldCount() > 0 || c.getCounters(CounterEnumType.SHIELD) > 0 || c.hasSVar("SacMe")) {
+                return false;
+            }
+            if (c.isCreature()) {
+                return !ComputerUtilCard.hasActiveUndyingOrPersist(c) && ComputerUtilCard.evaluateCreature(c) >= hostValue;
+            }
+            return !c.isToken();
+        }
+
+        // Stock removal ranking without the board-position term: getBestRemovalTargetAI adds
+        // ComputerUtil.evaluateBoardPosition, which fills AiCache (cleared only in
+        // chooseSpellAbilityToPlay) at a moment the stock path never computed it.
+        private static int value(final Card c) {
+            return c.isCreature() ? ComputerUtilCard.evaluateCreature(c) : 50 + 30 * c.getCMC();
+        }
+    }
+
     // Goblin Cadets (dead-card batch 2, row 82)
     // "Whenever Goblin Cadets blocks or becomes blocked, target opponent gains control of it.
     // (This removes Goblin Cadets from combat.)" Neither combat AI models that trigger: the
