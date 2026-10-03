@@ -31,6 +31,21 @@ public class MillAi extends SpellAbilityAi {
         }
         return true;
     }
+
+    @Override
+    protected AiAbilityDecision canPlay(final Player ai, final SpellAbility sa) {
+        if (sa.isSpell() && SpecialCardAi.RootsOfWisdom.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && isSorcerySpeed(sa, ai)) {
+            // Roots of Wisdom is a sorcery whose root mills Defined$ You: checkPhaseRestrictions
+            // below allows that only in an opponent's end step, a window a sorcery never gets, so
+            // its owner held it all game. It is judged in its own Main 2 instead. A Roots granted
+            // flash keeps the stock end-step window, a free cast through a Play effect goes
+            // through doTriggerNoCost and never reaches canPlay, and every other Mill card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.RootsOfWisdom.consider(ai, sa);
+        }
+        return super.canPlay(ai, sa);
+    }
     
     @Override
     protected boolean checkPhaseRestrictions(final Player ai, final SpellAbility sa, final PhaseHandler ph) {

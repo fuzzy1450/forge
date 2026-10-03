@@ -16760,6 +16760,90 @@ public class SpecialCardAi {
         }
     }
 
+    // Roots of Wisdom (dead-card batch 2, row 124)
+    // "Mill three cards, then return a land card or Elf card from your graveyard to your hand. If
+    // you can't, draw a card." ({1}{G} Sorcery.) MillAi.checkPhaseRestrictions allows a Defined$ You
+    // mill only in an opponent's end step, a window in which a sorcery never has priority, so its
+    // owner held it 508 times and never cast it. It never costs a card - it returns one or draws
+    // one - so what it spends is {1}{G} and three library cards. Routed by name from MillAi.canPlay
+    // for a sorcery-speed spell only (a Roots granted flash keeps the stock end-step window). In
+    // order, every decline before any WillPlay:
+    // - the base class's restriction check, which the override bypasses (Rile's idiom), else
+    //   CantPlaySa;
+    // - window: our own turn, Main 2 (Main 1 only when castSpellInMain1 says so, the stock rule
+    //   MillAi applies to every other mill), else WaitForMain2. Creatures and bigger spells go
+    //   first, and the land or Elf it returns can still be played or cast this turn;
+    // - a library of LIBRARY_FLOOR or more, MillAi.checkApiLogic's own self-mill floor, which the
+    //   routing bypasses, else CantPlayAi;
+    // - affordable, else CantAfford: HonestMana (G2, held sources skipped, restrictions read on
+    //   this spell) covers this spell's own cost (sa.getPayCosts(), never
+    //   host.getFirstSpellAbility(): row 77), in total and in green pips. Never
+    //   getAvailableManaEstimate here: it counts the words of Produced$ (Command Tower or Arcane
+    //   Signet 2), and an approval in an unpayable window would reach canPayCost's
+    //   isManaSourceReserved roll with no cast;
+    // - a hand no larger than its maximum size, else CantPlayAi: DBDraw's own stock veto
+    //   (DrawAi.targetAI reads the full hand, Roots included, because the sub is not a spell),
+    //   mirrored here so that in a pod no approval reaches the ChangeZone drawback's random
+    //   defender pick only to be refused after it. In 1v1 it changes no decision;
+    // - a pick ALREADY in our graveyard before the mill, else CantPlayAi: a nonland Elf card (an
+    //   Elf creature or a Kindred Elf spell), or a land while no land is in hand and fewer than
+    //   LAND_CAP lands are in play. The three milled cards are a bonus, never the reason; the
+    //   resolution's own pick chooses from these plus the milled cards, so it can only do as well
+    //   or better.
+    // The stock path drew no random numbers for this card (it stopped at checkPhaseRestrictions),
+    // and every check here is a read that draws nothing; nothing is targeted, held or remembered.
+    public static class RootsOfWisdom {
+        public static final String NAME = "Roots of Wisdom";
+        static final int LIBRARY_FLOOR = 10;
+        static final int LAND_CAP = 6;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // Routing from MillAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.isPlayerTurn(ai)
+                    || (ph.getPhase().isBefore(PhaseType.MAIN2) && !ComputerUtil.castSpellInMain1(ai, sa))) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            if (ai.getCardsIn(ZoneType.Library).size() < LIBRARY_FLOOR) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // judged on this spell's own cost (never host.getFirstSpellAbility(): row 77)
+            final ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            final int need = cost == null ? host.getCMC() : cost.getCMC();
+            final int greenPips = cost == null ? 1 : cost.getShardCount(forge.card.mana.ManaCostShard.GREEN);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < need || mana.colour(MagicColor.GREEN) < greenPips) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // parity with DBDraw's stock veto (DrawAi.targetAI: the full hand above its maximum)
+            if (ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility back = sa.findSubAbilityByType(ApiType.ChangeZone);
+            if (back == null || !back.hasParam("ChangeType")) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the resolution's own pick (ChangeZoneAi.chooseCardToHiddenOriginChangeZone) chooses
+            // from these plus the milled cards, so it can only do as well or better
+            final CardCollection picks = CardLists.getValidCards(ai.getCardsIn(ZoneType.Graveyard),
+                    back.getParam("ChangeType"), ai, host, back);
+            if (picks.anyMatch(c -> !c.isLand())) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            if (picks.anyMatch(CardPredicates.LANDS)
+                    && !ai.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.LANDS)
+                    && ai.getLandsInPlay().size() < LAND_CAP) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+    }
+
     public static class SarkhanTheMad {
         public static AiAbilityDecision considerDig(final Player ai, final SpellAbility sa) {
             if (sa.getHostCard().getCounters(CounterEnumType.LOYALTY) == 1) {
