@@ -15,6 +15,7 @@ import forge.game.combat.Combat;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.TargetRestrictions;
 import forge.util.MyRandom;
@@ -156,6 +157,16 @@ public class ProtectAi extends SpellAbilityAi {
     
     @Override
     protected AiAbilityDecision checkApiLogic(final Player ai, final SpellAbility sa) {
+        if (SpecialCardAi.BatheInLight.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && !(sa instanceof AbilitySub)) {
+            // Radiance hands the same protection to every creature sharing a colour with the
+            // target, opponents' included, which the generic pick below ignores, and that pick
+            // rolls MyRandom in our main 1 (getProtectCreatures). AI:RemoveDeck:All stripped the
+            // card before any handler ran, so the stock path drew nothing for it; the evaluator
+            // draws nothing either. Play-effect casts and copies (doTriggerNoCost / chkDrawback ->
+            // protectTgtAI) never come here. Every other Protection card takes exactly its old path.
+            return SpecialCardAi.BatheInLight.consider(ai, sa);
+        }
         if (sa.usesTargeting()) {
             return protectTgtAI(ai, sa, false);
         }

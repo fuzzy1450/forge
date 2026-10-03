@@ -22,6 +22,7 @@ import com.google.common.collect.Table;
 import forge.StaticData;
 import forge.ai.ability.AnimateAi;
 import forge.ai.ability.FightAi;
+import forge.ai.ability.ProtectAi;
 import forge.ai.ability.TokenAi;
 import forge.card.CardFacePredicates;
 import forge.card.CardType;
@@ -1154,6 +1155,276 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+    }
+
+    // Bathe in Light (dead-card batch 2, row 117; precon:Heavenly Inferno (CMA))
+    // "Radiance - Choose a color. Target creature and each other creature that shares a color with
+    // it gain protection from the chosen color until end of turn." ({1}{W} Instant.) Never cast by
+    // its owner: AI:RemoveDeck:All dropped it before any handler ran, and behind the hint the stock
+    // ProtectAi pick is Radiance-blind, has no value floor and rolls MyRandom in our main 1. Routed
+    // by name from the top of ProtectAi.checkApiLogic for the root spell, and spent only to SAVE
+    // creatures of ours, in two windows:
+    // - STACK: an opponent's object on top of the stack whose source has a colour, when
+    //   predictThreatenedObjects with THIS spell as the saviour says a creature of ours dies to it
+    //   (targeted removal, lethal damage or -X/-X that protection from that colour stops);
+    // - COMBAT: declare blockers with an empty stack, a combatant of ours that dies only to opposing
+    //   combatants of the colour the resolution chooser names for the target.
+    // The colour is PlayerControllerAi.chooseProtectionType's, worked out the same way: the item
+    // under this spell on the stack, else the target's best combat opponent (sortByEvaluateCreature,
+    // then ProtectAi.toProtectFrom). Radiance hands the same protection to every creature sharing a
+    // colour with the target, any controller's (CardUtil.getRadiance), so a target is refused when
+    // the spread costs us: it rescues as much of theirs from the threat as it saves of ours, spares
+    // an opposing combatant our creatures of that colour were killing, sheds an Aura or Equipment of
+    // ours from a creature it does not save, makes a shielded creature an illegal target for a
+    // spell or ability of ours of that colour lower on the stack, or (their turn, before blocks)
+    // lets lethal power escape our blockers of that colour. Floor: the saved set holds our
+    // commander or a creature at BrokersConfluence.MIN_SAVE_EVAL (180), or MIN_SAVED_CREATURES (2)
+    // or more creatures. Among the targets that pass, the best net value (saved minus rescued)
+    // wins, a tie going to the narrowest opposing spread.
+    // RNG: in A the card was never evaluated, so every decline here draws nothing: the window,
+    // predictThreatenedObjects, HonestMana (G2), the combat predictors, evaluateCreature and the
+    // stack and battlefield reads. G2 is the affordability screen, so an unpayable window never
+    // reaches canPayCost's isManaSourceReserved draws. Nothing is held or remembered.
+    public static class BatheInLight {
+        public static final String NAME = "Bathe in Light";
+        static final int MIN_SAVED_CREATURES = 2;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets(); // nothing stale from an earlier, declined pass
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+
+            // 1. the window, O(1), before any scan
+            final SpellAbility top = game.getStack().isEmpty() ? null : game.getStack().peekAbility();
+            if (top != null) {
+                if (top.getActivatingPlayer() == null || !top.getActivatingPlayer().isOpponentOf(ai)
+                        || top.getHostCard() == null) {
+                    return no(AiPlayDecision.CantPlayAi);
+                }
+            } else if (combat == null || !ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)) {
+                return no(AiPlayDecision.WaitForCombat);
+            }
+
+            // 2. the stack window: the colour the chooser will name, and what the threat kills
+            final String stackColor = top == null ? null : ProtectAi.toProtectFrom(top.getHostCard(), sa);
+            final Set<Card> doomedMine = new HashSet<>();
+            final Set<Card> doomedTheirs = new HashSet<>();
+            if (top != null) {
+                if (stackColor == null) {
+                    return no(AiPlayDecision.CantPlayAi); // a colourless source: no colour stops it
+                }
+                for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, sa, true)) {
+                    if (o instanceof Card c && c.isCreature() && ai.equals(c.getController())) {
+                        doomedMine.add(c);
+                    }
+                }
+                if (doomedMine.isEmpty()) {
+                    return no(AiPlayDecision.CantPlayAi); // nothing of ours dies to it
+                }
+                for (final Player opp : ai.getOpponents()) {
+                    for (final GameObject o : ComputerUtil.predictThreatenedObjects(opp, sa, true)) {
+                        if (o instanceof Card c && c.isCreature() && !ai.equals(c.getController())) {
+                            doomedTheirs.add(c);
+                        }
+                    }
+                }
+            }
+
+            // 3. affordable from real mana (a WillPlay goes on into canPayCost, whose test payment
+            //    draws per source it tries): G2 on this spell's own cost (row 77)
+            final ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            final int need = cost == null ? sa.getHostCard().getCMC() : cost.getCMC();
+            final int whitePips = cost == null ? 1 : cost.getShardCount(forge.card.mana.ManaCostShard.WHITE);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < need || mana.colour(MagicColor.WHITE) < whitePips) {
+                return no(AiPlayDecision.CantAfford);
+            }
+            CardCollection targets = CardLists.getTargetableCards(ai.getCreaturesInPlay(), sa);
+            targets = ComputerUtil.getSafeTargets(ai, sa, targets);
+            if (targets.isEmpty()) {
+                return no(AiPlayDecision.TargetingFailed);
+            }
+
+            // 4. the target with the best net save, a tie going to the narrowest opposing spread
+            Card best = null;
+            int bestNet = 0;
+            int bestTheirs = Integer.MAX_VALUE;
+            for (final Card t : targets) {
+                final String color = top != null ? stackColor : combatColor(t, combat, sa);
+                if (color == null) {
+                    continue;
+                }
+                final byte mask = MagicColor.fromName(color);
+                final CardCollection shielded = shielded(game, t);
+                final CardCollection saved = CardLists.filter(shielded, c -> ai.equals(c.getController())
+                        && (top != null ? doomedMine.contains(c) : diesOnlyTo(ai, c, combat, mask)));
+                if (saved.isEmpty() || (top == null && !saved.contains(t))) {
+                    continue; // in combat the chooser keys off the target's own fight
+                }
+                if (saved.size() < MIN_SAVED_CREATURES
+                        && !IterableUtil.any(saved, BrokersConfluence::isWorthSaving)) {
+                    continue;
+                }
+                final CardCollection rescued = CardLists.filter(shielded,
+                        c -> !ai.equals(c.getController()) && doomedTheirs.contains(c));
+                final int net = ComputerUtilCard.evaluateCreatureList(saved)
+                        - ComputerUtilCard.evaluateCreatureList(rescued);
+                if (net <= 0) {
+                    continue; // it rescues as much of theirs as it saves of ours
+                }
+                if (shedsOurAttachment(ai, shielded, saved, mask)
+                        || sparesTheirCombatant(ai, shielded, combat, mask)
+                        || fizzlesOurOwn(ai, game, shielded, mask)
+                        || opensLethal(ai, shielded, ph, combat)) {
+                    continue;
+                }
+                final int theirs = CardLists.count(shielded, c -> !ai.equals(c.getController()));
+                if (net > bestNet || (net == bestNet && theirs < bestTheirs)) {
+                    best = t;
+                    bestNet = net;
+                    bestTheirs = theirs;
+                }
+            }
+            if (best == null) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            if (!sa.canTarget(best) || !sa.getTargets().add(best)) {
+                sa.resetTargets();
+                return no(AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision why) {
+            return new AiAbilityDecision(0, why);
+        }
+
+        // chooseProtectionType's combat branch (PlayerControllerAi) for target t. Combat hands out
+        // fresh collections, so the sort never touches combat state.
+        private static String combatColor(final Card t, final Combat combat, final SpellAbility sa) {
+            CardCollection threats = null;
+            if (combat.isBlocked(t)) {
+                threats = combat.getBlockers(t);
+            }
+            if (combat.isBlocking(t)) {
+                threats = combat.getAttackersBlockedBy(t);
+            }
+            if (threats == null || threats.isEmpty()) {
+                return null;
+            }
+            ComputerUtilCard.sortByEvaluateCreature(threats);
+            return ProtectAi.toProtectFrom(threats.get(0), sa);
+        }
+
+        // Dies in this combat, and only to opposing combatants of that colour, whose damage (first
+        // strike and deathtouch included) the protection prevents. The colour test runs before
+        // combatantCantBeDestroyed, whose regeneration scan can reach canPayCost.
+        private static boolean diesOnlyTo(final Player ai, final Card c, final Combat combat, final byte mask) {
+            if (!ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)) {
+                return false;
+            }
+            final CardCollection foes = combat.isBlocking(c) ? combat.getAttackersBlockedBy(c) : combat.getBlockers(c);
+            return !foes.isEmpty() && IterableUtil.all(foes, f -> f.getColor().hasAnyColor(mask))
+                    && !ComputerUtilCombat.combatantCantBeDestroyed(ai, c);
+        }
+
+        // The target plus what CardUtil.getRadiance adds at resolution: every creature in play, any
+        // controller's, sharing a colour with it (a colourless target spreads to nothing).
+        private static CardCollection shielded(final Game game, final Card t) {
+            final CardCollection out = new CardCollection(t);
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (c != t && c.isCreature() && !c.isPhasedOut() && c.sharesColorWith(t)) {
+                    out.add(c);
+                }
+            }
+            return out;
+        }
+
+        // Protection sheds Auras and Equipment of its colour. One of ours on a creature this does
+        // not save is a loss (a doomed creature loses it anyway).
+        private static boolean shedsOurAttachment(final Player ai, final CardCollection shielded,
+                final CardCollection saved, final byte mask) {
+            for (final Card c : shielded) {
+                if (saved.contains(c)) {
+                    continue;
+                }
+                for (final Card a : c.getAttachedCards()) {
+                    if (ai.equals(a.getController()) && (a.isAura() || a.isEquipment())
+                            && a.getColor().hasAnyColor(mask)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // The F1 rule (row 116): an opposing combatant our combat was killing must not walk away
+        // because the spread made it immune to our creatures of that colour.
+        private static boolean sparesTheirCombatant(final Player ai, final CardCollection shielded,
+                final Combat combat, final byte mask) {
+            if (combat == null) {
+                return false;
+            }
+            for (final Card o : shielded) {
+                if (ai.equals(o.getController()) || !(combat.isAttacking(o) || combat.isBlocking(o))) {
+                    continue;
+                }
+                final CardCollection ours = combat.isBlocking(o) ? combat.getAttackersBlockedBy(o) : combat.getBlockers(o);
+                if (IterableUtil.any(ours, m -> m.getColor().hasAnyColor(mask))
+                        && ComputerUtilCombat.combatantWouldBeDestroyed(ai, o, combat)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Protection from the colour makes a shielded creature an illegal target for a spell or
+        // ability of ours from a source of that colour lower on the stack: it would fizzle, or lose
+        // that target (our Terminate on their creature, our Aura or pump on ours).
+        private static boolean fizzlesOurOwn(final Player ai, final Game game, final CardCollection shielded,
+                final byte mask) {
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility item = si.getSpellAbility();
+                if (item == null || !ai.equals(item.getActivatingPlayer())) {
+                    continue;
+                }
+                final Card host = item.getHostCard();
+                if (host == null || !host.getColor().hasAnyColor(mask)) {
+                    continue;
+                }
+                for (SpellAbility part = item; part != null; part = part.getSubAbility()) {
+                    if (IterableUtil.any(part.getTargets().getTargetCards(), shielded::contains)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Their turn, before blocks: protection from the colour on their creatures makes them
+        // unblockable by our creatures of that colour. Refuse when the power that gains it could
+        // kill us (a plain power sum, never the lifeInDanger roll).
+        private static boolean opensLethal(final Player ai, final CardCollection shielded,
+                final PhaseHandler ph, final Combat combat) {
+            if (ph.isPlayerTurn(ai) || ph.getPhase() == null
+                    || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || ai.cantLoseForZeroOrLessLife()) {
+                return false;
+            }
+            int power = 0;
+            for (final Card o : shielded) {
+                if (!o.getController().equals(ph.getPlayerTurn())) {
+                    continue;
+                }
+                final boolean attacking = combat != null && combat.isAttacking(o);
+                if (attacking || (ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                        && CombatUtil.canAttack(o))) {
+                    power += o.getNetCombatDamage();
+                }
+            }
+            return power > 0 && power >= ai.getLife();
         }
     }
 
