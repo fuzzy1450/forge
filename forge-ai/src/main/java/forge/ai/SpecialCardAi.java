@@ -5516,6 +5516,76 @@ public class SpecialCardAi {
         }
     }
 
+    // Ecstatic Beauty (dead-card batch 2, row 59)
+    // {2}{R} Sorcery. "Exile the top three cards of your library. You may play those cards until
+    // end of turn. Put four time counters on each of those cards that has suspend. Suspend 4-{R}"
+    // No AI:RemoveDeck hint. DigAi judged the root WillPlay and EffectAi's base chkDrawback passed
+    // DBEffect, but the TIME-counter rider DBPumpAll (PutCounterAll, ValidCards$
+    // Card.IsRemembered+withSuspend, ValidZone$ Exile) went CountersPutAllAi.chkDrawback -> canPlay
+    // -> checkApiLogic, which compares two BATTLEFIELD lists, so "hList >= cList" (0 >= 0) refused
+    // every consult. That vetoed both casts: the hard cast from hand (AiController.canPlaySa) and
+    // Suspend's last-counter free cast (PlayAi.chooseSingleCard -> canPlayFromEffectAI ->
+    // doTriggerNoCostWithSubs, not mandatory), so a suspended copy lost its last counter and stayed
+    // in exile for good. worthResolving approves the rider for its OWNER's cast only (a thief's
+    // optional Play, Nathan Drake's or Silent-Blade Oni's, keeps the stock refusal; Jeleva's
+    // mandatory Play never read it), with a library of more than DigNum + LIBRARY_MARGIN cards, and:
+    // - a free cast (the root carries WithoutManaCost: Suspend's cast, also after The Tenth
+    //   Doctor's Allons-y exiles it with time counters) always passes: three cards for no mana,
+    //   and a decline strands the card in exile with no counters;
+    // - a hard cast passes only with HARD_CAST_SPARE_MANA left to play what it exiles: HonestMana
+    //   (G2: held sources skipped, restrictions read on the root, a choice source worth one) at
+    //   least the cost as the engine prices it (calculateManaCost(test=true): taxes and
+    //   reductions) plus that spare, and at least one red in G2's strict colour count (a Combo W U
+    //   dual is not red). getAvailableManaEstimate counts the words of Produced$ and would pass a
+    //   turn-2 board of two duals. Below the floor the AI keeps its sound line: suspend for {R} in
+    //   Main 2, then the free cast four upkeeps later.
+    // RNG: the stock refusal drew nothing (preventRunAwayActivations returns before its roll for a
+    // sub; super.checkApiLogic's roll sits after the refusal), and every check here is a param
+    // compare, a library size, calculateManaCost(test) or HonestMana, none of which draws. A
+    // decline falls through to the identical stock canPlay. Nothing is held: no target, no X, no
+    // AiCardMemory write.
+    public static class EcstaticBeauty {
+        public static final String NAME = "Ecstatic Beauty";
+        // mana still untapped after paying the hard cast, to play a typical three-drop it exiles
+        private static final int HARD_CAST_SPARE_MANA = 3;
+        // DigAi's own "don't deck yourself" margin (DigAi.checkApiLogic)
+        private static final int LIBRARY_MARGIN = 2;
+
+        // the shape: a TIME-counter rider over exiled cards, under a Dig-to-Exile spell root
+        public static boolean isSuspendRider(final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            return sa.getParent() != null
+                    && "TIME".equals(sa.getParam("CounterType"))
+                    && "Exile".equals(sa.getParam("ValidZone"))
+                    && root.isSpell() && root.getApi() == ApiType.Dig
+                    && "Exile".equals(root.getParam("DestinationZone"));
+        }
+
+        public static boolean worthResolving(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            final Card host = root.getHostCard();
+            if (host == null || !ai.equals(host.getOwner())) {
+                return false; // a thief keeps the stock path
+            }
+            final int dig = AbilityUtils.calculateAmount(host, root.getParamOrDefault("DigNum", "1"), root);
+            if (ai.getCardsIn(ZoneType.Library).size() <= dig + LIBRARY_MARGIN) {
+                return false; // never mill ourselves toward a draw loss
+            }
+            if (root.hasParam("WithoutManaCost")) {
+                return true; // free cast: three cards for no mana, usually at our own upkeep
+            }
+            if (root.getPayCosts() == null) {
+                return false;
+            }
+            // a WillPlay sends the hard cast on to canPayCost, whose test payment draws MyRandom
+            // (ComputerUtilMana.isManaSourceReserved): only RNG-free counts decide before it
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, root, true);
+            return mana.total() >= cost.getConvertedManaCost() + HARD_CAST_SPARE_MANA
+                    && mana.colour(MagicColor.RED) >= Math.max(1, cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED));
+        }
+    }
+
     // Electric Seaweed
     // "When this creature enters, until end of turn, whenever another creature
     // dies, this creature deals 1 damage to each non-Wall creature."

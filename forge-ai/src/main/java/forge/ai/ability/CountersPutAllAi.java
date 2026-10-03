@@ -139,6 +139,18 @@ public class CountersPutAllAi extends SpellAbilityAi {
             // before that refusal, and the evaluator draws none either.
             return SpecialCardAi.UnbreakableFormation.considerAddendum(ai, sa);
         }
+        if (SpecialCardAi.EcstaticBeauty.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && SpecialCardAi.EcstaticBeauty.isSuspendRider(sa)
+                && SpecialCardAi.EcstaticBeauty.worthResolving(ai, sa)) {
+            // Ecstatic Beauty's DBPumpAll (ValidCards$ Card.IsRemembered+withSuspend, ValidZone$ Exile)
+            // names the cards its root Dig exiles at resolution, but checkApiLogic compares two
+            // BATTLEFIELD lists (ValidZone is not read there, nothing is remembered yet), so 0 >= 0
+            // (:87) refused every consult and vetoed both the hard cast (AiController.canPlaySa) and
+            // Suspend's last-counter free cast (PlayAi.chooseSingleCard -> canPlayFromEffectAI). The
+            // owner-only value floor is in worthResolving; a decline falls through to the stock
+            // refusal below, which drew no random number.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         return canPlay(ai, sa);
     }
     /* (non-Javadoc)
