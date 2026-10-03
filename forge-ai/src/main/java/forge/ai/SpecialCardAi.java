@@ -18732,6 +18732,173 @@ public class SpecialCardAi {
         }
     }
 
+    // Truth or Consequences (dead-card batch 2, row 83)
+    // {2}{U}{R} Sorcery. "Secret council - Each player secretly votes for truth or consequences, then
+    // those votes are revealed. You draw cards equal to the number of truth votes. Then choose an
+    // opponent at random. Truth or Consequences deals 3 damage to that player for each consequences
+    // vote." The script has no AILogic, so VoteAi.canPlay fell through to CantPlayAi at every
+    // priority (held 968 times, never cast by its owner); VoteAi now routes the spell here by name.
+    // No AILogic is added on purpose: any AILogic moves ComputerUtil.vote off its no-AILogic
+    // Aggregates.random for every voter. So the votes stay stock and random and we cannot steer
+    // them, and the floor makes EVERY outcome worth something: each truth vote is a real draw of
+    // ours, and each consequences vote lands on whichever opponent the random choice picks. In 1v1
+    // the worst result is two cards or 6 damage, never nothing, and the card never damages its
+    // caster. In order, every decline before any WillPlay:
+    // - our own Main 2 only (VoteAi's Torture timing, DrawAi's "no draw before Main 2");
+    // - the cost as the engine prices it (test-mode calculateManaCost: taxes and reductions)
+    //   against HonestMana (G2) in total, in blue and in red, then a blue and a red source that
+    //   are DISTINCT unless one floats (a lone Frostboil Snarl is not both), each source's colours
+    //   read through getComboColors (never "any Combo is every colour");
+    // - we can draw (canDraw, a CantDraw static at its limit), and the library survives every vote
+    //   at the table landing on truth plus LIBRARY_MARGIN, unless milling cannot make us lose;
+    // - every opponent can lose life and is dealt a consequences vote's 3 damage;
+    // - no draw thief or draw punisher at the table (Notion Thief, Consecrated Sphinx, Orcish
+    //   Bowmasters, Nekusar): TradeSecrets' predicate, copied privately.
+    // The stock fallthrough drew no random number and no decline here does either: the phase,
+    // calculateManaCost(test), HonestMana and mana-ability reads, zone sizes, static scans. Nothing
+    // is held past a decline: no target, no X, no memory set, no vote chosen.
+    // The script's SVar:DBDraw still chains SubAbility$ DBChoose, so Forge's card deals 3 damage
+    // per vote of EITHER kind; that rules fix is not taken (Evan's ruling, 2026-10-01). The floor
+    // is set on the printed card, so it holds either way.
+    public static class TruthOrConsequences {
+        public static final String NAME = "Truth or Consequences";
+        public static final int DMG_PER_VOTE = 3;
+        public static final int LIBRARY_MARGIN = 3; // DrawAi's own-deck margin (numCards >= library - 3)
+
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && sa.isSpell() && !(sa instanceof AbilitySub)
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            // cheapest first: our Main 2 only (canCastTiming already kept us to our main phases)
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // a WillPlay goes on to canPayCost, whose test payment can draw MyRandom
+            // (ComputerUtilMana.isManaSourceReserved), so an unpayable window is refused first,
+            // judged on the root sa (never host.getFirstSpellAbility(): row 77)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int needU = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+            final int needR = cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLUE) < needU || mana.colour(MagicColor.RED) < needR
+                    || !hasBlueAndRedSources(ai, sa, needU > 0, needR > 0)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // truth votes must be real draws (a draw-limit static such as Narset's counts this turn's)
+            if (!ai.canDraw() || StaticAbilityCantDraw.canDrawAmount(ai, 1) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // every vote at the table could be truth; optional extra votes count too (an upper bound)
+            int maxVotes = 0;
+            for (final Player p : game.getPlayers()) {
+                maxVotes += 1 + p.getAdditionalVotesAmount() + p.getAdditionalOptionalVotesAmount();
+            }
+            if (!ai.cantLoseCheck(forge.game.player.GameLossReason.Milled)
+                    && ai.getCardsIn(ZoneType.Library).size() < maxVotes + LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // consequences votes land on an opponent chosen at random: every opponent must take them
+            final PlayerCollection opps = ai.getOpponents();
+            if (opps.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final Player opp : opps) {
+                if (!opp.canLoseLife()
+                        || ComputerUtilCombat.predictDamageTo(opp, DMG_PER_VOTE, host, false) <= 0) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // a truth vote must be OUR card: last, the table scan for draw thieves and punishers
+            if (tableStealsOrPunishesDraws(ai, game)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // A blue and a red source from DISTINCT permanents unless that colour floats: Hall's
+        // condition for two one-mana demands, so a lone dual that makes one or the other (Frostboil
+        // Snarl, Talisman of Creativity) is never both. Each untapped mana ability is read once for its colours:
+        // a Combo through getComboColors (its letters; Chosen, ColorID and ColorIdentity resolved,
+        // Combo Any as every colour), else its printed production, where Any and Chosen count as
+        // either colour. Restrictions are judged against the root spell. A private predicate (never
+        // refactor an accepted card's); it reads state only, its one write is setActivatingPlayer on
+        // the mana abilities it reads, as the estimate's.
+        private static boolean hasBlueAndRedSources(final Player ai, final SpellAbility spell,
+                final boolean blueNeeded, final boolean redNeeded) {
+            final int needU = blueNeeded && ai.getManaPool().getAmountOfColor(MagicColor.BLUE) <= 0 ? 1 : 0;
+            final int needR = redNeeded && ai.getManaPool().getAmountOfColor(MagicColor.RED) <= 0 ? 1 : 0;
+            if (needU + needR == 0) {
+                return true;
+            }
+            int blueOnly = 0, redOnly = 0, both = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                boolean u = false, r = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || !mp.meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String p = mp.isComboMana() ? mp.getComboColors(ma) : mp.getOrigProduced();
+                    u |= p.contains("U") || p.contains("Any") || p.contains("Chosen");
+                    r |= p.contains("R") || p.contains("Any") || p.contains("Chosen");
+                }
+                if (u && r) {
+                    both++;
+                } else if (u) {
+                    blueOnly++;
+                } else if (r) {
+                    redOnly++;
+                }
+            }
+            return blueOnly + both >= needU && redOnly + both >= needR
+                    && blueOnly + redOnly + both >= needU + needR;
+        }
+
+        // TradeSecrets.tableStealsOrPunishesDraws, copied (never share a predicate with an accepted
+        // card): draw thieves and draw punishers on the battlefield or in the Command zone, counted
+        // only where they work (zonesCheck). Any opponent's Drawn trigger or Draw replacement is a
+        // veto; one of ours (or an emblem we own) is a veto when it is symmetric (Spiteful Visions,
+        // Chains of Mephistopheles). Our own payoffs still pass (Psychosis Crawler, Notion Thief).
+        private static boolean tableStealsOrPunishesDraws(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                final boolean theirs = controller != null && controller.isOpponentOf(ai);
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Drawn && t.zonesCheck(game.getZoneOf(c))
+                            && (theirs || (!namesASide(t.getParam("ValidCard")) && !namesASide(t.getParam("ValidPlayer"))))) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.zonesCheck(game.getZoneOf(c))) {
+                        final String validPlayer = re.getParam("ValidPlayer");
+                        if (theirs || validPlayer == null || !validPlayer.contains("Opp")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean namesASide(final String valid) {
+            return valid != null && (valid.contains("You") || valid.contains("Opp"));
+        }
+    }
+
     // Unbreakable Formation (dead-card batch 2, row 13)
     // {2}{W} Instant. "Creatures you control gain indestructible until end of turn. Addendum -- If
     // you cast this spell during your main phase, put a +1/+1 counter on each of those creatures and

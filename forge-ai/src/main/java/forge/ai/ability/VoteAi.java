@@ -25,6 +25,12 @@ public class VoteAi extends SpellAbilityAi {
         if (SpecialCardAi.MobVerdict.handles(sa)) {
             return SpecialCardAi.MobVerdict.consider(aiPlayer, sa);
         }
+        // Truth or Consequences has no AILogic either (held 968 times, never cast by its owner).
+        // Its own evaluator draws no random number before any decline; vote choice stays stock
+        // (ComputerUtil.vote with no AILogic), and Play-effect casts keep doTriggerNoCost.
+        if (SpecialCardAi.TruthOrConsequences.handles(sa)) {
+            return SpecialCardAi.TruthOrConsequences.consider(aiPlayer, sa);
+        }
         // TODO: add ailogic
         String logic = sa.getParam("AILogic");
         final Card host = sa.getHostCard();
