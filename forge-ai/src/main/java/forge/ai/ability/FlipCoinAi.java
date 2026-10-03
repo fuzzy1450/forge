@@ -23,6 +23,13 @@ public class FlipCoinAi extends SpellAbilityAi {
             // FlipCoin card takes exactly the path it took before this branch.
             return SpecialCardAi.InvertPolarity.consider(ai, sa);
         }
+        if ("FreneticSliver".equals(sa.getParam("AILogic"))) {
+            // Frenetic Sliver's granted flip, on every Sliver (so keyed on the AILogic value, not
+            // the source name): owner only, one flip per host on the stack, and only when a lethal
+            // damage effect already dooms the host. Only frenetic_sliver.txt carries this value;
+            // Frenetic Efreet keeps the stock PhaseOut branch below.
+            return SpecialCardAi.FreneticSliver.consider(ai, sa);
+        }
         if (sa.hasParam("AILogic")) {
             String ailogic = sa.getParam("AILogic");
             if (ailogic.equals("PhaseOut")) {

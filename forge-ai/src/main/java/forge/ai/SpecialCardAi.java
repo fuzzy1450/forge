@@ -6909,6 +6909,52 @@ public class SpecialCardAi {
         }
     }
 
+    // Frenetic Sliver
+    // "All Slivers have '{0}: If this permanent is on the battlefield, flip a coin. If you win the
+    // flip, exile this permanent and return it to the battlefield under its owner's control at the
+    // beginning of the next end step. If you lose the flip, sacrifice it.'" The granted flip carries
+    // AILogic$ FreneticSliver, which FlipCoinAi.checkApiLogic routes here (the source name is the
+    // host Sliver's, not the grantor's, so the route is keyed on the AILogic value; only
+    // frenetic_sliver.txt carries it). Stock PhaseOut, written for Frenetic Efreet, is not enough
+    // for a flip that every Sliver on both sides shares: two threatened Slivers of different players
+    // answer each other's flips until MagicStack.add passes 999 entries and draws the game, and a
+    // thief's won flip hands the permanent back to its owner. So: only the owner flips, at most one
+    // flip per host is on the stack, and only when a lethal damage effect on the stack already dooms
+    // the host (PhaseOut's floor: predictThreatenedObjects registers only lethal DealDamage and
+    // DamageAll for a FlipCoin saviour). A lost flip sacrifices a creature that was dying anyway; a
+    // won flip saves it and fires every "wins a coin flip" payoff.
+    // RNG-free: the AILogic branch of SpellAbilityAi.canPlayWithoutRestrict never calls
+    // preventRunAwayActivations, and nothing here draws. No target, no memory.
+    public static class FreneticSliver {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // nothing threatens it
+            }
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner())) {
+                // a won flip returns the permanent under its owner's control: a thief never flips
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility item = si.getSpellAbility();
+                if (item == null) {
+                    continue;
+                }
+                final SpellAbility root = item.isWrapper() ? ((WrappedAbility) item).getWrappedAbility() : item;
+                if (root.getApi() == ApiType.FlipCoin && host.equals(root.getHostCard())) {
+                    // one flip per permanent, keyed on the host rather than the ability instance,
+                    // so a second grant (Spark Double, Sakashima) cannot stack a second flip
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            if (!ComputerUtil.predictThreatenedObjects(ai, sa).contains(host)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Gaze of Granite
     // "X B B G: Destroy each nonland permanent with mana value X or less."
     // DestroyAllAi.doMassRemovalLogic evaluates and pays only the MAX affordable
