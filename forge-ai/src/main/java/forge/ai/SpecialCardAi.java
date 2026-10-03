@@ -7819,6 +7819,144 @@ public class SpecialCardAi {
         }
     }
 
+    // Evolutionary Leap
+    // "{G}, Sacrifice a creature: Reveal cards from the top of your library until you reveal a creature card.
+    // Put that card into your hand and the rest on the bottom of your library in a random order."
+    // A creature card for {G} and a body. AI:RemoveDeck:All kept the cast and this ability off every list;
+    // the cast is now stock behind the script's NeedsToPlayVar (3+ creature cards in our library), and
+    // DigUntilAi routes the ability here by name. Only a body that is leaving or free anyway is cashed in:
+    //  tier 0 - dying anyway: a stack object kills / exiles / steals it (Momentous Fall's verdict, with its
+    //           until-end-of-turn steal and divided-damage exclusions), or it dies in this combat without
+    //           trading and with no trampler behind it; or a blitzed body (or a token with an end-of-turn
+    //           leave) in our own Main 2, after combat and before its end-step sacrifice, which the AI never
+    //           answers (its own trigger on top of the stack) and the stock SacCost chooser never sees
+    //           (Sacrifice is not a predictThreatenedObjects threat). Blitz's own "dies: draw" still fires;
+    //  tier 1 - free: SacMe, active undying/persist, useless; at the opponent's end step before our turn;
+    //  tier 2 - a cheap token (evaluateCreature <= the profile's SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL,
+    //           135 in Default.ai: a 0/1 Plant, a 1/1 or a vanilla 2/2, not a 3/3 Beast); same window.
+    // Tiers 1-2 also need hand room and, unless undying/persist, LifesLegacy.survivesUnblocked. Never the
+    // commander, never a real nontoken body that is not leaving, never with no creature card to find.
+    // RNG-free: the O(1) window test runs first, and nothing here asks AiBlockController or MyRandom. The
+    // ComputerUtil.getCardPreference SacCost hook answers checkSacrificeCost and the payment's
+    // chooseSacrificeType with this same chooser, so the creature priced is the creature paid and the
+    // stock SacMe shuffle is never reached. Nothing is held or remembered past a decline.
+    public static class EvolutionaryLeap {
+        public static boolean handles(final Card source) {
+            return source != null && "Evolutionary Leap".equals(source.getName());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (!inWindow(ai)) { // O(1), before any loop
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // something to find (the stock DigUntilAi Valid check), ahead of the chooser: it short-circuits
+            // and skips the creature loop in a decked-out late game
+            if (!ai.getCardsIn(ZoneType.Library).anyMatch(CardPredicates.CREATURES)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CostSacrifice sac = sa.getPayCosts() == null ? null
+                    : sa.getPayCosts().getCostPartByType(CostSacrifice.class);
+            if (sac == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection options = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                    sac.getType().split(";"), ai, sa.getHostCard(), sa);
+            return chooseSacrifice(ai, sa, options) == null
+                    ? new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable)
+                    : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static boolean inWindow(final Player ai) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            return !game.getStack().isEmpty() || ph.is(PhaseType.MAIN2, ai) || isOppEndStep(ai, ph)
+                    || isCombatWindow(game, ph);
+        }
+
+        private static boolean isOppEndStep(final Player ai, final PhaseHandler ph) {
+            return ph.is(PhaseType.END_OF_TURN) && !ph.isPlayerTurn(ai) && ai.equals(ph.getNextTurn());
+        }
+
+        private static boolean isCombatWindow(final Game game, final PhaseHandler ph) {
+            return game.getCombat() != null
+                    && (ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) || ph.is(PhaseType.COMBAT_FIRST_STRIKE_DAMAGE));
+        }
+
+        // Called at the decision (consider, then checkSacrificeCost) and at the payment (chooseSacrificeType),
+        // all on the same board: costs are decided before any mana is tapped and the ability is not yet on
+        // the stack, so each call returns the same creature. sa may be null on getCardPreference's
+        // four-argument overload; neither caller here passes null, but the guard keeps this total.
+        public static Card chooseSacrifice(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            if (!inWindow(ai)) {
+                return null;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean ownMain2 = ph.is(PhaseType.MAIN2, ai);
+            final boolean oppEndStep = isOppEndStep(ai, ph);
+            final boolean combatWindow = isCombatWindow(game, ph);
+            final boolean stackLive = !game.getStack().isEmpty();
+            final Set<Card> ignored = stackLive ? MomentousFall.stackThreatsToIgnore(game) : Collections.<Card>emptySet();
+            final boolean room = ai.isUnlimitedHandSize() || ai.getCardsIn(ZoneType.Hand).size() < ai.getMaxHandSize();
+            final int tokenCap = AiProfileUtil.getIntProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL);
+            Boolean safe = null; // LifesLegacy.survivesUnblocked, computed at most once per call
+
+            Card best = null;
+            int bestTier = 0, bestEval = 0;
+            for (final Card c : options) {
+                if (!c.isCreature() || !ai.equals(c.getController()) || c.isCommander()
+                        || (sa != null && !CardPredicates.canBeSacrificedBy(sa, false).test(c))) {
+                    continue;
+                }
+                // Saviour null keeps predictThreatenedObjects' Destroy / Exile / GainControl branches live;
+                // nonCombatOnly returns the stack verdict alone, under the profile's
+                // DONT_EVAL_KILLSPELLS_ON_STACK_WITH_PERMISSION guard (Momentous Fall's call)
+                final boolean dying = (stackLive && !ignored.contains(c)
+                                && ComputerUtil.predictCreatureWillDieThisTurn(ai, c, null, true))
+                        || (combatWindow && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                                && !ComputerUtilCombat.willOpposingCreatureDieInCombat(ai, c, combat)
+                                && !ComputerUtilCombat.isDangerousToSacInCombat(ai, c, combat));
+                // "leaving anyway": blitz sacrifices it at the end step; a token with any end-of-turn leave
+                // ceases to exist
+                final boolean leavingEot = "Blitz".equals(c.getSVar("EndOfTurnLeavePlay"))
+                        || (c.isToken() && c.hasSVar("EndOfTurnLeavePlay"));
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                final int tier;
+                if (dying || (leavingEot && ownMain2)) {
+                    tier = 0;
+                } else if (oppEndStep && room) {
+                    final boolean returns = ComputerUtilCard.hasActiveUndyingOrPersist(c);
+                    if (c.hasSVar("SacMe") || returns || ComputerUtilCard.isUselessCreature(ai, c)) {
+                        tier = 1;
+                    } else if (c.isToken() && eval <= tokenCap) {
+                        tier = 2;
+                    } else {
+                        continue; // a real body that is not leaving is never cashed in
+                    }
+                    if (!returns) {
+                        if (safe == null) {
+                            safe = LifesLegacy.survivesUnblocked(ai);
+                        }
+                        if (!safe) {
+                            continue; // it may be a blocker we need
+                        }
+                    }
+                } else {
+                    continue;
+                }
+                // lowest tier, then the least valuable body, then card id
+                if (best == null || tier < bestTier || (tier == bestTier && (eval < bestEval
+                        || (eval == bestEval && c.getId() < best.getId())))) {
+                    best = c;
+                    bestTier = tier;
+                    bestEval = eval;
+                }
+            }
+            return best;
+        }
+    }
+
     // Excise the Imperfect
     // "Exile target nonland permanent. Its controller incubates X, where X is its mana value."
     // The exile half is Utter End's (ChangeZoneAi picks and sets the target with the stock removal

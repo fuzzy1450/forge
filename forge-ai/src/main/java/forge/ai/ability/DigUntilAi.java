@@ -18,6 +18,11 @@ public class DigUntilAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
         Card source = sa.getHostCard();
+        // Evolutionary Leap: cash in only a body that is leaving or free anyway (SpecialCardAi). This
+        // handler draws no random number (its chance below is never used), so the route's place is free.
+        if (SpecialCardAi.EvolutionaryLeap.handles(source)) {
+            return SpecialCardAi.EvolutionaryLeap.consider(ai, sa);
+        }
         final String logic = sa.getParamOrDefault("AILogic", "");
         double chance = .4; // 40 percent chance with instant speed stuff
         if (isSorcerySpeed(sa, ai)) {
