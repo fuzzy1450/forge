@@ -11039,6 +11039,104 @@ public class SpecialCardAi {
         }
     }
 
+    // Long-Term Plans (dead-card batch 2, row 87)
+    // "Search your library for a card, then shuffle and put that card third from the top."
+    // ({2}{U} Instant.) A slow tutor for any card: the pick is drawn on the third draw after the
+    // cast, sooner with extra draws (Zndrsplt's won flips, Niv-Mizzet, a cantrip). Behind its
+    // AI:RemoveDeck:All hint the stock hidden-origin path (hiddenOriginCanPlayAI) approves it in
+    // every window from Main 2 on with no floor beyond a non-empty library, our own Main 2
+    // included, where it taps the mana kept up for counterspells. Routed by name from the top of
+    // ChangeZoneAi.checkApiLogic for the root spell.
+    // In order, every decline before any WillPlay:
+    // - window: the end step of the opponent whose next turn is ours (getNextTurn, extra turns
+    //   included; never our own end step), with an empty stack, else AnotherTime. O(1), no scan
+    //   outside it. Mana still open there was not spent on our turn and untaps before we need
+    //   it, and our draw step is next;
+    // - affordable: HonestMana (G2, held sources skipped, restrictions read on this spell) covers
+    //   the card's mana value and the blue pips of this spell's own cost (sa.getPayCosts(), never
+    //   host.getFirstSpellAbility(): row 77), else CantAfford. Never getAvailableManaEstimate:
+    //   it counts the words of Produced$ (Command Tower or Arcane Signet 2, a Talisman 3), and an
+    //   approval in an unpayable window would reach canPayCost's isManaSourceReserved roll;
+    // - the search is ours to make and nobody profits from it, else CantPlayAi: a
+    //   CantSearchLibrary effect (canSearchLibraryWith: Stranglehold, Leonin Arbiter), Aven
+    //   Mindcensor's LimitSearchLibrary (the top four only), an opposing SearchedLibrary trigger
+    //   (Ob Nixilis, Unshackled: a creature and 10 life; Archivist of Oghma; Wan Shi Tong; River
+    //   Song), Opposition Agent's ControlOpponentsSearchingLibrary (it takes the pick), or a
+    //   Shuffled trigger on any battlefield whose ValidPlayer matches us (Widespread Panic, which
+    //   triggers from any battlefield: we put a hand card on top and the pick drops to fourth;
+    //   Psychogenic Probe's 2 damage; an opposing Psychic Surgery or Cosi's Trickster);
+    // - a library of MIN_LIBRARY or more cards (with three or fewer the pick is already among
+    //   the next three draws, so the spell only reorders them) holding a nonland card other than
+    //   another Long-Term Plans for the resolution pick (chooseCardToHiddenOriginChangeZone: a
+    //   creature, else the best nonland), else CantPlayAi;
+    // - else WillPlay 100.
+    // RNG: AI:RemoveDeck:All stripped the card before any handler ran, so the stock path drew no
+    // random numbers for it. Every check here is a read and draws nothing; nothing is targeted,
+    // held or remembered. Play-effect casts (ChangeZoneAi.doTriggerNoCost -> hiddenTriggerAI)
+    // never come here, so thefts keep the stock path.
+    public static class LongTermPlans {
+        public static final String NAME = "Long-Term Plans";
+        static final int MIN_LIBRARY = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // O(1) window first: no scan at all outside it
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai) || !ai.equals(ph.getNextTurn())
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // judged on this spell's own cost (never host.getFirstSpellAbility(): row 77)
+            final ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            final int bluePips = cost == null ? 1 : cost.getShardCount(forge.card.mana.ManaCostShard.BLUE);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < host.getCMC() || mana.colour(MagicColor.BLUE) < bluePips) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (!ai.canSearchLibraryWith(sa, ai) || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (library.size() < MIN_LIBRARY
+                    || !library.anyMatch(c -> !c.isLand() && !NAME.equals(c.getName()))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // An opposing permanent that triggers on our search or takes it over, or a permanent on
+        // any battlefield whose Shuffled trigger our own shuffle fires (an absent ValidPlayer
+        // matches: a conservative decline). Parameter reads only.
+        private static boolean searchPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.SearchedLibrary) {
+                            return true;
+                        }
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (st.hasParam("ControlOpponentsSearchingLibrary")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Shuffled && t.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Maestros Confluence (dead-card batch 2, row 67)
     // "Choose three. You may choose the same mode more than once. Return target monocolored
     // instant or sorcery card from your graveyard to your hand; target creature gets -3/-3 until

@@ -139,6 +139,18 @@ public class ChangeZoneAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision checkApiLogic(Player aiPlayer, SpellAbility sa) {
+        if (SpecialCardAi.LongTermPlans.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Tutors to third from the top, so it pays off only after two more draws: one window,
+            // the end step of the opponent whose turn precedes ours. The stock hidden-origin path
+            // below approves it from Main 2 on with no floor (our own Main 2 included, tapping the
+            // mana kept up for counterspells). AI:RemoveDeck:All stripped the card before any
+            // handler ran, so the stock path drew no random numbers for it; the evaluator is
+            // RNG-free. First, ahead of multipleCardsToChoose.clear(): in A the card never reached
+            // that clear either. Play-effect casts (doTriggerNoCost -> hiddenTriggerAI) never come
+            // here. Every other ChangeZone card takes exactly the path it took before this branch.
+            return SpecialCardAi.LongTermPlans.consider(aiPlayer, sa);
+        }
+
         multipleCardsToChoose.clear();
 
         if ("Spelltwine".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
