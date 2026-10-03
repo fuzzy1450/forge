@@ -153,6 +153,16 @@ public class PumpAi extends PumpAiBase {
             // exactly the path it took before this branch.
             return SpecialCardAi.SuddenSubstitution.consider(ai, sa);
         }
+        if (SpecialCardAi.SylvanSafekeeper.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && !(sa instanceof AbilitySub) && ai.getGame().getStack().isEmpty()) {
+            // Dead-card batch 2, row 95. Shroud only answers a targeted threat on the stack; the
+            // stock empty-stack targeting below (pumpTgtAI -> shouldPumpCard's "become attacker"
+            // branch) never reads the keyword, so it could pay a land for nothing on a creature
+            // the real attack keeps home. Declines before any random draw; a non-empty stack keeps
+            // the stock canPumpAgainstRemoval path and the land-rich sacrifice rule. Every other
+            // Pump card takes exactly the path it took before this branch.
+            return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+        }
         final Game game = ai.getGame();
         final Card source = sa.getHostCard();
         final SpellAbility root = sa.getRootAbility();

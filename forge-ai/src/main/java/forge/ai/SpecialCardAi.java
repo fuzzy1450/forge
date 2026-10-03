@@ -17773,6 +17773,20 @@ public class SpecialCardAi {
         }
     }
 
+    // Sylvan Safekeeper (Dead-card batch 2, row 95): a 1/1 for {G} with "Sacrifice a land: Target
+    // creature you control gains shroud until end of turn." AI:RemoveDeck:All was its only gate;
+    // the creature spell takes the stock PermanentCreatureAi path. The ability's stock PumpAi path
+    // is sound with something on the stack (canPumpAgainstRemoval answers only a targeted threat,
+    // and getCardPreference's SacCost pays a land only when the AI is land-rich), but on an empty
+    // stack at the AI's beginning of combat shouldPumpCard's "become attacker" branch is
+    // keyword-blind: it scores the Shroud grant on any creature the full attack prediction holds
+    // back, and the land is lost for nothing. PumpAi.checkApiLogic declines every empty-stack
+    // consult of this name (root ability only) with AnotherTime, before any random draw. Only the
+    // name lives here.
+    public static class SylvanSafekeeper {
+        public static final String NAME = "Sylvan Safekeeper";
+    }
+
     // Synthetic Destiny
     // "Exile all creatures you control. At the beginning of the next end step, reveal cards
     // from the top of your library until you reveal that many creature cards, put all creature
