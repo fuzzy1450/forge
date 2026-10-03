@@ -93,6 +93,16 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.ShieldedByFaith.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.TraceOfAbundance.NAME.equals(source.getName())) {
+            // Ramp Aura judged whole in SpecialCardAi.TraceOfAbundance: the stock Pump preference
+            // reads the granted Shroud as the card's whole value (isUsefulAttachKeyword) and
+            // takes getBestLandAI's random nonbasic (Aggregates.random), which can be a land that
+            // returns or sacrifices itself (Maze's End, The World Tree). This path draws no random
+            // numbers. A Play-effect cast (a thief's DB$ Play) comes through doTriggerNoCost,
+            // never here, and keeps the stock path.
+            return SpecialCardAi.TraceOfAbundance.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {

@@ -18740,6 +18740,127 @@ public class SpecialCardAi {
         }
     }
 
+    // Trace of Abundance
+    // "Enchant land. Enchanted land has shroud. Whenever enchanted land is tapped for mana, its
+    // controller adds an additional one mana of any color." Pure ramp, so it is judged as ramp
+    // (AttachAi.checkApiLogic routes the cast here; the stock Pump preference values only the
+    // Shroud and enchants a random nonbasic land):
+    // (1) it looks payable from two distinct untapped sources, one making G and the other R or W,
+    //     neither held for a later spell or block (HonestMana.isHeld, called unchanged), so the
+    //     payer (isManaSourceReserved draws MyRandom) is entered only when the cast goes through;
+    // (2) the mana has a use: a spell in hand (not this card, not a RemoveDeck card), a commander
+    //     in the command zone (with tax), or a non-mana activated ability we control costs more
+    //     than our count of mana-producing permanents, or carries X;
+    // (3) a safe host: our own land that is not a creature, not an artifact (Mechanized
+    //     Production enchants an artifact we control, and shroud would take Darksteel Citadel or
+    //     Thornglint Bridge from it), not enchanted and not EndOfTurnLeavePlay, with a {T} mana
+    //     ability and no activated ability other than a plain tap / mana-cost mana ability
+    //     (StewardOfTheHarvest's safe-land test: no self-return like Maze's End, no sacrifice
+    //     like The World Tree, no fetch).
+    // Untapped host first, then battlefield order. Reads the board only: no random draws, nothing
+    // held, and a decline leaves no target.
+    public static class TraceOfAbundance {
+        public static final String NAME = "Trace of Abundance";
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card aura = sa.getHostCard();
+            sa.resetTargets();
+            if (!looksPayable(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (!extraManaHasAUse(ai, aura)) {
+                return new AiAbilityDecision(0, AiPlayDecision.NeedsToPlayCriteriaNotMet);
+            }
+            Card host = null;
+            for (final Card land : ai.getLandsInPlay()) {
+                if (land.isCreature() || land.isArtifact() || land.isEnchanted() || land.hasSVar("EndOfTurnLeavePlay")
+                        || !sa.canTarget(land) || !land.canBeAttached(aura, sa) || !isSafeManaHost(land)) {
+                    continue;
+                }
+                if (host == null || (land.isUntapped() && host.isTapped())) {
+                    host = land;
+                }
+            }
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(host);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // "tapped for mana" needs a {T} mana ability; the rest is Steward's safe-land test
+        private static boolean isSafeManaHost(final Card land) {
+            boolean tapsForMana = false;
+            for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(land)) {
+                if (ma.getPayCosts() != null && ma.getPayCosts().hasTapCost()) {
+                    tapsForMana = true;
+                    break;
+                }
+            }
+            return tapsForMana && StewardOfTheHarvest.grantsOnlySafeManaAbilities(land);
+        }
+
+        // two different untapped, usable, unheld sources: one makes G, the other R or W
+        private static boolean looksPayable(final Player ai) {
+            final Set<Card> g = new HashSet<>();
+            final Set<Card> rw = new HashSet<>();
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isTapped() || (c.isCreature() && c.isSick()) || HonestMana.isHeld(ai, c)) {
+                    continue;
+                }
+                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(c)) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.canProduce("G")) {
+                        g.add(c);
+                    }
+                    if (ma.canProduce("R") || ma.canProduce("W")) {
+                        rw.add(c);
+                    }
+                }
+            }
+            final Set<Card> any = new HashSet<>(g);
+            any.addAll(rw);
+            return !g.isEmpty() && !rw.isEmpty() && any.size() >= 2;
+        }
+
+        private static boolean extraManaHasAUse(final Player ai, final Card self) {
+            int supply = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!ComputerUtilMana.getAIPlayableMana(c).isEmpty()) {
+                    supply++;
+                }
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c == self || c.isLand() || c.getManaCost() == null || ComputerUtilCard.isCardRemAIDeck(c)) {
+                    continue;
+                }
+                if (c.getManaCost().countX() > 0 || c.getManaCost().getCMC() > supply) {
+                    return true;
+                }
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Command)) {
+                if (!c.isCommander() || c.getManaCost() == null) {
+                    continue; // effects and emblems live here too
+                }
+                if (c.getManaCost().getCMC() + 2 * ai.getCommanderCast(c) > supply) {
+                    return true;
+                }
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ab : c.getSpellAbilities()) {
+                    if (!ab.isActivatedAbility() || ab.isManaAbility() || ab.getPayCosts() == null) {
+                        continue;
+                    }
+                    final ManaCost mc = ab.getPayCosts().getTotalMana();
+                    if (mc.countX() > 0 || mc.getCMC() > supply) {
+                        return true; // Go-Shintai's WUBRG, Helix Pinnacle's X
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Trade Secrets
     // Target opponent draws two, we draw up to four, and the OPPONENT chooses how often to repeat.
     // Forge's chooser for that (AiController "RepeatDraw") picks (maxHand - hand + rand{0..2}) / 2
