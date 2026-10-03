@@ -325,6 +325,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.FootbottomFeast.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.HourOfEternity.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // X is the TARGET COUNT and every target is a creature card in OUR graveyard
+            // (ValidTgts$ Creature.YouOwn): the generic known-origin path below sizes X with
+            // setMaxXValue (whose test payments draw MyRandom) and then keeps only opponents'
+            // cards (isPreferredTarget's Exile branch, no AITgtOwnCards), so it can never
+            // complete a target set. AI:RemoveDeck:All stripped the card before any handler
+            // ran, so the stock path drew no random numbers for it. Play-effect casts (Nathan
+            // Drake's attack trigger) and copies go through doTriggerNoCost and never reach
+            // checkApiLogic. Every other ChangeZone card takes exactly the path it took before
+            // this branch.
+            return SpecialCardAi.HourOfEternity.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {

@@ -9846,6 +9846,200 @@ public class SpecialCardAi {
         }
     }
 
+    // Hour of Eternity
+    // "Exile X target creature cards from your graveyard. For each card exiled this way, create
+    // a token that's a copy of that card, except it's a 4/4 black Zombie." ({X}{X}{U}{U}{U}
+    // sorcery.) Each pick is a 4/4 Zombie carrying a creature card's abilities for {2}. A pick
+    // is live when the AI would cast that creature from hand (no AI:RemoveDeck:All, and an
+    // enters trigger checkETBEffects approves: the veto saSideEffects applies to a creature
+    // spell), its copy survives arrival (the legend rule, against ours and between two picks)
+    // and it stays (no end-step self-sacrifice or self-exile). A commander is never picked: the
+    // command-zone replacement means it is not "exiled this way", so no token comes. Cast in our
+    // own Main 2 with an empty stack (tokens without haste: the stock graveyard-exile and TokenAi
+    // window), X = as many live picks as real mana pays for, never X = 0.
+    // Mana: spendableMana is CommuneWithLava.reusableMana with this spell's mana restrictions
+    // read, and maxX shrinks until costCmc (the cost at X = k after CostAdjustment, so a Thalia
+    // or Sphere tax lands there) fits it. getAvailableManaEstimate counts the words of Produced$
+    // (Talisman of Dominance, Choked Estuary or Tainted Isle 3, Command Tower or Arcane Signet 2),
+    // so an X sized on it overshoots into a canPayCost that fails, and draws, on every Main 2
+    // pass. The three blue sources are G2's colour count (Combo letters, never "any Combo is
+    // blue").
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card, so nothing here draws
+    // before a live pick's enters trigger has to be judged: no setMaxXValue (its test payments
+    // draw in ComputerUtilMana.isManaSourceReserved), no lifeInDanger. The window, mana, colour
+    // and candidate checks are RNG-free, and canPlayAndPayForFace runs the real canPayCost only
+    // after a WillPlay.
+    public static class HourOfEternity {
+        public static final String NAME = "Hour of Eternity";
+        static final int BLUE_PIPS = 3;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            sa.resetTargets();
+            sa.setXManaCostPaid(null);
+            if (!ph.is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // {U}{U}{U} plus {2} per pick: X >= 1 needs real mana for the cost at X = 1 and three blue sources
+            final int mana = spendableMana(ai, sa);
+            if (mana < costCmc(ai, sa, 1) || HonestMana.of(ai, sa, true).colour(MagicColor.BLUE) < BLUE_PIPS) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+            final List<Card> cands = new ArrayList<>();
+            for (final Card c : CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa)) {
+                if (!c.isCreature() || c.isCommander() || ComputerUtilCard.isCardRemAIDeck(c)
+                        || c.hasSVar("EndOfTurnLeavePlay") || leavesOnItsOwn(c)) {
+                    continue;
+                }
+                if (!c.ignoreLegendRule() && ai.isCardInPlay(c.getName())) {
+                    continue; // the legend rule would bin the copy (or ours) on arrival
+                }
+                cands.add(c);
+            }
+            if (cands.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            int maxX = cands.size();
+            while (maxX > 1 && costCmc(ai, sa, maxX) > mana) {
+                maxX--;
+            }
+            // every copy is a 4/4, so rank by what it carries: abilities, then mana value (a stable sort)
+            final Map<Card, Integer> value = new HashMap<>();
+            for (final Card c : cands) {
+                value.put(c, ComputerUtilCard.evaluateCreature(c, false, false));
+            }
+            cands.sort((a, b) -> {
+                final int va = value.get(a);
+                final int vb = value.get(b);
+                return va != vb ? Integer.compare(vb, va) : Integer.compare(b.getCMC(), a.getCMC());
+            });
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            final CardCollection picks = new CardCollection();
+            final Set<String> legends = new HashSet<>();
+            for (final Card c : cands) {
+                if (picks.size() >= maxX) {
+                    break;
+                }
+                if (!c.ignoreLegendRule() && !legends.add(c.getName())) {
+                    continue; // two picks of one legendary name: one copy would die
+                }
+                // the only call here that can draw: reached only in an affordable Main 2 with a pick
+                // in sight, and a decline after it needs every candidate to be a vetoed enters-trigger card
+                if (c.hasETBTrigger(false) && !aic.checkETBEffects(c, sa, null)) {
+                    continue;
+                }
+                picks.add(c);
+            }
+            if (picks.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.setXManaCostPaid(picks.size());
+            for (final Card c : picks) {
+                sa.getTargets().add(c);
+            }
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // A phase trigger whose root sacrifices or exiles the creature itself (Ball Lightning
+        // without the hint): its copy would leave at the next end step, having done nothing in
+        // Main 2. Read from the SVar text, never built (building allocates SpellAbility ids).
+        private static boolean leavesOnItsOwn(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getKeyword() != null || t.getMode() != TriggerType.Phase || !t.hasParam("Execute")) {
+                    continue;
+                }
+                final String text = t.getSVar(t.getParam("Execute"));
+                if (text.isEmpty()) {
+                    continue;
+                }
+                final Map<String, String> p = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                if (p.containsKey("UnlessCost")) {
+                    continue; // an upkeep tax, not a certain loss
+                }
+                final String api = p.get("DB");
+                if ("Sacrifice".equals(api) && "Self".equals(p.getOrDefault("SacValid", p.getOrDefault("Defined", "")))) {
+                    return true;
+                }
+                if ("ChangeZone".equals(api) && "Self".equals(p.get("Defined"))
+                        && !"Battlefield".equals(p.get("Destination"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The spell's mana value at X = k after CostAdjustment: ComputerUtilMana.calculateManaCost
+        // in test mode (the G1 ceiling's call: no MyRandom, the SA's own X untouched); a private
+        // copy of CommuneWithLava.costCmc.
+        private static int costCmc(final Player ai, final SpellAbility sa, final int k) {
+            return ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, k, false).getConvertedManaCost();
+        }
+
+        // Untapped mana that this spell may spend, RNG-free: floating mana, plus, per battlefield
+        // source not held (isHeld), its best mana ability that canPlay(), whose cost is a reusable
+        // resource (Cost.isReusuableResource: no sacrifice, so no Treasure) and whose restrictions
+        // accept this spell (meetsManaRestrictions(sa): the root SA, never
+        // host.getFirstSpellAbility()), worth one mana times Amount for a choice (Combo, Any,
+        // Chosen, reflected or empty) and Amount times its symbols otherwise, net of the
+        // ability's own mana cost (a Signet nets one). CommuneWithLava.reusableMana with the
+        // restriction check added, a private copy (an accepted card's predicate is not
+        // refactored). An undercount only lowers X.
+        private static int spendableMana(final Player ai, final SpellAbility sa) {
+            int total = ai.getManaPool().totalMana();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || !ma.getPayCosts().isReusuableResource() || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final String produced = ma.getParamOrDefault("Produced", "").trim();
+                    final boolean choice = produced.isEmpty() || produced.startsWith("Combo")
+                            || produced.contains("Any") || produced.contains("Chosen");
+                    final int each = choice ? 1 : produced.split(" ").length;
+                    final CostPartMana cm = ma.getPayCosts().getCostMana();
+                    final int paid = cm == null ? 0 : cm.getMana().getCMC();
+                    final int net = each * AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma)
+                            - paid;
+                    best = Math.max(best, net);
+                }
+                total += best;
+            }
+            return total;
+        }
+
+        // The sources ComputerUtilMana.isManaSourceReserved refuses in this phase: held for the
+        // next spell; held for a block trick outside declare blockers and cleanup; held for Main 2
+        // outside Main 2 and cleanup (every AI profile reserves at 100%). A private copy of
+        // CommuneWithLava's (and HonestMana's) rule.
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+    }
+
     // Hua Tuo, Honored Physician
     // "{T}: Put target creature card from your graveyard on top of your
     // library. Activate only during your turn, before attackers are declared."
