@@ -12843,6 +12843,115 @@ public class SpecialCardAi {
         }
     }
 
+    // Indulge // Excess (the Indulge half)
+    // "Whenever a creature you control attacks this turn, create a 1/1 green and white Citizen
+    // creature token that's tapped and attacking." ({2}{R} sorcery. The Excess half is Aftermath,
+    // ApiType Token, and stays with TokenAi and its NeedsToPlayVar X GE3.)
+    // EffectAi's no-AILogic fallthrough refused it every time. Reached from
+    // EffectAi.checkApiLogic's name gate after the randomReturn roll: the card is unhinted, so the
+    // stock engine drew that roll before refusing, and nothing here draws from the game's stream.
+    // The gate keys on the split card's combined name, which is what getAbilitySourceName returns
+    // for the Indulge SA (its original host is the card in its Original state); sa.getHostCard()
+    // and sa.getCardState() read "Indulge" (LeftSplit).
+    // Worth casting only in our own MAIN1 with an empty stack (the trigger lasts this turn; MAIN2
+    // is past the attack), when at least MIN_ATTACKERS creatures can attack some opponent with no
+    // attack tax, real mana covers the printed cost (G2, in total and in red), and an attack
+    // simulation sends at least MIN_ATTACKERS untaxed attackers: each one makes a 1/1 attacking
+    // token, and two attackers plus two tokens also put Excess's X >= 3 in reach.
+    // The simulation runs AiAttackController.declareAttackers on a local Combat, never
+    // getPredictedCombat(): that cache is reset on every chooseSpellAbilityToPlay, and its first
+    // build draws percentTrue rolls from the game's stream, so a declining pass would move the rest
+    // of the game (measured on a prototype: a carrier win turned into a loss with Indulge never
+    // cast). The controller's constructor (in pods, choosePreferredDefenderPlayer's tiebreak draws
+    // one nextInt per candidate), the Combat and declareAttackers all run inside
+    // MyRandom.setRandom(side), with the game's stream restored in finally, so every decline draws
+    // exactly what the stock path drew. The side stream is a fresh Random(SIDE_SEED) per call:
+    // deterministic, and never the game's.
+    // The swap relies on one game per JVM thread at a time (the harness plays one) and on AI
+    // timeouts being off (Harness: AI_CAN_USE_TIMEOUT = false): declareAttackers then joins its
+    // must-attack futures in full before the restore. With timeouts on, a timed-out straggler
+    // could outlive the swap.
+    // Non-RNG state the simulation touches, as every stock attack prediction does: AnimateAi's
+    // timestamps and setActivatingPlayer for a defender's self-animating lands or artifacts, and
+    // Exert's doTrigger on our own trigger SAs. Nothing is held: no target, no X, no AiCardMemory,
+    // no reservation. Cost: three RNG-free vetoes first, then one simulation per MAIN1 pass that
+    // clears them while the card is in hand.
+    public static class Indulge {
+        public static final String NAME = "Indulge // Excess";
+        static final int MIN_ATTACKERS = 2;
+        static final long SIDE_SEED = 0x1D0D6EL; // any fixed seed: the side stream only has to be repeatable
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            if (!game.getPhaseHandler().is(PhaseType.MAIN1, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (countUntaxedAttackers(ai, game) < MIN_ATTACKERS) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // judge the SA being cast, not host.getFirstSpellAbility() (row 77): a free
+            // Play-effect cast carries no mana cost
+            final ManaCost cost = sa.getPayCosts() == null ? ManaCost.ZERO : sa.getPayCosts().getTotalMana();
+            if (cost.getCMC() > 0) {
+                final HonestMana mana = HonestMana.of(ai, sa, true);
+                if (mana.total() < cost.getCMC()
+                        || mana.colour(MagicColor.RED) < cost.getShardCount(forge.card.mana.ManaCostShard.RED)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            if (simulatedUntaxedAttackers(ai, game) < MIN_ATTACKERS) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Defender-agnostic and RNG-free: a creature counts when it can attack at all and at least
+        // one opponent, in getOpponents()' fixed order, would take its attack with no tax.
+        // choosePreferredDefenderPlayer is never called here (its pod tiebreak draws, and its
+        // HashMap iterates in identity-hash order).
+        private static int countUntaxedAttackers(final Player ai, final Game game) {
+            int n = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!CombatUtil.canAttack(c)) {
+                    continue;
+                }
+                for (final Player opp : ai.getOpponents()) {
+                    if (CombatUtil.getAttackCost(game, c, opp) == null) {
+                        n++;
+                        break;
+                    }
+                }
+                if (n >= MIN_ATTACKERS) {
+                    return n;
+                }
+            }
+            return n;
+        }
+
+        // The attack the AI would declare now, built on a side stream: everything that touches
+        // AiAttackController (its constructor included) runs inside the swap. The count after the
+        // restore reads only the local Combat and getAttackCost, which draw nothing.
+        private static int simulatedUntaxedAttackers(final Player ai, final Game game) {
+            final Random saved = MyRandom.getRandom();
+            final Combat combat;
+            MyRandom.setRandom(new Random(SIDE_SEED));
+            try {
+                final AiAttackController aiAtk = new AiAttackController(ai);
+                combat = new Combat(ai);
+                aiAtk.declareAttackers(combat);
+            } finally {
+                MyRandom.setRandom(saved);
+            }
+            int n = 0;
+            for (final Card att : combat.getAttackers()) {
+                if (CombatUtil.getAttackCost(game, att, combat.getDefenderByAttacker(att)) == null) {
+                    n++;
+                }
+            }
+            return n;
+        }
+    }
+
     // Infinite Reflection
     // Enchant a creature (ours or an opponent's) only when turning each other nontoken creature
     // we control into a copy of it is a clear board upgrade. The target must be a nonlegendary

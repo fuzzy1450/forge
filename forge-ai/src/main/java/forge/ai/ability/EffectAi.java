@@ -139,6 +139,20 @@ public class EffectAi extends SpellAbilityAi {
             return SpecialCardAi.DontBlink.consider(ai, sa);
         }
 
+        if (SpecialCardAi.Indulge.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Indulge // Excess: "Whenever a creature you control attacks this turn, create a 1/1
+            // ... token that's tapped and attacking." The no-AILogic fallthrough below refused it
+            // every time. getAbilitySourceName is the split card's combined (Original-state) name,
+            // and only the Indulge half is an Effect SA (Excess is ApiType Token, TokenAi), so this
+            // reaches Indulge alone. Routed after the randomReturn roll: the card has no RemoveDeck
+            // hint, so the stock engine evaluated it and drew here before refusing, and the
+            // evaluator draws nothing from the game's stream (its attack simulation runs on a side
+            // stream). A name gate, not an AILogic$, so doTriggerNoCost's AILogic pre-call never
+            // runs for it. Every other Effect card takes exactly the path it took before this
+            // branch.
+            return SpecialCardAi.Indulge.consider(ai, sa);
+        }
+
         if (sa.hasParam("AILogic")) {
             logic = sa.getParam("AILogic");
             if (logic.equals("BeginningOfOppTurn")) {
