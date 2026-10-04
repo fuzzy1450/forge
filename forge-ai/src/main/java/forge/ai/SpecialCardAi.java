@@ -10933,6 +10933,587 @@ public class SpecialCardAi {
         }
     }
 
+    // Grab the Reins (dead-card batch 2, row 36)
+    // "Choose one - Until end of turn, you gain control of target creature and it gains haste; or
+    // sacrifice a creature, then Grab the Reins deals damage equal to that creature's power to any
+    // target. Entwine {2}{R}" ({3}{R} instant.) It does not untap: a creature taken tapped cannot
+    // attack. The sacrifice is the effect's, chosen at resolution; the damage target is chosen at
+    // cast, while X (RememberedLKI$CardPower) still reads 0.
+    // AI:RemoveDeck:All dropped the owner's hand SA in AiController.getSpellAbilityToPlay before any
+    // handler, so it was never cast from hand (its only casts are Sunforger's forced casts and
+    // Nathan Drake's thefts, Play effects that never read the hint). The hint is KEPT: dropping it
+    // would put the hand SA on every list pass, where CharmAi.chooseOptionalCosts test-pays the
+    // entwine (canPayCost draws in ComputerUtilMana.isManaSourceReserved) and re-rolls every held
+    // game. admits() is instead G3's readmit case (RemoveDeckFilter.readmit): the hand SA joins the
+    // list only when the RNG-free plan below finds a line, so every other pass is the stock pass.
+    // Behind the hint the stock chooser shuffled the modes, ControlGainAi took tapped creatures on
+    // either turn, and SacrificeAi + DamageDealAi flung our cheapest creature for 1 or 2.
+    // The plain spell takes the first line that holds:
+    // - LETHAL, any window: a creature of ours whose power, after prevention, is at least an
+    //   opponent's life (one who can lose), the lowest evaluation; aimed at that opponent;
+    // - RESCUE, an opponent's declare blockers with lethal on us: steal an unblocked attacker whose
+    //   removal alone leaves us alive (tapped is fine: it leaves combat). Checked before SALVAGE,
+    //   whose window overlaps here, so the card is never spent on a salvage while we die;
+    // - SALVAGE, with something on the stack or in declare blockers / first-strike damage: a creature
+    //   of ours that is leaving anyway (MomentousFall.chooseSacrifice, row 143), at an opposing
+    //   planeswalker it kills, else an opposing creature worth MIN_SALVAGE_KILL_EVAL it kills, else,
+    //   with power MIN_SALVAGE_FACE or more, the lowest-life opponent;
+    // - STEAL, our own Main 1 or beginning of combat, empty stack, combat not skipped: an UNTAPPED
+    //   opposing creature by Seize the Spotlight's filter and floor (row 74): lethal on its
+    //   controller, or 3+ combat damage or evaluation 200+ while the opponents' next attack leaves
+    //   us safe and the mana does not displace a creature, planeswalker or commander cast.
+    // The entwined copy (7 mana) takes an opposing creature worth MIN_REMOVE_EVAL and sacrifices it
+    // (removal that beats indestructible) for its power as damage: a lethal opponent, then an
+    // opposing planeswalker it kills, then another opposing creature it kills (on defence another
+    // attacker first), then the lowest-life opponent; never us. Windows, empty stack: our own main
+    // phase without displacing a permanent cast, the end step before our turn, or an opponent's
+    // declare attackers / blockers, among the attackers on us (with lethal incoming, only an
+    // unblocked attacker whose removal saves us). Never undying or persist (it returns to its
+    // owner), an end-of-turn leaver, or one the stack already kills. Deferred while LETHAL holds:
+    // the plain spell does that for 4.
+    // No card target ever has ward (its trigger counters the spell unless the tax is paid on top),
+    // and no kill target or entwine victim is one the stack already kills (skeptic amendment 2:
+    // predictCreatureWillDieThisTurn, stack only).
+    // Mana: G2 (HonestMana, held sources skipped) against the printed {3}{R} / {5}{R}{R} plus any
+    // raise the test-mode calculateManaCost reads above the printed cost, and one / two red sources'
+    // worth; the same figures in admits() and chooseModes(), so a readmit and the cast agree
+    // (skeptic amendment 3: never the SA's own pay cost, which reads 4 on the hand SA and 7 on the
+    // entwined copy).
+    // chooseSacrifice is the resolution half (ComputerUtil.choosePermanentsToSacrifice): the creature
+    // the steal mode took (stock's SacMe 6 already does it; an edge cover), else one whose damage is
+    // lethal on, or kills, the target (a leaving one first, else the lowest evaluation), else a
+    // leaving one, else null and the stock pick.
+    // RNG parity: nothing here draws. CharmAi replays its stock shuffle before chooseModes (hand
+    // scans that ignore the hint reached that shuffle in the stock engine). Targets are reset on
+    // every owner evaluation and set only on approval; nothing is held or remembered.
+    public static class GrabTheReins {
+        public static final String NAME = "Grab the Reins";
+        public static final int PLAIN_MV = 4;                // {3}{R}
+        public static final int ENTWINE_MV = 7;              // {3}{R} plus entwine {2}{R}
+        public static final int PLAIN_RED = 1;
+        public static final int ENTWINE_RED = 2;
+        public static final int MIN_REMOVE_EVAL = 200;       // a 4/4 for 4: batch 1's steal floor
+        public static final int MIN_SALVAGE_KILL_EVAL = 130; // more than a 1/1 token (~105)
+        public static final int MIN_SALVAGE_FACE = 3;
+
+        // what the chosen modes target: stolen for the steal mode, target for the fling's damage
+        private static final class Plan {
+            final Card stolen;
+            final GameEntity target;
+
+            Plan(final Card stolen, final GameEntity target) {
+                this.stolen = stolen;
+                this.target = target;
+            }
+        }
+
+        // the parts, found by API: steal (GainControl with LoseControl), sac (Sacrifice) and dmg (sac's
+        // targeted DealDamage sub). makePossibleOptions drops the steal mode when no creature is
+        // targetable, and a drifted script may lose the others: each may be null.
+        private static final class Parts {
+            AbilitySub steal;
+            AbilitySub sac;
+            AbilitySub dmg;
+
+            static Parts of(final List<AbilitySub> choices) {
+                final Parts p = new Parts();
+                for (final AbilitySub sub : choices) {
+                    if (sub.getApi() == ApiType.GainControl && sub.hasParam("LoseControl")) {
+                        p.steal = sub;
+                    } else if (sub.getApi() == ApiType.Sacrifice) {
+                        p.sac = sub;
+                        final AbilitySub next = sub.getSubAbility();
+                        if (next != null && next.getApi() == ApiType.DealDamage && next.usesTargeting()) {
+                            p.dmg = next;
+                        }
+                    }
+                }
+                return p;
+            }
+
+            boolean activatorUnset() {
+                return (steal != null && steal.getActivatingPlayer() == null)
+                        || (sac != null && sac.getActivatingPlayer() == null)
+                        || (dmg != null && dmg.getActivatingPlayer() == null);
+            }
+
+            void resetTargets() {
+                if (steal != null) {
+                    steal.resetTargets();
+                }
+                if (dmg != null) {
+                    dmg.resetTargets();
+                }
+            }
+        }
+
+        // CharmAi's gate: a spell of this card, never a Play-effect cast (Sunforger's forced cast and
+        // Nathan Drake's theft keep the stock chooser, as the hint never covered them)
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && sa.isSpell() && !sa.isCastFromPlayEffect() && isGrab(sa);
+        }
+
+        // by source name, or by the host's paper rules for a host whose source name reads ""
+        private static boolean isGrab(final SpellAbility sa) {
+            if (NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                return true;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // our own copy, cast from our own hand: the only cast the hint kept off the list
+        private static boolean ownHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Player activator = sa.getActivatingPlayer();
+            return host != null && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner())
+                    && (activator == null || ai.equals(activator));
+        }
+
+        // canTarget reads the activator (hexproof, protection); set it on a hand SA that has none yet,
+        // as getOriginalAndAltCostAbilities sets it right after the RemoveDeck filter (skeptic
+        // amendment 6). It trickles down to the Choices subs.
+        private static void ensureActivator(final Player ai, final SpellAbility sa, final Parts parts) {
+            if (sa.getActivatingPlayer() == null || parts.activatorUnset()) {
+                sa.setActivatingPlayer(ai);
+            }
+        }
+
+        // G3's readmit case (RemoveDeckFilter.readmit): the owner's hand SA joins the list only when the
+        // plain spell or the entwined copy has a line. RNG-free; reads the board, sets no target.
+        public static boolean admits(final Player ai, final SpellAbility sa) {
+            if (!handles(sa) || !ownHandCast(ai, sa)) {
+                return false;
+            }
+            final Parts parts = Parts.of(sa.getAdditionalAbilityList("Choices"));
+            if (parts.sac == null || parts.dmg == null) {
+                return false; // script drift
+            }
+            ensureActivator(ai, sa, parts);
+            final Card host = sa.getHostCard();
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int raise = costRaise(ai, sa);
+            return planPlain(ai, host, parts, mana, raise) != null
+                    || planEntwine(ai, host, parts, mana, raise) != null;
+        }
+
+        // CharmAi's name gate, after its stock shuffle: the modes, with every target set; empty to
+        // decline (CantPlayAi; on the entwined copy chooseOptionalCosts then drops the entwine). The
+        // plain spell may take [sac] alone (no steal mode offered); only the entwine needs both.
+        // The list is mutable: chainAbilities sorts it in place.
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa, final List<AbilitySub> choices) {
+            final List<AbilitySub> chosen = Lists.newArrayList();
+            if (!ownHandCast(ai, sa)) {
+                return chosen; // the hint kept every other cast of it off the list
+            }
+            final Parts parts = Parts.of(choices);
+            parts.resetTargets(); // nothing stale from an earlier priority
+            if (parts.sac == null || parts.dmg == null) {
+                return chosen; // script drift
+            }
+            ensureActivator(ai, sa, parts);
+            final Card host = sa.getHostCard();
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int raise = costRaise(ai, sa);
+            final Plan plan = sa.isEntwine() ? planEntwine(ai, host, parts, mana, raise)
+                    : planPlain(ai, host, parts, mana, raise);
+            if (plan == null) {
+                return chosen;
+            }
+            if (plan.stolen != null) {
+                parts.steal.getTargets().add(plan.stolen);
+                chosen.add(parts.steal);
+            }
+            if (plan.target != null) {
+                parts.dmg.getTargets().add(plan.target);
+                chosen.add(parts.sac);
+            }
+            return chosen;
+        }
+
+        // A cost raise the engine would charge (Thalia, Sphere of Resistance), read by the test-mode
+        // calculateManaCost (RNG-free) above the printed cost of the SA it prices, so the hand SA and
+        // the entwined copy name the same raise. Reductions are not counted.
+        private static int costRaise(final Player ai, final SpellAbility sa) {
+            final int printed = sa.isEntwine() ? ENTWINE_MV : PLAIN_MV;
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            return Math.max(0, cost.getConvertedManaCost() - printed);
+        }
+
+        private static Plan planPlain(final Player ai, final Card host, final Parts parts,
+                                      final HonestMana mana, final int raise) {
+            if (mana.total() < PLAIN_MV + raise || mana.colour(MagicColor.RED) < PLAIN_RED) {
+                return null;
+            }
+            Plan plan = lethal(ai, host, parts);
+            if (plan == null) {
+                plan = rescue(ai, parts);
+            }
+            if (plan == null) {
+                plan = salvage(ai, host, parts);
+            }
+            if (plan == null) {
+                plan = steal(ai, parts, mana.total(), PLAIN_MV + raise);
+            }
+            return plan;
+        }
+
+        // LETHAL: the lowest-evaluation creature of ours whose power reaches an opponent's life
+        private static Plan lethal(final Player ai, final Card host, final Parts parts) {
+            Card best = null;
+            Player victim = null;
+            int bestEval = Integer.MAX_VALUE;
+            for (final Player opp : ai.getOpponents()) {
+                if (!canDie(opp) || !parts.dmg.canTarget(opp)) {
+                    continue;
+                }
+                for (final Card c : ai.getCreaturesInPlay()) {
+                    final int power = c.getNetPower();
+                    // the damage first (cheap); effect true: SacrificeEffect's own filter at resolution
+                    if (power <= 0 || ComputerUtilCombat.predictDamageTo(opp, power, host, false) < opp.getLife()
+                            || !c.canBeSacrificedBy(parts.sac, true)) {
+                        continue;
+                    }
+                    final int eval = ComputerUtilCard.evaluateCreature(c);
+                    if (best == null || eval < bestEval || (eval == bestEval && c.getId() < best.getId())) {
+                        best = c;
+                        bestEval = eval;
+                        victim = opp;
+                    }
+                }
+            }
+            return victim == null ? null : new Plan(null, victim);
+        }
+
+        // RESCUE: the best unblocked attacker on us whose removal turns lethal combat survivable
+        private static Plan rescue(final Player ai, final Parts parts) {
+            if (parts.steal == null || !lethalIncoming(ai)) {
+                return null;
+            }
+            final CardCollection saves = saviours(ai, CardLists.filter(ai.getGame().getCombat().getAttackersOf(ai),
+                    c -> stealable(ai, parts.steal, c)));
+            return saves.isEmpty() ? null : new Plan(ComputerUtilCard.getBestCreatureAI(saves), null);
+        }
+
+        // SALVAGE: a creature of ours that is leaving anyway, flung at what its power kills
+        private static Plan salvage(final Player ai, final Card host, final Parts parts) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean combatWindow = game.getCombat() != null
+                    && (ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) || ph.is(PhaseType.COMBAT_FIRST_STRIKE_DAMAGE));
+            if (game.getStack().isEmpty() && !combatWindow) {
+                return null; // nothing can be leaving
+            }
+            final Card leaving = MomentousFall.chooseSacrifice(ai, CardLists.filter(ai.getCreaturesInPlay(),
+                    c -> c.getNetPower() >= MomentousFall.MIN_POWER && c.canBeSacrificedBy(parts.sac, true)));
+            if (leaving == null) {
+                return null;
+            }
+            final int power = leaving.getNetPower();
+            final CardCollection walkers = kills(ai, host, parts.dmg, power, true, 0, null);
+            if (!walkers.isEmpty()) {
+                return new Plan(null, ComputerUtilCard.getBestPlaneswalkerAI(walkers));
+            }
+            final CardCollection bodies = kills(ai, host, parts.dmg, power, false, MIN_SALVAGE_KILL_EVAL, null);
+            if (!bodies.isEmpty()) {
+                return new Plan(null, ComputerUtilCard.getBestCreatureAI(bodies));
+            }
+            if (power >= MIN_SALVAGE_FACE) {
+                final Player face = lowestLife(ai, parts.dmg);
+                if (face != null) {
+                    return new Plan(null, face);
+                }
+            }
+            return null;
+        }
+
+        // STEAL: an untapped opposing creature that attacks for us this turn (Seize the Spotlight's
+        // filter and floor; bestSteal and inDangerNextCombat are its own, read-only)
+        private static Plan steal(final Player ai, final Parts parts, final int avail, final int spend) {
+            if (parts.steal == null) {
+                return null;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!(ph.is(PhaseType.MAIN1, ai) || ph.is(PhaseType.COMBAT_BEGIN, ai)) || !game.getStack().isEmpty()
+                    || game.getReplacementHandler().wouldPhaseBeSkipped(ai, PhaseType.COMBAT_BEGIN)) {
+                return null;
+            }
+            final CardCollection worthy = new CardCollection();
+            for (final Player opp : ai.getOpponents()) {
+                final Card best = SeizeTheSpotlight.bestSteal(ai, CardLists.filter(opp.getCreaturesInPlay(),
+                        c -> !c.isTapped() && stealable(ai, parts.steal, c)));
+                if (best == null) {
+                    continue;
+                }
+                final int dmg = best.getNetCombatDamage();
+                if (dmg >= opp.getLife()) {
+                    return new Plan(best, null);
+                }
+                if (dmg >= SeizeTheSpotlight.MIN_STOLEN_DAMAGE
+                        || ComputerUtilCard.evaluateCreature(best) >= SeizeTheSpotlight.MIN_STOLEN_VALUE) {
+                    worthy.add(best);
+                }
+            }
+            if (worthy.isEmpty() || SeizeTheSpotlight.inDangerNextCombat(ai) || displaces(ai, avail, spend)) {
+                return null;
+            }
+            return new Plan(ComputerUtilCard.getBestCreatureAI(worthy), null);
+        }
+
+        private static Plan planEntwine(final Player ai, final Card host, final Parts parts,
+                                        final HonestMana mana, final int raise) {
+            if (parts.steal == null || mana.total() < ENTWINE_MV + raise
+                    || mana.colour(MagicColor.RED) < ENTWINE_RED) {
+                return null;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            if (!game.getStack().isEmpty()) {
+                return null;
+            }
+            final boolean ourTurn = ph.isPlayerTurn(ai);
+            final boolean defence = !ourTurn && combat != null
+                    && (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS))
+                    && !combat.getAttackersOf(ai).isEmpty();
+            if (ourTurn) {
+                if (!(ph.is(PhaseType.MAIN1) || ph.is(PhaseType.MAIN2)) || displaces(ai, mana.total(), ENTWINE_MV + raise)) {
+                    return null;
+                }
+            } else if (!defence && !(ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn()))) {
+                return null;
+            }
+            if (lethal(ai, host, parts) != null) {
+                return null; // the plain spell does that for 4
+            }
+            final Iterable<Card> pool = defence ? combat.getAttackersOf(ai) : ai.getOpponents().getCreaturesInPlay();
+            CardCollection cands = CardLists.filter(pool, c -> stealable(ai, parts.steal, c)
+                    && !c.hasSVar("EndOfTurnLeavePlay") && !ComputerUtilCard.hasActiveUndyingOrPersist(c)
+                    && !ComputerUtil.predictCreatureWillDieThisTurn(ai, c, null, true));
+            if (lethalIncoming(ai)) {
+                cands = saviours(ai, cands); // survival first: only an attacker whose removal saves us
+            } else {
+                cands = CardLists.filter(cands, c -> ComputerUtilCard.evaluateCreature(c) >= MIN_REMOVE_EVAL);
+            }
+            if (cands.isEmpty()) {
+                return null;
+            }
+            final Card victim = ComputerUtilCard.getBestCreatureAI(cands);
+            final GameEntity target = entwineTarget(ai, host, parts.dmg, victim, defence ? combat : null);
+            return target == null ? null : new Plan(victim, target);
+        }
+
+        // the fling's target on entwine, for the stolen creature's power; null when no opponent-side
+        // target is legal (it never aims at us)
+        private static GameEntity entwineTarget(final Player ai, final Card host, final SpellAbility dmg,
+                                                final Card victim, final Combat defence) {
+            final int power = victim.getNetPower();
+            if (power > 0) {
+                for (final Player opp : ai.getOpponents()) {
+                    if (canDie(opp) && dmg.canTarget(opp)
+                            && ComputerUtilCombat.predictDamageTo(opp, power, host, false) >= opp.getLife()) {
+                        return opp;
+                    }
+                }
+            }
+            final CardCollection walkers = kills(ai, host, dmg, power, true, 0, victim);
+            if (!walkers.isEmpty()) {
+                return ComputerUtilCard.getBestPlaneswalkerAI(walkers);
+            }
+            final CardCollection bodies = kills(ai, host, dmg, power, false, 0, victim);
+            if (!bodies.isEmpty()) {
+                if (defence != null) {
+                    final CardCollection attackers = CardLists.filter(bodies, defence::isAttacking);
+                    if (!attackers.isEmpty()) {
+                        return ComputerUtilCard.getBestCreatureAI(attackers);
+                    }
+                }
+                return ComputerUtilCard.getBestCreatureAI(bodies);
+            }
+            return lowestLife(ai, dmg);
+        }
+
+        // a creature the steal mode can take: an opponent's, in play, never ward, ours to control,
+        // targetable (hexproof, shroud, protection from red)
+        private static boolean stealable(final Player ai, final SpellAbility steal, final Card c) {
+            return c.isCreature() && !c.isPhasedOut() && ai.isOpponentOf(c.getController())
+                    && !c.hasKeyword(Keyword.WARD) && c.canBeControlledBy(ai) && steal.canTarget(c);
+        }
+
+        // the opponents' planeswalkers (walkers) or creatures that power damage from this card kills:
+        // targetable, never ward, not already dying to the stack, creatures worth minEval, never skip
+        private static CardCollection kills(final Player ai, final Card host, final SpellAbility dmg, final int power,
+                                            final boolean walkers, final int minEval, final Card skip) {
+            final CardCollection out = new CardCollection();
+            if (power <= 0) {
+                return out;
+            }
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    if ((walkers ? !c.isPlaneswalker() : !c.isCreature()) || c.isPhasedOut()
+                            || (skip != null && c.equals(skip)) || c.hasKeyword(Keyword.WARD) || !dmg.canTarget(c)
+                            || ComputerUtilCombat.getEnoughDamageToKill(c, power, host, false) > power
+                            || ComputerUtil.predictCreatureWillDieThisTurn(ai, c, null, true)
+                            || (minEval > 0 && ComputerUtilCard.evaluateCreature(c) < minEval)) {
+                        continue;
+                    }
+                    out.add(c);
+                }
+            }
+            return out;
+        }
+
+        // the lowest-life opponent this damage can target who can lose life
+        private static Player lowestLife(final Player ai, final SpellAbility dmg) {
+            Player best = null;
+            for (final Player opp : ai.getOpponents()) {
+                if (opp.canLoseLife() && dmg.canTarget(opp) && (best == null || opp.getLife() < best.getLife())) {
+                    best = opp;
+                }
+            }
+            return best;
+        }
+
+        private static boolean canDie(final Player p) {
+            return p.canLoseLife() && !p.cantLoseForZeroOrLessLife() && !p.cantLose();
+        }
+
+        // an opponent's declare-blockers step whose combat, as blocked, leaves us below 1 life
+        private static boolean lethalIncoming(final Player ai) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            return combat != null && !ph.isPlayerTurn(ai) && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    && ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife() && !combat.getAttackersOf(ai).isEmpty()
+                    && ComputerUtilCombat.lifeThatWouldRemain(ai, combat) < 1;
+        }
+
+        // the unblocked attackers on us among cands whose removal alone leaves us at 1 life or more
+        // (lifeThatWouldRemain's own rule: no blockers is unblocked)
+        private static CardCollection saviours(final Player ai, final Iterable<Card> cands) {
+            final Combat combat = ai.getGame().getCombat();
+            final int remain = ComputerUtilCombat.lifeThatWouldRemain(ai, combat);
+            final CardCollection out = new CardCollection();
+            for (final Card c : cands) {
+                if (combat.isAttacking(c, ai) && combat.getBlockers(c).isEmpty()
+                        && remain + ComputerUtilCombat.damageIfUnblocked(c, ai, combat, false) >= 1) {
+                    out.add(c);
+                }
+            }
+            return out;
+        }
+
+        // Seize the Spotlight's displacesPermanent with the mana and the spend passed in (skeptic
+        // amendment 3): G2's total and this line's own price, never the SA's pay cost. A private copy,
+        // since an accepted card's predicate is not edited: true when a creature or planeswalker in
+        // hand, or our commander in the command zone (with its tax), fits the mana we have but not
+        // what this cast leaves.
+        private static boolean displaces(final Player ai, final int avail, final int spend) {
+            final int left = avail - spend;
+            final CardCollection cands = CardLists.filter(ai.getCardsIn(ZoneType.Hand),
+                    card -> card.isCreature() || card.isPlaneswalker());
+            for (final Card cmdr : ai.getCommanders()) {
+                if (cmdr.isInZone(ZoneType.Command)) {
+                    cands.add(cmdr);
+                }
+            }
+            for (final Card c : cands) {
+                final int cost = c.getCMC() + (c.isCommander() ? 2 * ai.getCommanderCast(c) : 0);
+                if (cost <= avail && cost > left) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // ComputerUtil.choosePermanentsToSacrifice's gate: this card's "sacrifice a creature",
+        // resolving for its own caster (the owner's cast from hand, Sunforger's forced cast, a thief's
+        // cast through Nathan Drake, a copy)
+        public static boolean sacrificesFor(final Player ai, final SpellAbility sacSa) {
+            return sacSa != null && sacSa.getApi() == ApiType.Sacrifice && ai.equals(sacSa.getActivatingPlayer())
+                    && isGrab(sacSa);
+        }
+
+        // The resolution pick among options (our creatures); null = the stock pick. Deterministic, no
+        // random draw. The spell is still on the stack while it resolves, so a wrath below it is still
+        // seen by MomentousFall.
+        public static Card chooseSacrifice(final Player ai, final SpellAbility sacSa, final CardCollectionView options) {
+            // 1. the creature the steal mode took (the entwine line), matched by id
+            for (SpellAbility part = sacSa.getRootAbility(); part != null; part = part.getSubAbility()) {
+                if (part.getApi() != ApiType.GainControl || !part.hasParam("LoseControl")) {
+                    continue;
+                }
+                for (final Card t : part.getTargets().getTargetCards()) {
+                    for (final Card o : options) {
+                        if (o.getId() == t.getId() && ai.equals(o.getController())) {
+                            return o;
+                        }
+                    }
+                }
+            }
+            // 2. the fling's target, as it stands now
+            final Card host = sacSa.getHostCard();
+            final SpellAbility dmg = sacSa.getSubAbility();
+            GameEntity target = null;
+            if (host != null && dmg != null && dmg.getApi() == ApiType.DealDamage && dmg.usesTargeting()) {
+                final Player p = dmg.getTargets().getFirstTargetedPlayer();
+                final Card c = dmg.getTargets().getFirstTargetedCard();
+                if (p != null) {
+                    target = p.isInGame() ? p : null;
+                } else if (c != null) {
+                    final Card now = ai.getGame().getCardState(c);
+                    target = now != null && now.isInPlay() ? now : null;
+                }
+            }
+            if (target instanceof Player p) {
+                if (!ai.isOpponentOf(p)) {
+                    return null; // aimed at us: the stock pick, the least damage
+                }
+                if (canDie(p)) {
+                    final Card pick = pickFrom(ai, CardLists.filter(options, c -> c.getNetPower() > 0
+                            && ComputerUtilCombat.predictDamageTo(p, c.getNetPower(), host, false) >= p.getLife()));
+                    if (pick != null) {
+                        return pick;
+                    }
+                }
+            } else if (target instanceof Card t) {
+                if (t.getController() == null || !ai.isOpponentOf(t.getController())) {
+                    return null; // aimed at our own permanent: the stock pick, the least damage
+                }
+                final Card pick = pickFrom(ai, CardLists.filter(options, c -> c.getNetPower() > 0
+                        && ComputerUtilCombat.getEnoughDamageToKill(t, c.getNetPower(), host, false) <= c.getNetPower()));
+                if (pick != null) {
+                    return pick;
+                }
+            }
+            // 3. a creature leaving anyway (MomentousFall), else null and the stock pick
+            return MomentousFall.chooseSacrifice(ai, options);
+        }
+
+        // within set: one that is leaving anyway (MomentousFall), else the lowest evaluation, then the
+        // lowest id
+        private static Card pickFrom(final Player ai, final CardCollection set) {
+            if (set.isEmpty()) {
+                return null;
+            }
+            final Card leaving = MomentousFall.chooseSacrifice(ai, set);
+            if (leaving != null) {
+                return leaving;
+            }
+            Card best = null;
+            int bestEval = Integer.MAX_VALUE;
+            for (final Card c : set) {
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                if (best == null || eval < bestEval || (eval == bestEval && c.getId() < best.getId())) {
+                    best = c;
+                    bestEval = eval;
+                }
+            }
+            return best;
+        }
+    }
+
     // Grell Philosopher
     // "When this enters and at the beginning of your upkeep, each Horror you control gains all
     // activated abilities of target artifact an opponent controls until end of turn."
@@ -20462,6 +21043,8 @@ public class SpecialCardAi {
             }
             switch (name) {
                 // one case per G3 readmit row, added by that row's own commit
+                case GrabTheReins.NAME:
+                    return GrabTheReins.admits(ai, sa);
                 case ManascapeRefractor.NAME:
                     return ManascapeRefractor.isOwnHandCast(sa);
                 case GoblinCadets.NAME:

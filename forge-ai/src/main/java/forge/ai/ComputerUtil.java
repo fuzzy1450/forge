@@ -849,6 +849,19 @@ public class ComputerUtil {
         final Card host = source.getHostCard();
         final int considerSacThreshold = getAIPreferenceParameter(host, "CreatureEvalThreshold", source);
 
+        // Grab the Reins (dead-card batch 2, row 36): its "sacrifice a creature" is the effect's,
+        // chosen here for its own caster. The stock pick (getWorstCreatureAI after SacMe) flings our
+        // worst body, not the one the cast priced: the card's chooser takes the creature the steal
+        // mode took, else one whose damage is lethal on, or kills, the target, else one leaving
+        // anyway; null falls through to the stock pick. Name-gated, deterministic, no random draw.
+        if (amount == 1 && !destroy && SpecialCardAi.GrabTheReins.sacrificesFor(ai, source)) {
+            final Card grabPick = SpecialCardAi.GrabTheReins.chooseSacrifice(ai, source, cardlist);
+            if (grabPick != null) {
+                sacrificed.add(grabPick);
+                return sacrificed;
+            }
+        }
+
         if ("OpponentOnly".equals(source.getParam("AILogic"))) {
             if (!source.getActivatingPlayer().isOpponentOf(ai)) {
                 return sacrificed; // sacrifice none

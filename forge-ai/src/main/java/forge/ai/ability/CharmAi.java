@@ -82,6 +82,18 @@ public class CharmAi extends SpellAbilityAi {
             // evaluator replays that pass first, so a decline draws exactly what A drew, and only
             // then builds its own five slots. Play-effect and cascade casts come here too, on purpose.
             chosenList = SpecialCardAi.UniteTheCoalition.chooseModes(ai, sa, choices, num);
+        } else if (SpecialCardAi.GrabTheReins.handles(sa)) {
+            // AI:RemoveDeck:All kept the owner's hand cast off the playable list, but hand scans that
+            // ignore the hint (ManaAi's ritual scan, TapAi.willPayUnlessCost through
+            // hasReasonToPlayCardThisTurn, the Nykthos and Yawgmoth's Will scanners) reached the stock
+            // else below for the plain spell and drew its shuffle. So this branch draws that same
+            // shuffle first (handles() only reads), then asks the card's own chooser, which finds the
+            // modes by API and draws nothing (the entwined copy, num == choices, never shuffled).
+            // A Play-effect cast (Sunforger, Nathan Drake) never matches and keeps the stock chooser.
+            if (num < choices.size()) {
+                Collections.shuffle(choices, MyRandom.getRandom());
+            }
+            chosenList = SpecialCardAi.GrabTheReins.chooseModes(ai, sa, choices);
         } else {
             // only randomize if not all possible together
             if (num < choices.size()) {
