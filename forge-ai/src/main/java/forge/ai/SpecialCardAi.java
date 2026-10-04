@@ -18928,16 +18928,20 @@ public class SpecialCardAi {
     // "Draw X cards. For each card drawn this way, discard a card unless you sacrifice a
     // permanent." ({X}{U} instant.) Reached from DrawAi.checkApiLogic's name gate; a Play-effect
     // cast (Nathan Drake's exile-and-cast) goes through doTriggerNoCost -> targetAI and never
-    // reaches it. The script's UnlessAI$ Never makes every resolution discard
-    // (DiscardAi.willPayUnlessCost), never sacrifice: the stock answer paid every Sac<1/Permanent>
-    // of the AI's own effect, and ComputerUtil.chooseSacrificeType's getWorstAI took lands. So the
-    // spell is a filter - draw X, keep the best of the hand, discard X - and it is cast only when
-    // the hand already holds cards to throw away: those beyond the maximum hand size, and every
-    // land in hand once we control six. Without one the discards take cards we want, and from an
-    // empty hand every card drawn. Cast from our own hand in the end step before our own turn
-    // (the mana is what we held through the opponent's turn), with more than five cards in the
-    // library, and X = the largest payable value <= min(spare + 1, library - 3, what we can
-    // draw), never below 2 (X = 1 is a card-neutral {1}{U} loot).
+    // reaches it. Each "unless you sacrifice" sacrifices only an expendable permanent - a token or
+    // an SVar:SacMe permanent that is not a land, a commander, an attacker or a blocker, the worst
+    // of them - and otherwise discards: willSacrifice answers DiscardAi.willPayUnlessCost (ahead of
+    // the script's UnlessAI$ Never) by asking the payment itself, ComputerUtil.chooseSacrificeType,
+    // whose effect-side hook is chooseSacrifice, so the answer and the payment never disagree. The
+    // stock answer paid every Sac<1/Permanent> of the AI's own effect, and chooseSacrificeType's
+    // getWorstAI took lands. So the spell is a filter - draw X, keep the best of the hand, pay for
+    // X with fodder and discards - cast only when something costs nothing to pay with: hand cards
+    // beyond the maximum hand size, every land in hand once we control six, and the expendable
+    // permanents. Without one the discards take cards we want, and from an empty hand every card
+    // drawn. Cast from our own hand in the end step before our own turn (the mana is what we held
+    // through the opponent's turn), with more than five cards in the library, and X = the largest
+    // payable value <= min(spare + 1, library - 3, what we can draw), never below 2 (X = 1 is a
+    // card-neutral {1}{U} loot).
     // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card. Every decline before the
     // X probe is RNG-free (G2's honest count, with a blue source, bounds X first); the probe's
     // test payments (ComputerUtilMana.isManaSourceReserved) are the first draws. They run from the
@@ -18945,7 +18949,7 @@ public class SpecialCardAi {
     // never with no blue source: a failing test payment records its unpaid cost in
     // AiCardMemory.UNPAID_COSTS, and an unpaid {U} there steers ChangeZoneAi.basicManaFixing's
     // land fetches toward Islands until end of turn. X is cleared on entry and set only on
-    // approval: none is held past a decline.
+    // approval: none is held past a decline. willSacrifice and chooseSacrifice draw nothing.
     public static class ReadTheRunes {
         public static final String NAME = "Read the Runes";
         static final int MIN_X = 2;          // X = 1 is a card-neutral {1}{U} loot
@@ -18972,7 +18976,7 @@ public class SpecialCardAi {
             if (library < MIN_LIBRARY) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
-            final int spare = spareCards(ai, host);
+            final int spare = spareCards(ai, root, host);
             if (spare < 1) {
                 return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
             }
@@ -18993,9 +18997,11 @@ public class SpecialCardAi {
             return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
         }
 
-        // Cards in hand the discards cost nothing: those beyond the maximum hand size, plus every
-        // land in hand once we control LAND_GLUT lands (the Read the Runes itself is spent).
-        static int spareCards(final Player ai, final Card host) {
+        // What the X discards cost nothing to pay with: hand cards beyond the maximum hand size,
+        // every land in hand once we control LAND_GLUT lands (the Read the Runes itself is spent),
+        // and every expendable permanent the sacrifice takes instead of a discard (the payment's
+        // own filter, canBeSacrificedBy as an effect).
+        static int spareCards(final Player ai, final SpellAbility root, final Card host) {
             final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
             int spare = 0;
             if (!ai.isUnlimitedHandSize()) {
@@ -19005,7 +19011,61 @@ public class SpecialCardAi {
             if (ai.getLandsInPlay().size() >= LAND_GLUT) {
                 spare += CardLists.count(hand, CardPredicates.LANDS);
             }
+            final Combat combat = ai.getGame().getCombat();
+            spare += CardLists.count(ai.getCardsIn(ZoneType.Battlefield),
+                    c -> expendable(ai, c, combat) && c.canBeSacrificedBy(root, true));
             return spare;
+        }
+
+        // A permanent the "unless you sacrifice" may take: a token or an SVar:SacMe permanent of
+        // ours, never a land, a commander, or a creature attacking or blocking in this combat.
+        static boolean expendable(final Player ai, final Card c, final Combat combat) {
+            return c != null && ai.equals(c.getController()) && !c.isLand()
+                    && (c.isToken() || c.hasSVar("SacMe")) && !c.isCommander()
+                    && (combat == null || (!combat.isAttacking(c) && !combat.isBlocking(c)));
+        }
+
+        // Any ability of a host of the name: our own cast, a thief's (Nathan Drake), a copy.
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && (NAME.equals(host.getName())
+                    || NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)));
+        }
+
+        // DiscardAi.willPayUnlessCost, ahead of the script's UnlessAI$ Never: sacrifice only when
+        // the payment itself (ComputerUtil.chooseSacrificeType, whose hook is chooseSacrifice: the
+        // same candidate list, the same pick) would take an expendable permanent; otherwise the
+        // card is discarded. Only a single Sac<1/...> unless cost; one payer, never already paid.
+        public static boolean willSacrifice(final Player payer, final SpellAbility sa, final Cost cost,
+                final boolean alreadyPaid) {
+            if (alreadyPaid || payer == null || cost == null || sa.getHostCard() == null
+                    || !cost.hasOnlySpecificCostType(CostSacrifice.class)) {
+                return false;
+            }
+            final CostSacrifice sac = cost.getCostPartByType(CostSacrifice.class);
+            if (sac == null || sac.payCostFromSource() || "All".equals(sac.getAmount())
+                    || sac.getAbilityAmount(sa) != 1) {
+                return false;
+            }
+            return ComputerUtil.chooseSacrificeType(payer, sac.getType(), sa, sa.getTargetCard(),
+                    true, 1, null) != null;
+        }
+
+        // ComputerUtil.chooseSacrificeType's hook (effect && amount == 1 && handles): the worst
+        // expendable permanent among the payment's own candidates, or null - the payment declines
+        // and the card is discarded instead, never the stock getWorstAI pick.
+        public static Card chooseSacrifice(final Player ai, final Iterable<Card> candidates) {
+            final Combat combat = ai.getGame().getCombat();
+            final CardCollection fodder = new CardCollection();
+            for (final Card c : candidates) {
+                if (expendable(ai, c, combat)) {
+                    fodder.add(c);
+                }
+            }
+            return fodder.isEmpty() ? null : ComputerUtilCard.getWorstAI(fodder);
         }
     }
 

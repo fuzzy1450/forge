@@ -590,6 +590,16 @@ public class ComputerUtil {
             // rather than return null, which would strand the spell (handlePlayingSpellAbility)
         }
 
+        if (amount == 1 && effect && SpecialCardAi.ReadTheRunes.handles(ability)) {
+            // Read the Runes' "discard a card unless you sacrifice a permanent" (an unless cost, so
+            // effect is true): only the worst token or SacMe permanent that is not a land, a
+            // commander, an attacker or a blocker. None -> null: the payment declines and the card
+            // is discarded, never the stock getWorstAI pick (the worst land on a 7-land board).
+            // DiscardAi.willPayUnlessCost asks this same call before paying, so the two agree.
+            final Card pick = SpecialCardAi.ReadTheRunes.chooseSacrifice(ai, typeList);
+            return pick == null ? null : new CardCollection(pick);
+        }
+
         if (typeList.size() < amount) {
             return null;
         }

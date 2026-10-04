@@ -229,6 +229,12 @@ public class DiscardAi extends SpellAbilityAi {
     @Override
     public boolean willPayUnlessCost(Player payer, SpellAbility sa, Cost cost, boolean alreadyPaid, FCollectionView<Player> payers) {
         final Card host = sa.getHostCard();
+        if (SpecialCardAi.ReadTheRunes.handles(sa)) {
+            // Read the Runes: sacrifice only the expendable permanent the payment would take (a
+            // token or SacMe permanent, never a land, a commander, an attacker or a blocker), else
+            // discard. Judged ahead of the script's UnlessAI$ Never, which stays as the fallback.
+            return SpecialCardAi.ReadTheRunes.willSacrifice(payer, sa, cost, alreadyPaid);
+        }
         final String aiLogic = sa.getParam("UnlessAI");
         if ("Never".equals(aiLogic)) { return false; }
 

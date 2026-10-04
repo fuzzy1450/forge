@@ -103,10 +103,10 @@ public class DrawAi extends SpellAbilityAi {
             return SpecialCardAi.SkeletalScrying.consider(ai, sa);
         }
         if (SpecialCardAi.ReadTheRunes.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
-            // Draw X, then one discard per card drawn (the script's UnlessAI$ Never: never the
-            // sacrifice): judged whole there (window, hand, library, spare cards, X from real
-            // mana). A Play-effect cast (Nathan Drake) goes through doTriggerNoCost and keeps its
-            // stock path.
+            // Draw X, then per card drawn a discard unless an expendable permanent (a token or a
+            // SacMe nonland) is sacrificed instead: judged whole there (window, hand, library,
+            // spare cards and fodder, X from real mana). A Play-effect cast (Nathan Drake) goes
+            // through doTriggerNoCost and keeps its stock path.
             return SpecialCardAi.ReadTheRunes.consider(ai, sa);
         }
 
