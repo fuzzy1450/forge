@@ -324,6 +324,17 @@ public class ControlGainAi extends SpellAbilityAi {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
+        if (SpecialCardAi.DomineeringWill.takeJudged(sa)) {
+            // Dead-card batch 2, row 44. Domineering Will's steal was chosen and floored a moment
+            // ago, in this same consult, by SpecialCardAi.DomineeringWill (routed from
+            // PumpAi.checkApiLogic). canPlay below would reset those picks and re-pick by attack
+            // value. Any other route to this sub (a Play-effect theft through
+            // PumpAi.doTriggerNoCost, a copy) finds no mark and takes the stock path unchanged.
+            return sa.isTargetNumberValid() && !sa.getTargets().isEmpty()
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+
         if (!sa.usesTargeting()) {
             if (sa.hasParam("AllValid")) {
                 CardCollectionView tgtCards = ai.getOpponents().getCardsIn(ZoneType.Battlefield);

@@ -6880,6 +6880,294 @@ public class SpecialCardAi {
         }
     }
 
+    // Domineering Will (dead-card batch 2, row 44)
+    // "Target player gains control of up to three target nonattacking creatures until end of turn.
+    // Untap those creatures. They block this turn if able." ({3}{U} instant.) One window, the
+    // printed one: an opponent's declare-attackers step, empty stack, with attackers aimed at us or
+    // our planeswalkers. Picks are opponents' nonattacking creatures that can block one of those
+    // attackers once untapped. They become forced blockers (the Effect's MustBlock), and
+    // AiBlockController.makeRequiredBlocks piles every one its earlier passes left unused onto the
+    // first attacker, in sortPotentialAttackers order, that it can block while that attacker's
+    // blockers are under its maximum (CombatUtil.canBlock(a, b, combat) -> canBeBlocked); the
+    // closing validity pass of assignBlockers then removes a pile under the attacker's minimum
+    // (menace). The floor is judged on that pile model, over every attacker aimed at us that can
+    // be blocked at all, menace included. Every forced block is free: the creature and the damage
+    // it takes are the opponent's, and control returns at end of turn.
+    // Floor (Wake the Dead's, batch 1 row 88): a pile kills an attacker worth a card (a commander,
+    // or a nontoken of mana value 2+ or power 3+; one blocker by canDestroyAttacker, a gang by
+    // total blocker damage net of first strike, deathtouch counted; never an indestructible or
+    // shielded attacker), or the piles absorb at least max(MIN_ABSORBED, life / 5) damage (capped
+    // at the blockers' toughness against trample, 1 each against deathtouch trample), or a
+    // deterministic danger test holds and the piles absorb something. A pile under the attacker's
+    // minimum counts nothing.
+    // Picks: targetable by the GainControl sub and controllable by us (Creature.!attacking,
+    // hexproof, shroud, protection from blue), never ward (canPayCost adds every target's ward
+    // after targeting, so a warded pick could stick the cast on an unpayable cost every pass),
+    // able to block one of the attackers once untapped; untapped ones first by pile damage, tapped
+    // ones (the spell untaps them) only when the untapped picks miss the floor.
+    // Mana: G2 (HonestMana, held sources skipped) against the engine's test-mode cost, in total and
+    // in blue, never getAvailableManaEstimate, which counts the words of Produced$.
+    // Reached from PumpAi.checkApiLogic (a normal cast, a MayPlay theft, or a canPlaySa probe);
+    // ControlGainAi.chkDrawback keeps the picks through an identity marker set here and consumed
+    // there in the same canPlayWithSubs chain (the per-call "Game AI Eval" thread, so a mark never
+    // crosses threads). Play-effect casts and copies take PumpAi.doTriggerNoCost and the stock sub
+    // path, unchanged. Draws no random numbers on any path: every combat predictor runs
+    // withoutAbilities (the ability-aware ones reach canPayCost's mana simulation), and the danger
+    // test is lifeInDanger's deterministic half, without its random threshold walk. A decline
+    // holds nothing: both targets are reset and the marker cleared. Residuals: our own blockers
+    // are not modelled, and controller-sensitive statics and P/T are read under the creature's
+    // current controller.
+    public static class DomineeringWill {
+        public static final String NAME = "Domineering Will";
+        public static final int MIN_ABSORBED = 4;
+        private static final ThreadLocal<SpellAbility> JUDGED = new ThreadLocal<>();
+
+        // the root spell, by source, host or card-state name: a card cast face down from exile
+        // (Gonti, Lord of Luxury; Thief of Sanity) reads "" from getAbilitySourceName (Dispatch's
+        // idiom, row 106's); never a sub and never a copy
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || sa.isCopied()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        // consumed by ControlGainAi.chkDrawback in the same canPlayWithSubs chain
+        public static boolean takeJudged(final SpellAbility sub) {
+            if (sub == null || JUDGED.get() != sub) {
+                return false;
+            }
+            JUDGED.remove();
+            return true;
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            JUDGED.remove();
+            final SpellAbility steal = sa.findSubAbilityByType(ApiType.GainControl);
+            sa.resetTargets();
+            if (steal != null) {
+                steal.resetTargets();
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            // 1. the window, first
+            if (ph.isPlayerTurn(ai) || !ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                    || combat == null || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (steal == null || !sa.canTarget(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 2. attackers aimed at us (planeswalkers and battles included) that can be blocked at
+            //    all, with their minimum and maximum blocker counts (menace, "can't be blocked by
+            //    more than one creature")
+            final CardCollection attackers = new CardCollection();
+            final Map<Card, Pair<Integer, Integer>> minMax = new HashMap<>();
+            for (final Card a : combat.getAttackers()) {
+                if (!ai.equals(combat.getDefenderPlayerByAttacker(a)) || !CombatUtil.canBeBlocked(a, null, ai)) {
+                    continue;
+                }
+                final Pair<Integer, Integer> mm =
+                        forge.game.staticability.StaticAbilityCantAttackBlock.getMinMaxBlocker(a, ai);
+                if (mm.getRight() < Math.max(1, mm.getLeft())) {
+                    continue;
+                }
+                attackers.add(a);
+                minMax.put(a, mm);
+            }
+            if (attackers.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 3. RNG-free affordability (row 159), judged on this sa (row 77)
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            sortLikeBlockController(ai, combat, attackers);
+            // 4. candidates: targetable, controllable, no ward, and able to block some attacker
+            //    once untapped
+            final CardCollection untapped = new CardCollection();
+            final CardCollection tapped = new CardCollection();
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCreaturesInPlay()) {
+                    if (!steal.canTarget(c) || !c.canBeControlledBy(ai) || c.hasKeyword(Keyword.WARD)) {
+                        continue;
+                    }
+                    boolean blocks = false;
+                    for (final Card a : attackers) {
+                        if (CombatUtil.canBlock(a, c, true)) { // nextTurn = true: tapped is ignored
+                            blocks = true;
+                            break;
+                        }
+                    }
+                    if (blocks) {
+                        (c.isTapped() ? tapped : untapped).add(c);
+                    }
+                }
+            }
+            if (untapped.isEmpty() && tapped.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int max = steal.getMaxTargets();
+            rankForPile(untapped);
+            rankForPile(tapped);
+            // 5. untapped first; a tapped creature is only taken when the untapped picks miss the
+            //    floor (we untap it, and it goes home untapped for its controller's turn)
+            List<Card> picks = new ArrayList<>(untapped.subList(0, Math.min(max, untapped.size())));
+            if (!floorMet(ai, combat, attackers, minMax, picks)) {
+                final List<Card> wider = new ArrayList<>(picks);
+                for (final Card t : tapped) {
+                    if (wider.size() >= max) {
+                        break;
+                    }
+                    wider.add(t);
+                }
+                if (wider.size() == picks.size() || !floorMet(ai, combat, attackers, minMax, wider)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                picks = wider;
+            }
+            sa.getTargets().add(ai);
+            for (final Card c : picks) {
+                steal.getTargets().add(c);
+            }
+            if (!sa.isTargetNumberValid() || !steal.isTargetNumberValid()) {
+                sa.resetTargets();
+                steal.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            JUDGED.set(steal);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The engine's test-mode cost (calculateManaCost: taxes and reductions applied; RNG-free
+        // for this spell, which has no Announce$ and no cost feature that asks a controller)
+        // against G2's count with held sources skipped (a source held for an enemy declare-blockers
+        // trick is refused in this step), in total and in blue. G2 is called, not changed.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLUE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+
+        // makeRequiredBlocks' pile: each pick blocks the first attacker, in block order, that it
+        // can block while that attacker's pile is under its maximum; a pile under the attacker's
+        // minimum is undone by the validity pass and counts nothing
+        private static boolean floorMet(final Player ai, final Combat combat, final CardCollection order,
+                final Map<Card, Pair<Integer, Integer>> minMax, final List<Card> picks) {
+            final Map<Card, List<Card>> pile = new LinkedHashMap<>();
+            for (final Card p : picks) {
+                for (final Card a : order) {
+                    final List<Card> on = pile.get(a);
+                    if ((on == null || on.size() < minMax.get(a).getRight()) && CombatUtil.canBlock(a, p, true)) {
+                        pile.computeIfAbsent(a, k -> new ArrayList<>()).add(p);
+                        break;
+                    }
+                }
+            }
+            int absorbed = 0;
+            boolean kill = false;
+            for (final Map.Entry<Card, List<Card>> e : pile.entrySet()) {
+                final Card a = e.getKey();
+                final List<Card> bs = e.getValue();
+                if (bs.size() < minMax.get(a).getLeft()) {
+                    continue;
+                }
+                int dmg = ComputerUtilCombat.damageIfUnblocked(a, ai, combat, true);
+                if (a.hasKeyword(Keyword.TRAMPLE)) {
+                    int soak = 0;
+                    for (final Card b : bs) {
+                        soak += a.hasKeyword(Keyword.DEATHTOUCH) ? 1 : Math.max(0, b.getNetToughness() - b.getDamage());
+                    }
+                    dmg = Math.min(dmg, soak);
+                }
+                absorbed += dmg;
+                if (!kill && worthACard(a) && pileKills(ai, a, bs, combat)) {
+                    kill = true;
+                }
+            }
+            return kill || absorbed >= Math.max(MIN_ABSORBED, ai.getLife() / 5)
+                    || (absorbed > 0 && inDanger(ai, combat));
+        }
+
+        private static boolean worthACard(final Card a) {
+            return a.isCommander() || (!a.isToken() && (a.getCMC() >= 2 || a.getNetPower() >= 3));
+        }
+
+        // withoutAbilities = true everywhere: the ability-aware predictors reach
+        // ComputerUtilCost.canPayCost and through it ComputerUtilMana's random reserve roll
+        private static boolean pileKills(final Player ai, final Card a, final List<Card> bs, final Combat combat) {
+            if (a.hasKeyword(Keyword.INDESTRUCTIBLE) || a.getCounters(CounterEnumType.SHIELD) > 0
+                    || (a.getShieldCount() > 0 && a.canBeShielded())) {
+                return false;
+            }
+            if (bs.size() == 1) {
+                return ComputerUtilCombat.canDestroyAttacker(ai, a, bs.get(0), combat, true);
+            }
+            final List<Card> live = new ArrayList<>();
+            for (final Card b : bs) {
+                if (!ComputerUtilCombat.canDestroyBlockerBeforeFirstStrike(b, a, true)) {
+                    if (b.hasKeyword(Keyword.DEATHTOUCH) && ComputerUtilCombat.dealsDamageAsBlocker(a, b) > 0) {
+                        return true;
+                    }
+                    live.add(b);
+                }
+            }
+            // a copy: totalDamageOfBlockers drops the first blocker for a Godsend-equipped attacker
+            return ComputerUtilCombat.totalDamageOfBlockers(a, new ArrayList<>(live))
+                    >= ComputerUtilCombat.getDamageToKill(a, false);
+        }
+
+        // lifeInDanger's deterministic half: no random threshold walk and no ability-aware damage
+        private static boolean inDanger(final Player ai, final Combat combat) {
+            if (ai.cantLose() || !ai.canLoseLife() || ai.cantLoseForZeroOrLessLife()) {
+                return false;
+            }
+            int dmg = 0;
+            for (final Card a : combat.getAttackersOf(ai)) {
+                final int d = ComputerUtilCombat.damageIfUnblocked(a, ai, combat, true);
+                if (!a.getSVar("MustBeBlocked").isEmpty()
+                        || (a.isCommander() && ai.getCommanderDamage(a) + d >= 21)) {
+                    return true;
+                }
+                dmg += d;
+            }
+            return ai.getLife() - dmg < Math.min(AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_THRESHOLD), ai.getLife());
+        }
+
+        // AiBlockController.sortPotentialAttackers' single-defender order, made RNG-free:
+        // MustBeBlocked, then commanders lethal by commander damage, then power descending
+        private static void sortLikeBlockController(final Player ai, final Combat combat, final CardCollection attackers) {
+            ComputerUtilCard.sortByEvaluateCreature(attackers);
+            CardLists.sortByPowerDesc(attackers);
+            final Set<Card> lethalCmd = new HashSet<>();
+            for (final Card a : attackers) {
+                if (a.isCommander() && ai.getCommanderDamage(a)
+                        + ComputerUtilCombat.damageIfUnblocked(a, ai, combat, true) >= 21) {
+                    lethalCmd.add(a);
+                }
+            }
+            attackers.sort((o1, o2) -> {
+                final boolean m1 = o1.hasSVar("MustBeBlocked"), m2 = o2.hasSVar("MustBeBlocked");
+                if (m1 != m2) {
+                    return m1 ? -1 : 1;
+                }
+                final boolean c1 = lethalCmd.contains(o1), c2 = lethalCmd.contains(o2);
+                return c1 == c2 ? 0 : (c1 ? -1 : 1);
+            });
+        }
+
+        // biggest pile damage first
+        private static void rankForPile(final CardCollection list) {
+            ComputerUtilCard.sortByEvaluateCreature(list);
+            CardLists.sortByPowerDesc(list);
+        }
+    }
+
     // Donate
     public static class Donate {
         public static AiAbilityDecision considerTargetingOpponent(final Player ai, final SpellAbility sa) {

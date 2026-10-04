@@ -172,6 +172,17 @@ public class PumpAi extends PumpAiBase {
             // path it ran in A. Every other Pump card takes exactly the path it took before.
             return SpecialCardAi.TaigamSidisisHand.considerShrink(ai, sa);
         }
+        if (SpecialCardAi.DomineeringWill.handles(sa)) {
+            // Dead-card batch 2, row 44. A Pump shell that only names the new controller (the real
+            // effect is its GainControl sub, NewController$ ParentTarget): the non-curse targeting
+            // below targets us and WillPlays in any combat step, and ControlGainAi then steals the
+            // three best attack-capable creatures with no floor, at our own beginning of combat as
+            // readily as in an opponent's attack. The evaluator owns the window, both targets and
+            // the floor, and draws no random numbers; the card carried AI:RemoveDeck:All, so the
+            // stock path never drew for it. A copy and a Play-effect cast (doTriggerNoCost) keep the
+            // stock path, as does every other Pump card.
+            return SpecialCardAi.DomineeringWill.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final Card source = sa.getHostCard();
         final SpellAbility root = sa.getRootAbility();
