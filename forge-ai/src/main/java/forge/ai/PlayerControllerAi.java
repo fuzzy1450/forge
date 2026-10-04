@@ -1678,6 +1678,17 @@ public class PlayerControllerAi extends PlayerController {
         if (sa.hasOptionalKeywordAmount(keyword)) {
             return Math.min(sa.getOptionalKeywordAmount(keyword), max);
         }
+        if (keyword.getKeyword() == Keyword.REPLICATE
+                && SpecialCardAi.DjinnIlluminatus.grants(keyword.getStatic())) {
+            // Djinn Illuminatus (dead-card batch 2, row 81) gives every instant and sorcery we
+            // cast replicate at its own mana cost, and the loop below pays it for every copy the
+            // mana allows. Cap it where a copy hurts us; the loop then pays only what is
+            // affordable up to the cap. Draws no random numbers.
+            max = Math.min(max, SpecialCardAi.DjinnIlluminatus.maxCopies(player, sa, cost));
+            if (max <= 0) {
+                return 0;
+            }
+        }
         // TODO: improve the logic depending on the keyword and the playability of the cost-modified SA (enough targets present etc.)
         if (keyword.getKeyword() == Keyword.CASUALTY
                 && "true".equalsIgnoreCase(sa.getHostCard().getSVar("AINoCasualtyPayment"))) {

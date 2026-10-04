@@ -7880,6 +7880,90 @@ public class SpecialCardAi {
         }
     }
 
+    // Djinn Illuminatus (dead-card batch 2, row 81)
+    // "Each instant and sorcery spell you cast has replicate. The replicate cost is equal to its
+    // mana cost." ({5}{U/R}{U/R} 3/5 flyer.) The body is cast by the stock creature logic once
+    // AI:RemoveDeck:All is gone (PermanentAi waits for Main 2 and says WillPlay; no ETB). This
+    // caps the stock replicate chooser, PlayerControllerAi.chooseNumberForKeywordCost, which pays
+    // for every copy the mana allows, whatever the spell.
+    // Reached only for a REPLICATE keyword whose granting static is hosted by a card named Djinn
+    // Illuminatus (djinn_illuminatus.txt is the only script with that name; a clone of it carries
+    // the same static and is capped the same way), under any controller, a thief included. An
+    // intrinsic replicate (Pyromatics) has no static and stays stock, as do Hatchery Sliver's and
+    // Ian Chesterton's grants. The cap only ever lowers the stock count.
+    // Zero copies when (in this order):
+    //   R1 the replicate cost is free (a {0} spell, the Pacts): the stock loop would not stop,
+    //      and every Pact copy is a lose-the-game upkeep trigger;
+    //   R5 the spell also has multikicker, or more than one replicate (two Djinns, or an
+    //      intrinsic one beside the grant): addExtraKeywordCost hands every chooser the original
+    //      SA, so each prices its copies against the same untapped mana, and the summed cost can
+    //      exceed it (Comet Storm at X = 2 with 10 mana: 6 kicks + 1 copy = 14), failing the cast;
+    //   R6 the replicate cost has Phyrexian shards: the loop would pay life for copy after copy;
+    //   R2 a DamageAll, DestroyAll, SacrificeAll or ChangeZoneAll anywhere in the chain (charm
+    //      modes are pre-chained by CharmAi before this runs): a mass effect's value was judged
+    //      for ONE resolution (DamageAllAi keeps the smallest X that spares our creatures), and
+    //      Starstorm's copies stack X more damage on our own board, this Djinn included;
+    //   R3 an X spell that digs into exile (Commune with Lava): copies spend the mana the exiled
+    //      cards need and exile X more each, past row 45's library cap;
+    //   R4 draws that land on us cap the copies so the library keeps LIBRARY_MARGIN cards after
+    //      the original and every copy resolve (Hunter's Insight's margin).
+    // Reads only the passed root SA and its sub chain (never getFirstSpellAbility, the row 77
+    // lesson); every rule is an enum, param or zone read, ahead of any canPayCost, so it draws
+    // no random numbers. Nothing is remembered or held.
+    public static class DjinnIlluminatus {
+        public static final String NAME = "Djinn Illuminatus";
+        public static final int LIBRARY_MARGIN = 5; // as HuntersInsight
+
+        public static boolean grants(final StaticAbility st) {
+            return st != null && st.getHostCard() != null && NAME.equals(st.getHostCard().getName());
+        }
+
+        public static int maxCopies(final Player ai, final SpellAbility sa, final Cost cost) {
+            // R1: a free replicate cost
+            if (cost.hasNoManaCost() || cost.getTotalMana().getCMC() <= 0) {
+                return 0;
+            }
+            final Card host = sa.getHostCard();
+            // R5: two choosers pricing against the same mana
+            if (host.hasKeyword(Keyword.MULTIKICKER) || host.getKeywords(Keyword.REPLICATE).size() > 1) {
+                return 0;
+            }
+            // R6: life paid per copy
+            if (cost.getTotalMana().hasPhyrexian()) {
+                return 0;
+            }
+            final boolean hasX = host.getManaCost().countX() > 0;
+            int draws = 0;
+            for (SpellAbility cur = sa; cur != null; cur = cur.getSubAbility()) {
+                final ApiType api = cur.getApi();
+                // R2: a mass effect repeated on our own board
+                if (api == ApiType.DamageAll || api == ApiType.DestroyAll
+                        || api == ApiType.SacrificeAll || api == ApiType.ChangeZoneAll) {
+                    return 0;
+                }
+                // R3: an X impulse-exile
+                if (hasX && api == ApiType.Dig && "Exile".equals(cur.getParam("DestinationZone"))) {
+                    return 0;
+                }
+                // R4: draws that land on us, counted per resolution
+                if (api == ApiType.Draw) {
+                    final boolean ours = cur.usesTargeting()
+                            ? cur.getTargets().contains(ai)
+                            : AbilityUtils.getDefinedPlayers(host, cur.getParamOrDefault("Defined", "You"), cur).contains(ai);
+                    if (ours) {
+                        draws += Math.max(0, AbilityUtils.calculateAmount(host, cur.getParamOrDefault("NumCards", "1"), cur));
+                    }
+                }
+            }
+            if (draws > 0) {
+                // the original resolves too: keep LIBRARY_MARGIN cards after all of them
+                final int spare = ai.getCardsIn(ZoneType.Library).size() - draws - LIBRARY_MARGIN;
+                return Math.max(0, spare / draws);
+            }
+            return Integer.MAX_VALUE;
+        }
+    }
+
     // Domineering Will (dead-card batch 2, row 44)
     // "Target player gains control of up to three target nonattacking creatures until end of turn.
     // Untap those creatures. They block this turn if able." ({3}{U} instant.) One window, the
