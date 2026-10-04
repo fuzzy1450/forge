@@ -67,6 +67,14 @@ public class CharmAi extends SpellAbilityAi {
             // copy (declined first, RNG-free). A Play-effect cast (Nathan Drake) and a no-mana test
             // copy (ManaAi's ManaRitual hand scan) never match, and keep the stock path they took in A.
             chosenList = SpecialCardAi.ProfaneCommand.chooseModes(ai, sa);
+        } else if (SpecialCardAi.MysticConfluence.handles(sa)) {
+            // Every evaluation AI:RemoveDeck:All used to drop (getSpellAbilityToPlay's list, any zone,
+            // any player), so A never reached the shuffle below for them: this gate sits before that
+            // draw, and the evaluator draws nothing on any decline. It judges only the owner's cast
+            // from hand and returns empty for the rest. Play-effect casts (Jeleva, Silent-Blade Oni,
+            // Nathan Drake, Epic Experiment, Mizzix's Mastery), copies and triggers never read the
+            // hint and keep the stock chooser.
+            chosenList = SpecialCardAi.MysticConfluence.chooseModes(ai, sa, choices, num);
         } else {
             // only randomize if not all possible together
             if (num < choices.size()) {

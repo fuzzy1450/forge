@@ -16090,6 +16090,146 @@ public class SpecialCardAi {
         }
     }
 
+    // Mystic Confluence (dead-card batch 2, row 18)
+    // "Choose three. You may choose the same mode more than once. - Counter target spell unless its
+    // controller pays {3}. - Return target creature to its owner's hand. - Draw a card." ({3}{U}{U}
+    // instant.) AI:RemoveDeck:All kept every one of its spell abilities off
+    // AiController.getSpellAbilityToPlay's list. Behind the hint the stock chooser
+    // (CharmAi.chooseMultipleOptionsAi) ignores CanRepeatModes and needs three DISTINCT modes whose
+    // handlers all pass at once, and CounterAi refuses any spell whose caster can pay the {3}, so it
+    // was never cast, and it could never counter twice or draw three.
+    // Reached from CharmAi's name gate. handles(): a spell, not a copy, a trigger or a Play-effect
+    // cast, named by its source or by the host's paper rules (the rules the hint's filter read, for a
+    // face-down host whose source name is ""). Play-effect casts, copies and triggers never read the
+    // hint and keep the stock chooser. Only the owner's cast from hand is judged: any other zone or
+    // player (Melek's library top, Kess's graveyard, a Dire Fleet Daredevil or Gonti thief) returns
+    // empty first, before any sub is touched, as the hint kept it.
+    // Two lines:
+    // - response: an opponent's counterable spell on top of the stack that
+    //   OverchargedAmalgam.isWorthCountering calls worth a card, countered k times so the k {3} taxes
+    //   exceed the caster's open mana (CounterAi's own measure, getAvailableManaEstimate, whose
+    //   over-count only raises k or declines): open 0-2 -> k = 1, 3-5 -> 2, 6-8 -> 3, 9+ -> decline
+    //   (it would only be a tax). Every counter mode is its own "unless its controller pays {3}"
+    //   (chainAbilities resolves one clone per entry; a clone whose spell is already gone skips at
+    //   CounterEffect.resolve). Spare slots draw when drawing is safe, else counter again;
+    // - the end step before our turn, on an empty stack: three draws, when drawing is safe and the
+    //   hand ends within one card of its maximum (Promise of Power's rule). The mana untaps at once.
+    // Drawing is safe: we can draw, no opponent's permanent triggers on or replaces draws
+    // (PromiseOfPower.drawPunished), and the library keeps more than num + LIBRARY_MARGIN cards.
+    // Affordability, RNG-free, before any value check (MaestrosConfluence's shape, row 67): the cost
+    // after taxes and reductions (calculateManaCost in test mode: Mizzix's experience, Goblin
+    // Electromancer) against G2's total (HonestMana, held sources skipped) and its {U}{U} against G2's
+    // blue, restrictions judged on the root sa (row 77). Never getAvailableManaEstimate for our own
+    // side: it counts the words of Produced$.
+    // RNG parity: the hint kept A from ever evaluating the owner's cast, so nothing here draws on any
+    // decline path. The zone test, the window, calculateManaCost, HonestMana,
+    // getTopSpellAbilityOnStack, canTargetSpellAbility, calculateAmount, isWorthCountering,
+    // getAvailableManaEstimate and drawPunished only read; no stock mode handler is asked. An empty
+    // list is CantPlayAi in CharmAi; only a non-empty list goes on to canPayCost's test payment
+    // (isManaSourceReserved draws). Targets are reset on every owner evaluation and set only on
+    // approval; the list is mutable because chainAbilities sorts it in place. Holds nothing.
+    public static class MysticConfluence {
+        public static final String NAME = "Mystic Confluence";
+        public static final int LIBRARY_MARGIN = 3; // DrawAi.targetAI's deck-out margin
+
+        public static boolean handles(final SpellAbility sa) {
+            if (!sa.isSpell() || sa.isCopied() || sa.isTrigger() || sa.isCastFromPlayEffect()) {
+                return false;
+            }
+            if (NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                return true;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa,
+                                                   final List<AbilitySub> choices, final int num) {
+            final List<AbilitySub> chosen = Lists.newArrayList(); // mutable: chainAbilities sorts it
+            // 0. the owner's cast from hand only, before any sub is touched
+            final Card host = sa.getHostCard();
+            if (host == null || !host.isInZone(ZoneType.Hand) || !ai.equals(host.getOwner())) {
+                return chosen;
+            }
+            AbilitySub counter = null;
+            AbilitySub draw = null;
+            for (final AbilitySub sub : choices) {
+                sub.setActivatingPlayer(ai);
+                if (sub.usesTargeting()) {
+                    sub.resetTargets(); // nothing stale from an earlier priority
+                }
+                if (sub.getApi() == ApiType.Counter) {
+                    counter = sub; // offered only while a spell it can target is on the stack
+                } else if (sub.getApi() == ApiType.Draw) {
+                    draw = sub;
+                }
+            }
+            if (draw == null || num < 1) {
+                return chosen; // script drifted: stay out
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+
+            // 1. the window, O(1): an opponent's spell on top, or the end step before our turn
+            SpellAbility top = null;
+            if (!game.getStack().isEmpty()) {
+                if (counter == null) {
+                    return chosen;
+                }
+                top = ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+                if (top == null || !top.isSpell() || top.getActivatingPlayer() == null
+                        || !top.getActivatingPlayer().isOpponentOf(ai) || !counter.canTargetSpellAbility(top)) {
+                    return chosen;
+                }
+            } else if (!ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai) || !ai.equals(ph.getNextTurn())) {
+                return chosen;
+            }
+
+            // 2. RNG-free affordability: the adjusted cost against G2, in total and in blue
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLUE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE)) {
+                return chosen;
+            }
+            final boolean drawOk = ai.canDraw() && !PromiseOfPower.drawPunished(ai)
+                    && ai.getCardsIn(ZoneType.Library).size() > num + LIBRARY_MARGIN;
+
+            // 3a. response: a worthy spell, countered k times so the caster cannot pay every tax
+            if (top != null) {
+                if (!OverchargedAmalgam.isWorthCountering(ai, counter, top, true)) {
+                    return chosen;
+                }
+                final int tax = AbilityUtils.calculateAmount(host, counter.getParamOrDefault("UnlessCost", "0"), counter);
+                if (tax < 1) {
+                    return chosen;
+                }
+                final int open = ComputerUtilMana.getAvailableManaEstimate(top.getActivatingPlayer());
+                final int k = open / tax + 1; // the least k with tax * k > open
+                if (k > num) {
+                    return chosen; // the caster could pay every tax: it would only be a tax
+                }
+                counter.getTargets().add(top);
+                for (int i = 0; i < k; i++) {
+                    chosen.add(counter);
+                }
+                while (chosen.size() < num) {
+                    chosen.add(drawOk ? draw : counter);
+                }
+                return chosen;
+            }
+
+            // 3b. the end step before our turn: three cards for mana that untaps next turn
+            final int handAfter = ai.getCardsIn(ZoneType.Hand).size() - 1 + num;
+            if (drawOk && (ai.isUnlimitedHandSize() || handAfter <= ai.getMaxHandSize() + 1)) {
+                for (int i = 0; i < num; i++) {
+                    chosen.add(draw);
+                }
+            }
+            return chosen;
+        }
+    }
+
     // Nahiri, the Lithomancer (dead-card batch 2, row 5; the commander of precon:Forged in Stone
     // (C14))
     // Its AI:RemoveDeck:All hint stripped every spell ability of the card at
