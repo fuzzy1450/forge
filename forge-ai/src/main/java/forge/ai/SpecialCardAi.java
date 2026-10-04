@@ -27334,6 +27334,150 @@ public class SpecialCardAi {
         }
     }
 
+    // Titan's Presence (dead-card batch 2, row 70)
+    // "As an additional cost to cast this spell, reveal a colorless creature card from your hand.
+    // Exile target creature if its power is less than or equal to the revealed card's power."
+    // ({3} instant.) The script carried AI:RemoveDeck:All, so A never evaluated the hand cast.
+    // Behind the hint two more gates refuse it: Y (Revealed$CardPower) reads the reveal cost's paid
+    // list, empty until the cost is paid, so SpellAbilityAi.checkConditions compares the target's
+    // power to 0 and declines every creature with power 1 or more (ConditionsNotMet); and the stock
+    // pick (ChangeZoneAi.isPreferredTarget) is blind to the reveal and draws MyRandom in
+    // useRemovalNow. The stock reveal payment is the discard heuristic, blind to the condition.
+    // Judge each target against the highest-power revealable card (chooseReveal) and pay the cost
+    // with the same chooser (AiCostDecision.visit(CostReveal)), so the condition judged is the
+    // condition resolved: Calamity of the Titans' pattern (row 82, the same deck).
+    // Hand cast (ChangeZoneAi.checkApiLogic): never in response; our own Main 2 (the script's
+    // AIActivateLast$ True lets every other play go first; in Main 1 PermanentAi holds a plain
+    // creature for Main 2, so this spell would spend the mana a held Eldrazi needs there), an
+    // opponent's end step with our turn next, or an opponent's declare-attackers or declare-blockers
+    // step with attackers on us (attackers only): StealCreatureForX's windows. The cost must fit real
+    // mana first: G2 (HonestMana, held sources skipped, mana restrictions read, so Eldrazi Temple's
+    // Eldrazi-only {C}{C} counts 1) against the engine's own test-mode calculateManaCost (Ugin, the
+    // Ineffable's reduction and opponents' taxes applied), never getAvailableManaEstimate, which
+    // approves windows canPayCost then fails after drawing (row 159's re-roll).
+    // Floor: an opponent's creature we do not own, power <= the reveal's, no ward (not priced on
+    // this path), not wearing our aura, not useless, not already dying, worth a vanilla 2/2 for 2
+    // (MIN_EVAL, Oubliette's) or a commander; with lethal damage incoming after blocks, any
+    // unblocked attacker whose exile leaves us alive (StealCreatureForX). The pick is
+    // prioritizeCreaturesWorthRemovingNow, then getBestRemovalTargetAI (Oubliette).
+    // Play-effect casts (ChangeZoneAi.doTriggerNoCost, optional only) are now or never: no window
+    // and no mana pre-check (their callers price the payment). One cast without paying its mana
+    // cost (WithoutManaCost, set by copyWithNoManaCost: Zhulodok's cascade) also drops the value
+    // floor, since a decline there only replaces a whiff; a paid one keeps it.
+    // RNG: draws nothing. The window test, HonestMana, calculateManaCost in test mode,
+    // filterAITgts, isUselessCreature, evaluateCreature, filterCreaturesThatWillDieThisTurn,
+    // prioritizeCreaturesWorthRemovingNow, getBestRemovalTargetAI, lifeThatWouldRemain and
+    // damageIfUnblocked draw nothing; no useRemovalNow and no lifeInDanger. A decline leaves no
+    // state: targets reset, nothing remembered or held.
+    public static class TitansPresence {
+        public static final String NAME = "Titan's Presence";
+        // evaluateCreature of a vanilla 2/2 for 2; a 1/1 token is 106, a 2/2 token 131 (Oubliette)
+        public static final int MIN_EVAL = 160;
+
+        // the source, host or card-state name: a card cast face down from exile (Gonti, Siphon
+        // Insight, Petty Larceny) reads "" from getAbilitySourceName (row 106's isMeteor idiom)
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        /** The card to reveal: the highest net power, ties keeping the worst creature. Null if none. */
+        public static Card chooseReveal(final Player ai, final SpellAbility sa, final CostReveal reveal) {
+            final Card host = sa.getHostCard();
+            if (reveal == null || host == null) {
+                return null;
+            }
+            final CardCollection hand = new CardCollection(ai.getCardsIn(reveal.getRevealFrom()));
+            hand.remove(host); // can't pay for itself (CostReveal.getMaxAmountX)
+            final CardCollection valid = CardLists.getValidCards(hand, reveal.getType().split(";"), ai, host, sa);
+            if (valid.isEmpty()) {
+                return null;
+            }
+            int best = Integer.MIN_VALUE;
+            for (final Card c : valid) {
+                best = Math.max(best, c.getNetPower());
+            }
+            final int p = best;
+            return ComputerUtilCard.getWorstCreatureAI(CardLists.filter(valid, c -> c.getNetPower() == p));
+        }
+
+        private static Card reveal(final Player ai, final SpellAbility sa) {
+            final Cost cost = sa.getPayCosts();
+            return chooseReveal(ai, sa, cost == null ? null : cost.getCostPartByType(CostReveal.class));
+        }
+
+        /** ChangeZoneAi.checkConditions for this card: the target against the card the cost will reveal. */
+        public static boolean conditionHolds(final Player ai, final SpellAbility sa) {
+            final Card t = sa.getTargetCard();
+            final Card shown = reveal(ai, sa);
+            return t != null && shown != null && t.getNetPower() <= shown.getNetPower();
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean fromEffect) {
+            sa.resetTargets(); // nothing is held past a decline
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            // a Play effect's cast without paying the mana cost: the card is not spent from hand
+            final boolean free = fromEffect && sa.hasParam("WithoutManaCost");
+            boolean defensive = false;
+            if (!fromEffect) {
+                if (!game.getStack().isEmpty()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+                }
+                final boolean ownTurn = ph.isPlayerTurn(ai);
+                defensive = !ownTurn && combat != null
+                        && (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS))
+                        && !combat.getAttackersOf(ai).isEmpty();
+                final boolean oppEndStep = !ownTurn && ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn());
+                if (!defensive && !oppEndStep && !ph.is(PhaseType.MAIN2, ai)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+                }
+                // real mana for the cost as the engine prices it; canPayCost after a WillPlay would draw
+                if (HonestMana.of(ai, sa, true).total()
+                        < ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false).getConvertedManaCost()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            final Card shown = reveal(ai, sa);
+            if (shown == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int power = shown.getNetPower();
+            final int remain = defensive && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) && !ai.cantLoseForZeroOrLessLife()
+                    ? ComputerUtilCombat.lifeThatWouldRemain(ai, combat) : Integer.MAX_VALUE;
+            final boolean lethal = remain < 1;
+            final CardCollection pool = defensive ? combat.getAttackersOf(ai) : ai.getOpponents().getCreaturesInPlay();
+            CardCollection list = ComputerUtil.filterAITgts(sa, ai, CardLists.getTargetableCards(pool, sa), true);
+            list = CardLists.filter(list, c -> c.isCreature()
+                    && c.getController().isOpponentOf(ai)
+                    && !ai.equals(c.getOwner())                // exiling it loses our own card
+                    && c.getNetPower() <= power                // the resolution condition (LEY)
+                    && !c.hasKeyword(Keyword.WARD)             // StealCreatureForX: no ward pricing
+                    && c.getEnchantedBy().stream().noneMatch(a -> ai.equals(a.getController()))
+                    && !ComputerUtilCard.isUselessCreature(c.getController(), c)
+                    && (lethal
+                        ? !combat.isBlocked(c) && remain + ComputerUtilCombat.damageIfUnblocked(c, ai, combat, false) >= 1
+                        : free || c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= MIN_EVAL));
+            list = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, list, sa);
+            if (list.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            list = ComputerUtilCard.prioritizeCreaturesWorthRemovingNow(ai, list, false);
+            final Card best = ComputerUtilCard.getBestRemovalTargetAI(ai, list);
+            if (best == null || !sa.canTarget(best)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Tower Defense (dead-card batch 2, row 64)
     // "Creatures you control get +0/+5 and gain reach until end of turn." ({1}{G} instant.) The
     // script carried AI:RemoveDeck:All, so A never evaluated the card; behind the hint the stock

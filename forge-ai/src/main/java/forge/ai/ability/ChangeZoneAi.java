@@ -138,6 +138,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
     }
 
     @Override
+    protected boolean checkConditions(final Player ai, final SpellAbility sa) {
+        if (SpecialCardAi.TitansPresence.handles(sa)) {
+            // Its condition (target power <= the revealed card's power) reads Y = Revealed$CardPower
+            // from the reveal cost's paid list, empty until payment, so the base check compares the
+            // target's power to 0 and refuses every creature with power 1 or more. Judge the target
+            // against the card AiCostDecision will reveal (SpecialCardAi.TitansPresence.chooseReveal).
+            // Every other ChangeZone card takes the base check, as before.
+            return SpecialCardAi.TitansPresence.conditionHolds(ai, sa);
+        }
+        return super.checkConditions(ai, sa);
+    }
+
+    @Override
     protected AiAbilityDecision checkApiLogic(Player aiPlayer, SpellAbility sa) {
         if (SpecialCardAi.LongTermPlans.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
             // Tutors to third from the top, so it pays off only after two more draws: one window,
@@ -368,6 +381,17 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.DanceOfTheManse.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.TitansPresence.handles(sa) && !(sa instanceof AbilitySub)) {
+            // Its condition (target power <= the revealed card's power) reads the reveal cost's paid
+            // list, empty until payment: the generic pick below is blind to the reveal and the base
+            // checkConditions sees a reveal of power 0. AI:RemoveDeck:All stripped the card before
+            // any handler ran, so the stock path drew no random numbers for it (useRemovalNow would).
+            // A thief's cast through a granted permission is judged on the thief's own hand and mana;
+            // Play-effect casts (Zhulodok's cascade) go through doTriggerNoCost. Every other
+            // ChangeZone card takes exactly the path it took before this branch.
+            return SpecialCardAi.TitansPresence.consider(aiPlayer, sa, false);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
@@ -553,6 +577,15 @@ public class ChangeZoneAi extends SpellAbilityAi {
             // its upkeep exile hands the card to the exiled card's controller (ControlGainAi
             // .chkDrawback approves that sub blindly): never taken, so never stacked either
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        if (!mandatory && SpecialCardAi.TitansPresence.handles(sa)) {
+            // An optional Play-effect cast (Zhulodok's cascade, Optional through its reveal cost) is
+            // judged here: the stock known-origin pick ignores the reveal and casts into a whiff when
+            // the best target outpowers every revealable card. Free casts (WithoutManaCost) drop the
+            // value floor; paid ones keep it. No random draw either way. Mandatory calls (a copy's
+            // targets) keep the stock path.
+            return SpecialCardAi.TitansPresence.consider(aiPlayer, sa, true);
         }
 
         if (sa.isHidden()) {
