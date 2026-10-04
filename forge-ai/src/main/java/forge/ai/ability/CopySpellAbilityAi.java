@@ -18,6 +18,13 @@ public class CopySpellAbilityAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision checkApiLogic(Player aiPlayer, SpellAbility sa) {
+        if ("CooperateCopy".equals(sa.getParam("AILogic"))) {
+            // Cooperate (Refuse // Cooperate): judged whole in SpecialCardAi.Cooperate. Above the
+            // percentTrue draw below (RNG parity: AI:RemoveDeck:All kept A from ever evaluating it),
+            // which would copy our own spells at random with no value floor. doTriggerNoCost (a copy
+            // of Cooperate, a Play-effect cast) is untouched.
+            return SpecialCardAi.Cooperate.consider(aiPlayer, sa);
+        }
         Game game = aiPlayer.getGame();
         int chance = AiProfileUtil.getIntProperty(aiPlayer, AiProps.CHANCE_TO_COPY_OWN_SPELL_WHILE_ON_STACK);
         int diff = AiProfileUtil.getIntProperty(aiPlayer, AiProps.ALWAYS_COPY_SPELL_IF_CMC_DIFF);

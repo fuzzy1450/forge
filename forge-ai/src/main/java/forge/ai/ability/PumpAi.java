@@ -215,6 +215,13 @@ public class PumpAi extends PumpAiBase {
             // without an AILogic the 3-arg checkPhaseRestrictions vetoed the instant outside combat.
             // The evaluator owns the timing and the targets.
             return SpecialCardAi.DecoyGambit.consider(ai, sa);
+        } else if ("RefuseBurn".equals(aiLogic)) {
+            // Refuse (Refuse // Cooperate): a Pump targeting shell on a spell; the real effect is the
+            // DealDamage sub (the spell's controller takes its mana value). With a spell on the stack the
+            // non-curse branch below answers canPumpAgainstRemoval (our battlefield cards only) and can
+            // never choose a spell; the evaluator chooses and floors the target itself. Every exit there
+            // is RNG-free, and doTriggerNoCost (Play-effect casts, copies) does not reach this branch.
+            return SpecialCardAi.RefuseBurn.consider(ai, sa);
         } else if ("MoveCounter".equals(aiLogic)) {
             final SpellAbility moveSA = sa.findSubAbilityByType(ApiType.MoveCounter);
 

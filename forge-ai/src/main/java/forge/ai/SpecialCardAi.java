@@ -4347,6 +4347,172 @@ public class SpecialCardAi {
         }
     }
 
+    // Cooperate (Refuse // Cooperate) (dead-card batch 2, row 23)
+    // "Aftermath (Cast this spell only from your graveyard. Then exile it.) Copy target instant or
+    // sorcery spell. You may choose new targets for the copy." ({2}{U} instant.) Routed from the
+    // first statement of CopySpellAbilityAi.checkApiLogic on AILogic$ CooperateCopy, above that
+    // handler's percentTrue draw, which copied our own spells under mana value 5 at random 30% of
+    // the time with no value floor. The AI re-targets the copy itself at resolution
+    // (MayChooseTarget -> PlayerControllerAi.orderAndPlaySimultaneousSa -> setupTargets ->
+    // doTrigger), so the floors are Wild Ricochet's, as private copies (ROOT_OK, SUB_OK,
+    // MANA_SPENT_WORDS, JUDGING; WildRicochet itself is untouched). In order:
+    // - re-entered from a copy's own handler: CantPlayAi;
+    // - an empty stack or a non-AI controller: TargetingFailed;
+    // - the top spell (ComputerUtilAbility.getTopSpellAbilityOnStack) is an api-based instant or
+    //   sorcery spell, else TargetingFailed;
+    // - cast by us or by an opponent who is not a teammate, else CantPlayAi;
+    // - it can be copied and the copy does something: not cantBeCopied, AINoCopy or AI:RemoveDeck,
+    //   no X in its mana cost (the copy's X resets to 0 when re-targeted), mana value >=
+    //   MIN_COPIED_CMC (Cooperate's own three), nothing reading mana spent (not copied), every part
+    //   on the api whitelist (no Charm, no *All, no Play/copy/retarget recursion), no CopyPermanent
+    //   handing tokens to someone else. Else CantPlayAi;
+    // - OUR OWN spell only when no part of it targets a card or a spell (player targets are fine:
+    //   a copied "target player draws" re-targets a player). A re-targeted copy of our own removal
+    //   would take the original's target, resolve first and fizzle the original. Else CantPlayAi;
+    // - affordable, else CantAfford: HonestMana (G2, held sources skipped, restrictions read on
+    //   this spell) covers this spell's own cost (sa.getPayCosts() after taxes and reductions,
+    //   never host.getFirstSpellAbility(): row 77), in total and in blue pips. Never
+    //   getAvailableManaEstimate (it counts the words of Produced$);
+    // - Cooperate can target it, else TargetingFailed;
+    // - the copy, costs stripped as the real one's are (CardFactory.copySpellAbilityAndPossiblyHost),
+    //   passes canPlayFromEffectAI with a non-empty, valid target set on every targeted part, else
+    //   that decision (or TargetingFailed).
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card. Every exit before the copy
+    // judge is a read that draws nothing; the judge runs the copied api's handler (which may draw
+    // MyRandom and takes spell-ability ids for topSA.copy) only behind the RNG-free affordability
+    // bound: Wild Ricochet's accepted residual. canPlayAndPayForFace runs the real canPayCost only
+    // after a WillPlay. CopySpellAbilityAi.doTriggerNoCost (Sevinne's copy of Cooperate, a
+    // Play-effect cast) does not read this AILogic and keeps the stock path.
+    public static class Cooperate {
+        public static final int MIN_COPIED_CMC = 3;
+
+        private static final EnumSet<ApiType> ROOT_OK = EnumSet.of(ApiType.Destroy, ApiType.ChangeZone,
+                ApiType.DealDamage, ApiType.Counter, ApiType.Draw, ApiType.Dig, ApiType.Token, ApiType.CopyPermanent);
+        private static final EnumSet<ApiType> SUB_OK = EnumSet.of(ApiType.Destroy, ApiType.ChangeZone,
+                ApiType.DealDamage, ApiType.Draw, ApiType.Dig, ApiType.Token, ApiType.CopyPermanent,
+                ApiType.Cleanup, ApiType.GainLife, ApiType.LoseLife, ApiType.Scry);
+        private static final String[] MANA_SPENT_WORDS = {"Converge", "CastTotalManaSpent", "ManaSpent", "Adamant", "Sunburst"};
+        private static final ThreadLocal<Boolean> JUDGING = ThreadLocal.withInitial(() -> false);
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (JUDGING.get()) {
+                // re-entered from the copy's own handler (e.g. a graveyard replay scan)
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            sa.resetTargets();
+            if (game.getStack().isEmpty() || !(ai.getController() instanceof PlayerControllerAi)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final SpellAbility topSA = ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+            if (!(topSA instanceof forge.game.ability.SpellApiBased) || !topSA.isSpell()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final Card host = topSA.getHostCard();
+            if (host == null || !(host.isInstant() || host.isSorcery())) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            final Player caster = topSA.getActivatingPlayer();
+            if (caster == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final boolean ours = ai.equals(caster);
+            if (!ours && (!caster.isOpponentOf(ai) || ai.getYourTeam().contains(caster))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // The copy must actually happen and be worth three mana and a card.
+            if (topSA.cantBeCopied() || host.hasSVar("AINoCopy") || ComputerUtilCard.isCardRemAIDeck(host)
+                    || host.getManaCost().countX() > 0 || host.getCMC() < MIN_COPIED_CMC) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final String svar : host.getSVars().values()) {
+                if (readsManaSpent(svar)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            for (SpellAbility part = topSA; part != null; part = part.getSubAbility()) {
+                final ApiType api = part.getApi();
+                if (api == null || !(part == topSA ? ROOT_OK : SUB_OK).contains(api)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                if (api == ApiType.CopyPermanent && part.hasParam("Controller") && !"You".equals(part.getParam("Controller"))) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                for (final Map.Entry<String, String> param : part.getMapParams().entrySet()) {
+                    if (param.getKey().contains("ManaSpent") || readsManaSpent(param.getValue())) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                }
+                // our own spell: the original resolves as cast and the copy is the gain, but a copy
+                // re-targeted onto the original's card or spell would resolve first and fizzle it
+                if (ours && part.usesTargeting()
+                        && (part.getTargets().isTargetingAnyCard() || part.getTargets().isTargetingAnySpell())) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            if (!sa.canTargetSpellAbility(topSA)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+
+            // The copy must be something the AI would cast for free now, with targets it
+            // picks itself (CopySpellAbilityAi's targeted branch uses the same judgment).
+            final SpellAbility topCopy = topSA.copy(ai);
+            topCopy.clearManaPaid();
+            topCopy.resetTargets();
+            topCopy.setPayCosts(new forge.game.cost.Cost("", false));
+            AiPlayDecision copyDecision;
+            JUDGING.set(true);
+            try {
+                copyDecision = ((PlayerControllerAi) ai.getController()).getAi()
+                        .canPlayFromEffectAI((forge.game.spellability.Spell) topCopy, false, true);
+            } finally {
+                JUDGING.remove();
+            }
+            if (copyDecision != AiPlayDecision.WillPlay) {
+                return new AiAbilityDecision(0, copyDecision);
+            }
+            // canPlayFromEffectAI never checks target validity (ControlGainAi approves a
+            // non-mandatory copy with no targets), so require them here.
+            for (SpellAbility part = topCopy; part != null; part = part.getSubAbility()) {
+                if (part.usesTargeting() && (part.getTargets().isEmpty() || !part.isTargetNumberValid())) {
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+            }
+
+            sa.getTargets().add(topSA);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The engine's own test-mode cost (calculateManaCost: taxes and reductions applied, castFrom
+        // restored) against G2 (HonestMana, held sources skipped), in total and in blue pips. A
+        // private helper in Dispatch's shape; G1, G2 and getAvailableManaEstimate are unchanged.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLUE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+
+        private static boolean readsManaSpent(final String text) {
+            if (text == null) {
+                return false;
+            }
+            for (final String word : MANA_SPENT_WORDS) {
+                if (text.contains(word)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Cosmic Intervention
     // "If a permanent you control would be put into a graveyard from the battlefield this
     // turn, exile it instead. Return it to the battlefield under its owner's control at the
@@ -18155,6 +18321,97 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
+    // Refuse (Refuse // Cooperate) (dead-card batch 2, row 23)
+    // "Refuse deals damage to target spell's controller equal to that spell's mana value." ({3}{R}
+    // instant.) It does not counter the spell, and it may target any spell, our own included; the
+    // stock DealDamage sub (DamageDealAi.damageChooseNontargeted) approves even a hit on ourselves,
+    // so the floor lives here. Routed from PumpAi.checkApiLogic on AILogic$ RefuseBurn: with a spell
+    // on the stack the stock non-curse branch answers canPumpAgainstRemoval (our battlefield cards
+    // only) and can never choose a spell, and with an AILogic present the PumpAi "save tricks"
+    // phase hold no longer applies, so this is consulted in every priority window. In order:
+    // - an empty stack: TargetingFailed;
+    // - our own item on top: CantPlayAi. AiController.getSpellAbilityToPlay (topOwnedByAI) then
+    //   returns only the first copy SA of the sorted list, so a WillPlay here would cast nothing
+    //   yet run canPayCost's test payment and end the list early (skeptic's amendment); once our
+    //   item resolves, the opponent's spell is on top again and Refuse is offered then;
+    // - the target: the best spell anywhere on the stack cast by an opponent (never ourselves or a
+    //   teammate) who can lose life, that Refuse can target, ranked lethal first, then by the
+    //   predicted damage: the spell's mana value on the stack, announced X included (exactly what
+    //   Targeted$CardManaCost resolves to), after static prevention and replacement
+    //   (predictDamageTo). Lethal = damage >= that opponent's life and the opponent can lose for
+    //   0 life. None: TargetingFailed;
+    // - the floor: lethal, or damage >= MIN_DAMAGE (Refuse's own four mana) on a turn that is not
+    //   ours (our own turn's mana belongs to our own plays). Else CantPlayAi;
+    // - affordable, else CantAfford: HonestMana (G2, held sources skipped, restrictions read on
+    //   this spell) covers this spell's own cost (sa.getPayCosts() after taxes and reductions,
+    //   never host.getFirstSpellAbility(), which on a split card can be the other face: row 77),
+    //   in total and in red pips. Never getAvailableManaEstimate (it counts the words of Produced$).
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card, and every exit here is a
+    // read that draws nothing; nothing is held or remembered, so a decline leaves only
+    // sa.resetTargets() on Refuse's own ability. canPlayAndPayForFace runs the real canPayCost
+    // only after a WillPlay. Play-effect casts (Nathan Drake's attack trigger) and copies go
+    // through PumpAi.doTriggerNoCost, which does not read this AILogic, and keep the stock path.
+    public static class RefuseBurn {
+        public static final int MIN_DAMAGE = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            sa.resetTargets();
+            if (game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            if (ai.equals(game.getStack().peekAbility().getActivatingPlayer())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card host = sa.getHostCard();
+            SpellAbility best = null;
+            int bestDmg = 0;
+            boolean bestLethal = false;
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility s = si.getSpellAbility();
+                if (s == null || !s.isSpell() || s.getHostCard() == null) {
+                    continue;
+                }
+                final Player caster = s.getActivatingPlayer();
+                if (caster == null || !caster.isOpponentOf(ai) || ai.getYourTeam().contains(caster)
+                        || !caster.canLoseLife() || !sa.canTargetSpellAbility(s)) {
+                    continue;
+                }
+                final int dmg = ComputerUtilCombat.predictDamageTo(caster, s.getHostCard().getCMC(), host, false);
+                if (dmg <= 0) {
+                    continue;
+                }
+                final boolean lethal = dmg >= caster.getLife() && !caster.cantLoseForZeroOrLessLife();
+                if (best == null || (lethal && !bestLethal) || (lethal == bestLethal && dmg > bestDmg)) {
+                    best = s;
+                    bestDmg = dmg;
+                    bestLethal = lethal;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            if (!bestLethal && (bestDmg < MIN_DAMAGE || game.getPhaseHandler().isPlayerTurn(ai))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The engine's own test-mode cost (calculateManaCost: taxes and reductions applied) against
+        // G2 (HonestMana, held sources skipped), in total and in red pips. A private helper in
+        // Dispatch's shape; G1, G2 and getAvailableManaEstimate are unchanged.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
         }
     }
 
