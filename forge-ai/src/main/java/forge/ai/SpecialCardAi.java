@@ -14475,9 +14475,15 @@ public class SpecialCardAi {
     // Exert's doTrigger on our own trigger SAs. Nothing is held: no target, no X, no AiCardMemory,
     // no reservation. Cost: three RNG-free vetoes first, then one simulation per MAIN1 pass that
     // clears them while the card is in hand.
+    // Both attacker counts must also cover combatTapReserve: two creatures for each Kitt Kanto,
+    // Mayhem Diva we control, whose beginning-of-combat cost (tap two untapped creatures) the AI
+    // pays on its own turn after this MAIN1 check and before attackers are declared. Without it
+    // the MAIN1 board counts attackers Kitt is about to tap (W14 replays: a cast that made no
+    // token, and one that made a single token).
     public static class Indulge {
         public static final String NAME = "Indulge // Excess";
         static final int MIN_ATTACKERS = 2;
+        static final String KITT = "Kitt Kanto, Mayhem Diva";
         static final long SIDE_SEED = 0x1D0D6EL; // any fixed seed: the side stream only has to be repeatable
 
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
@@ -14485,7 +14491,9 @@ public class SpecialCardAi {
             if (!game.getPhaseHandler().is(PhaseType.MAIN1, ai) || !game.getStack().isEmpty()) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
-            if (countUntaxedAttackers(ai, game) < MIN_ATTACKERS) {
+            // MIN_ATTACKERS must still attack after our Kitt Kanto triggers tap their two each
+            final int need = MIN_ATTACKERS + combatTapReserve(ai);
+            if (countUntaxedAttackers(ai, game, need) < need) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             // judge the SA being cast, not host.getFirstSpellAbility() (row 77): a free
@@ -14498,17 +14506,26 @@ public class SpecialCardAi {
                     return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
                 }
             }
-            if (simulatedUntaxedAttackers(ai, game) < MIN_ATTACKERS) {
+            if (simulatedUntaxedAttackers(ai, game) < need) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
+        // Our Kitt Kanto's beginning-of-combat trigger ("you may tap two untapped creatures you
+        // control") resolves after this MAIN1 check and before attackers; the AI pays it on its own
+        // turn whenever it can (574578 T9, 615297 T20, 781217 T16/T18), so each Kitt we control
+        // takes two would-be attackers out of the attack. RNG-free.
+        private static int combatTapReserve(final Player ai) {
+            return 2 * CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.nameEquals(KITT));
+        }
+
         // Defender-agnostic and RNG-free: a creature counts when it can attack at all and at least
-        // one opponent, in getOpponents()' fixed order, would take its attack with no tax.
+        // one opponent, in getOpponents()' fixed order, would take its attack with no tax. Stops
+        // counting once it reaches need.
         // choosePreferredDefenderPlayer is never called here (its pod tiebreak draws, and its
         // HashMap iterates in identity-hash order).
-        private static int countUntaxedAttackers(final Player ai, final Game game) {
+        private static int countUntaxedAttackers(final Player ai, final Game game, final int need) {
             int n = 0;
             for (final Card c : ai.getCreaturesInPlay()) {
                 if (!CombatUtil.canAttack(c)) {
@@ -14520,7 +14537,7 @@ public class SpecialCardAi {
                         break;
                     }
                 }
-                if (n >= MIN_ATTACKERS) {
+                if (n >= need) {
                     return n;
                 }
             }
