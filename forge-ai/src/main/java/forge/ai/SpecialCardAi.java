@@ -27334,6 +27334,289 @@ public class SpecialCardAi {
         }
     }
 
+    // Tower Defense (dead-card batch 2, row 64)
+    // "Creatures you control get +0/+5 and gain reach until end of turn." ({1}{G} instant.) The
+    // script carried AI:RemoveDeck:All, so A never evaluated the card; behind the hint the stock
+    // PumpAllAi stack-empty path runs ComputerUtilCard.shouldPumpCard per creature, which draws
+    // MyRandom twice per creature on every priority, has no value floor and never values reach.
+    // PumpAllAi.checkApiLogic routes AILogic$ TowerDefense here before any stock code. The pump
+    // lasts until end of turn, so it is cast only in three windows, each with its own floor:
+    //  1. Blocks declared, empty stack, either player's turn (combatPaysOff): our combatants that
+    //     die now and live with +5 toughness (saved); opposing combatants that live now and die
+    //     to our pumped toughness damage under a CombatDamageToughness static (Felothar the
+    //     Steadfast, Assault Formation; read per creature from c.toughnessAssignsDamage(), never
+    //     assumed), each opposing creature once (a Set), and an attacker's kills capped by its
+    //     pumped damage, cheapest kill first; and, under that static, the extra unblocked damage
+    //     to players (never to a planeswalker or battle; never to a player who is already dead
+    //     or cannot lose). Cast for saved + killed >= MIN_COUNT, one save or kill of a premium
+    //     creature (a commander or CreatureEvaluator >= PREMIUM_VALUE, Cosmic Intervention's
+    //     floor), an attack the pump makes lethal, or >= MIN_EXTRA_DAMAGE extra damage (two
+    //     unblocked attackers under the static).
+    //  2. An opponent's declare-attackers step, empty stack, attackers at us (reachPaysOff):
+    //     reach lets our untapped ground creatures block attacking fliers none of ours can block
+    //     now. Cast when that brings the fliers' damage from lethal to below our life, or when
+    //     pumped reach blockers kill fliers and survive (the same count and premium floor).
+    //  3. An opponent's spell or ability on top of the stack (savedFromStack): the creatures of
+    //     ours whose damage or -X/-X +5 toughness survives (ComputerUtil.predictThreatenedObjects
+    //     with this spell as the saviour; destroy, exile, bounce and steal are never claimed for
+    //     a keyword-less pump), saved >= MIN_COUNT or one premium.
+    // Mana: G2 (HonestMana, held sources skipped) against the engine's own test-mode
+    // calculateManaCost (taxes and reductions applied; RNG-free for this cost), in total and in
+    // green, before any approval: never getAvailableManaEstimate, which counts the words of
+    // Produced$ and approves windows canPayCost then fails after drawing (row 159's re-roll).
+    // Copy diet: an unblocked attacker's pumped damage is damageIfUnblocked's own formula with
+    // +5 (no LKI copy); a blocked attacker or a blocker gets one getPumpedCreature copy and one
+    // Combat only when it dies now or, under the static, an opposing combatant of it lives now;
+    // a window-2 ground creature gets at most one copy. Each copy takes card timestamps and
+    // SpellAbility ids A never took for this card, so a held window-1 or window-2 consult that
+    // builds one can still move a game the card is not cast in.
+    // RNG: every window test, the mana count, CreatureEvaluator, damageIfUnblocked,
+    // predictThreatenedObjects, CombatUtil.canBlock and getPumpedCreature draw nothing; no
+    // lifeInDanger, AiBlockController or shouldPumpCard. Residual: the combat predictors
+    // (combatantWouldBeDestroyed, attackerWouldBeDestroyed, blockerWouldBeDestroyed) reach
+    // ComputerUtil.canRegenerate whatever withoutAbilities says (combatantCantBeDestroyed,
+    // canDestroyBlockerBeforeFirstStrike), and with a Regenerate ability covering a combatant on
+    // the battlefield it runs canPayCost, which draws isManaSourceReserved rolls. Nothing is
+    // reserved or remembered. PumpAllAi.doTriggerNoCost (thefts and free casts through Play
+    // effects) returns before checkApiLogic and is unchanged.
+    public static class TowerDefense {
+        static final int TOUGHNESS = 5;
+        static final int MIN_EXTRA_DAMAGE = 10;  // two unblocked attackers under a toughness-damage static
+        static final int MIN_COUNT = 2;          // two combatants saved or killed: card advantage for 2 mana
+        static final int PREMIUM_VALUE = 200;    // Cosmic Intervention's single-creature floor
+        static final List<String> KW = List.of("Reach");
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean stackEmpty = game.getStack().isEmpty();
+            final boolean afterBlocks = stackEmpty && combat != null && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS);
+            final boolean beforeBlocks = stackEmpty && combat != null && !ph.isPlayerTurn(ai)
+                    && ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) && !combat.getAttackersOf(ai).isEmpty();
+            final SpellAbility top = stackEmpty ? null : game.getStack().peekAbility();
+            final boolean response = top != null && top.getActivatingPlayer() != null
+                    && top.getActivatingPlayer().isOpponentOf(ai);
+            if (!afterBlocks && !beforeBlocks && !response) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // nearly every consult ends here
+            }
+            if (ai.getCreaturesInPlay().isEmpty()
+                    || (!response && game.getReplacementHandler().isPreventCombatDamageThisTurn())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final boolean pass = response ? savedFromStack(ai, sa)
+                    : beforeBlocks ? reachPaysOff(ai, sa, combat)
+                    : combatPaysOff(ai, sa, combat);
+            return pass ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                        : new AiAbilityDecision(0, AiPlayDecision.DoesntImpactCombat);
+        }
+
+        // G2 against the adjusted cost, in total and in green; judged on sa, never
+        // host.getFirstSpellAbility() (row 77).
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.GREEN) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+
+        // Window 3.
+        private static boolean savedFromStack(final Player ai, final SpellAbility sa) {
+            int count = 0;
+            boolean premium = false;
+            for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, sa, true)) {
+                if (o instanceof Card c && c.isCreature() && ai.equals(c.getController())) {
+                    count++;
+                    premium |= isPremium(c);
+                }
+            }
+            return count >= MIN_COUNT || (count >= 1 && premium);
+        }
+
+        // Window 1: blocks are known.
+        private static boolean combatPaysOff(final Player ai, final SpellAbility sa, final Combat combat) {
+            int saved = 0;
+            boolean premium = false;
+            final Set<Card> killed = new HashSet<>();
+            boolean toughUnblocked = false;
+            final Map<Player, int[]> dmg = new LinkedHashMap<>(); // attacked player -> {now, pumped}
+            for (final Card c : ai.getCreaturesInPlay()) {
+                final boolean attacking = combat.isAttacking(c);
+                if (!attacking && !combat.isBlocking(c)) {
+                    continue;
+                }
+                final boolean tough = c.toughnessAssignsDamage() && !c.assignNoCombatDamage();
+                if (attacking && !combat.isBlocked(c)) {
+                    // unblocked: only damage to a player counts (a planeswalker or battle dies either way)
+                    if (combat.getDefenderByAttacker(c) instanceof Player p) {
+                        final int now = ComputerUtilCombat.damageIfUnblocked(c, p, combat, true);
+                        final int[] d = dmg.computeIfAbsent(p, k -> new int[2]);
+                        d[0] += now;
+                        d[1] += tough ? pumpedDamageIfUnblocked(c, p, combat) : now;
+                        toughUnblocked |= tough;
+                    }
+                    continue;
+                }
+                final boolean dies = !c.hasKeyword(Keyword.INDESTRUCTIBLE)
+                        && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat);
+                final List<Card> survivors = new ArrayList<>(); // opposing combatants of c that live now
+                if (tough) {
+                    for (final Card o : attacking ? combat.getBlockers(c) : combat.getAttackersBlockedBy(c)) {
+                        if (!killed.contains(o) && !ComputerUtilCombat.combatantWouldBeDestroyed(o.getController(), o, combat)) {
+                            survivors.add(o);
+                        }
+                    }
+                }
+                if (!dies && survivors.isEmpty()) {
+                    continue; // +0/+5 changes nothing about c's combat: no copy
+                }
+                final Card pumped = ComputerUtilCard.getPumpedCreature(ai, sa, c, TOUGHNESS, 0, KW);
+                final Combat pc = pumpedCombat(ai, combat, c, pumped, attacking);
+                if (pc == null) {
+                    continue;
+                }
+                if (dies && !(attacking ? ComputerUtilCombat.attackerWouldBeDestroyed(ai, pumped, pc)
+                                        : ComputerUtilCombat.blockerWouldBeDestroyed(ai, pumped, pc))) {
+                    saved++;
+                    premium |= isPremium(c);
+                }
+                // c's pumped damage is shared among its opponents: credit the cheapest kills it pays for
+                int budget = pumped.getNetCombatDamage() * (pumped.hasDoubleStrike() ? 2 : 1);
+                survivors.sort(Comparator.comparingInt(o -> ComputerUtilCombat.getDamageToKill(o, false)));
+                for (final Card o : survivors) {
+                    final Player p = o.getController();
+                    if (!(attacking ? ComputerUtilCombat.blockerWouldBeDestroyed(p, o, pc)
+                                    : ComputerUtilCombat.attackerWouldBeDestroyed(p, o, pc))) {
+                        continue;
+                    }
+                    final int need = pumped.hasKeyword(Keyword.DEATHTOUCH) ? 1 : ComputerUtilCombat.getDamageToKill(o, false);
+                    if (need > budget) {
+                        continue;
+                    }
+                    budget -= need;
+                    killed.add(o);
+                    premium |= ComputerUtilCard.evaluateCreature(o) >= PREMIUM_VALUE;
+                }
+            }
+            final int count = saved + killed.size();
+            if (count >= MIN_COUNT || (count >= 1 && premium)) {
+                return true;
+            }
+            if (!toughUnblocked) {
+                return false;
+            }
+            int extra = 0;
+            for (final Map.Entry<Player, int[]> e : dmg.entrySet()) {
+                final Player p = e.getKey();
+                final int[] d = e.getValue();
+                final int life = p.getLife();
+                if (p.cantLose() || p.cantLoseForZeroOrLessLife() || !p.canLoseLife() || d[0] >= life) {
+                    continue; // cannot die, or dies to this attack anyway
+                }
+                if (d[1] >= life) {
+                    return true; // the pump makes the attack lethal
+                }
+                extra += d[1] - d[0];
+            }
+            return extra >= MIN_EXTRA_DAMAGE;
+        }
+
+        // ComputerUtilCombat.damageIfUnblocked's own formula for c with +TOUGHNESS, read only
+        // under a toughness-damage static (getNetCombatDamage is then the toughness): no LKI copy.
+        private static int pumpedDamageIfUnblocked(final Card c, final Player p, final Combat combat) {
+            if (!p.canLoseLife() || c.hasKeyword(Keyword.INFECT)) {
+                return 0;
+            }
+            int damage = c.getNetCombatDamage() + TOUGHNESS;
+            if (ComputerUtilCombat.isCombatDamagePrevented(c, p, damage)) {
+                return 0;
+            }
+            damage += ComputerUtilCombat.predictPowerBonusOfAttacker(c, null, combat, true);
+            final int sum = ComputerUtilCombat.predictDamageTo(p, damage, c, true);
+            return c.hasDoubleStrike() ? sum * 2 : sum;
+        }
+
+        // ComputerUtilCard.shouldPumpCard's combat rebuild with the real sides: our attacker
+        // against the entity it attacks, the attackers our blocker blocks against us.
+        private static Combat pumpedCombat(final Player ai, final Combat combat, final Card c, final Card pumped,
+                                           final boolean attacking) {
+            final Combat pc = new Combat(combat.getAttackingPlayer());
+            if (attacking) {
+                final GameEntity defender = combat.getDefenderByAttacker(c);
+                if (defender == null) {
+                    return null;
+                }
+                pc.addAttacker(pumped, defender);
+                for (final Card b : combat.getBlockers(c)) {
+                    pc.addBlocker(pumped, b);
+                }
+            } else {
+                for (final Card a : combat.getAttackersBlockedBy(c)) {
+                    pc.addAttacker(a, ai);
+                    pc.addBlocker(a, pumped);
+                }
+            }
+            return pc;
+        }
+
+        // Window 2: an opponent's attack, blocks not yet declared.
+        private static boolean reachPaysOff(final Player ai, final SpellAbility sa, final Combat combat) {
+            final CardCollection mine = CardLists.filter(ai.getCreaturesInPlay(), b -> CombatUtil.canBlock(b, combat));
+            final CardCollection fliers = CardLists.filter(combat.getAttackersOf(ai),
+                    f -> !mine.anyMatch(b -> CombatUtil.canBlock(f, b, combat))); // what we cannot block now
+            final CardCollection ground = CardLists.filter(mine,
+                    b -> !b.hasKeyword(Keyword.FLYING) && !b.hasKeyword(Keyword.REACH));
+            if (fliers.isEmpty() || ground.isEmpty()) {
+                return false; // no copies built
+            }
+            int flierDmg = 0;
+            for (final Card f : fliers) {
+                flierDmg += ComputerUtilCombat.damageIfUnblocked(f, ai, combat, true);
+            }
+            ComputerUtilCard.sortByEvaluateCreature(fliers); // best flier first
+            final Card[] pumpedGround = new Card[ground.size()]; // one copy per ground creature, on first use
+            final boolean[] used = new boolean[ground.size()];
+            int count = 0;
+            int stopped = 0;
+            boolean premium = false;
+            for (final Card f : fliers) {
+                for (int i = 0; i < ground.size(); i++) {
+                    if (used[i]) {
+                        continue;
+                    }
+                    if (pumpedGround[i] == null) {
+                        pumpedGround[i] = ComputerUtilCard.getPumpedCreature(ai, sa, ground.get(i), TOUGHNESS, 0, KW);
+                    }
+                    final Card pumped = pumpedGround[i];
+                    if (!CombatUtil.canBlock(f, pumped)) {
+                        continue;
+                    }
+                    final Combat trial = new Combat(combat.getAttackingPlayer());
+                    trial.addAttacker(f, ai);
+                    trial.addBlocker(f, pumped);
+                    used[i] = true;
+                    stopped += ComputerUtilCombat.damageIfUnblocked(f, ai, combat, true);
+                    if (ComputerUtilCombat.attackerWouldBeDestroyed(ai, f, trial)
+                            && !ComputerUtilCombat.blockerWouldBeDestroyed(ai, pumped, trial)) {
+                        count++;
+                        premium |= ComputerUtilCard.evaluateCreature(f) >= PREMIUM_VALUE;
+                    }
+                    break;
+                }
+            }
+            final boolean lethalPrevented = !ai.cantLose() && !ai.cantLoseForZeroOrLessLife() && ai.canLoseLife()
+                    && flierDmg >= ai.getLife() && flierDmg - stopped < ai.getLife();
+            return lethalPrevented || count >= MIN_COUNT || (count >= 1 && premium);
+        }
+
+        private static boolean isPremium(final Card c) {
+            return c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= PREMIUM_VALUE;
+        }
+    }
+
     // Toxic Deluge (dead-card batch 2, row 11)
     // "As an additional cost to cast this spell, pay X life. All creatures get -X/-X until end of
     // turn." ({2}{B} Sorcery.) The script carried AI:RemoveDeck:All. Behind it nothing on the stock

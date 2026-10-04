@@ -42,6 +42,17 @@ public class PumpAllAi extends PumpAiBase {
             return SpecialCardAi.ToxicDeluge.consider(ai, sa);
         }
 
+        if ("TowerDefense".equals(logic)) {
+            // Dead-card batch 2, row 64: Tower Defense, +0/+5 and reach for our team. The stock
+            // stack-empty path below runs ComputerUtilCard.shouldPumpCard per creature, which
+            // draws MyRandom twice per creature on every priority, has no value floor and never
+            // values reach. The card carried AI:RemoveDeck:All, so A never evaluated it and drew
+            // nothing for it; the evaluator draws nothing either (its one residual, canRegenerate's
+            // cost check inside the combat predictors, is named on the class). doTriggerNoCost
+            // (thefts and free casts through Play effects) returns before this and is unchanged.
+            return SpecialCardAi.TowerDefense.consider(ai, sa);
+        }
+
         if (logic.equals("UntapCombatTrick")) {
             PhaseHandler ph = ai.getGame().getPhaseHandler();
             if (!(ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS, ai)
