@@ -347,6 +347,14 @@ public class ComputerUtil {
                 // SacMe shuffle, for whoever controls Gisa
                 return SpecialCardAi.GhoulcallerGisa.chooseSacrifice(ai, sa, typeList);
             }
+            if (SpecialCardAi.Reshape.handles(activate) && ai.equals(activate.getOwner())) {
+                // the artifact Reshape.consider priced (a noncreature token, else a spare one-mana
+                // rock): serves ChangeZoneAi.willPayCosts (checkSacrificeCost, whose result a
+                // Battlefield destination then ignores) and the payment (chooseSacrificeType) alike,
+                // ahead of the SacMe shuffle and the lands branch that would sell an artifact land. A
+                // stolen copy (Nathan Drake's attack trigger) keeps the stock path.
+                return SpecialCardAi.Reshape.chooseSacrifice(ai, typeList);
+            }
             // search for permanents with SacMe. priority 1 is the lowest, priority 5 the highest
             for (int ip = 0; ip < 6; ip++) {
                 final int priority = 6 - ip;
