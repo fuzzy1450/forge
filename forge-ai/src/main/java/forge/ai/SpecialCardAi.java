@@ -21349,6 +21349,181 @@ public class SpecialCardAi {
         }
     }
 
+    // Taigam, Sidisi's Hand
+    // {3}{U}{B} 3/4: "Skip your draw step. At the beginning of your upkeep, look at the top three
+    // cards of your library. Put one of them into your hand and the rest into your graveyard.
+    // {B}, {T}, Exile X cards from your graveyard: Target creature gets -X/-X until end of turn."
+    // AI:RemoveDeck:All kept every Taigam-hosted SpellAbility out of the playable list
+    // (AiController.getSpellAbilityToPlay), so A never judged the owner's spell or ability. Behind
+    // the hint the stock path casts it at every affordable Main 2, but PumpAi announces X as the
+    // whole graveyard (setMaxXValue -> getMaxForNonManaX) and the payment exiles all of it for any
+    // kill, and the mandatory upkeep dig keeps the highest-MV card (getBestAI), so a land-short AI
+    // mills its land drops. Three name-gated routes:
+    //  - cast (PermanentCreatureAi.checkApiLogic, first statement; never a Play-effect cast): the
+    //    upkeep takes three library cards a turn, so never below MIN_LIBRARY (it cannot deck us
+    //    while it stays; the danger is it leaving late); and only when G2 covers the spell's mana
+    //    value with a blue and a black source, so an unpayable window never reaches canPayCost's
+    //    MyRandom probe (ComputerUtilMana.isManaSourceReserved). It only declines.
+    //  - shrink (PumpAi.checkApiLogic, on sa.getHostCard(): a Mairsil, the Pretender grant has
+    //    Mairsil as its host and keeps the stock path it ran in A): the owner only (a thief never
+    //    activated it in A, the hint filtered it too); a black source before X or a target is set,
+    //    so the common decline leaves no X behind; then an opponent's creature worth MIN_EVAL (a
+    //    vanilla non-token 2/2 two-drop, the Entrancing Melody calibration), best first, with X
+    //    exactly its toughness (toughness 0 kills through indestructible and regeneration),
+    //    refused when the cards the payment would exile hold a creature card worth more than the
+    //    kill. Ward (an extra cost), an undying or persist return and a creature combat already
+    //    kills are skipped.
+    //  - dig (DigAi.chooseSingleCard, the owner only): while land-short (no land in hand, fewer
+    //    than LAND_GOAL in play) keep the first dug land whose printed production names a colour
+    //    (or Any, Combo, Chosen), else the first dug land; otherwise the stock pick. Never
+    //    getBestLandAI, a land-destruction picker that rolls between nonbasics.
+    // The routes read the board only. The one stock call that can test-pay is the combat
+    // predictor (combatantWouldBeDestroyed -> ComputerUtil.canRegenerate), and only while a
+    // creature with a regeneration ability is in that combat.
+    public static class TaigamSidisisHand {
+        public static final String NAME = "Taigam, Sidisi's Hand";
+        static final int MIN_LIBRARY = 20;
+        static final int MIN_EVAL = 160;
+        static final int LAND_GOAL = 7;
+
+        // The cast floor. WillPlay means "let the stock path judge it".
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (ai.getCardsIn(ZoneType.Library).size() < MIN_LIBRARY) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final ManaCost cost = sa.getPayCosts() == null ? ManaCost.ZERO : sa.getPayCosts().getTotalMana();
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getCMC()
+                    || mana.colour(MagicColor.BLUE) < 1 || mana.colour(MagicColor.BLACK) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        public static AiAbilityDecision considerShrink(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final SpellAbility root = sa.getRootAbility();
+            root.setXManaCostPaid(null);
+            sa.resetTargets();
+            if (!ai.equals(host.getOwner())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // A's filter, kept for thieves
+            }
+            if (HonestMana.of(ai, sa, true).colour(MagicColor.BLACK) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford); // before X or a target is set
+            }
+            final CostExile exile = sa.getPayCosts().getCostPartByType(CostExile.class);
+            if (exile == null || !sa.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int yard = CardLists.getValidCards(ai.getCardsIn(ZoneType.Graveyard),
+                    exile.getType().split(";"), ai, host, sa).size();
+            if (yard <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final Combat combat = ai.getGame().getCombat();
+            final List<Card> cands = new ArrayList<>();
+            final Map<Card, Integer> evals = new HashMap<>();
+            for (final Card c : CardLists.getTargetableCards(ai.getOpponents().getCreaturesInPlay(), sa)) {
+                final int need = c.getNetToughness();
+                if (need <= 0 || need > yard || c.hasKeyword(Keyword.WARD)
+                        || ComputerUtilCard.hasActiveUndyingOrPersist(c)) {
+                    continue;
+                }
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                if (eval < MIN_EVAL) {
+                    continue;
+                }
+                if (combat != null && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)) {
+                    continue; // dying anyway
+                }
+                cands.add(c);
+                evals.put(c, eval);
+            }
+            if (cands.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            cands.sort((a, b) -> Integer.compare(evals.get(b), evals.get(a))); // stable: ties keep order
+
+            final Map<Card, Integer> yardEvals = new HashMap<>();
+            for (final Card t : cands) {
+                final int need = t.getNetToughness();
+                final int tEval = evals.get(t);
+                // exactly what AiCostDecision.visit(CostExile) exiles for X = need
+                final CardCollection paid = ComputerUtil.chooseExileFrom(ai, exile, host, need, sa, false);
+                if (paid == null) {
+                    continue;
+                }
+                boolean tooDear = false;
+                for (final Card g : paid) {
+                    if (g.isCreature() && yardEvals.computeIfAbsent(g, ComputerUtilCard::evaluateCreature) > tEval) {
+                        tooDear = true;
+                        break;
+                    }
+                }
+                if (tooDear) {
+                    continue;
+                }
+                root.setXManaCostPaid(need);
+                sa.getTargets().add(t);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
+        }
+
+        // The upkeep dig's pick, for the owner's own trigger only.
+        public static boolean digs(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && NAME.equals(host.getName()) && ai.equals(host.getOwner());
+        }
+
+        public static Card chooseDigCard(final Player ai, final Iterable<Card> options) {
+            if (CardLists.count(ai.getCardsIn(ZoneType.Hand), CardPredicates.LANDS) == 0
+                    && ai.getLandsInPlay().size() < LAND_GOAL) {
+                Card firstLand = null;
+                for (final Card c : options) {
+                    if (!c.isLand()) {
+                        continue;
+                    }
+                    if (namesAColour(c)) {
+                        return c;
+                    }
+                    if (firstLand == null) {
+                        firstLand = c;
+                    }
+                }
+                if (firstLand != null) {
+                    return firstLand;
+                }
+            }
+            return ComputerUtilCard.getBestAI(options); // the stock pick
+        }
+
+        // A printed mana ability whose production names W, U, B, R or G, or Any, Combo or Chosen.
+        // Read from the script only: the card is in the library, so no canPlay().
+        private static boolean namesAColour(final Card land) {
+            for (final SpellAbility ma : land.getManaAbilities()) {
+                final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                if (mp == null) {
+                    continue;
+                }
+                if (mp.isAnyMana() || mp.isComboMana()) {
+                    return true;
+                }
+                final String produced = mp.getOrigProduced() == null ? "" : mp.getOrigProduced();
+                if (produced.contains("Chosen")) {
+                    return true;
+                }
+                for (final String t : produced.trim().split(" ")) {
+                    if (t.length() == 1 && "WUBRG".indexOf(t.charAt(0)) >= 0) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // The Master, Formed Anew
     // Body Thief (a cast trigger) exiles a creature we control with a takeover
     // counter, and the Master may enter as a copy of a creature card in exile with

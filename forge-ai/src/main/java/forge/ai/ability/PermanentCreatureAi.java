@@ -191,6 +191,16 @@ public class PermanentCreatureAi extends PermanentAi {
 
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        if (SpecialCardAi.TaigamSidisisHand.NAME.equals(sa.getHostCard().getName()) && !sa.isCastFromPlayEffect()) {
+            // Dead-card batch 2, row 26. Library floor for its three-cards-an-upkeep dig and the
+            // RNG-free mana ceiling (G2), answered before super's upkeep-cost scan and before
+            // canPlayAndPayForFace's canPayCost rolls ComputerUtilMana.isManaSourceReserved. It only
+            // declines; a Play-effect cast (a thief) keeps the stock path. See the class comment.
+            final AiAbilityDecision floor = SpecialCardAi.TaigamSidisisHand.considerCast(ai, sa);
+            if (!floor.willingToPlay()) {
+                return floor;
+            }
+        }
         AiAbilityDecision decision = super.checkApiLogic(ai, sa);
         if (!decision.willingToPlay()) {
             return decision;

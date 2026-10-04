@@ -156,6 +156,13 @@ public class DigAi extends SpellAbilityAi {
     
     @Override
     public Card chooseSingleCard(Player ai, SpellAbility sa, Iterable<Card> valid, boolean isOptional, Player relatedPlayer, Map<String, Object> params) {
+        if (SpecialCardAi.TaigamSidisisHand.digs(ai, sa)) {
+            // Dead-card batch 2, row 26. The stock getBestAI below keeps the highest-MV card of a
+            // mixed pick, so a land-short owner would mill its land drops every upkeep. Keeps a
+            // land while short, else the stock pick; no random draw. A thief's dig keeps the stock
+            // path, and every other Dig card takes exactly the path it took before.
+            return SpecialCardAi.TaigamSidisisHand.chooseDigCard(ai, valid);
+        }
         if ("DigForCreature".equals(sa.getParam("AILogic"))) {
             Card bestChoice = ComputerUtilCard.getBestCreatureAI(valid);
             if (bestChoice == null) {

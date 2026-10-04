@@ -163,6 +163,15 @@ public class PumpAi extends PumpAiBase {
             // Pump card takes exactly the path it took before this branch.
             return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
         }
+        if (SpecialCardAi.TaigamSidisisHand.NAME.equals(sa.getHostCard().getName()) && !(sa instanceof AbilitySub)) {
+            // Dead-card batch 2, row 26. Below, setMaxXValue announces X as the whole graveyard and
+            // the payment exiles all of it for any kill (after useRemovalNow's random roll). The
+            // evaluator announces X as exactly the target's toughness, floors the kill and what the
+            // payment exiles, and vetoes a thief, all with no random draw. It reads the host, not
+            // getAbilitySourceName: a Mairsil, the Pretender grant (host Mairsil) keeps the stock
+            // path it ran in A. Every other Pump card takes exactly the path it took before.
+            return SpecialCardAi.TaigamSidisisHand.considerShrink(ai, sa);
+        }
         final Game game = ai.getGame();
         final Card source = sa.getHostCard();
         final SpellAbility root = sa.getRootAbility();
