@@ -47,6 +47,10 @@ public class RepeatAi extends SpellAbilityAi {
             // Dance with Calamity: exile another card only while the stopping model says it pays
             return SpecialCardAi.DanceWithCalamity.exileAnother(player, sa);
         }
+        if ("FieryGambit".equals(sa.getParam("AILogic"))) {
+            // Fiery Gambit: flip again only while the stopping rule says it pays (dead-card batch 2, row 84)
+            return SpecialCardAi.FieryGambit.flipAgain(player, sa);
+        }
       //TODO add logic to have computer make better choice (ArsenalNut)
         return false;
     }

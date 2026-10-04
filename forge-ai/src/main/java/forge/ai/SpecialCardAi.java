@@ -9694,6 +9694,265 @@ public class SpecialCardAi {
         }
     }
 
+    // Fiery Gambit (dead-card batch 2, row 84)
+    // "Flip a coin until you lose a flip or choose to stop flipping. If you lose a flip, Fiery
+    // Gambit has no effect. If you win one or more flips, Fiery Gambit deals 3 damage to target
+    // creature. If you win two or more flips, Fiery Gambit deals 6 damage to each opponent. If you
+    // win three or more flips, draw nine cards and untap all lands you control." ({2}{R} sorcery.)
+    // The script is a Pump targeting shell (+0/+0, no keywords) over a Repeat of FlipCoin and
+    // Win-conditioned damage, draw and untap subs. The stock non-curse targeting offers only our
+    // own creatures (PumpAiBase.getPumpCreatures), so it returned TargetingFailed on every consult,
+    // and the stock RepeatAi.confirmAction stopped after the first flip. Three hooks:
+    // - consider (PumpAi.checkApiLogic, the root spell): the cast. Real mana with red (HonestMana,
+    //   G2, against the engine's test-mode cost), a first flip that can be won, and a real
+    //   target: the best opposing creature the spell's 3 damage destroys for good
+    //   (getEnoughDamageToKill: indestructible, shield counters, regeneration shields and
+    //   prevention; no undying or persist return, not SacMe), never warded, worth at least a
+    //   vanilla nontoken 2/2 (evaluateCreature >= MIN_KILL_EVAL; a 1/1 token is 105). The one
+    //   exception is the reach: when 6 damage kills every opponent, any target the 3 damage cannot
+    //   hurt us with, and flipAgain flips for the lethal second win. Never our own creature that
+    //   would die.
+    // - flipAgain (RepeatAi.confirmAction, routed by AILogic$ FieryGambit on the Repeat sub):
+    //   asked after each won flip; flips again only on strictly positive expected value in cards,
+    //   never past three wins, never into a deck-out, and locks a lethal second win.
+    // - retargetCopy (PumpAi.doTriggerNoCost, copies only): a copy that may choose new targets
+    //   (Krark, the Thumbless) is aimed away from our own creatures that would die.
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card on the normal-cast path.
+    // consider reads state only: calculateManaCost in test mode, HonestMana (its only write is
+    // setActivatingPlayer on the mana abilities it reads), the flip statics, getTargetableCards,
+    // evaluateCreature, getEnoughDamageToKill and predictDamageTo. It calls no useRemovalNow and
+    // no lifeInDanger (both draw), writes no AiCardMemory and sets the target only on WillPlay.
+    // flipAgain and retargetCopy run only after a cast, and draw nothing either.
+    public static class FieryGambit {
+        public static final String NAME = "Fiery Gambit";
+        public static final int DAMAGE = 3;
+        public static final int FACE_DAMAGE = 6;
+        public static final int DRAWN = 9;
+        public static final int MIN_KILL_EVAL = 160;      // a vanilla nontoken 2/2
+        public static final int LIBRARY_MARGIN = 4;       // SqueesRevenge's decking margin
+        static final double CARD_EVAL = 160.0;            // a kill's worth in cards: eval / 160 ...
+        static final double MAX_KILL_CARDS = 3.0;         // ... at most 3
+        static final double WIN = 100.0;                  // the face damage ends the game
+        static final double FACE_PER_OPP = 0.5;           // 6 damage that does not kill
+        static final double UNTAP = 0.5;                  // untapping our lands
+        static final double EPS = 1e-9;                   // ties stop
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Card host = sa.getHostCard();
+            // Decline an unaffordable Gambit here, not in ComputerUtilCost.canPayCost, whose test
+            // payment draws random numbers while the card is only held (isManaSourceReserved).
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.RED) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (SqueesRevenge.firstFlipChance(ai) <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // every flip is lost: no effect
+            }
+            // 1. The kill.
+            Card kill = null;
+            int killEval = -1;
+            Card anyOpp = null;
+            int anyEval = -1;
+            for (final Card c : CardLists.getTargetableCards(ai.getOpponents().getCreaturesInPlay(), sa)) {
+                if (c.hasKeyword(Keyword.WARD)) {
+                    continue; // the ward trigger can counter it
+                }
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                if (v > anyEval) {
+                    anyOpp = c;
+                    anyEval = v;
+                }
+                if (v > killEval && isKill(c, host)) {
+                    kill = c;
+                    killEval = v;
+                }
+            }
+            if (kill != null && killEval >= MIN_KILL_EVAL) {
+                return target(sa, kill);
+            }
+            // 2. The reach: 6 damage kills every opponent, and flipAgain flips for the second win.
+            if (killsEveryOpponent(ai, host)) {
+                Card t = kill != null ? kill : anyOpp;
+                if (t == null) {
+                    t = ownSurvivor(ai, sa, host, Collections.emptySet());
+                }
+                if (t != null) {
+                    return target(sa, t);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // RepeatAi.confirmAction: flip again? Asked only while no flip is lost (RepeatEffect checks
+        // Loss EQ0 before asking), after the mandatory first flip. Units: cards. Stopping locks what
+        // is won; flipping again risks all of it for the next unlock. Draw-on-win triggers
+        // (Zndrsplt, Eye of Wisdom: d per won flip) are kept whatever the later flips do.
+        public static boolean flipAgain(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final int wins = AbilityUtils.calculateAmount(host, "Win", sa); // mirrors RepeatCheckSVar's read
+            if (wins <= 0 || wins >= 3) {
+                return false; // three wins unlock everything
+            }
+            final Boolean fixed = StaticAbilityFlipCoinMod.fixedResult(ai);
+            final double q = fixed == null ? SqueesRevenge.laterFlipChance(ai) : (fixed ? 1.0 : 0.0);
+            final int d = SqueesRevenge.drawOnWinTriggers(ai);
+            final int library = ai.getCardsIn(ZoneType.Library).size();
+            if (q <= 0 || library < LIBRARY_MARGIN + d) {
+                return false;
+            }
+            final double k = killValue(ai, sa.getRootAbility().getTargetCard(), host);
+            final double face = faceValue(ai, host);
+            final double nine;
+            if (!ai.canDraw()) {
+                nine = UNTAP;
+            } else if (library - DRAWN - 2 * d < LIBRARY_MARGIN) {
+                nine = -WIN + UNTAP;  // the nine cards could deck us
+            } else {
+                final int room = ai.isUnlimitedHandSize() ? DRAWN
+                        : Math.max(1, ai.getMaxHandSize() - ai.getCardsIn(ZoneType.Hand).size());
+                nine = Math.min(DRAWN, room) + UNTAP;
+            }
+            final double stop2 = k + face;
+            final double cont2 = q * (k + face + nine + d);
+            if (wins == 2) {
+                return cont2 > stop2 + EPS; // a locked lethal (face = WIN) stops unless q == 1
+            }
+            final double cont1 = q * (Math.max(stop2, cont2) + d);
+            return cont1 > k + EPS;
+        }
+
+        // PumpAi.doTriggerNoCost for a copy of the spell that may choose new targets (Krark, the
+        // Thumbless; setupTargets -> chooseTargetsFor -> doTrigger(sa, true)). The stock pumpTgtAI
+        // re-aimed the copy at our own creature that can attack, or our best one
+        // (pumpMandatoryTarget), so its 3 damage could kill Okaun or Krark himself. Order: the best
+        // opposing creature the 3 damage destroys for good, else the best opposing creature, never
+        // warded, neither already aimed at by a Fiery Gambit on the stack (the copy resolves first,
+        // and a kill there would fizzle the original); else our least valuable creature that
+        // survives 3 and no Gambit aims at; else CantPlayAi, and orderAndPlaySimultaneousSa puts the
+        // original's target back (setupTargets built a new TargetChoices, the old one is intact).
+        public static AiAbilityDecision retargetCopy(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Set<Card> aimed = aimedByGambits(ai.getGame());
+            sa.resetTargets();
+            Card kill = null;
+            int killEval = -1;
+            Card anyOpp = null;
+            int anyEval = -1;
+            for (final Card c : CardLists.getTargetableCards(ai.getOpponents().getCreaturesInPlay(), sa)) {
+                if (c.hasKeyword(Keyword.WARD) || aimed.contains(c)) {
+                    continue;
+                }
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                if (v > anyEval) {
+                    anyOpp = c;
+                    anyEval = v;
+                }
+                if (v > killEval && isKill(c, host)) {
+                    kill = c;
+                    killEval = v;
+                }
+            }
+            Card t = kill != null ? kill : anyOpp;
+            if (t == null) {
+                t = ownSurvivor(ai, sa, host, aimed);
+            }
+            if (t == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return target(sa, t);
+        }
+
+        // an opposing creature the spell's 3 damage destroys for good
+        static boolean isKill(final Card c, final Card host) {
+            return !c.hasSVar("SacMe") && !ComputerUtilCard.hasActiveUndyingOrPersist(c) && dies(c, host);
+        }
+
+        // batch-1 idiom: indestructible, shield counters, regeneration shields and prevention included
+        static boolean dies(final Card c, final Card host) {
+            return ComputerUtilCombat.getEnoughDamageToKill(c, DAMAGE, host, false) <= DAMAGE;
+        }
+
+        static boolean killsEveryOpponent(final Player ai, final Card host) {
+            boolean any = false;
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.canLoseLife() || opp.cantLoseForZeroOrLessLife() || opp.cantLose()
+                        || ComputerUtilCombat.predictDamageTo(opp, FACE_DAMAGE, host, false) < opp.getLife()) {
+                    return false;
+                }
+                any = true;
+            }
+            return any;
+        }
+
+        // the kill in cards: + eval / 160 (at most 3) for an opposing creature the 3 damage destroys
+        // for good, minus the same for a creature of ours that dies (a thief's stock target), else 0
+        static double killValue(final Player ai, final Card t, final Card host) {
+            if (t == null || !t.isInPlay() || !t.isCreature()) {
+                return 0;
+            }
+            final double cards = Math.min(MAX_KILL_CARDS, ComputerUtilCard.evaluateCreature(t) / CARD_EVAL);
+            if (ai.isOpponentOf(t.getController())) {
+                return isKill(t, host) ? cards : 0;
+            }
+            return dies(t, host) ? -cards : 0;
+        }
+
+        // WIN when 6 damage kills every opponent, else FACE_PER_OPP for each opponent it damages
+        static double faceValue(final Player ai, final Card host) {
+            if (killsEveryOpponent(ai, host)) {
+                return WIN;
+            }
+            double v = 0;
+            for (final Player opp : ai.getOpponents()) {
+                if (ComputerUtilCombat.predictDamageTo(opp, FACE_DAMAGE, host, false) > 0) {
+                    v += FACE_PER_OPP;
+                }
+            }
+            return v;
+        }
+
+        // our least valuable creature that survives the spell's 3 damage and no Gambit aims at
+        private static Card ownSurvivor(final Player ai, final SpellAbility sa, final Card host, final Set<Card> aimed) {
+            Card t = null;
+            int tEval = Integer.MAX_VALUE;
+            for (final Card c : CardLists.getTargetableCards(ai.getCreaturesInPlay(), sa)) {
+                if (aimed.contains(c) || dies(c, host)) {
+                    continue;
+                }
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                if (v < tEval) {
+                    t = c;
+                    tEval = v;
+                }
+            }
+            return t;
+        }
+
+        // the cards Fiery Gambit spells already on the stack target (the original, earlier copies)
+        private static Set<Card> aimedByGambits(final Game game) {
+            final Set<Card> aimed = new HashSet<>();
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility item = si.getSpellAbility();
+                if (item == null || !NAME.equals(ComputerUtilAbility.getAbilitySourceName(item))) {
+                    continue;
+                }
+                for (final Card c : item.getTargets().getTargetCards()) {
+                    aimed.add(c);
+                }
+            }
+            return aimed;
+        }
+
+        private static AiAbilityDecision target(final SpellAbility sa, final Card t) {
+            sa.resetTargets();
+            sa.getTargets().add(t);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Finale of Promise
     // "X R R: you may cast up to one target instant card and/or up to one target sorcery card from
     // your graveyard, each with mana value X or less, without paying their mana costs." Two SP$ Pump

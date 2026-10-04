@@ -183,6 +183,15 @@ public class PumpAi extends PumpAiBase {
             // stock path, as does every other Pump card.
             return SpecialCardAi.DomineeringWill.consider(ai, sa);
         }
+        if (SpecialCardAi.FieryGambit.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Dead-card batch 2, row 84. A Pump targeting shell (+0/+0, no keywords; the real effects
+            // are the Repeat/FlipCoin sub and its Win-conditioned damage, draw and untap subs): the
+            // non-curse targeting below offers only our own creatures and returned TargetingFailed on
+            // every consult. The evaluator chooses and floors the target itself and draws no random
+            // numbers; the card carried AI:RemoveDeck:All, so the stock path never drew for it. Every
+            // other Pump card takes exactly the path it took before this branch.
+            return SpecialCardAi.FieryGambit.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final Card source = sa.getHostCard();
         final SpellAbility root = sa.getRootAbility();
@@ -766,6 +775,16 @@ public class PumpAi extends PumpAiBase {
             if (carpet != null) {
                 return carpet;
             }
+        }
+        if (sa.isCopied() && !(sa instanceof AbilitySub)
+                && SpecialCardAi.FieryGambit.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dead-card batch 2, row 84. A copy of Fiery Gambit that may choose new targets (Krark,
+            // the Thumbless): pumpTgtAI below re-aimed its 3 damage at our own creature that can
+            // attack, or at our best one. The copy goes at an opposing creature no Gambit on the stack
+            // aims at, else at our own creature that survives 3; otherwise CantPlayAi, and the copy
+            // keeps the original's target. A Play-effect cast (Nathan Drake, Prosper) is not a copy
+            // and keeps the stock path below. Post-cast only; no random draw.
+            return SpecialCardAi.FieryGambit.retargetCopy(ai, sa);
         }
         final SpellAbility root = sa.getRootAbility();
         final String numDefense = sa.getParamOrDefault("NumDef", "");
