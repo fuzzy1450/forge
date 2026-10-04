@@ -312,6 +312,16 @@ public class CountersPutAi extends CountersAi {
             return doStationAi(ai, sa);
         }
 
+        if (sa.isPwAbility() && SpecialCardAi.GideonChampionOfJustice.NAME.equals(sourceName)) {
+            // Dead-card batch 2, row 102. Gideon, Champion of Justice's +1 counts the creatures of
+            // a target opponent: X reads 0 before a target exists, so the "no counters to add"
+            // check below declined it every time, and the targeting branch lists cards only. Judged
+            // in SpecialCardAi.GideonChampionOfJustice.considerPlusOne (Main 2, the opponent with
+            // the most creatures). Every statement above is RNG-free for it (LOYALTY counters, no
+            // AILogic, not Station). Every other PutCounter ability takes the path it took before.
+            return SpecialCardAi.GideonChampionOfJustice.considerPlusOne(ai, sa);
+        }
+
         if (sourceName.equals("Feat of Resistance")) { // sub-ability should take precedence
             CardCollection prot = ProtectAi.getProtectCreatures(ai, sa.getSubAbility());
             if (!prot.isEmpty()) {

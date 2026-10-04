@@ -154,6 +154,17 @@ public class PermanentNoncreatureAi extends PermanentAi {
             }
         }
 
+        // Gideon, Champion of Justice dropped AI:RemoveDeck:All. Its own cast is judged here, after
+        // the stock approval (Main 2 unless castPermanentInMain1): only into a window real mana can
+        // pay for, so a decline draws no random numbers and returns before canPlaySa's canPayCost
+        // test payment. A Play-effect cast (Nathan Drake's attack trigger, Rashmi and Ragavan's
+        // free cast; PermanentAi.doTriggerNoCost ends in this checkApiLogic) keeps the stock answer
+        // it had while the hint was on the card: the hint never applied there.
+        if (sa.isSpell() && !sa.isCastFromPlayEffect()
+                && SpecialCardAi.GideonChampionOfJustice.NAME.equals(host.getName())) {
+            return SpecialCardAi.GideonChampionOfJustice.considerCast(ai, sa);
+        }
+
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
             // TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?

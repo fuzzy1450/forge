@@ -77,6 +77,17 @@ public class AnimateAi extends SpellAbilityAi {
             // of the stock path. Every other Animate card takes the path it took before.
             return SpecialCardAi.TurnToFrog.consider(ai, sa);
         }
+        if (sa.isPwAbility()
+                && SpecialCardAi.GideonChampionOfJustice.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Gideon, Champion of Justice's 0 (dead-card batch 2, row 102), judged whole in
+            // SpecialCardAi.GideonChampionOfJustice.considerSwing. The stock checkApiLogic animates
+            // any untapped non-creature that was in play since our turn began and, at sorcery
+            // speed, skips the does-it-attack check, so it would fire in every Main 1 and starve
+            // the +1. The card carried AI:RemoveDeck:All, so its owner never evaluated this; the
+            // GideonPrevent sub still goes through chkDrawbackWithSubs. Every other Animate card
+            // takes the path it took before.
+            return SpecialCardAi.GideonChampionOfJustice.considerSwing(ai, sa);
+        }
         return super.canPlay(ai, sa);
     }
 

@@ -11224,6 +11224,176 @@ public class SpecialCardAi {
         }
     }
 
+    // Gideon, Champion of Justice (dead-card batch 2, row 102)
+    // {2}{W}{W} planeswalker, loyalty 4. "[+1]: Put a loyalty counter on Gideon for each creature
+    // target opponent controls." (a net 1 + N) "[0]: Until end of turn, Gideon becomes a Human
+    // Soldier creature with power and toughness each equal to the number of loyalty counters on
+    // him and gains indestructible. He's still a planeswalker. Prevent all damage that would be
+    // dealt to him this turn." "[-15]: Exile all other permanents." (ours too, lands included.)
+    // AI:RemoveDeck:All kept the spell and all three loyalty abilities out of every playable list
+    // (AiController.getSpellAbilityToPlay's filter is keyed on the host). Behind the hint the +1
+    // was dead in stock CountersPutAi (X = TargetedPlayer$CreaturesInPlay reads 0 before a target
+    // exists, so "no counters to add" declines it, and its targeting branch lists cards only),
+    // and the stock 0 fired in every Main 1 from Gideon's second turn whether or not he attacked
+    // (AnimateAi.checkApiLogic skips the attack check at sorcery speed), which would starve the
+    // +1 for the rest of the game.
+    // Policy: the +1 is the default, in Main 2, where the stock -15 (ChangeZoneAllAi: its
+    // relative-board floor, Main 2 only, the run-away and 80% rolls) is looked at first and stays
+    // unrouted. The 0 is a Main 1 swing only when the +1 has no legal target; or no opposing
+    // creature can block and the swing is lethal; or no opposing creature can block, the +1
+    // would add at most 2, the -15 floor would not fire, and swinging instead of growing does not
+    // decide whether Gideon survives the opponents' next attack. Every swing must also be one the
+    // attack controller would make with the animated Gideon.
+    // RNG: A never evaluated the card for its owner. considerCast's decline draws nothing and
+    // returns before canPlaySa's canPayCost, whose test payment rolls
+    // ComputerUtilMana.isManaSourceReserved; affordability is the cost as the engine prices it
+    // (test-mode calculateManaCost) against HonestMana (G2) in total and in white, never
+    // getAvailableManaEstimate, which counts the words of Produced$ (Temple of Silence 3, Command
+    // Tower 2). considerPlusOne draws nothing; considerSwing builds an AiAttackController (which
+    // can draw) only after its RNG-free checks pass. No AiCardMemory writes, no mana held.
+    public static class GideonChampionOfJustice {
+        public static final String NAME = "Gideon, Champion of Justice";
+        static final int ULTIMATE = 15;
+
+        // PermanentNoncreatureAi.checkApiLogic's name gate, after the stock approval (the legend
+        // rule; Main 2 unless castPermanentInMain1), for a normal cast only: a Play-effect cast
+        // (Nathan Drake's attack trigger, Rashmi and Ragavan) keeps the stock answer it had while
+        // the hint was on the card. Judged on the spell being cast (row 77).
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // CountersPutAi.checkApiLogic's name gate. Main 2 only: the stock -15 is
+        // TimingRestrictions in Main 1 (ChangeZoneAllAi), so a Main 1 +1 would spend the turn's
+        // loyalty activation before the ultimate is ever asked. The target is the targetable
+        // opponent with the most creatures (the most counters). Adding loyalty is never self-harming.
+        public static AiAbilityDecision considerPlusOne(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            final Player best = bestPlusOneTarget(ai, sa);
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // AnimateAi.canPlay's name gate, in place of the stock 0 (which fires in every Main 1).
+        public static AiAbilityDecision considerSwing(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Game game = ai.getGame();
+            final int loyalty = host.getCurrentLoyalty();
+            // the cheap preconditions first: our Main 1, Gideon able to attack
+            if (!game.getPhaseHandler().is(PhaseType.MAIN1, ai) || host.isTapped() || host.hasSickness()
+                    || loyalty <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility plusOne = findPlusOne(ai, host);
+            final Player tgt = plusOne == null ? null : bestPlusOneTarget(ai, plusOne);
+            final boolean swing;
+            if (tgt == null) {
+                swing = true; // the +1 has nothing to target
+            } else if (anyOpposingBlocker(ai)) {
+                swing = false; // a chump block is free for them; grow instead
+            } else if (loyalty >= tgt.getLife()) {
+                swing = true; // lethal (1v1: the +1 target is the defender)
+            } else {
+                final int n = tgt.getCreaturesInPlay().size(); // the +1 adds 1 + n
+                final int p = opposingCombatDamage(ai);
+                // the swing never costs Gideon's survival: he lives through their attack at his
+                // current loyalty either way, or dies to it even after the +1
+                final boolean survivalNeutral = p < loyalty || p >= loyalty + 1 + n;
+                swing = n <= 1 && !ultimateWanted(ai, host, loyalty) && survivalNeutral;
+            }
+            if (!swing) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // only now the one expensive check (the stock AnimateAi pattern): will it really attack?
+            final Card animated = AnimateAi.becomeAnimated(host, sa);
+            if (!ComputerUtilCard.doesSpecifiedCreatureAttackAI(ai, animated)) {
+                return new AiAbilityDecision(0, AiPlayDecision.DoesntImpactCombat);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the targetable opponent with the most creatures; opponents in turn order, the first on a tie
+        private static Player bestPlusOneTarget(final Player ai, final SpellAbility plusOne) {
+            Player best = null;
+            int most = -1;
+            for (final Player opp : ai.getOpponents()) {
+                if (!plusOne.canTarget(opp)) {
+                    continue;
+                }
+                final int n = opp.getCreaturesInPlay().size();
+                if (n > most) {
+                    most = n;
+                    best = opp;
+                }
+            }
+            return best;
+        }
+
+        // the host's own +1 (its PutCounter loyalty ability); canTarget reads the activating player
+        private static SpellAbility findPlusOne(final Player ai, final Card host) {
+            for (final SpellAbility ab : host.getSpellAbilities()) {
+                if (ab.isPwAbility() && ab.getApi() == ApiType.PutCounter) {
+                    ab.setActivatingPlayer(ai);
+                    return ab;
+                }
+            }
+            return null;
+        }
+
+        // an untapped opposing creature that can block at all
+        private static boolean anyOpposingBlocker(final Player ai) {
+            for (final Card c : ai.getOpponents().getCreaturesInPlay()) {
+                if (CombatUtil.canBlock(c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // what the opponents' creatures could deal Gideon on their next attack
+        private static int opposingCombatDamage(final Player ai) {
+            int p = 0;
+            for (final Card c : ai.getOpponents().getCreaturesInPlay()) {
+                p += Math.max(0, c.getNetCombatDamage());
+            }
+            return p;
+        }
+
+        // mirrors the stock -15 floor (ChangeZoneAllAi, the mixed-permanent branch), so a Main 1
+        // swing never pre-empts an ultimate Main 2 would take
+        private static boolean ultimateWanted(final Player ai, final Card host, final int loyalty) {
+            if (loyalty < ULTIMATE) {
+                return false;
+            }
+            final CardCollection ours = CardLists.filter(ai.getCardsIn(ZoneType.Battlefield), c -> !c.equals(host));
+            final CardCollectionView theirs = ai.getOpponents().getCardsIn(ZoneType.Battlefield);
+            return ComputerUtilCard.evaluatePermanentList(ours)
+                    + AiProfileUtil.getIntProperty(ai, AiProps.BOUNCE_ALL_ELSEWHERE_NONCREAT_EVAL_DIFF)
+                    < ComputerUtilCard.evaluatePermanentList(theirs);
+        }
+
+        // The cost after CostAdjustment (calculateManaCost in test mode, the G1 ceiling's call: no
+        // MyRandom, nothing written to the SA) against G2's count with held sources skipped: its
+        // mana value against the total and its {W}{W} against the white sources (Combo letters
+        // read, never "any Combo is white"). A private ceiling in CommanderCastCeiling's shape; G1
+        // and G2 are called, never changed.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
+        }
+    }
+
     // Gift of Doom (dead-card batch 2, row 104)
     // "Enchant creature. Enchanted creature has deathtouch and indestructible. Morph - Sacrifice
     // another creature. As Gift of Doom is turned face up, you may attach it to a creature."
