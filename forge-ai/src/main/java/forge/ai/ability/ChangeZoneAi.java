@@ -392,20 +392,6 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.TitansPresence.consider(aiPlayer, sa, false);
         }
 
-        if (SpecialCardAi.Reshape.isReshape(sa) && !(sa instanceof AbilitySub)) {
-            // X U U, sacrifice an artifact: tutor an artifact of mana value X or less onto the
-            // battlefield. The stock hidden-origin path below announces the largest affordable X
-            // (setMaxXValue, whose test payments draw MyRandom), fetches whatever is most expensive
-            // at that X - an artifact land at X = 0 - and willPayCosts ignores the sacrifice check's
-            // answer for a Battlefield destination. AI:RemoveDeck:All stripped the card before any
-            // handler ran, so the stock path drew no random numbers for it. A non-owner (a static
-            // "you may cast it" theft, a face-down exile included) declines in Reshape.consider,
-            // RNG-free, as A's filter refused it; Play-effect casts (Nathan Drake's attack trigger)
-            // go through doTriggerNoCost and never reach checkApiLogic. Every other ChangeZone card
-            // takes exactly the path it took before this branch.
-            return SpecialCardAi.Reshape.consider(aiPlayer, sa);
-        }
-
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
@@ -1896,16 +1882,6 @@ public class ChangeZoneAi extends SpellAbilityAi {
     }
 
     public static Card chooseCardToHiddenOriginChangeZone(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList, Player player, final Player decider) {
-        if (SpecialCardAi.Reshape.isReshape(sa) && sa.getHostCard() != null
-                && decider.equals(sa.getHostCard().getOwner())) {
-            // Reshape's owner (its cast, or a Krark, the Thumbless copy of it, whose second search
-            // Reshape.consider never priced) never fetches an artifact whose activated ability
-            // reaches DestroyAll (Boompile: FlipCoinAi taps it at once, and a won flip destroys
-            // every nonland permanent, ours included). Reshape.chooseX drops the same cards, so the
-            // X it announced is still met. Real resolutions only: no held-game draw. A thief's
-            // resolution, and every other card's search, takes the stock pick below unchanged.
-            fetchList = CardLists.filter(fetchList, c -> !SpecialCardAi.Reshape.isHarmful(c));
-        }
         if (fetchList.isEmpty()) {
             return null;
         }
