@@ -20883,10 +20883,17 @@ public class SpecialCardAi {
         // Our next upkeep is not paid for yet (less fodder than Mesas): make a Pegasus in the first
         // window left before it. Own turn from main 2 on (after combat and after the Mesa itself
         // resolved), or any window of an opponent's turn. Stock TokenAi never activates a non-haste
-        // instant-speed token ability on our own turn and rolls 80% per window on theirs, and the AI
-        // never answers its own upkeep trigger, so without this a Mesa could die with the mana for
-        // its Pegasus unspent. The first test is the name: inert, and spawnToken-free, for every
-        // other token ability. Controller-based, so a stolen Mesa is kept alive by its thief.
+        // instant-speed token ability on our own turn and rolls 80% per window on theirs, so without
+        // this a Mesa could die with the mana for its Pegasus unspent.
+        // The net behind those windows, for a main 2 whose last mana a hand play took: the AI does
+        // not answer its own trigger unless the trigger says so, and TrigUpkeep carries
+        // AIRespondsToOwnAbility (AiController sets mustRespond while it is on top). So our own
+        // upkeep is a window too, but only while this Mesa's trigger is on the stack
+        // (hasSourceOnStack): the Pegasus is made from fresh mana in response to it. Once the
+        // trigger has resolved the window closes; a paid upkeep leaves no fodder, and a bare upkeep
+        // window would make next turn's Pegasus there, ahead of every main-phase spell.
+        // The first test is the name: inert, and spawnToken-free, for every other token ability.
+        // Controller-based, so a stolen Mesa is kept alive by its thief.
         public static boolean needsKeepAlive(final Player ai, final SpellAbility sa, final PhaseHandler ph) {
             final Card host = sa.getHostCard();
             if (host == null || !NAME.equals(host.getName()) || sa.isSpell() || !host.isInPlay()
@@ -20897,7 +20904,14 @@ public class SpecialCardAi {
             if (fodder(ai) >= mesas) {
                 return false; // surplus flyers: stock TokenAi decides
             }
-            return !ph.isPlayerTurn(ai) || !ph.getPhase().isBefore(PhaseType.MAIN2);
+            if (!ph.isPlayerTurn(ai)) {
+                return true;
+            }
+            if (ph.is(PhaseType.UPKEEP)) {
+                // the response net: our own upkeep trigger waits on the stack, nothing pays it yet
+                return ai.getGame().getStack().hasSourceOnStack(host, null);
+            }
+            return !ph.getPhase().isBefore(PhaseType.MAIN2);
         }
     }
 
