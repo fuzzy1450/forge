@@ -10442,6 +10442,176 @@ public class SpecialCardAi {
         }
     }
 
+    // Ghoulcaller Gisa
+    // "{B}, {T}, Sacrifice another creature: Create X 2/2 black Zombie creature tokens, where X is the
+    // sacrificed creature's power." AI:RemoveDeck:All kept it out of every evaluation (AiController's
+    // removeIf), and behind the hint TokenAi could never fire it: checkPhaseRestrictions takes a card id for
+    // a token prototype and then reads X (Sacrificed$CardPower) as 0 before payment; checkApiLogic rolls
+    // TOKEN_GENERATION_ABILITY_CHANCE; the stock SacCost preference finds nothing under Default.ai's
+    // SACRIFICE_DEFAULT_PREF_ENABLE=false (its threatened test is blind to destroy/exile with a Token
+    // saviour); the payment falls back to getWorstAI. Only a body that is leaving or free anyway is cashed
+    // in, and only for at least one Zombie:
+    //  tier 0 - dying anyway: an opponent's stack object kills / exiles / steals it for good (Momentous
+    //           Fall's verdict and its until-EOT-steal and divided-damage exclusions), its own evoke
+    //           sacrifice trigger is on the stack, or it dies in this combat without trading and with no
+    //           trampler behind it, judged at declare blockers only (in the first-strike damage step that
+    //           damage is already marked and the stock predictors count it twice - Evolutionary Leap's
+    //           W11 retry); or a blitzed body / end-of-turn-leaving token in Main 2, after it fought.
+    //           Power >= 1.
+    //  tier 1 - free: SacMe, active undying/persist (it comes back too), useless. Power >= 1.
+    //  tier 2 - a cheap token (evaluateCreature <= SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL): power >= 2,
+    //           so the one token becomes two or more 2/2s.
+    // Tiers 1-2 only at the end step before our turn (Gisa untaps at once and the Zombies can attack), or when
+    // Gisa itself is leaving. Never the commander unless it is leaving. Nothing at all while a board wipe is
+    // on the stack: the new Zombies would die with the rest. No blocker test: X >= 1 untapped 2/2s replace the
+    // body. RNG-free: no token prototype, no AiBlockController, no roll; no mana is held. The
+    // ComputerUtil.getCardPreference SacCost hook answers checkSacrificeCost and the payment's
+    // chooseSacrificeType with this same chooser, so the creature priced is the creature paid.
+    public static class GhoulcallerGisa {
+        public static final String NAME = "Ghoulcaller Gisa";
+        static final int TOKEN_MIN_POWER = 2;
+
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && sa.getApi() == ApiType.Token && !(sa instanceof AbilitySub)
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    && sa.getPayCosts() != null && sa.getPayCosts().getCostPartByType(CostSacrifice.class) != null;
+        }
+
+        // O(1), before any loop: some tier can fire only in one of these
+        public static boolean inWindow(final Player ai) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            return !game.getStack().isEmpty()
+                    || ph.is(PhaseType.MAIN2)
+                    || isEndStepBeforeOurs(ai, ph)
+                    || isCombatWindow(game, ph);
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final CostSacrifice sac = sa.getPayCosts().getCostPartByType(CostSacrifice.class);
+            final CardCollection options = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                    sac.getType().split(";"), ai, sa.getHostCard(), sa);
+            if (options.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return chooseSacrifice(ai, sa, options) == null
+                    ? new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable)
+                    : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Called at the decision (consider, then checkSacrificeCost) and at the payment (chooseSacrificeType),
+        // all through getCardPreference's SacCost hook: a function of the board and stack alone. Costs are
+        // decided before anything is paid and the ability is not yet on the stack, so each call returns the
+        // same creature.
+        public static Card chooseSacrifice(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            if (!inWindow(ai)) {
+                return null;
+            }
+            final Game game = ai.getGame();
+            if (massThreatOnStack(game)) {
+                return null; // the Zombies would share the wipe's fate
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean combatWindow = isCombatWindow(game, ph);
+            final boolean stackLive = !game.getStack().isEmpty();
+            final Set<Card> ignored = stackLive ? MomentousFall.stackThreatsToIgnore(game) : Collections.<Card>emptySet();
+            final Card host = sa.getHostCard();
+            final boolean hostLeaving = (stackLive && !ignored.contains(host)
+                            && ComputerUtil.predictCreatureWillDieThisTurn(ai, host, null, true))
+                    || (combatWindow && ComputerUtilCombat.combatantWouldBeDestroyed(ai, host, combat));
+            final boolean freeWindow = isEndStepBeforeOurs(ai, ph) || hostLeaving;
+            final boolean main2 = ph.is(PhaseType.MAIN2);
+            final int tokenCap = AiProfileUtil.getIntProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL);
+
+            Card best = null;
+            int bestTier = 0, bestPower = 0, bestEval = 0;
+            for (final Card c : options) {
+                if (!c.isCreature() || c.equals(host) || !ai.equals(c.getController())
+                        || !CardPredicates.canBeSacrificedBy(sa, false).test(c)) {
+                    continue;
+                }
+                final int power = c.getNetPower();
+                if (power < 1) {
+                    continue; // X = 0: no Zombie
+                }
+                // Saviour null keeps predictThreatenedObjects' Destroy / Exile / GainControl branches live;
+                // nonCombatOnly returns the stack verdict alone (Momentous Fall's call)
+                final boolean dying = (stackLive && !ignored.contains(c)
+                                && ComputerUtil.predictCreatureWillDieThisTurn(ai, c, null, true))
+                        || (stackLive && evokeSacrificePending(game, c))
+                        || (combatWindow && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                                && !ComputerUtilCombat.willOpposingCreatureDieInCombat(ai, c, combat)
+                                && !ComputerUtilCombat.isDangerousToSacInCombat(ai, c, combat));
+                final boolean leavingEot = "Blitz".equals(c.getSVar("EndOfTurnLeavePlay"))
+                        || (c.isToken() && c.hasSVar("EndOfTurnLeavePlay"));
+                final int tier;
+                if (dying || (leavingEot && main2)) {
+                    tier = 0;
+                } else if (!freeWindow || c.isCommander()) {
+                    continue;
+                } else if (c.hasSVar("SacMe") || ComputerUtilCard.hasActiveUndyingOrPersist(c)
+                        || ComputerUtilCard.isUselessCreature(ai, c)) {
+                    tier = 1;
+                } else if (c.isToken() && power >= TOKEN_MIN_POWER && ComputerUtilCard.evaluateCreature(c) <= tokenCap) {
+                    tier = 2;
+                } else {
+                    continue; // a real body that is not leaving is never cashed in
+                }
+                // lowest tier, then most Zombies, then the least valuable body, then card id
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                if (best == null || tier < bestTier || (tier == bestTier && (power > bestPower
+                        || (power == bestPower && (eval < bestEval
+                        || (eval == bestEval && c.getId() < best.getId())))))) {
+                    best = c;
+                    bestTier = tier;
+                    bestPower = power;
+                    bestEval = eval;
+                }
+            }
+            return best;
+        }
+
+        private static boolean isEndStepBeforeOurs(final Player ai, final PhaseHandler ph) {
+            return ph.is(PhaseType.END_OF_TURN) && !ph.isPlayerTurn(ai) && ai.equals(ph.getNextTurn());
+        }
+
+        private static boolean isCombatWindow(final Game game, final PhaseHandler ph) {
+            // declare blockers only: at the first-strike damage step that damage is already marked and the stock
+            // predictors (canDestroyAttacker / canDestroyBlocker) apply it a second time
+            return game.getCombat() != null && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS);
+        }
+
+        // An evoked creature whose evoke sacrifice trigger is on the stack is leaving anyway
+        // (AiController lets the AI answer that trigger: mustRespond). predictThreatenedObjects does
+        // not model the Sacrifice API, so this is checked on its own. O(stack), RNG-free.
+        private static boolean evokeSacrificePending(final Game game, final Card c) {
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility s = si.getSpellAbility();
+                if (s != null && s.isTrigger() && s.getTrigger().isKeyword(Keyword.EVOKE)
+                        && c.equals(s.getHostCard())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Crude on purpose: any mass-removal shape anywhere on the stack shuts every tier.
+        private static boolean massThreatOnStack(final Game game) {
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                for (SpellAbility part = si.getSpellAbility(); part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    if (api == ApiType.DestroyAll || api == ApiType.DamageAll || api == ApiType.PumpAll
+                            || api == ApiType.PutCounterAll || api == ApiType.ChangeZoneAll
+                            || api == ApiType.SacrificeAll) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Gideon Blackblade
     public static class GideonBlackblade {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

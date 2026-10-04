@@ -341,6 +341,12 @@ public class ComputerUtil {
                 // chooseSacrificeType alike, ahead of the SacMe shuffle, for whoever controls the Leap
                 return SpecialCardAi.EvolutionaryLeap.chooseSacrifice(ai, sa, typeList);
             }
+            if (SpecialCardAi.GhoulcallerGisa.handles(sa)) {
+                // its activation priced exactly one creature; sacrifice that one (serves both
+                // ComputerUtilCost.checkSacrificeCost and chooseSacrificeType's payment), ahead of the
+                // SacMe shuffle, for whoever controls Gisa
+                return SpecialCardAi.GhoulcallerGisa.chooseSacrifice(ai, sa, typeList);
+            }
             // search for permanents with SacMe. priority 1 is the lowest, priority 5 the highest
             for (int ip = 0; ip < 6; ip++) {
                 final int priority = 6 - ip;

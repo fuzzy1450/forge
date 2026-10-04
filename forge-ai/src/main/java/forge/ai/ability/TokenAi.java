@@ -49,6 +49,11 @@ public class TokenAi extends SpellAbilityAi {
         if (SpecialCardAi.SacredMesa.needsKeepAlive(ai, sa, ph)) {
             return true;
         }
+        if (SpecialCardAi.GhoulcallerGisa.handles(sa)) {
+            // Ghoulcaller Gisa: its window is GhoulcallerGisa.inWindow (O(1)). Routed before spawnToken
+            // (which takes a card id) and before X (Sacrificed$CardPower) reads 0 ahead of the payment.
+            return SpecialCardAi.GhoulcallerGisa.inWindow(ai);
+        }
         final Card source = sa.getHostCard();
         // Planeswalker-related flags
         boolean pwMinus = false;
@@ -148,6 +153,12 @@ public class TokenAi extends SpellAbilityAi {
         // 80% roll below. Draws no random numbers.
         if (SpecialCardAi.NightSoil.isOwnActivation(sa)) {
             return SpecialCardAi.NightSoil.considerActivation(ai, sa);
+        }
+        // Ghoulcaller Gisa dropped AI:RemoveDeck:All. Its sacrifice-for-Zombies ability is judged
+        // here, before spawnToken allocates a card id and before the 80% roll below; the chooser
+        // draws no random numbers.
+        if (SpecialCardAi.GhoulcallerGisa.handles(sa)) {
+            return SpecialCardAi.GhoulcallerGisa.consider(ai, sa);
         }
         final Game game = ai.getGame();
         final Player opp = ai.getWeakestOpponent();
