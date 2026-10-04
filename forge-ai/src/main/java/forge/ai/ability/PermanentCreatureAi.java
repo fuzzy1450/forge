@@ -76,6 +76,14 @@ public class PermanentCreatureAi extends PermanentAi {
             return SpecialCardAi.OverchargedAmalgam.considerCastTiming(ai, sa);
         }
 
+        if (SpecialCardAi.DualcasterMage.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()) {
+            // a spell copy on a flash body: cast only in response to an opponent's instant or
+            // sorcery whose copy we would cast ourselves; never a vanilla 2/2 (doAdvancedFlashLogic's
+            // ETB branch would cast it in our own main phase with nothing to copy, drawing RNG).
+            // RNG-free until the copy judgment.
+            return SpecialCardAi.DualcasterMage.considerCastTiming(ai, sa);
+        }
+
         // Flash logic
         boolean advancedFlash = AiProfileUtil.getBoolProperty(ai, AiProps.FLASH_ENABLE_ADVANCED_LOGIC);
         if (card.hasKeyword(Keyword.FLASH) || (!ai.canCastSorcery() && sa.canCastTiming(ai) && !sa.isCastFromPlayEffect())) {

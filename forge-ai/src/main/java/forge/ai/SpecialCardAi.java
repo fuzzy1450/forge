@@ -7589,6 +7589,237 @@ public class SpecialCardAi {
         }
     }
 
+    // Dualcaster Mage (dead-card batch 2, row 19)
+    // "Flash. When Dualcaster Mage enters, copy target instant or sorcery spell. You may choose
+    // new targets for the copy." ({1}{R}{R} 2/2.) AI:RemoveDeck:All kept it off the playable list
+    // (AiController.getSpellAbilityToPlay). Behind the hint: doAdvancedFlashLogic's ETB branch drew
+    // MyRandom and cast it in our own main phase with nothing to copy; checkETBEffects vetoed every
+    // cast as BadEtbEffects (CopySpellAbilityAi.doTriggerNoCost refused the non-mandatory consult
+    // of a copy trigger with no AILogic); and at resolution the mandatory trigger was answered
+    // WillPlay with no target, so MagicStack.add dropped it ("failed to target"). Cast only in
+    // response to an opponent's instant or sorcery whose copy the AI would cast itself, for free,
+    // right now (Wild Ricochet's floor, at mana value 2+: the copy plus a 2/2 flash body for three
+    // mana); the trigger then targets that spell and the copy re-targets itself at resolution
+    // (CopySpellAbilityEffect -> mayChooseNewTargets -> PlayerControllerAi.
+    // orderAndPlaySimultaneousSa -> setupTargets). Never a vanilla 2/2: an empty stack, our own or
+    // a teammate's spell, a creature spell or an unworthy spell is a decline. Routed by name from
+    // PermanentCreatureAi.checkPhaseRestrictions (the cast window; a Play-effect cast keeps the
+    // stock path) and CopySpellAbilityAi.doTriggerNoCost (the ETB consult and the trigger's
+    // target). considerCastTiming, in order:
+    // - re-entered from a copy's own handler, an empty stack or a non-AI controller: false;
+    // - the top of the stack is a copyable shape (isCopyableShape): an api-based instant or sorcery
+    //   spell cast by an opponent who is not a teammate; not cantBeCopied, AINoCopy or AI:RemoveDeck;
+    //   no X in its mana cost (the copy's X resets to 0 when re-targeted); mana value >=
+    //   MIN_COPIED_CMC; nothing reading mana spent (not copied); every part on Wild Ricochet's api
+    //   whitelist (no Charm, no *All, no Mana, no Play/copy/retarget recursion); no CopyPermanent
+    //   handing tokens to someone else. Else false;
+    // - our ETB trigger would trigger: no static disables it (Torpor Orb, Hushbringer), asked with
+    //   the runParams AiController.checkETBEffectsPreparedCard builds. Else false (a vanilla 2/2);
+    // - the trigger can target that spell (canTargetSpellAbility, the check chooseTarget makes).
+    //   Else false;
+    // - affordable: HonestMana (G2, held sources skipped, restrictions read on this spell) covers
+    //   the engine's test-mode cost (taxes and reductions applied), in total and in red pips.
+    //   Never getAvailableManaEstimate (it counts the words of Produced$). Else false;
+    // - judgeCopy: the copy, costs stripped as the real one's are (CardFactory.
+    //   copySpellAbilityAndPossiblyHost), passes canPlayFromEffectAI with a non-empty, valid target
+    //   set on every targeted part.
+    // RNG parity: A never evaluated the card, so every decline before judgeCopy is a read that
+    // draws nothing and takes no SpellAbility id (the trigger ability is the one built at parse,
+    // and its probe is an LKI copy, which keeps that id; ids feed SpellAbility.hashCode). judgeCopy
+    // runs the copied api's handler (which may draw MyRandom and takes ids for s.copy) only in
+    // affordable structural windows: Wild Ricochet's accepted residual. canPlayAndPayForFace runs
+    // the real canPayCost only after a WillPlay. The ETB consult (checkETBEffects, non-mandatory)
+    // is structural and top-only, so a cast the gate approved is not re-rolled into a decline.
+    public static class DualcasterMage {
+        public static final String NAME = "Dualcaster Mage";
+        // the copy plus a 2/2 flash body for three mana: a one-mana-cheaper floor than Wild
+        // Ricochet's 3 (four mana, no body)
+        public static final int MIN_COPIED_CMC = 2;
+
+        private static final EnumSet<ApiType> ROOT_OK = EnumSet.of(ApiType.Destroy, ApiType.ChangeZone,
+                ApiType.DealDamage, ApiType.Counter, ApiType.Draw, ApiType.Dig, ApiType.Token, ApiType.CopyPermanent);
+        private static final EnumSet<ApiType> SUB_OK = EnumSet.of(ApiType.Destroy, ApiType.ChangeZone,
+                ApiType.DealDamage, ApiType.Draw, ApiType.Dig, ApiType.Token, ApiType.CopyPermanent,
+                ApiType.Cleanup, ApiType.GainLife, ApiType.LoseLife, ApiType.Scry);
+        private static final String[] MANA_SPENT_WORDS = {"Converge", "CastTotalManaSpent", "ManaSpent", "Adamant", "Sunburst"};
+        private static final ThreadLocal<Boolean> JUDGING = ThreadLocal.withInitial(() -> false);
+
+        // PermanentCreatureAi.checkPhaseRestrictions name gate. Cheap, RNG-free checks first.
+        public static boolean considerCastTiming(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            if (JUDGING.get() || game.getStack().isEmpty() || !(ai.getController() instanceof PlayerControllerAi)) {
+                return false;
+            }
+            final SpellAbility top = game.getStack().peekAbility();
+            if (!isCopyableShape(ai, top)) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            final Trigger tr = host == null ? null : copyTrigger(host);
+            if (tr == null) {
+                return false;
+            }
+            // a trigger-disabling static would leave a vanilla 2/2 (checkETBEffectsPreparedCard
+            // returns true there before any consult)
+            final Map<forge.game.ability.AbilityKey, Object> runParams = forge.game.ability.AbilityKey.mapFromCard(tr.getHostCard());
+            runParams.put(forge.game.ability.AbilityKey.Destination, ZoneType.Battlefield.name());
+            if (forge.game.staticability.StaticAbilityDisableTriggers.disabled(game, tr, runParams)) {
+                return false;
+            }
+            // the trigger must be able to target it, else judgeCopy would draw for a cast the
+            // consult then refuses; an LKI copy keeps the built ability's id
+            final SpellAbility trigSA = tr.getOverridingAbility().copy(host, ai, true);
+            if (!trigSA.canTargetSpellAbility(top)) {
+                return false;
+            }
+            // RNG-free upper bound: never judge a copy we cannot pay for
+            if (!affordable(ai, sa)) {
+                return false;
+            }
+            return judgeCopy(ai, top);   // canPlayFromEffectAI on the copy: the only RNG
+        }
+
+        // CopySpellAbilityAi.doTriggerNoCost name gate.
+        //  !mandatory: the checkETBEffects consult (cast time, and the Ghostly Flicker / Sinister
+        //  Waltz / Wake the Dead / Aethersnatch ETB checks). Structural floor on the current top
+        //  only, RNG-free: at cast time considerCastTiming already ran the full judgment moments
+        //  before, and a second canPlayFromEffectAI could roll differently and decline after the
+        //  gate approved (a held-game re-roll with no cast).
+        //  mandatory: resolution. Judge the topmost structurally copyable spell fully; target it.
+        public static AiAbilityDecision chooseTarget(final Player ai, final SpellAbility trig, final boolean mandatory) {
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            SpellAbility pick = null;
+            for (final SpellAbilityStackInstance si : game.getStack()) {    // top first
+                final SpellAbility s = si.getSpellAbility();
+                if (isCopyableShape(ai, s) && trig.canTargetSpellAbility(s)) {
+                    pick = s;
+                    break;
+                }
+                if (!mandatory) {
+                    break;   // the consult looks at the top only, as considerCastTiming does
+                }
+            }
+            if (pick == null || (mandatory && !judgeCopy(ai, pick))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            trig.resetTargets();
+            trig.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // RNG-free structural floor (Wild Ricochet's, with MIN_COPIED_CMC = 2)
+        static boolean isCopyableShape(final Player ai, final SpellAbility s) {
+            if (!(s instanceof forge.game.ability.SpellApiBased) || !s.isSpell()) {
+                return false;
+            }
+            final Card host = s.getHostCard();
+            if (host == null || !(host.isInstant() || host.isSorcery())) {
+                return false;
+            }
+            final Player caster = s.getActivatingPlayer();
+            if (caster == null || !caster.isOpponentOf(ai) || ai.getYourTeam().contains(caster)) {
+                return false;
+            }
+            if (s.cantBeCopied() || host.hasSVar("AINoCopy") || ComputerUtilCard.isCardRemAIDeck(host)
+                    || host.getManaCost().countX() > 0 || host.getCMC() < MIN_COPIED_CMC) {
+                return false;
+            }
+            for (final String svar : host.getSVars().values()) {
+                if (readsManaSpent(svar)) {
+                    return false;
+                }
+            }
+            for (SpellAbility part = s; part != null; part = part.getSubAbility()) {
+                final ApiType api = part.getApi();
+                if (api == null || !(part == s ? ROOT_OK : SUB_OK).contains(api)) {
+                    return false;
+                }
+                if (api == ApiType.CopyPermanent && part.hasParam("Controller") && !"You".equals(part.getParam("Controller"))) {
+                    return false;
+                }
+                for (final Map.Entry<String, String> param : part.getMapParams().entrySet()) {
+                    if (param.getKey().contains("ManaSpent") || readsManaSpent(param.getValue())) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // Twincast floor: the copy, costs stripped as CardFactory strips the real copy's, must be
+        // WillPlay from canPlayFromEffectAI with a non-empty valid target set on every targeted part.
+        static boolean judgeCopy(final Player ai, final SpellAbility s) {
+            if (!(ai.getController() instanceof PlayerControllerAi)) {
+                return false;
+            }
+            final SpellAbility copy = s.copy(ai);
+            copy.clearManaPaid();
+            copy.resetTargets();
+            copy.setPayCosts(new forge.game.cost.Cost("", false));
+            final AiPlayDecision d;
+            JUDGING.set(true);
+            try {
+                d = ((PlayerControllerAi) ai.getController()).getAi()
+                        .canPlayFromEffectAI((forge.game.spellability.Spell) copy, false, true);
+            } finally {
+                JUDGING.remove();
+            }
+            if (d != AiPlayDecision.WillPlay) {
+                return false;
+            }
+            // canPlayFromEffectAI never checks target validity (ControlGainAi approves a
+            // non-mandatory copy with no targets), so require them here.
+            for (SpellAbility part = copy; part != null; part = part.getSubAbility()) {
+                if (part.usesTargeting() && (part.getTargets().isEmpty() || !part.isTargetNumberValid())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // The ETB copy trigger (the script's T: line), read as built at parse
+        // (TriggerHandler.parseTrigger); never built here, so no SpellAbility id is taken.
+        private static Trigger copyTrigger(final Card host) {
+            for (final Trigger tr : host.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone
+                        || !ZoneType.Battlefield.toString().equals(tr.getParam("Destination"))
+                        || !tr.hasParam("ValidCard") || !tr.getParam("ValidCard").contains("Self")) {
+                    continue;
+                }
+                final SpellAbility built = tr.getOverridingAbility();
+                if (built != null && built.getApi() == ApiType.CopySpellAbility) {
+                    return tr;
+                }
+            }
+            return null;
+        }
+
+        // The engine's own test-mode cost (calculateManaCost: taxes and reductions applied) against
+        // G2 (HonestMana, held sources skipped), in total and in red pips. A private copy of
+        // Cooperate.affordable's shape; G1, G2 and getAvailableManaEstimate are unchanged.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        private static boolean readsManaSpent(final String text) {
+            if (text == null) {
+                return false;
+            }
+            for (final String word : MANA_SPENT_WORDS) {
+                if (text.contains(word)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Ecstatic Beauty (dead-card batch 2, row 59)
     // {2}{R} Sorcery. "Exile the top three cards of your library. You may play those cards until
     // end of turn. Put four time counters on each of those cards that has suspend. Suspend 4-{R}"

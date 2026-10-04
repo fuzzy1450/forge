@@ -113,6 +113,17 @@ public class CopySpellAbilityAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player aiPlayer, SpellAbility sa, boolean mandatory) {
+        if (SpecialCardAi.DualcasterMage.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dualcaster Mage's ETB copy: a structural, RNG-free answer for the non-mandatory
+            // consult (checkETBEffects); at resolution the copy is judged and the trigger targets
+            // that spell (the stock mandatory answer below set no target, so the stack dropped it)
+            final AiAbilityDecision d = SpecialCardAi.DualcasterMage.chooseTarget(aiPlayer, sa, mandatory);
+            if (d.willingToPlay() || !mandatory) {
+                return d;
+            }
+            // mandatory with nothing worth copying: the stock answer below (no target; the stack
+            // drops the trigger exactly as it did in A)
+        }
         // the AI should not miss mandatory activations (e.g. Precursor Golem trigger)
         String logic = sa.getParamOrDefault("AILogic", "");
 
