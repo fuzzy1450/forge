@@ -21760,6 +21760,8 @@ public class SpecialCardAi {
                     return ManascapeRefractor.isOwnHandCast(sa);
                 case GoblinCadets.NAME:
                     return GoblinCadets.readmit(ai, sa);
+                case ShaperParasite.NAME:
+                    return ShaperParasite.readmit(ai, sa);
                 case GiftOfDoom.NAME:
                     return GiftOfDoom.readmit(ai, sa);
                 default:
@@ -22763,6 +22765,172 @@ public class SpecialCardAi {
             lki.setLastKnownZone(ai.getZone(ZoneType.Battlefield));
             ComputerUtilCard.applyStaticContPT(c.getGame(), lki, null);
             return lki.getNetToughness() > 0 && ComputerUtilCard.evaluateCreature(lki) >= MIN_BODY_EVAL;
+        }
+    }
+
+    // Shaper Parasite (dead-card batch 2, row 89)
+    // {1}{U}{U} 2/3, "Morph {2}{U}. When Shaper Parasite is turned face up, target creature gets
+    // +2/-2 or -2/+2 until end of turn." The hard cast is a vanilla 2/3 for three that can never
+    // use the trigger (a face-up Parasite is never turned face down again): all of the card's text
+    // is on the flip. The script keeps AI:RemoveDeck:All, so the face-up cast, the -10 sort
+    // (ComputerUtilAbility :359) and every other isCardRemAIDeck reader (steal, exchange, copy,
+    // clone and tutor pickers) stay as they were, and the G3 dispatcher (RemoveDeckFilter.readmit)
+    // lets exactly two abilities through AiController's filter, for the player who both owns and
+    // controls the Parasite (a Nathan Drake theft turned face down by our Ixidron keeps the filter):
+    // - the face-down cast ({3}) from our own hand, only in our own Main 2 with an empty stack. The
+    //   face-down Spell has no API, so nothing makes it wait for Main 2 the way
+    //   PermanentAi.checkPhaseRestrictions makes a creature wait: in Main 1 it would take the mana
+    //   of a non-haste creature that waits (Frost Titan, Sphinx of Jwar Isle). In Main 2 those
+    //   sort ahead of it (the hint's -10) and claim the mana first, and a creature cast this turn
+    //   cannot attack anyway.
+    // - the turn-face-up special action (morph {2}{U}; a manifested or cloaked Parasite's {1}{U}{U}),
+    //   only when an opponent controls a creature that +2/-2 kills (see bestKill), at any priority
+    //   on an opponent's turn and on our own turn only after combat (Main 2, end step): before
+    //   that, a special action at upkeep, draw or Main 1 is the only WillPlay and would spend the
+    //   mana of the Main-2 creatures that wait.
+    // Both need RemoveDeckFilter.noManaHeld and the cost as the engine prices it (test-mode
+    // calculateManaCost) within HonestMana (G2), in total and in blue, held sources skipped. Never
+    // getAvailableManaEstimate, which counts the words of Produced$ (Commander's Sphere 2) and
+    // would admit windows canPayCost then fails after its isManaSourceReserved draws.
+    // Stock drops the mandatory trigger outright (ChooseGenericAi has no creature targeting, so the
+    // mandatory fallback tries players only: TargetingFailed, and prepareSingleSa never plays it)
+    // and would always pick +2/-2 at resolution. ChooseGenericAi now asks chooseTarget (the best
+    // kill on live state, else any kill, else the Parasite itself) and chooseMode (+2/-2 only into
+    // an opponent's creature it kills at resolution, else the harmless -2/+2).
+    // Reads only: no random number, no held mana, no memory write, so a refusal is the old filter
+    // and the first new draw is canPayCost's reservation roll in a window G2 judged payable.
+    public static class ShaperParasite {
+        public static final String NAME = "Shaper Parasite";
+        // a 2/2 token (CreatureEvaluator 130) or any nontoken creature of power 1+ qualifies; a
+        // vanilla 1/1 token (105), a 1/1 flying token (115) or a nontoken 0/1 (116) is not worth it
+        public static final int MIN_KILL_VALUE = 130;
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // face down, getName() is "": judge the paper card, as isCardRemAIDeck does
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())
+                    || !ai.equals(host.getController()) || !ai.equals(host.getOwner())) {
+                return false; // a Play-effect theft or a stolen face-down Parasite keeps the filter
+            }
+            return sa.isSpell() ? readmitFaceDownCast(ai, sa, host) : readmitFlip(ai, sa, host);
+        }
+
+        // the face-down cast from our hand, in our own Main 2 only
+        private static boolean readmitFaceDownCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (!sa.isCastFaceDown() || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false; // the face-up hard cast stays filtered
+            }
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            return fits(ai, sa);
+        }
+
+        // the turn-face-up special action, only into a kill (any opponent priority, our turn after combat)
+        private static boolean readmitFlip(final Player ai, final SpellAbility sa, final Card host) {
+            if (!sa.isTurnFaceUp() || !host.isFaceDown() || !host.isInPlay()) {
+                return false;
+            }
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (ph.isPlayerTurn(ai) && (ph.getPhase() == null || !ph.getPhase().isAfter(PhaseType.COMBAT_END))) {
+                return false; // upkeep, draw, Main 1 and our own combat: the Main-2 creatures' mana
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, false) || !fits(ai, sa)) {
+                return false;
+            }
+            return bestKill(ai, null, MIN_KILL_VALUE) != null;
+        }
+
+        // the cost as the engine prices it (test mode: CostAdjustment only), within G2 (HonestMana,
+        // held sources skipped) in total and in blue
+        private static boolean fits(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int total = cost.getConvertedManaCost();
+            final int blue = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+            if (total <= 0 && blue <= 0) {
+                return true; // free: nothing to count
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= total && mana.colour(MagicColor.BLUE) >= blue;
+        }
+
+        // ChooseGenericAi.doTriggerNoCost (TrigChoice): the target, on live state. null = stock,
+        // only when a mandatory trigger can target no creature at all (stock then fails as before).
+        public static AiAbilityDecision chooseTarget(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            Card t = bestKill(ai, sa, MIN_KILL_VALUE);
+            if (t == null) {
+                t = bestKill(ai, sa, 0); // any kill beats the fallback
+            }
+            if (t == null) {
+                // no kill (the target gone or protected after the flip, or a flip we did not choose):
+                // the Parasite itself, which chooseMode gives -2/+2 (a 0/5 until end of turn)
+                final Card host = sa.getHostCard();
+                if (host != null && host.isInPlay() && sa.canTarget(host)) {
+                    t = host;
+                }
+            }
+            if (t == null) {
+                return mandatory ? null : new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(t);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // ChooseGenericAi.chooseSingleSpellAbility's gate: the face-up name, or the paper name of a
+        // host turned face down again before its trigger resolved (getName() is "" then, and the
+        // stock fallthrough would answer +2/-2 into whatever the trigger targeted, the Parasite
+        // itself included). The paper lookup runs only for a face-down host.
+        public static boolean isHost(final Card host) {
+            if (host == null) {
+                return false;
+            }
+            if (NAME.equals(host.getName())) {
+                return true;
+            }
+            return host.isFaceDown() && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // ChooseGenericAi.chooseSingleSpellAbility, at resolution: +2/-2 only into a kill
+        public static SpellAbility chooseMode(final Player chooser, final SpellAbility sa, final List<SpellAbility> spells) {
+            SpellAbility kill = null;
+            SpellAbility safe = null;
+            for (final SpellAbility sp : spells) {
+                if ("-2".equals(sp.getParam("NumDef"))) {
+                    kill = sp; // TrigPump1, +2/-2
+                } else {
+                    safe = sp; // TrigPump2, -2/+2
+                }
+            }
+            final Card t = sa.getTargetCard();
+            final boolean kills = t != null && t.isInPlay() && t.getController().isOpponentOf(chooser)
+                    && t.getNetToughness() <= 2;
+            if (kills && kill != null) {
+                return kill;
+            }
+            return safe != null ? safe : spells.get(0);
+        }
+
+        // The opponents' most valuable creature +2/-2 kills: net toughness 2 or less (toughness 0
+        // is a state-based death that indestructible, regeneration, shield counters and totem
+        // armor do not stop), worth floor or more, never one that comes back (an active undying or
+        // persist: three mana for a counter) and never a ward (the payment is not modelled;
+        // face-down cloaked and disguised creatures carry it). trigSa == null at the flip gate:
+        // the host is still face down (colourless), so targetability is read from keywords,
+        // conservatively; at trigger time the live ability decides.
+        private static Card bestKill(final Player ai, final SpellAbility trigSa, final int floor) {
+            final CardCollection kills = CardLists.filter(ai.getOpponents().getCreaturesInPlay(), c ->
+                    !c.isPhasedOut() && c.getNetToughness() <= 2
+                    && !c.hasKeyword(Keyword.WARD)
+                    && !ComputerUtilCard.hasActiveUndyingOrPersist(c)
+                    && (trigSa != null ? trigSa.canTarget(c)
+                        : !c.hasKeyword(Keyword.HEXPROOF) && !c.hasKeyword(Keyword.SHROUD)
+                          && !c.hasKeyword(Keyword.PROTECTION))
+                    && ComputerUtilCard.evaluateCreature(c) >= floor);
+            return kills.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(kills);
         }
     }
 

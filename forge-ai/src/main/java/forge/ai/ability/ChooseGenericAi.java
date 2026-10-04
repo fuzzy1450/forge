@@ -133,6 +133,16 @@ public class ChooseGenericAi extends SpellAbilityAi {
         if (ComputerUtilAbility.getAbilitySourceName(sa).equals("Deathmist Raptor")) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
+        if (SpecialCardAi.ShaperParasite.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Its turned-face-up trigger targets a creature; the mandatory fallback in
+            // super.doTriggerNoCost tries players only, so it failed (TargetingFailed) and the
+            // trigger never reached the stack. The target is chosen in
+            // SpecialCardAi.ShaperParasite; null = no creature it can target, the old path.
+            final AiAbilityDecision d = SpecialCardAi.ShaperParasite.chooseTarget(aiPlayer, sa, mandatory);
+            if (d != null) {
+                return d;
+            }
+        }
         return super.doTriggerNoCost(aiPlayer, sa, mandatory);
     }
 
@@ -148,6 +158,12 @@ public class ChooseGenericAi extends SpellAbilityAi {
             // odd or even, on the board as it is now (the counter already placed); the
             // logic == null fallthrough below answered Odd, always
             return SpecialCardAi.ZimonesHypothesis.chooseParity(player, sa, spells);
+        }
+        if (SpecialCardAi.ShaperParasite.isHost(host)) {
+            // +2/-2 or -2/+2 on the creature its trigger targeted: +2/-2 only into an opponent's
+            // creature it kills, else -2/+2 (the logic == null fallthrough below answered +2/-2,
+            // always: a pump for an opponent's bigger creature, a kill for a small one of ours)
+            return SpecialCardAi.ShaperParasite.chooseMode(player, sa, spells);
         }
         final Game game = host.getGame();
         final String logic = sa.getParam("AILogic");
