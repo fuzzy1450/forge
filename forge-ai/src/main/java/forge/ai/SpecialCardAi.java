@@ -25946,6 +25946,400 @@ public class SpecialCardAi {
         }
     }
 
+    // Sudden Demise (dead-card batch 2, row 116; precon:Power Hungry (C13))
+    // "Choose a color. Sudden Demise deals X damage to each creature of the chosen color."
+    // ({X}{R} Sorcery. Printed text = Oracle: the damage is symmetric, our creatures of that colour
+    // take it too; a multicoloured creature is of each of its colours, CardStateProperty's
+    // hasAnyColor; no player is dealt damage.) Never cast by its owner: AI:RemoveDeck:All dropped it
+    // before any handler ran, and behind the hint nothing judged it: ChooseColorAi.checkApiLogic has
+    // no MostProminentHumanCreatures branch (an unconditional WillPlay), the DamageAll sub reads
+    // Creature.ChosenColor, which matches nothing before resolution, so DamageAllAi.chkDrawback saw
+    // two empty lists, set X to the max (0 included) and said yes on every board, and the
+    // resolution pick read only the strongest opponent's creatures, ignoring X and our own board.
+    // Routed by name from the top of DamageAllAi.chkDrawback (the hand cast, a Play-effect cast, an
+    // opponent's copy test) and from ComputerUtilCard.chooseColor, which scores the same board
+    // again at the X that was paid. The colour and the smallest X with the best net swing are
+    // chosen together. A (colour, X) pair is admissible only when:
+    // - an opposing creature of the colour dies at X (getEnoughDamageToKill: prevention,
+    //   protection from red, shields, indestructible) that we do not own, with no activated
+    //   Regenerate, no active undying or persist, no SacMe, and no own death trigger that leaves
+    //   value behind (Wave of Reckoning's noValueKills);
+    // - nothing of ours dies in our own turn before Main 2 (our doomed creatures swing first);
+    // - no commander we control or own dies;
+    // - the kills are worth a card: a nontoken of mana value 2+ or power 3+, or two cards' worth
+    //   of bodies with tokens counted as half (Wave's Meteor Blast filter, widened for swarms);
+    // - never a card down: cards killed (tokens half) >= our nontoken losses + 1, this card;
+    // - creature value killed minus creature value lost > MARGIN (200: a nontoken 4/4, or two
+    //   nontoken 2/2s with room to spare; DamageAllAi's minGain for a spell, Wave's margin);
+    // - no opposing death watcher sees a dying creature and no opposing body's own death hurts us
+    //   (Wave of Reckoning's scan); no death trigger of ours hands a dying opposing creature's
+    //   controller anything (Fecundity: an OptionalDecider, Defined or TokenOwner naming
+    //   TriggeredCardController or TriggeredCardOwner);
+    // - no opposing noncombat damage-received trigger (DamageDone / DamageDoneOnce: High Priest
+    //   of Penance, Illusory Ambusher, Boros Reckoner, Broodhatch Nantuko, enrage) matches a
+    //   creature of the colour this X actually damages, whether or not it dies.
+    // A copy (an opponent's CopySpellAbilityAi tests top.copy(), which keeps the original's X and
+    // its X shard) or a free cast has its X fixed: judged at that X and left alone.
+    // RNG: A never evaluated the owner's card (the hint), so every decline before setMaxXValue
+    // draws nothing: the board read (getEnoughDamageToKill, predictDamageTo, the creature
+    // evaluator, the trigger scans; never ComputerUtil.canRegenerate, whose canPayCost probe
+    // draws) and getAvailableManaEstimate, an over-count (the words of Produced$), used only to
+    // decline an X it already cannot pay. setMaxXValue's test payments draw MyRandom
+    // (ComputerUtilMana.isManaSourceReserved) and run only past both. Nothing is held: X is
+    // cleared on every decline.
+    public static class SuddenDemise {
+        public static final String NAME = "Sudden Demise";
+        public static final int MARGIN = WaveOfReckoning.MARGIN; // 200
+        static final int X_CAP = 20; // getEnoughDamageToKill bound; X_CAP + 1 = never dies to this spell
+
+        public static boolean isSuddenDemise(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        private static final class Pick {
+            final String color;
+            final int x;
+            final int net;
+
+            Pick(final String color, final int x, final int net) {
+                this.color = color;
+                this.x = x;
+                this.net = net;
+            }
+        }
+
+        // Every creature on the battlefield, read once per consult; the pair loop only adds ints.
+        private static final class Board {
+            final CardCollection creatures;
+            final byte[] colors;          // colour bits; 0 = colourless, never hit
+            final int[] need;             // damage to kill, X_CAP + 1 = never (or colourless)
+            final int[] value;            // evaluateCreature, only where need <= X_CAP
+            final boolean[] loss;         // we control or own it
+            final boolean[] opposing;     // an opponent controls it and we do not own it
+            final boolean[] kill;         // opposing and a real kill when it dies
+            final boolean[] worth;        // nontoken of mana value 2+, or power 3+
+            final boolean[] vetoOnDeath;  // its death feeds a watcher or a payback
+            final boolean[] punished;     // an opposing damage-received trigger matches it
+
+            Board(final CardCollection all) {
+                final int n = all.size();
+                creatures = all;
+                colors = new byte[n];
+                need = new int[n];
+                value = new int[n];
+                loss = new boolean[n];
+                opposing = new boolean[n];
+                kill = new boolean[n];
+                worth = new boolean[n];
+                vetoOnDeath = new boolean[n];
+                punished = new boolean[n];
+            }
+        }
+
+        private static boolean oneSidedOnly(final Player ai) { // our doomed creatures swing first
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            return ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.MAIN2);
+        }
+
+        // Without ComputerUtil.canRegenerate: its canPayCost probe draws MyRandom
+        // (ComputerUtilMana.isManaSourceReserved). Regeneration shields already read as
+        // "never dies" in getEnoughDamageToKill.
+        private static boolean regenerates(final Card c) {
+            for (final SpellAbility a : c.getSpellAbilities()) {
+                if (a.getApi() == ApiType.Regenerate) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean namesDyingController(final String s) {
+            return s != null && (s.contains("TriggeredCardController") || s.contains("TriggeredCardOwner"));
+        }
+
+        // A death trigger that hands the dying creature's controller (or owner) a choice, cards or
+        // tokens: Fecundity's OptionalDecider$ / Defined$ TriggeredCardController.
+        private static boolean paysDyingController(final Trigger t) {
+            if (namesDyingController(t.getParam("OptionalDecider"))) {
+                return true;
+            }
+            for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                if (namesDyingController(part.getParam("Defined")) || namesDyingController(part.getParam("TokenOwner"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static Board scan(final Player ai, final Card source) {
+            final CardCollection all = CardLists.filter(ai.getGame().getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES);
+            final int n = all.size();
+            final Board b = new Board(all);
+            final boolean[] noValue = new boolean[n];
+            for (int i = 0; i < n; i++) {
+                final Card c = all.get(i);
+                b.colors[i] = c.getColor().getColor();
+                // colourless creatures are never "of the chosen colour"
+                b.need[i] = b.colors[i] == 0 ? X_CAP + 1
+                        : ComputerUtilCombat.getEnoughDamageToKill(c, X_CAP, source, false);
+                if (b.need[i] <= X_CAP) {
+                    b.value[i] = ComputerUtilCard.evaluateCreature(c);
+                }
+                b.loss[i] = ai.equals(c.getController()) || ai.equals(c.getOwner());
+                b.opposing[i] = !b.loss[i] && ai.isOpponentOf(c.getController());
+                b.worth[i] = (!c.isToken() && c.getCMC() >= 2) || c.getNetPower() >= 3;
+            }
+            // Opponents' side: death watchers and harmful own deaths veto (Wave of Reckoning's
+            // scan, both sides' dying creatures); a harmless own death is not a kill; noncombat
+            // damage-received triggers on any creature this spell would damage.
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (WaveOfReckoning.isDeathTrigger(t)) {
+                        for (int i = 0; i < n; i++) {
+                            final Card d = all.get(i);
+                            if (b.need[i] > X_CAP
+                                    || !t.matchesValidParam("ValidCard", d) || !t.matchesValidParam("ValidCards", d)) {
+                                continue;
+                            }
+                            if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                                b.vetoOnDeath[i] = true;
+                            } else {
+                                noValue[i] = true;
+                            }
+                        }
+                        continue;
+                    }
+                    final TriggerType mode = t.getMode();
+                    if ((mode != TriggerType.DamageDone && mode != TriggerType.DamageDoneOnce)
+                            || "True".equalsIgnoreCase(t.getParam("CombatDamage"))) {
+                        continue;
+                    }
+                    for (int i = 0; i < n; i++) {
+                        // The source is this spell, not the victim (Wave's helper matches the
+                        // victim, which deals its own damage there).
+                        if (b.colors[i] != 0 && !b.punished[i]
+                                && t.matchesValidParam("ValidTarget", all.get(i))
+                                && t.matchesValidParam("ValidSource", source)) {
+                            b.punished[i] = true;
+                        }
+                    }
+                }
+            }
+            // Our side: a death trigger that pays the dying creature's controller turns an
+            // opposing kill into their card (Fecundity, in the carrier).
+            for (final Card h : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (!WaveOfReckoning.isDeathTrigger(t) || !paysDyingController(t)) {
+                        continue;
+                    }
+                    for (int i = 0; i < n; i++) {
+                        final Card d = all.get(i);
+                        if (b.opposing[i] && b.need[i] <= X_CAP
+                                && t.matchesValidParam("ValidCard", d) && t.matchesValidParam("ValidCards", d)) {
+                            b.vetoOnDeath[i] = true;
+                        }
+                    }
+                }
+            }
+            for (int i = 0; i < n; i++) {
+                final Card c = all.get(i);
+                b.kill[i] = b.opposing[i] && !noValue[i] && !regenerates(c)
+                        && !ComputerUtilCard.hasActiveUndyingOrPersist(c) && !c.hasSVar("SacMe");
+            }
+            return b;
+        }
+
+        // Every admissible (colour, X) in colour order (choices; WUBRG for the cast), X ascending.
+        // exact: score only X = cap (resolution, a fixed X); otherwise every opposing kill
+        // threshold up to cap.
+        private static List<Pick> admissible(final Board b, final Card source, final List<String> choices,
+                int cap, final boolean exact, final boolean oneSided) {
+            final List<Pick> out = new ArrayList<>();
+            cap = Math.min(cap, X_CAP); // need == X_CAP + 1 means "never": a bigger X must not read it as a kill
+            final int n = b.need.length;
+            for (final String name : choices) {
+                final byte color = MagicColor.fromName(name);
+                final TreeSet<Integer> xs = new TreeSet<>();
+                for (int i = 0; i < n; i++) {
+                    if ((b.colors[i] & color) != 0 && b.opposing[i] && b.need[i] <= cap) {
+                        xs.add(exact ? cap : b.need[i]);
+                    }
+                }
+                for (final int x : xs) {
+                    boolean vetoed = false;
+                    boolean anyKill = false;
+                    boolean anyLoss = false;
+                    boolean commanderLoss = false;
+                    boolean worthACard = false;
+                    int killHalfCards = 0; // 2 per card, 1 per token
+                    int ourCards = 0;      // 2 per nontoken lost
+                    int net = 0;
+                    for (int i = 0; i < n; i++) {
+                        if ((b.colors[i] & color) == 0) {
+                            continue;
+                        }
+                        final Card c = b.creatures.get(i);
+                        if (b.punished[i] && ComputerUtilCombat.predictDamageTo(c, x, source, false) > 0) {
+                            vetoed = true; // dealt damage at all, dying or not
+                            break;
+                        }
+                        if (b.need[i] > x) {
+                            continue;
+                        }
+                        if (b.vetoOnDeath[i]) {
+                            vetoed = true;
+                            break;
+                        }
+                        if (b.loss[i]) {
+                            anyLoss = true;
+                            net -= b.value[i]; // no regeneration/undying credit for our own
+                            if (!c.isToken()) {
+                                ourCards += 2;
+                            }
+                            if (c.isCommander()) {
+                                commanderLoss = true;
+                            }
+                        } else if (b.kill[i]) {
+                            anyKill = true;
+                            net += b.value[i];
+                            killHalfCards += c.isToken() ? 1 : 2;
+                            worthACard |= b.worth[i];
+                        }
+                    }
+                    if (vetoed || !anyKill || (oneSided && anyLoss) || commanderLoss) {
+                        continue;
+                    }
+                    // worth a card: a real body, or a swarm of at least two cards' worth
+                    if (!worthACard && killHalfCards < 4) {
+                        continue;
+                    }
+                    // never a card down (tokens half a card): ours lost + this card <= theirs
+                    if (killHalfCards < Math.max(2, ourCards + 2)) {
+                        continue;
+                    }
+                    if (net <= MARGIN) {
+                        continue;
+                    }
+                    out.add(new Pick(name, x, net));
+                }
+            }
+            return out;
+        }
+
+        private static Pick best(final List<Pick> picks, final int maxX) { // strict: first colour, smaller X keep ties
+            Pick best = null;
+            for (final Pick p : picks) {
+                if (p.x <= maxX && (best == null || p.net > best.net)) {
+                    best = p;
+                }
+            }
+            return best;
+        }
+
+        // DamageAllAi.chkDrawback's name gate: sa is the DamageAll sub, the root is the ChooseColor
+        // spell that carries the X.
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            final Card source = sa.getHostCard();
+            final boolean oneSided = oneSidedOnly(ai);
+            if (root.getPayCosts() == null || !root.costHasManaX() || root.isCopied()
+                    || source.isInZone(ZoneType.Stack)) {
+                // A copy or a free cast: X is already fixed, judge it there and leave it alone.
+                // CopySpellAbilityAi's test copy (top.copy(ai)) keeps the original's X shard and X,
+                // so costHasManaX alone would send it to the scan below and to setMaxXValue on the
+                // copier's own mana; its host is the original on the stack.
+                final Integer fixed = root.getXManaCostPaid();
+                final int x = fixed == null ? 0 : fixed;
+                return x > 0 && !admissible(scan(ai, source), source, MagicColor.Constant.ONLY_COLORS, x, true, oneSided).isEmpty()
+                        ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                        : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (ai.getOpponents().getCreaturesInPlay().isEmpty()) { // cheap precondition: nothing to kill
+                root.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // board first: no mana probe, no random draw
+            final List<Pick> picks = admissible(scan(ai, source), source, MagicColor.Constant.ONLY_COLORS, X_CAP, false, oneSided);
+            if (picks.isEmpty()) {
+                root.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            int minX = X_CAP;
+            for (final Pick p : picks) {
+                minX = Math.min(minX, p.x);
+            }
+            // RNG-free: getAvailableManaEstimate over-counts (the words of Produced$), so when even
+            // it cannot cover {R} plus the smallest admissible X, no pick is payable; only a decline
+            // reads it, never an approval.
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, true) - 1 < minX) {
+                root.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+            // only now: setMaxXValue's test payments draw MyRandom (isManaSourceReserved)
+            final int maxX = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger());
+            final Pick pick = best(picks, maxX);
+            if (pick == null) {
+                root.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+            root.setXManaCostPaid(pick.x);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Resolution (ComputerUtilCard.chooseColor): the same scoring at the X that was paid.
+        // null = X is 0 (nothing dies): the stock pick stands.
+        public static String chooseColor(final Player ai, final SpellAbility sa, final List<String> choices) {
+            final Integer paid = sa.getRootAbility().getXManaCostPaid();
+            final int x = paid == null ? 0 : paid;
+            if (x <= 0 || choices == null || choices.isEmpty()) {
+                return null;
+            }
+            final Card source = sa.getHostCard();
+            final Board b = scan(ai, source);
+            final Pick pick = best(admissible(b, source, choices, x, true, oneSidedOnly(ai)), x);
+            if (pick != null) {
+                return pick.color;
+            }
+            // The board moved since the cast: least harm at this X, no floor, and never a colour
+            // that kills a commander we control or own while some colour does not.
+            final int cap = Math.min(x, X_CAP);
+            String bestColor = null;
+            int bestNet = Integer.MIN_VALUE;
+            String safeColor = null;
+            int safeNet = Integer.MIN_VALUE;
+            for (final String name : choices) {
+                final byte color = MagicColor.fromName(name);
+                int net = 0;
+                boolean commanderLoss = false;
+                for (int i = 0; i < b.need.length; i++) {
+                    if ((b.colors[i] & color) == 0 || b.need[i] > cap) {
+                        continue;
+                    }
+                    if (b.loss[i]) {
+                        net -= b.value[i];
+                        if (b.creatures.get(i).isCommander()) {
+                            commanderLoss = true;
+                        }
+                    } else if (b.opposing[i]) {
+                        net += b.value[i];
+                    }
+                }
+                if (net > bestNet) {
+                    bestNet = net;
+                    bestColor = name;
+                }
+                if (!commanderLoss && net > safeNet) {
+                    safeNet = net;
+                    safeColor = name;
+                }
+            }
+            return safeColor != null ? safeColor : bestColor;
+        }
+    }
+
     // Sudden Substitution
     // "Exchange control of target noncreature spell and target creature." The one exchange
     // worth four mana and a card: an opponent's haymaker for our most expendable creature, in

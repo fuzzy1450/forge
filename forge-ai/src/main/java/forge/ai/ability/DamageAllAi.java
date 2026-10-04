@@ -190,6 +190,14 @@ public class  DamageAllAi extends SpellAbilityAi {
 
     @Override
     public AiAbilityDecision chkDrawback(Player ai, SpellAbility sa) {
+        if (SpecialCardAi.SuddenDemise.isSuddenDemise(sa)) {
+            // Sudden Demise (dead-card batch 2, row 116): the damage reads the colour the root
+            // ChooseColor picks at resolution, so Creature.ChosenColor matches nothing here: the
+            // lists below came back empty and X was set to the max (0 included) on every board.
+            // Colour and X are chosen together instead. Every other DamageAll sub pays the name
+            // test and takes exactly the old path.
+            return SpecialCardAi.SuddenDemise.consider(ai, sa);
+        }
         final Card source = sa.getHostCard();
         final String validP = sa.getParamOrDefault("ValidPlayers", "");
 

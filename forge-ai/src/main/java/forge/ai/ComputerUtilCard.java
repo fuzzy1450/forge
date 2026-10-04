@@ -1147,6 +1147,16 @@ public class ComputerUtilCard {
             chosen.add(SpecialCardAi.BraveTheElements.chooseColor(ai, sa, colorChoices));
             return chosen;
         }
+        // Sudden Demise (dead-card batch 2, row 116): the cast's scoring again at the X paid (the
+        // stock MostProminentHumanCreatures pick ignores X and our own creatures, which take the
+        // same damage). null (X is 0, nothing dies): the stock pick stands.
+        if (SpecialCardAi.SuddenDemise.isSuddenDemise(sa)) {
+            final String pick = SpecialCardAi.SuddenDemise.chooseColor(ai, sa, colorChoices);
+            if (pick != null) {
+                chosen.add(pick);
+                return chosen;
+            }
+        }
         if (sa.hasParam("AILogic")) {
             final String logic = sa.getParam("AILogic");
 
