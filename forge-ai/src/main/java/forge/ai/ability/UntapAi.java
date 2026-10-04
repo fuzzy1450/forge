@@ -11,6 +11,7 @@ import forge.ai.ComputerUtilCard;
 import forge.ai.ComputerUtilCombat;
 import forge.ai.ComputerUtilCost;
 import forge.ai.ComputerUtilMana;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.card.mana.ManaCostShard;
 import forge.game.Game;
@@ -60,6 +61,16 @@ public class UntapAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        if (SpecialCardAi.ManifoldKey.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Manifold Key's "{1}, {T}: Untap another target artifact." The card carried
+            // AI:RemoveDeck:All, so AiController.getSpellAbilityToPlay stripped this ability for
+            // every controller and the stock engine never evaluated it; behind the hint,
+            // untapPrefTargeting below refuses a mana-costed untap of anything without UntapMe or
+            // "doesn't untap", which would have left it dead. Every decline in the evaluator draws
+            // no RNG. Only manifold_key.txt carries the name; every other Untap card takes exactly
+            // the path it took before this branch.
+            return SpecialCardAi.ManifoldKey.considerUntap(ai, sa);
+        }
         final Card source = sa.getHostCard();
 
         if (sa.usesTargeting()) {

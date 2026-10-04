@@ -84,6 +84,15 @@ public class EffectAi extends SpellAbilityAi {
             // other Effect card takes exactly the path it took before this branch.
             return SpecialCardAi.ChainerNightmareAdept.consider(ai, sa);
         }
+        if (SpecialCardAi.ManifoldKey.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Manifold Key's "{3}, {T}: Target creature can't be blocked this turn." (AILogic$
+            // MakeUnblockable). Routed before the randomReturn roll: the card used to carry
+            // AI:RemoveDeck:All, so the stock engine never evaluated it and never drew for it, and
+            // the evaluator's window and mana declines draw no RNG either. Every other Effect card
+            // (the 54 other MakeUnblockable scripts included) takes exactly the path it took before
+            // this branch.
+            return SpecialCardAi.ManifoldKey.considerUnblockable(ai, sa);
+        }
         final Game game = ai.getGame();
         final PhaseHandler phase = game.getPhaseHandler();
         boolean randomReturn = MyRandom.getRandom().nextFloat() <= .6667;

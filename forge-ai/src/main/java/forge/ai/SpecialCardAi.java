@@ -13263,6 +13263,322 @@ public class SpecialCardAi {
         }
     }
 
+    // Manifold Key (dead-card batch 2, row 22; carrier sauron-s-pile-o-nuts, a default_anchor deck)
+    // "{1}, {T}: Untap another target artifact. {3}, {T}: Target creature can't be blocked this
+    // turn." ({1} artifact.) The script carried AI:RemoveDeck:All, which stripped the cast and both
+    // abilities at AiController.getSpellAbilityToPlay. With it gone the cast takes the stock
+    // PermanentNoncreatureAi path (our own Main 2, one generic, no drawback), and both abilities are
+    // routed here by name: UntapAi.checkApiLogic (stock untapPrefTargeting refuses a mana-costed
+    // untap of anything without UntapMe or "doesn't untap") and EffectAi.checkApiLogic ahead of its
+    // randomReturn roll.
+    // The untap, from an untapped Key whose {1} is payable (the engine's test-mode cost against
+    // HonestMana, G2, held sources skipped; never getAvailableManaEstimate), has two value lines:
+    // - (A) at the end step of the opponent whose turn comes before ours, The One Ring a second
+    //   time, with mana otherwise idle until our untap step (where the Key untaps too). The Ring's
+    //   own TheOneRing.consider must say yes (its life and hand-size floor, what its next evaluation
+    //   checks); the library must hold the n+1 draws plus LIBRARY_MARGIN; no opponent's permanent
+    //   may trigger on or replace our draws; and, unless we can't lose life, life minus three
+    //   upkeeps of the raised drain the stock Ring then keeps raising ((n+1)+(n+2)+(n+3)) minus the
+    //   opponents' unblocked next-turn attack must stay above AI_IN_DANGER_MAX_THRESHOLD
+    //   (PromiseOfPower.drawSafe's shape).
+    // - (B) in our own main phase with an empty stack, +1 net mana ritual-style (Spectral
+    //   Searchlight's loop): a tapped rock whose tap-only, unrestricted mana ability makes 2 or more
+    //   (Sol Ring, Relic of Sauron; never a 1-mana rock, which nets nothing), when it turns a spell we
+    //   want (canPlaySa WillPlay, and not one the RemoveDeck filter then drops) from unaffordable into
+    //   affordable. The rock's mana is applied to the spell's own cost first; then the Key's {1} is
+    //   added and the rest must be payable from the sources untapped now, because the rock is still
+    //   tapped when the {1} is paid. Never while a One Ring qualifies for (A): the Key untaps once a
+    //   round, and the Ring's n+1 cards come first.
+    // The unblockable ability: our own Main 1, opponents with creatures and {3} payable (as above),
+    // then EffectAi's MakeUnblockable body verbatim: a lethal hit on the weakest opponent, or a
+    // creature that attacks only if it can't be blocked.
+    // RNG parity: A never evaluated the card. The windows, the mana bound, the Ring and rock scans
+    // and the Ring floor (TheOneRing.consider, sumDamageIfUnblocked, canAttackNextTurn, the trigger
+    // and replacement scan) draw nothing. The first draws are line B's payer tests and canPlaySa and
+    // the unblockable body's attack simulations, all with the Key on the battlefield. No
+    // AiCardMemory, no mana hold, and a decline leaves no target behind.
+    public static class ManifoldKey {
+        public static final String NAME = "Manifold Key";
+        static final int RING_DRAIN_UPKEEPS = 3; // the raised drain, three upkeeps ahead
+        static final int LIBRARY_MARGIN = 4;     // DrawAi's sub declines at numCards >= library - 3
+
+        public static AiAbilityDecision considerUntap(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            sa.resetTargets();
+            final boolean oppEot = ph.is(PhaseType.END_OF_TURN) && ph.getNextTurn() == ai;
+            final boolean ownMain = ph.isPlayerTurn(ai) && ph.getPhase() != null
+                    && ph.getPhase().isMain() && game.getStack().isEmpty();
+            if (!oppEot && !ownMain) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime); // O(1), RNG-free
+            }
+            final int keyCost = manaCost(ai, sa);
+            final int mana = HonestMana.of(ai, sa, true).total();
+            if (mana < keyCost) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford); // RNG-free bound
+            }
+            if (oppEot) {
+                // (A) The One Ring again
+                for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                    if (!untappable(sa, c)) {
+                        continue;
+                    }
+                    final SpellAbility ring = ringAbility(c);
+                    if (ring != null && ringWorthAgain(ai, ring)) {
+                        sa.getTargets().add(c);
+                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                    }
+                }
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // (B) +1 net mana from a tapped 2-mana rock, only into a spell it makes affordable
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!untappable(sa, c)) {
+                    continue;
+                }
+                final SpellAbility ma = bigTapMana(c);
+                if (ma == null) {
+                    continue;
+                }
+                if (ringKeepsKey(ai, sa)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // (B3)
+                }
+                if (enablesSpell(ai, ma, keyCost, mana - keyCost)) {
+                    sa.getTargets().add(c);
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        public static AiAbilityDecision considerUnblockable(final Player ai, final SpellAbility sa) {
+            final PhaseHandler phase = ai.getGame().getPhaseHandler();
+            sa.resetTargets();
+            if (!phase.is(PhaseType.MAIN1, ai) || ai.getOpponents().getCreaturesInPlay().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime); // stock acts only in our Main 1
+            }
+            if (HonestMana.of(ai, sa, true).total() < manaCost(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford); // RNG-free, before the attack sims
+            }
+            // EffectAi's MakeUnblockable body from here on, verbatim; the stock branch is left as it is
+            // (54 other scripts use it)
+            CardCollection options = new CardCollection(CardUtil.getValidCardsToTarget(sa));
+            options = CardLists.filterControlledBy(options, ai);
+            options = CardLists.filter(options, CombatUtil::canAttack);
+            if (sa.getPayCosts().hasTapCost()) {
+                options.remove(sa.getHostCard());
+            }
+            if (options.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            int predictedLife = ai.getLife();
+            if (ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife()) {
+                predictedLife = ComputerUtil.predictNextCombatsRemainingLife(ai, false, false, 0, options);
+            }
+            ComputerUtilCard.sortByEvaluateCreature(options);
+            for (Card card : options) {
+                if (!CombatUtil.canBeBlocked(card, ai.getOpponents().getCreaturesInPlay(), phase.getCombat())) {
+                    continue;
+                }
+                if (card.getNetPower() >= ai.getWeakestOpponent().getLife() && ai.getWeakestOpponent().canLoseLife() && !ai.getWeakestOpponent().cantLoseForZeroOrLessLife()) {
+                    // try to finish off the opponent with an unblockable creature
+                    sa.getTargets().add(card);
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+                final Card copy = CardCopyService.getLKICopy(card);
+                String cantBeBlocked = "Mode$ CantBlockBy | ValidAttacker$ Creature.Self";
+                copy.addStaticAbility(cantBeBlocked);
+                copy.setSickness(false); // for some reason is copied as if having summoning sickness
+                // TODO: also check the case where the AI would attack with the creature but it will be traded, to avoid trading unfavorably?
+                if (predictedLife > 0 && ComputerUtilCard.doesSpecifiedCreatureAttackAI(ai, copy) && !ComputerUtilCard.doesCreatureAttackAI(ai, card)) {
+                    sa.getTargets().add(card);
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // the activation's mana as the engine charges it now (test mode: cost statics applied, no draw)
+        private static int manaCost(final Player ai, final SpellAbility sa) {
+            return ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false).getConvertedManaCost();
+        }
+
+        // a tapped artifact of ours the untap may target ("another target artifact")
+        private static boolean untappable(final SpellAbility sa, final Card c) {
+            return c.isArtifact() && c.isTapped() && sa.canTarget(c);
+        }
+
+        // (B3) a One Ring we control and can target, worth (A) tonight, keeps the Key's one untap of
+        // the round; asked only once line B has a rock to untap
+        private static boolean ringKeepsKey(final Player ai, final SpellAbility sa) {
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                final SpellAbility ring = ringAbility(c);
+                if (ring != null && sa.canTarget(c) && ringWorthAgain(ai, ring)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the tap ability The One Ring's own AI judges (AILogic$ TheOneRing, CountersPutAi)
+        private static SpellAbility ringAbility(final Card c) {
+            for (final SpellAbility ab : c.getSpellAbilities()) {
+                if (ab.isActivatedAbility() && ab.getApi() == ApiType.PutCounter
+                        && "TheOneRing".equals(ab.getParam("AILogic"))) {
+                    return ab;
+                }
+            }
+            return null;
+        }
+
+        private static boolean ringWorthAgain(final Player ai, final SpellAbility ring) {
+            final int draws = ring.getHostCard().getCounters(CounterType.getType("BURDEN")) + 1;
+            if (!ai.canDraw() || ai.getCardsIn(ZoneType.Library).size() < draws + LIBRARY_MARGIN) {
+                return false; // never into a deck-out; DrawAi's sub would refuse anyway
+            }
+            if (!TheOneRing.consider(ai, ring).willingToPlay()) {
+                return false; // the Ring's own life and hand-size floor
+            }
+            if (ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife()) {
+                // the extra burden counter stays: three upkeeps at n+1, n+2, n+3 while the stock Ring
+                // keeps adding one, and the unblocked attack ignores our blockers, so it only ever
+                // holds the untap back
+                final int drain = RING_DRAIN_UPKEEPS * draws + RING_DRAIN_UPKEEPS * (RING_DRAIN_UPKEEPS - 1) / 2;
+                int unblocked = 0;
+                for (final Player opp : ai.getOpponents()) {
+                    unblocked += ComputerUtilCombat.sumDamageIfUnblocked(CardLists.filter(opp.getCreaturesInPlay(),
+                            c -> ComputerUtilCombat.canAttackNextTurn(c, ai)), ai);
+                }
+                if (ai.getLife() - drain - unblocked <= AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD)) {
+                    return false;
+                }
+            }
+            return !drawPunished(ai);
+        }
+
+        // A tap-only mana ability (no mana, sacrifice or sub cost; no spending restriction; no Special
+        // production) that makes two or more mana: Sol Ring, Relic of Sauron. Untapping a 1-mana rock
+        // for {1} nets nothing.
+        private static SpellAbility bigTapMana(final Card c) {
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                if (mp == null || ma.getPayCosts() == null || !ma.getPayCosts().hasTapCost()
+                        || !ma.getPayCosts().hasOnlySpecificCostType(CostTap.class)
+                        || ma.getSubAbility() != null || mp.isSpecialMana()
+                        || !mp.getManaRestrictions().isEmpty()) {
+                    continue;
+                }
+                if (ma.amountOfManaGenerated(true) >= 2) {
+                    return ma;
+                }
+            }
+            return null;
+        }
+
+        // Spectral Searchlight's loop, with the rock's mana applied to the spell's own cost before the
+        // Key's {1} is added to the payment (the rock is tapped when the {1} is paid).
+        private static boolean enablesSpell(final Player ai, final SpellAbility ma, final int keyCost,
+                final int spareAfterKey) {
+            final int amount = ma.amountOfManaGenerated(true);
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            // Command too: a commander recast is priced with its tax
+            final List<SpellAbility> all = ComputerUtilAbility.getSpellAbilities(ai.getCardsIn(ZoneType.Hand, ZoneType.Command), ai);
+            for (final SpellAbility testSa : ComputerUtilAbility.getOriginalAndAltCostAbilities(all, ai)) {
+                if (!testSa.isSpell() || testSa.getApi() == null || testSa.hasParam("AINoRecursiveCheck")
+                        || NAME.equals(ComputerUtilAbility.getAbilitySourceName(testSa))
+                        || testSa.getPayCosts() == null || !testSa.canPlay() || filteredOut(ai, testSa)) {
+                    continue; // canPlay also covers unpayable additional (non-mana) costs
+                }
+                final ManaCost mc = testSa.getPayCosts().getTotalMana();
+                if (mc == null || mc.getCMC() == 0 || mc.countX() > 0) {
+                    continue; // nothing to ramp into; X sizing is setMaxXValue's job
+                }
+                testSa.setActivatingPlayer(ai);
+                final ManaCostBeingPaid rest = ComputerUtilMana.calculateManaCost(testSa.getPayCosts(), testSa, ai, true, 0, false);
+                if (rest.getConvertedManaCost() > spareAfterKey + amount) {
+                    continue; // RNG-free bound before any payer test (the adjusted cost: tax, Medallions)
+                }
+                if (!payWithRock(rest, ma, amount, ai)) {
+                    continue; // none of the rock's mana fits this spell
+                }
+                rest.increaseGenericMana(keyCost); // the Key's {1}, paid by the sources untapped now
+                if (!ComputerUtilMana.canPayManaCost(rest, testSa, ai, false)) {
+                    continue; // still short even with the rock back
+                }
+                if (ComputerUtilCost.canPayCost(testSa, ai, false)) {
+                    continue; // castable already: the untap buys nothing
+                }
+                if (aic.canPlaySa(testSa) == AiPlayDecision.WillPlay) {
+                    return true; // we want this spell and can only afford it with the untap
+                }
+            }
+            return false;
+        }
+
+        // Applies the rock's mana to rest: each unit of a choice production (Combo, Any) tries each
+        // colour it can make and stops at the first that pays something; a fixed production pays its
+        // symbols as printed. A unit that fits no shard stays unspent. True when one unit applied.
+        private static boolean payWithRock(final ManaCostBeingPaid rest, final SpellAbility ma, final int amount,
+                final Player ai) {
+            final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+            final boolean choice = mp.isComboMana() || mp.isAnyMana();
+            final String produced = mp.isComboMana() ? mp.getComboColors(ma) : mp.isAnyMana() ? "W U B R G" : mp.mana(ma);
+            final List<String> units = new ArrayList<>();
+            for (final String t : produced.trim().split(" ")) {
+                if (t.length() == 1 && "WUBRGC".indexOf(t.charAt(0)) >= 0) {
+                    units.add(t);
+                }
+            }
+            if (units.isEmpty()) {
+                return false;
+            }
+            boolean applied = false;
+            for (int i = 0; i < amount; i++) {
+                if (choice) {
+                    for (final String colour : units) {
+                        if (rest.ai_payMana(colour, ai.getManaPool())) {
+                            applied = true;
+                            break;
+                        }
+                    }
+                } else if (rest.ai_payMana(units.get(i % units.size()), ai.getManaPool())) {
+                    applied = true; // amount = symbols x Amount for a fixed production
+                }
+            }
+            return applied;
+        }
+
+        // B2: the RemoveDeck filter's own answer (G3's dispatcher in AiController.getSpellAbilityToPlay),
+        // so the Key never untaps a rock for a spell that filter then drops
+        private static boolean filteredOut(final Player ai, final SpellAbility testSa) {
+            final Card host = testSa.getHostCard();
+            return host != null && (ComputerUtilCard.isCardRemAIDeck(host)
+                    ? !RemoveDeckFilter.readmit(ai, testSa) : RemoveDeckFilter.keepOff(ai, testSa));
+        }
+
+        // An opponent's permanent that triggers on our draws (Orcish Bowmasters) or replaces them
+        // (Notion Thief): the extra n+1 draws would feed it, or not reach us. A private copy of
+        // PromiseOfPower.drawPunished; predicates of accepted cards are not shared.
+        private static boolean drawPunished(final Player ai) {
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (ai.equals(c.getController())) {
+                    continue;
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Drawn) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Marath, Will of the Wild (dead-card batch 2, row 1; the commander of precon:Nature of the
     // Beast)
     // Its AI:RemoveDeck:All hint stripped the command-zone spell at
