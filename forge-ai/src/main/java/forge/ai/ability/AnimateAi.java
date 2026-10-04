@@ -62,6 +62,21 @@ public class AnimateAi extends SpellAbilityAi {
             }
             return SpecialCardAi.TimeLordRegeneration.consider(ai, sa);
         }
+        if (SpecialCardAi.TurnToFrog.isFrog(sa)) {
+            // A one-creature Polymorphist's Jest, judged whole in SpecialCardAi.TurnToFrog.consider
+            // (dead-card batch 2, row 101). The generic checks cannot take it:
+            // checkPhaseRestrictions closes the declare-blockers window on both turns, and
+            // animateTgtAI's "pure P/T" branch shrinks the most valuable creature on the board -
+            // ours included - in any open window, with no combat model. The card carried
+            // AI:RemoveDeck:All, so the stock cast path never evaluated it, and every decline
+            // through consider is RNG-free (see there). No Sacrifice fallback to the stock path:
+            // on the cast path, where A drew nothing, it would add canPayCost draws. Untargeted
+            // Play-effect casts (doTriggerNoCost) do not come through here and keep the stock
+            // path; hand scans that call canPlaySa (targetPlayableSpellCard,
+            // hasReasonToPlayCardThisTurn, ManaAi's ritual look-ahead) now meet consider instead
+            // of the stock path. Every other Animate card takes the path it took before.
+            return SpecialCardAi.TurnToFrog.consider(ai, sa);
+        }
         return super.canPlay(ai, sa);
     }
 

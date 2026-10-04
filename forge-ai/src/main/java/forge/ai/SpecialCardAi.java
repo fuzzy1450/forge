@@ -24901,6 +24901,123 @@ public class SpecialCardAi {
         }
     }
 
+    // Turn to Frog (dead-card batch 2, row 101)
+    // {1}{U} Instant. "Until end of turn, target creature loses all abilities and becomes a blue
+    // Frog with base power and toughness 1/1." A one-creature Polymorphist's Jest: CombatShrinkAll's
+    // window (declare-blockers step, stack empty, combat damage not prevented), its defuse levels,
+    // its no-grow veto and its gains-minus-losses swing, each judged over a single victim by
+    // calling CombatShrinkAll's private defuseLevel, growsPower and swing unchanged (legal from a
+    // sibling nested class). That couples this card to them: any later change to those helpers
+    // also moves Turn to Frog. Candidates: on an opponent's attack, each attacker (the swing reads
+    // a blocked one; the defuse is computed only for one attacking us that is unblocked, tramples
+    // or assigns its damage as though unblocked, the only victims whose entry can change it -
+    // which also keeps a blocked attacker whose blocker was removed, and so deals nothing, from
+    // reading as a defused hit); on ours, each opponent blocker. Targetable, never warded (ward is
+    // priced after targeting and can counter the spell), never ours. Floors: defuse >= 1, or swing
+    // >= MIN_SWING_VALUE. Affordability runs before any combat predictor: the printed mana value
+    // and one {U} against HonestMana (G2, held sources skipped, restrictions read on this sa),
+    // never getAvailableManaEstimate, which counts the words of Produced$ (Command Tower and
+    // Arcane Signet 2, a Talisman 3) and would approve windows canPayCost must then refuse.
+    // RNG: the card carried AI:RemoveDeck:All, so A never evaluated its cast. Every decline before
+    // the swing is a read (restrictions, phase, stack, G2, canTarget, ward, growsPower, the
+    // defuse's predictDamageTo and isCombatDamagePrevented). The swing's destroy predictors draw
+    // only while a matching Regenerate ability is on the battlefield: attackerWouldBeDestroyed
+    // (through combatantCantBeDestroyed) and blockerWouldBeDestroyed both reach
+    // ComputerUtil.canRegenerate, whose cost check pays through the mana reservation roll - the
+    // Jest's accepted residual. No AiCardMemory write, no mana hold, no target set on a decline.
+    // isFrog also reads the host's and the card state's name: a card cast face down from exile
+    // (Gonti, Lord of Luxury) reads "" from getAbilitySourceName, and the hint used to keep that
+    // cast off the list.
+    public static class TurnToFrog {
+        public static final String NAME = "Turn to Frog";
+        // CreatureEvaluator of a non-token vanilla 3/3 for 3: 80 + 20 + 45 + 30 + 15. The Jest's 250
+        // (a vanilla 5/5, or two creatures) was set for a 3-mana spell that hits a whole side; this
+        // is a 2-mana one-for-one, so one real 3-drop's fate changed is worth the card.
+        public static final int MIN_SWING_VALUE = 190;
+
+        public static boolean isFrog(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            // The router bypasses the base class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final Combat combat = game.getCombat();
+            if (combat == null || !game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || !game.getStack().isEmpty() || game.getReplacementHandler().isPreventCombatDamageThisTurn()
+                    || !sa.usesTargeting() || !sa.hasParam("Power") || !sa.hasParam("Toughness")) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int manaValue = sa.getPayCosts() != null && sa.getPayCosts().getTotalMana() != null
+                    ? sa.getPayCosts().getTotalMana().getCMC() : 0;
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < manaValue || mana.colour(MagicColor.BLUE) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final Player attacking = combat.getAttackingPlayer();
+            final boolean ourAttack = ai.equals(attacking);
+            final CardCollection candidates = new CardCollection();
+            if (ourAttack) {
+                for (final Card b : combat.getAllBlockers()) {
+                    if (b.getController().isOpponentOf(ai) && !candidates.contains(b)) {
+                        candidates.add(b);
+                    }
+                }
+            } else if (attacking != null && attacking.isOpponentOf(ai)) {
+                candidates.addAll(combat.getAttackers());
+            }
+            if (candidates.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card host = sa.getHostCard();
+            final int bp = AbilityUtils.calculateAmount(host, sa.getParam("Power"), sa);
+            final int bt = AbilityUtils.calculateAmount(host, sa.getParam("Toughness"), sa);
+            final boolean keeps = !sa.hasParam("RemoveAllAbilities");   // false for this card
+            final CardCollection onUs = ourAttack ? new CardCollection() : combat.getAttackersOf(ai);
+
+            Card best = null;
+            int bestScore = 0;
+            for (final Card c : candidates) {
+                if (!c.isCreature() || !c.getController().isOpponentOf(ai) || !sa.canTarget(c)
+                        || c.hasKeyword(Keyword.WARD)) {
+                    continue;
+                }
+                final CardCollection one = new CardCollection(c);
+                // Only an attacker on us that reaches us (unblocked, trampling or assigning its
+                // damage as though unblocked) can change the defuse; for any other victim
+                // defuseLevel's pre and post are equal, except for a blocked attacker whose
+                // blocker was removed, which it would misread as unblocked.
+                final boolean canDefuse = onUs.contains(c) && (!combat.isBlocked(c) || c.hasKeyword(Keyword.TRAMPLE)
+                        || forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(c));
+                final int defuse = canDefuse ? CombatShrinkAll.defuseLevel(ai, combat, one, bp, keeps) : 0;
+                if (defuse < 2 && CombatShrinkAll.growsPower(combat, one, bp)) {
+                    continue;   // the Jest's no-grow veto: a 0-power or no-damage victim gains damage
+                }
+                final int swing = CombatShrinkAll.swing(ai, combat, one, bp, bt, keeps);
+                if (defuse == 0 && swing < MIN_SWING_VALUE) {
+                    continue;
+                }
+                final int score = defuse * 100000 + swing;   // defusing a hit on us outranks any trade
+                if (best == null || score > bestScore) {
+                    best = c;
+                    bestScore = score;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.resetTargets();
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Ultimate Magic: Meteor (dead-card batch 2, row 106)
     // {5}{R} Sorcery. "Ultimate Magic: Meteor deals 7 damage to each creature. If this spell was
     // cast from exile, for each opponent, choose an artifact or land that player controls. Destroy
