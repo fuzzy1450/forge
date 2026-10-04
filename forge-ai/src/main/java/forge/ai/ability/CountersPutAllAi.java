@@ -25,6 +25,17 @@ import java.util.Map;
 public class CountersPutAllAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        if (SpecialCardAi.BlackSunsZenith.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && !sa.isCastFromPlayEffect()) {
+            // Dead-card batch 2, row 37: "Put X -1/-1 counters on each creature." The curse branch
+            // below pays the MAX affordable X (setMaxXValue: test payments that draw MyRandom on
+            // every evaluation) and approves whenever three opposing creatures die, never counting
+            // ours. The evaluator chooses X or declines with X null. A Play-effect cast (Nathan
+            // Drake's theft) keeps the stock path exactly as before, and every other PutCounterAll
+            // card pays one string compare.
+            return SpecialCardAi.BlackSunsZenith.consider(ai, sa);
+        }
+
         // AI needs to be expanded, since this function can be pretty complex
         // based on what the expected targets could be
         final Card source = sa.getHostCard();

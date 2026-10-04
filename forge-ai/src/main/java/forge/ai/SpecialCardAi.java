@@ -1928,6 +1928,347 @@ public class SpecialCardAi {
         }
     }
 
+    // Black Sun's Zenith (dead-card batch 2, row 37)
+    // "Put X -1/-1 counters on each creature. Shuffle Black Sun's Zenith into its owner's
+    // library." ({X}{B}{B} Sorcery.) Reached from CountersPutAllAi.checkApiLogic's name branch for
+    // every cast that is not a Play-effect cast. The stock curse branch pays the MAX affordable X
+    // through setMaxXValue, whose test payments draw MyRandom (isManaSourceReserved) on every
+    // evaluation, and approves whenever three of the weakest opponent's creatures die, never
+    // counting ours. X is chosen here among the opposing kill thresholds: the best creature swing
+    // (the counters stay, so every survivor keeps -X/-X on both sides), the smaller X on ties.
+    // An X is admissible only when, in order:
+    // (a) the swing clears the wrath margin, MARGIN / #opponents (DestroyAllAi's
+    //     CREATURE_EVAL_THRESHOLD): their kills plus their survivors' shrink, minus ours, on
+    //     evaluateCreature plus COMMANDER_TAX for a commander and PILE_CARD per extra card of a
+    //     mutated pile (0 for SacMe), the shrink on CreatureEvaluator's own P/T weights;
+    // (b) we are never a card down (a creature token is half a card, this card the one we pay);
+    // (c) the kills are worth a card: two or more worth MULTI_KILL_VALUE, exactly one worth
+    //     SINGLE_KILL_VALUE, or an opposing commander (Fire Covenant's floors, as Toxic Deluge's);
+    // then, lazily, once some X passes (a)-(c):
+    // - no opposing permanent profits from -1/-1 counters put on any creature (a CounterAdded or
+    //   CounterAddedOnce trigger with CounterType$ M1M1 and no ValidSource$ You: Auntie Ool,
+    //   Cursewretch draws a card per creature of theirs and drains us 1 per creature of ours).
+    //   That declines the whole consult;
+    // (d) the death-trigger drain of every creature that dies at X, summed per opposing trigger
+    //     and per part (deathScan), leaves life >= max(4, AI_IN_DANGER_MAX_THRESHOLD): Kokusho
+    //     counts 5, Blood Artist beside Falkenrath Noble 2 per death;
+    // (e) no edict fires (Butcher of Malakir, Grave Pact) while a creature of ours survives X,
+    //     counter-proof creatures and undying returners included: the sweep would cost us them;
+    // (f) no creature of ours that dies at X is returned to the battlefield under an opponent's
+    //     control by its death trigger (Necroskitter).
+    // Only then are mana probes run: determineLeftoverMana (Gaze of Granite's clamp) prices the
+    // real X B B, and the best admissible X it pays is cast; none gives CantAffordX with X null.
+    // Persist never saves a creature from this card (it dies with -1/-1 counters on it); undying
+    // does unless a +1/+1 counter is on it, so ComputerUtilCard.hasActiveUndyingOrPersist is the
+    // wrong test here. Toughness 0 kills through indestructible, shields and regeneration.
+    // RNG parity: AI:RemoveDeck:All kept the stock path from ever judging the card, so it drew
+    // nothing for it. Every decline before the clamp is RNG-free: the zone and cost reads,
+    // calculateManaCost in test mode against HonestMana (G2, held sources skipped, restrictions
+    // read on this sa) in total and in black, never getAvailableManaEstimate (it counts the
+    // words of Produced$: Command Tower 2, Savage Lands 4, so an X it caps is often one real mana
+    // cannot pay), the board scans, CreatureEvaluator and the trigger reads, which walk a
+    // trigger's chain without building it. The clamp draws only in a window the board already admits, where
+    // an unclamped approval would have drawn in canPayCost anyway. X is null on every decline.
+    public static class BlackSunsZenith {
+        public static final String NAME = "Black Sun's Zenith";
+        private static final int MARGIN = 200;            // DestroyAllAi CREATURE_EVAL_THRESHOLD, per opponent
+        private static final int MULTI_KILL_VALUE = 320;  // Fire Covenant: two or more kills worth this...
+        private static final int SINGLE_KILL_VALUE = 220; // ...or one kill worth this, or an opposing commander
+        private static final int COMMANDER_TAX = 100;     // the recast tax, both sides
+        private static final int PILE_CARD = 100;         // each extra card of a mutated pile dies too
+        private static final int SHRINK_POWER = 15;       // CreatureEvaluator: power * 15
+        private static final int SHRINK_TOUGHNESS = 10;   // CreatureEvaluator: toughness * 10
+        private static final int UNKNOWN_DRAIN = 3;       // a death drain whose amount is not a number
+        private static final int DRAIN = 0, EDICTS = 1, STEALS = 2; // deathScan's slots
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            final Card host = sa.getHostCard();
+            if (host == null || host.isInZone(ZoneType.Stack)) {
+                // a copy probe: the script's AINoCopy refuses it in CopySpellAbilityAi one branch
+                // before the hint did. Never touch a copy's X.
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            root.setXManaCostPaid(null); // no X left over from an approval canPayCost then declined
+            if (root.getPayCosts() == null || !root.costHasManaX()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // a free cast resolves with X = 0
+            }
+            // RNG-free preconditions before any loop: G2 covers the adjusted X = 0 cost (B B plus
+            // any tax) and at least one more for X, with a black source for each black pip
+            final ManaCostBeingPaid base = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, root, true);
+            final int xCap = mana.total() - base.getConvertedManaCost();
+            if (xCap < 1 || mana.colour(MagicColor.BLACK) < base.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final CardCollection theirs = CardLists.filter(ai.getOpponents().getCreaturesInPlay(), BlackSunsZenith::affected);
+            final TreeSet<Integer> xs = new TreeSet<>(); // each opposing kill threshold in reach, ascending
+            for (final Card c : theirs) {
+                final int k = killAt(c);
+                if (k >= 1 && k <= xCap && !returns(c)) {
+                    xs.add(k);
+                }
+            }
+            if (xs.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection ours = ai.getCreaturesInPlay(); // (e) reads every one of them
+            final CardCollection mine = CardLists.filter(ours, BlackSunsZenith::affected);
+
+            final int margin = MARGIN / Math.max(1, ai.getOpponents().size());
+            final int safety = Math.max(4, AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD));
+            final Map<Card, Integer> val = new HashMap<>(); // each creature evaluated once
+            Map<Card, int[]> deaths = null;                 // lazy: only once some X passes (a)-(c)
+            final TreeMap<Integer, Integer> admissible = new TreeMap<>(); // X -> net swing
+            for (final int x : xs) {
+                int killV = 0, oppShrink = 0, myKillV = 0, myShrink = 0, oppC2 = 0, myC2 = 0, oppKills = 0;
+                boolean commanderKill = false;
+                final List<Card> dying = new ArrayList<>(); // every creature that dies at X, undying returners included
+                for (final Card c : theirs) {
+                    final boolean dies = killAt(c) <= x;
+                    if (dies) {
+                        dying.add(c);
+                    }
+                    if (returns(c)) {
+                        continue;
+                    }
+                    if (dies) {
+                        killV += val.computeIfAbsent(c, BlackSunsZenith::value);
+                        oppC2 += cardsX2(c);
+                        oppKills++;
+                        commanderKill |= c.isCommander();
+                    } else {
+                        oppShrink += shrink(c, x);
+                    }
+                }
+                for (final Card c : mine) {
+                    final boolean dies = killAt(c) <= x;
+                    if (dies) {
+                        dying.add(c);
+                    }
+                    if (returns(c)) {
+                        continue;
+                    }
+                    if (dies) {
+                        myKillV += val.computeIfAbsent(c, BlackSunsZenith::value);
+                        myC2 += cardsX2(c);
+                    } else {
+                        myShrink += shrink(c, x);
+                    }
+                }
+                final int net = killV + oppShrink - myKillV - myShrink;
+                if (net < margin) {
+                    continue; // (a) the wrath margin, survivors' shrink included
+                }
+                if (oppC2 < myC2 + 2) {
+                    continue; // (b) never a card down: this card itself is the +1
+                }
+                if (!((oppKills >= 2 && killV >= MULTI_KILL_VALUE) || (oppKills == 1 && killV >= SINGLE_KILL_VALUE)
+                        || commanderKill)) {
+                    continue; // (c) the kills are worth a card
+                }
+                if (deaths == null) {
+                    if (counterPayoff(ai)) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // X already null
+                    }
+                    deaths = new HashMap<>();
+                }
+                int drain = 0;
+                int edicts = 0;
+                boolean stolen = false;
+                for (final Card d : dying) {
+                    final int[] r = deaths.computeIfAbsent(d, c -> deathScan(ai, c));
+                    drain += r[DRAIN];
+                    edicts += r[EDICTS];
+                    stolen |= r[STEALS] > 0 && ai.equals(d.getController());
+                }
+                if (drain > 0 && ai.getLife() - drain < safety) {
+                    continue; // (d) no death-trigger drain into danger
+                }
+                if (edicts > 0 && anySurvivor(ours, x)) {
+                    continue; // (e) no edict that takes a creature of ours
+                }
+                if (stolen) {
+                    continue; // (f) no creature of ours handed to an opponent
+                }
+                admissible.put(x, net);
+            }
+            if (admissible.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // X already null
+            }
+            // only now: the test payments draw MyRandom (isManaSourceReserved). Root X is null, so
+            // each prices exactly X B B; the loop stops at the first X it cannot pay
+            final int payable = ComputerUtilMana.determineLeftoverMana(root, ai, false);
+            int bestX = -1;
+            int bestNet = Integer.MIN_VALUE;
+            for (final Map.Entry<Integer, Integer> e : admissible.entrySet()) {
+                if (e.getKey() > payable) {
+                    break; // ascending
+                }
+                if (e.getValue() > bestNet) { // strict: ties keep the smaller X
+                    bestNet = e.getValue();
+                    bestX = e.getKey();
+                }
+            }
+            if (bestX < 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX); // X still null
+            }
+            root.setXManaCostPaid(bestX);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static boolean affected(final Card c) {
+            return c.canReceiveCounters(CounterEnumType.M1M1);
+        }
+
+        // Smallest X that kills c. Toughness 0 kills through indestructible, shields and
+        // regeneration; marked damage lowers the threshold only for what damage can destroy.
+        private static int killAt(final Card c) {
+            final int t = c.getNetToughness();
+            final boolean destroyable = !c.hasKeyword(Keyword.INDESTRUCTIBLE) && c.getCounters(CounterEnumType.SHIELD) <= 0;
+            return destroyable && c.getDamage() > 0 ? Math.max(1, t - c.getDamage()) : t;
+        }
+
+        // Comes back as a new object, unaffected: undying without a +1/+1 counter. Not persist:
+        // the creature dies with this card's -1/-1 counters on it.
+        private static boolean returns(final Card c) {
+            return !c.isToken() && c.hasKeyword(Keyword.UNDYING) && c.getCounters(CounterEnumType.P1P1) == 0;
+        }
+
+        private static int value(final Card c) {
+            if (c.hasSVar("SacMe")) {
+                return 0; // happy to die (the stock predicate)
+            }
+            return ComputerUtilCard.evaluateCreature(c) + (c.isCommander() ? COMMANDER_TAX : 0)
+                    + (c.hasMergedCard() ? PILE_CARD * Math.max(0, c.getMergedCards().size() - 1) : 0);
+        }
+
+        private static int cardsX2(final Card c) { // cards lost, doubled: a creature token counts half
+            if (c.isToken()) {
+                return 1;
+            }
+            return 2 * (c.hasMergedCard() ? Math.max(1, c.getMergedCards().size()) : 1);
+        }
+
+        private static int shrink(final Card c, final int x) { // a survivor keeps -x/-x for good
+            return SHRINK_POWER * Math.min(x, Math.max(0, c.getNetCombatDamage())) + SHRINK_TOUGHNESS * x;
+        }
+
+        // (e) a creature of ours an edict can still take: one this X does not kill, one that
+        // cannot have counters put on it, or an undying returner
+        private static boolean anySurvivor(final CardCollection ours, final int x) {
+            for (final Card c : ours) {
+                if (!affected(c) || returns(c) || killAt(c) > x) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // An opposing permanent that profits from -1/-1 counters put on any creature: a
+        // CounterAdded or CounterAddedOnce trigger with CounterType$ M1M1 and no ValidSource$ You
+        // (Hapatra, Nest of Scarabs and Obelisk Spider fire only on their controller's own counters).
+        private static boolean counterPayoff(final Player ai) {
+            for (final Card host : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : host.getTriggers()) {
+                    if ((t.getMode() == TriggerType.CounterAdded || t.getMode() == TriggerType.CounterAddedOnce)
+                            && "M1M1".equals(t.getParam("CounterType")) && !"You".equals(t.getParam("ValidSource"))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // What a death of d costs us, read off every opposing battlefield trigger that may fire on
+        // it (FireCovenant.punishesDeath's matching, a private copy: ChangesZone ValidCard or
+        // ChangesZoneAll ValidCards, from the battlefield or Any to a graveyard or Any, YouCtrl
+        // resolved against the trigger's host), summed over triggers and parts: [DRAIN] LoseLife
+        // its LifeAmount, DealDamage and DamageAll their NumDmg (a non-numeric or missing amount
+        // UNKNOWN_DRAIN); [EDICTS] each Sacrifice or SacrificeAll part; [STEALS] each ChangeZone
+        // part to the Battlefield with GainControl. A valid that reads -1/-1 counters
+        // (Necroskitter's counters_GE1_M1M1) is taken to match: no counter is on the creature yet,
+        // and every creature this spell kills dies with X of them. Over-matching only costs a cast.
+        private static int[] deathScan(final Player ai, final Card d) {
+            final int[] r = new int[3];
+            for (final Card host : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : host.getTriggers()) {
+                    final String valid;
+                    if (t.getMode() == TriggerType.ChangesZone) {
+                        valid = "ValidCard";
+                    } else if (t.getMode() == TriggerType.ChangesZoneAll) {
+                        valid = "ValidCards";
+                    } else {
+                        continue;
+                    }
+                    final String origin = t.getParamOrDefault("Origin", "Any");
+                    final String destination = t.getParamOrDefault("Destination", "Any");
+                    if (!("Any".equals(origin) || origin.contains("Battlefield"))
+                            || !("Any".equals(destination) || destination.contains("Graveyard"))) {
+                        continue;
+                    }
+                    if (!t.matchesValidParam(valid, d) && !t.getParamOrDefault(valid, "").contains("M1M1")) {
+                        continue;
+                    }
+                    chain(t, r);
+                }
+            }
+            return r;
+        }
+
+        // The trigger's chain is read without building it (Toxic Deluge's walk, a private copy):
+        // the overriding ability when already built, else the Execute SVar text and its
+        // SubAbility chain, because building an ability allocates a SpellAbility id.
+        private static void chain(final Trigger t, final int[] r) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                for (SpellAbility part = built; part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    part(api == null ? null : api.name(), part.getParam("LifeAmount"), part.getParam("NumDmg"),
+                            part.getParam("Destination"), part.hasParam("GainControl"), r);
+                }
+                return;
+            }
+            final Set<String> seen = new HashSet<>();
+            String svar = t.hasParam("Execute") ? t.getParam("Execute") : null;
+            while (svar != null && seen.add(svar)) {
+                final String text = t.getSVar(svar);
+                if (text.isEmpty()) {
+                    break;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                String api = params.get("DB");
+                if (api == null) {
+                    api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+                }
+                part(api, params.get("LifeAmount"), params.get("NumDmg"), params.get("Destination"),
+                        params.containsKey("GainControl"), r);
+                svar = params.get("SubAbility");
+            }
+        }
+
+        private static void part(final String api, final String lifeAmount, final String numDmg,
+                final String destination, final boolean gainControl, final int[] r) {
+            if (ApiType.LoseLife.name().equals(api)) {
+                r[DRAIN] += amount(lifeAmount);
+            } else if (ApiType.DealDamage.name().equals(api) || ApiType.DamageAll.name().equals(api)) {
+                r[DRAIN] += amount(numDmg);
+            } else if (ApiType.Sacrifice.name().equals(api) || ApiType.SacrificeAll.name().equals(api)) {
+                r[EDICTS]++;
+            } else if (ApiType.ChangeZone.name().equals(api) && gainControl
+                    && destination != null && destination.contains("Battlefield")) {
+                r[STEALS]++;
+            }
+        }
+
+        private static int amount(final String s) {
+            if (s == null || !s.trim().matches("\\d{1,6}")) {
+                return UNKNOWN_DRAIN;
+            }
+            return Integer.parseInt(s.trim());
+        }
+    }
+
     // Borderland Explorer
     // "When this enters, each player may discard a card. Each player who discarded a card this
     // way may search their library for a basic land card, reveal it, put it into their hand."
