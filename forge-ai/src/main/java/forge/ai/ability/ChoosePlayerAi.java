@@ -29,6 +29,14 @@ public class ChoosePlayerAi extends SpellAbilityAi {
                     ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
                     : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
+        if (SpecialCardAi.SylvanOffering.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa.isSpell() && sa.getParent() == null && sa.costHasManaX() && !sa.isCastFromPlayEffect()) {
+            // Its own paid cast only. The stock WillPlay below never sizes X, so the spell would pay
+            // {G} for two 0/0 Treefolk and no Elves (AI:RemoveDeck:All hid that). The DBChoose sub
+            // (chkDrawback), no-cost copies (ManaAi's ritual probe, a WithoutManaCost replay) and
+            // effect casts (doTriggerNoCost below) keep the stock answer.
+            return SpecialCardAi.SylvanOffering.consider(ai, sa);
+        }
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 
@@ -39,6 +47,11 @@ public class ChoosePlayerAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        if (SpecialCardAi.SylvanOffering.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Effect casts of Sylvan Offering (Nathan Drake's attack trigger, Jeleva, cascade,
+            // copies): the stock answer, never its paid-cast evaluator
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         return canPlay(ai, sa);
     }
 
