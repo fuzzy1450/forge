@@ -839,6 +839,11 @@ public class AiCostDecision extends CostDecisionMakerBase {
         }
 
         if (!cost.payCostFromSource()) {
+            if (SpecialCardAi.IonStorm.isOwnCounterCost(ability, cost)) {
+                // a +1/+1 counter only from a creature that keeps one and survives: the donor
+                // DamageDealAi judged the activation on, or null (never the first-found fallback)
+                return SpecialCardAi.IonStorm.chooseDonor(player, ability, cost);
+            }
             CardCollectionView typeList;
             if (type.equals("OriginalHost")) {
                 typeList = new CardCollection(ability.getOriginalHost());

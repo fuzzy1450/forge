@@ -295,6 +295,32 @@ public class DamageDealAi extends DamageAiBase {
             return SpecialCardAi.AcornCatapult.consider(ai, sa);
         }
 
+        if (SpecialCardAi.IonStorm.NAME.equals(sourceName)) {
+            // checkRemoveCounterCost (below) refuses every +1/+1 removal not paid from the
+            // source, and the stock payment takes the first permanent with a counter.
+            // Judged here instead: only with an empty stack (no donor judged against damage on
+            // its way, no playImmediately face ping while Ion Storm itself is threatened), only
+            // with a donor that keeps a counter and survives (IonStorm.hasDonor; never the
+            // charge line), then the stock targeting at 2 with no chain (getDamagingSAToChain
+            // reserves mana before the verdict and can raise the damage) and a value floor on
+            // the pick. Every other DamageDeal card takes exactly the path it took before.
+            if (!ai.getGame().getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!SpecialCardAi.IonStorm.hasDonor(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (ComputerUtil.preventRunAwayActivations(sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int stormDmg = calculateDamageAmount(sa, source, sa.getParam("NumDmg"));
+            if (!damageTargetAI(ai, sa, stormDmg, false) || !SpecialCardAi.IonStorm.worthTarget(ai, sa)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
         final String damage = sa.getParam("NumDmg");
         int dmg = calculateDamageAmount(sa, source, damage);
 

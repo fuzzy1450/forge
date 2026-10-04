@@ -178,6 +178,19 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.CrownOfDoom.considerCast(ai, sa);
         }
 
+        // Ion Storm dropped AI:RemoveDeck:All. Behind the stock approval it would be cast with no
+        // floor into a board that cannot fuel it: cast only when a creature of ours can spare a
+        // +1/+1 counter to its activation, no Ion Storm of ours is out, and G2's honest count pays
+        // the cost with a red source, drawing no random numbers, before canPlaySa's canPayCost
+        // test payment. The owner's cast from hand only: a thief's Play-effect cast (Nathan
+        // Drake's attack trigger from exile, a Silent-Blade Oni from its owner's hand;
+        // PermanentAi.doTriggerNoCost ends in this checkApiLogic) keeps the stock answer it had
+        // while the hint was on the card, since the hint never filtered that path.
+        if (SpecialCardAi.IonStorm.NAME.equals(sourceName) && host.isInZone(ZoneType.Hand)
+                && ai.equals(host.getOwner())) {
+            return SpecialCardAi.IonStorm.considerCast(ai, sa);
+        }
+
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
             // TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?

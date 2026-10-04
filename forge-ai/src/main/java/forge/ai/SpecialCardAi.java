@@ -48,6 +48,7 @@ import forge.game.cost.CostExile;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostPartMana;
 import forge.game.cost.CostRemoveAnyCounter;
+import forge.game.cost.CostRemoveCounter;
 import forge.game.cost.CostReveal;
 import forge.game.cost.CostSacrifice;
 import forge.game.cost.CostTap;
@@ -15279,6 +15280,142 @@ public class SpecialCardAi {
             }
 
             return chosen;
+        }
+    }
+
+    // Ion Storm
+    // "{1}{R}, Remove a +1/+1 counter or a charge counter from a permanent you control: Ion
+    // Storm deals 2 damage to any target." The script splits the "or" into two AB$ DealDamage
+    // lines. AI:RemoveDeck:All kept the spell and both abilities out of every evaluation
+    // (AiController.getSpellAbilityToPlay's filter reads the host, under any controller).
+    // Behind it the stock cast had no floor (PermanentAi's WillPlay) and would have landed a
+    // blank: the stock activation refuses every +1/+1 removal not paid from the source
+    // (ComputerUtilCost.checkRemoveCounterCost), and the stock payment
+    // (AiCostDecision.visit(CostRemoveCounter)) takes the first permanent with a counter, which
+    // can kill a 0/0 Hydra or strip the last counter an Abzan Falconer keys off. Only the +1/+1
+    // line is taught: the charge line stays refused (hasDonor is false for it), as under the
+    // hint; stripping a charge counter from a Chalice or a mana rock is self-harm.
+    // Routes: considerCast from PermanentNoncreatureAi.checkApiLogic (the owner's cast from hand
+    // only; a thief's Play-effect cast keeps the stock path the hint never filtered); the
+    // activation from DamageDealAi.canPlay (empty stack, a donor, the stock targeting at 2
+    // damage with no chain, then worthTarget); the payment from AiCostDecision, through the
+    // same bestDonor as the decision, so the two cannot disagree on one board.
+    // Floor. Cast: a creature of ours can spare a +1/+1 counter now, no Ion Storm of ours is
+    // out (a second copy shares the same fuel), and G2's honest count (held sources and
+    // filters skipped, a Combo counted once and red only when it names red, mana restrictions
+    // read) pays the adjusted cost with a red source. Activation: the donor is a creature that
+    // keeps at least one counter (Abzan Battle Priest, Abzan Falconer, Elite Scaleguard and
+    // riot key off having one), survives the loss with every positive boost gone
+    // (HierophantBioTitan.safeCounters) and is not attacking or blocking; the target is an
+    // opposing planeswalker, an opposing creature 2 damage kills that is worth MIN_KILL_VALUE,
+    // or an opponent's face only when the hit leaves them below 5 life (DamageAiBase.shouldTgtP's
+    // line, kept here even if the stock targeting moves).
+    // RNG: the hint kept A from ever evaluating the card. Every decline here reads game state
+    // only, and canPlayAndPayForFace runs canPayCost (isManaSourceReserved draws) only after a
+    // WillPlay.
+    // Dead-card batch 2, row 121.
+    public static class IonStorm {
+        public static final String NAME = "Ion Storm";
+        static final int DAMAGE = 2; // NumDmg$ 2 on both lines
+        static final int MIN_KILL_VALUE = 130; // a vanilla 2/2 token, a nontoken 1/1 one-drop
+        static final int FACE_LIFE_FLOOR = 5; // shouldTgtP: the hit leaves the opponent below this
+
+        // the +1/+1 line's cost: one counter, from a permanent other than the source
+        public static boolean isOwnCounterCost(final SpellAbility sa, final CostRemoveCounter cost) {
+            return sa != null && cost != null && sa.isActivatedAbility() && sa.getHostCard() != null
+                    && NAME.equals(sa.getHostCard().getName())
+                    && !cost.payCostFromSource() && "1".equals(cost.getAmount())
+                    && cost.counter != null && cost.counter.is(CounterEnumType.P1P1);
+        }
+
+        // counters c can give while keeping one, surviving with every positive boost gone
+        static int spare(final Card c) {
+            return Math.min(HierophantBioTitan.safeCounters(c), c.getCounters(CounterEnumType.P1P1) - 1);
+        }
+
+        // deterministic: most spare counters, then card id; never a creature in combat
+        static Card bestDonor(final Player ai, final SpellAbility sa, final CostRemoveCounter cost) {
+            final Combat combat = ai.getGame().getCombat();
+            Card best = null;
+            int bestSpare = 0;
+            for (final Card c : CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                    cost.getType().split(";"), ai, sa.getHostCard(), sa)) {
+                if (!c.isCreature()) {
+                    continue;
+                }
+                if (combat != null && (combat.isAttacking(c) || combat.isBlocking(c))) {
+                    continue;
+                }
+                final int s = spare(c);
+                if (s < 1) {
+                    continue;
+                }
+                if (best == null || s > bestSpare || (s == bestSpare && c.getId() < best.getId())) {
+                    best = c;
+                    bestSpare = s;
+                }
+            }
+            return best;
+        }
+
+        // the decision (DamageDealAi.canPlay) and the payment (AiCostDecision) alike
+        public static PaymentDecision chooseDonor(final Player ai, final SpellAbility sa, final CostRemoveCounter cost) {
+            final Card donor = bestDonor(ai, sa, cost);
+            if (donor == null) {
+                return null; // never the stock first-found fallback; the activation fails through setSkip
+            }
+            final GameEntityCounterTable table = new GameEntityCounterTable();
+            table.put(null, donor, CounterEnumType.P1P1, 1);
+            return PaymentDecision.counters(table);
+        }
+
+        // false for the charge line, so it stays refused, RNG-free
+        public static boolean hasDonor(final Player ai, final SpellAbility sa) {
+            final CostRemoveCounter part = sa.getPayCosts().getCostPartByType(CostRemoveCounter.class);
+            return part != null && isOwnCounterCost(sa, part) && bestDonor(ai, sa, part) != null;
+        }
+
+        // after DamageDealAi's stock targeting: what we shoot must be worth a counter and {1}{R}
+        public static boolean worthTarget(final Player ai, final SpellAbility sa) {
+            final TargetChoices tcs = sa.getTargets();
+            if (tcs.size() != 1) {
+                return false;
+            }
+            if (tcs.isTargetingAnyPlayer()) {
+                final Player p = tcs.getFirstTargetedPlayer();
+                return p != null && ai.isOpponentOf(p) && p.getLife() - DAMAGE < FACE_LIFE_FLOOR;
+            }
+            final Card c = tcs.getFirstTargetedCard();
+            if (c == null || !ai.isOpponentOf(c.getController())) {
+                return false;
+            }
+            return c.isPlaneswalker()
+                    || (c.isCreature() && ComputerUtilCard.evaluateCreature(c) >= MIN_KILL_VALUE);
+        }
+
+        // the owner's cast from hand, from PermanentNoncreatureAi; every decline is RNG-free
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (ai.isCardInPlay(NAME)) {
+                return new AiAbilityDecision(0, AiPlayDecision.DoesntImpactGame); // a second copy shares the same fuel
+            }
+            boolean fuel = false;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (spare(c) >= 1) {
+                    fuel = true;
+                    break;
+                }
+            }
+            if (!fuel) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // G2, not getAvailableManaEstimate (Jungle Shrine reads 4, Command Tower and Arcane
+            // Signet 2, a filter land's R G 2): the adjusted cost (tax, reducers) and one red source
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost() || mana.colour(MagicColor.RED) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
     }
 
