@@ -25230,6 +25230,428 @@ public class SpecialCardAi {
         }
     }
 
+    // Unite the Coalition (dead-card batch 2, row 65; precon:Painbow (DMC))
+    // "Choose five. You may choose the same mode more than once. - Target permanent phases out.
+    // - Target player draws a card. - Exile target player's graveyard. - Unite the Coalition deals
+    // 2 damage to any target. - Destroy target artifact or enchantment." ({2}{W}{U}{B}{R}{G}
+    // instant.) Never cast by its owner on any engine. It has no hint, so CharmAi saw it at every
+    // priority, but "choose five" (min 5) went to chooseMultipleOptionsAi, which ignores
+    // CanRepeatModes and needs five DISTINCT modes whose handlers pass at once, and PhasesAi.canPlay
+    // never passes (phasesPrefTargeting is a stub): the list was always cleared, CantPlayAi in every
+    // state. Reached from CharmAi's name gate; Brokers Confluence's shape (batch 1, row 64).
+    // The five slots are built here. Each mode gets ONE target and may repeat on it (chainAbilities
+    // clones a repeated entry with its targets):
+    // - phase out: only a save, our permanent worth it (BrokersConfluence.isWorthSaving) threatened
+    //   by an opponent's object on top of the stack;
+    // - 2 damage per slot: ONE opponent's face when its life fits the free slots (lethal), else ONE
+    //   opposing creature or planeswalker killed in at most two slots (evaluateCreature 160 for one
+    //   slot, 200 for two; a planeswalker counts 200); leftover slots add to that target, or go to
+    //   the weakest damageable opponent's face;
+    // - destroy: ONE opposing artifact or enchantment of mana value 2+, not indestructible;
+    // - draw (us): never into a deck-out (DrawAi's margin 3), a draw punisher or replacement
+    //   (PromiseOfPower.drawPunished) or past the maximum hand size;
+    // - exile: ONE opponent's graveyard, the last filler (a repeat on it is a legal no-op).
+    // Warded candidates are never picked (skeptic A2): canPayCost adds an opponent's ward cost for
+    // every targeted card in the prebuilt chain, and a CantAfford there comes after its draws.
+    // Floor: a save or a lethal burn at any priority; two removals in our own main phase on an empty
+    // stack; at the end step before our turn, on an empty stack, 5 points (a removal 2, a safe draw
+    // 1: five draws qualify) or two removals; a free cast (cascade, a Play effect) 1 point.
+    // Mana (skeptic A1), before any board scan: surelyPays, an RNG-free sufficient condition for the
+    // printed cost - seven distinct sources, each counted once, meeting Hall's condition over W, U,
+    // B, R and G. Never getAvailableManaEstimate, which counts the words of Produced$ (Painbow's ten
+    // tri-lands 4 each; Command Tower, Arcane Signet and Commander's Sphere 2): five sources pass its
+    // 7-mana check, and canPayCost's test payment then draws (isManaSourceReserved).
+    // RNG parity: the card was unhinted, so A ran the stock picker at every held evaluation. It ran
+    // every offered mode's handler in script order and never broke early (it breaks only at five
+    // passes, and PhasesAi never passes); ChangeZoneAllAi, DamageDealAi and DestroyAi can draw there.
+    // That pass is replayed first with the exact stock call (canPlayWithSubs, not Brokers'
+    // aic.canPlaySa, which the upstream merge replaced), its verdicts ignored and its targets
+    // dropped. Everything after it reads state only, and a decline sets no target, no memory and no
+    // chosen list. No AIActivateLast: it would move the card in the saEvaluator sort.
+    public static class UniteTheCoalition {
+        public static final String NAME = "Unite the Coalition";
+        public static final int NUM = 5;                  // CharmNum$ 5
+        public static final int DMG = 2;                  // DBDamage NumDmg$ 2
+        public static final int MAX_KILL_SLOTS = 2;       // at most 4 damage into one kill
+        public static final int MIN_KILL_EVAL = 160;      // a one-slot kill, evaluateCreature scale
+        public static final int MIN_KILL_EVAL_TWO = 200;  // a two-slot kill (3-4 toughness); a planeswalker
+        public static final int MIN_DESTROY_CMC = 2;      // no Treasure, Clue, Food or 1-mana trinket
+        public static final int REMOVAL_POINTS = 2;
+        public static final int MIN_POINTS_EOT = 5;
+        public static final int MIN_POINTS_FREE = 1;
+        public static final int MIN_REMOVALS = 2;
+        public static final int LIBRARY_MARGIN = 3;       // DrawAi.targetAI's own deck-out margin
+
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa,
+                                                   final List<AbilitySub> choices, final int num) {
+            final List<AbilitySub> chosen = Lists.newArrayList(); // mutable: chainAbilities sorts it
+
+            // 0. RNG parity: replay the stock picker's pass (CharmAi.chooseMultipleOptionsAi), every
+            // offered mode in this order with no early exit, verdicts ignored, then drop its targets
+            AbilitySub phase = null;
+            AbilitySub draw = null;
+            AbilitySub exile = null;
+            AbilitySub dmg = null;
+            AbilitySub destroy = null;
+            for (final AbilitySub sub : choices) {
+                sub.setActivatingPlayer(ai);
+                SpellApiToAi.Converter.get(sub).canPlayWithSubs(ai, sub);
+                if (sub.usesTargeting()) {
+                    sub.resetTargets();
+                }
+                if (sub.getApi() == ApiType.Phases) {
+                    phase = sub;
+                } else if (sub.getApi() == ApiType.Draw) {
+                    draw = sub;
+                } else if (sub.getApi() == ApiType.ChangeZoneAll) {
+                    exile = sub;
+                } else if (sub.getApi() == ApiType.DealDamage) {
+                    dmg = sub;
+                } else if (sub.getApi() == ApiType.Destroy) {
+                    destroy = sub; // absent while no artifact or enchantment can be targeted (603.3c)
+                }
+            }
+            sa.setSubAbility(null); // as the stock picker leaves it
+            final Card host = sa.getHostCard();
+            if (num != NUM || host == null || phase == null || draw == null || exile == null || dmg == null) {
+                return chosen; // script drifted: stay out
+            }
+
+            final Game game = ai.getGame();
+            // judge the ROOT (row 77): a Play-effect or cascade cast is a copy carrying WithoutManaCost
+            final boolean free = sa.hasParam("WithoutManaCost");
+
+            // 1. RNG-free mana, before any board scan
+            if (!free) {
+                final int mv = sa.getPayCosts() == null || sa.getPayCosts().getTotalMana() == null
+                        ? 0 : sa.getPayCosts().getTotalMana().getCMC();
+                if (!surelyPays(ai, sa, mv)) {
+                    return chosen;
+                }
+            }
+
+            // 2. windows
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean stackEmpty = game.getStack().isEmpty();
+            final SpellAbility top = stackEmpty ? null : ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+            final boolean oppTop = top != null && top.getActivatingPlayer() != null
+                    && top.getActivatingPlayer().isOpponentOf(ai);
+            final boolean eot = stackEmpty && ph.is(PhaseType.END_OF_TURN) && !ph.isPlayerTurn(ai)
+                    && ai.equals(ph.getNextTurn());
+            final boolean main = stackEmpty && (ph.is(PhaseType.MAIN1, ai) || ph.is(PhaseType.MAIN2, ai));
+            int slots = NUM;
+
+            // 3. a save: our permanent worth it, threatened by an opponent's object on top of the stack
+            Card save = null;
+            if (oppTop) {
+                final CardCollection worth = new CardCollection();
+                for (final Object o : ComputerUtil.predictThreatenedObjects(ai, null, true)) {
+                    if (o instanceof Card c && c.isInPlay() && ai.equals(c.getController())
+                            && BrokersConfluence.isWorthSaving(c) && phase.canTarget(c)) {
+                        worth.add(c);
+                    }
+                }
+                if (!worth.isEmpty()) {
+                    save = ComputerUtilCard.getBestAI(worth);
+                    slots--;
+                }
+            }
+
+            // 4. lethal: one opponent's face within the remaining damage slots
+            Player lethal = null;
+            int lethalSlots = Integer.MAX_VALUE;
+            for (final Player p : ai.getOpponents()) {
+                if (!dmg.canTarget(p) || !p.canLoseLife() || p.cantLoseForZeroOrLessLife()
+                        || ComputerUtilCombat.predictDamageTo(p, DMG, host, false) < DMG) {
+                    continue;
+                }
+                final int need = (Math.max(p.getLife(), 1) + DMG - 1) / DMG;
+                if (need <= slots && need < lethalSlots) {
+                    lethal = p;
+                    lethalSlots = need;
+                }
+            }
+
+            if (save == null && lethal == null && !free && !eot && !main) {
+                return chosen; // nothing to answer and no value window
+            }
+
+            // 5. one kill and one destroy (skipped when burning a player out)
+            Card kill = null;
+            int killSlots = 0;
+            int killValue = 0;
+            Card destroyTgt = null;
+            if (lethal != null) {
+                slots -= lethalSlots;
+            } else {
+                for (final Player opp : ai.getOpponents()) {
+                    for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                        if (!(c.isCreature() || c.isPlaneswalker()) || c.hasKeyword(Keyword.WARD)
+                                || !dmg.canTarget(c)
+                                || ComputerUtilCombat.predictDamageTo(c, DMG, host, false) < DMG) {
+                            continue; // each 2 must land whole
+                        }
+                        final int need = c.isCreature()
+                                ? ComputerUtilCombat.getEnoughDamageToKill(c, DMG * MAX_KILL_SLOTS, host, false)
+                                : c.getCurrentLoyalty();
+                        final int s = (need + DMG - 1) / DMG;
+                        if (s < 1 || s > MAX_KILL_SLOTS || s > slots) {
+                            continue; // indestructible or shielded returns max + 1: skipped
+                        }
+                        final int value = c.isCreature() ? ComputerUtilCard.evaluateCreature(c) : MIN_KILL_EVAL_TWO;
+                        if (value < (s == 1 ? MIN_KILL_EVAL : MIN_KILL_EVAL_TWO)) {
+                            continue;
+                        }
+                        if (kill == null || value > killValue || (value == killValue && s < killSlots)) {
+                            kill = c;
+                            killSlots = s;
+                            killValue = value;
+                        }
+                    }
+                }
+                if (kill != null) {
+                    slots -= killSlots;
+                }
+                if (destroy != null && slots > 0) {
+                    final CardCollection arts = new CardCollection();
+                    for (final Player opp : ai.getOpponents()) {
+                        for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                            if ((c.isArtifact() || c.isEnchantment()) && !c.isLand() && c != kill
+                                    && c.getCMC() >= MIN_DESTROY_CMC && !c.hasKeyword(Keyword.INDESTRUCTIBLE)
+                                    && !c.hasKeyword(Keyword.WARD) && destroy.canTarget(c)) {
+                                arts.add(c);
+                            }
+                        }
+                    }
+                    if (!arts.isEmpty()) {
+                        destroyTgt = ComputerUtilCard.getMostExpensivePermanentAI(arts);
+                        slots--;
+                    }
+                }
+            }
+
+            // 6. draws (targeting us) for what is left, never into a deck-out, a draw punisher or a discard
+            int draws = 0;
+            if (slots > 0 && draw.canTarget(ai) && ai.canDraw() && !PromiseOfPower.drawPunished(ai)) {
+                final int library = ai.getCardsIn(ZoneType.Library).size() - LIBRARY_MARGIN;
+                final int handAfter = ai.getCardsIn(ZoneType.Hand).size() - (host.isInZone(ZoneType.Hand) ? 1 : 0);
+                final int room = ai.isUnlimitedHandSize() ? NUM : ai.getMaxHandSize() - handAfter;
+                draws = Math.max(0, Math.min(slots, Math.min(library, room)));
+            }
+            slots -= draws;
+
+            // 7. the floor
+            final int removals = (kill != null ? 1 : 0) + (destroyTgt != null ? 1 : 0);
+            final int points = REMOVAL_POINTS * removals + draws;
+            final boolean cast = save != null || lethal != null
+                    || (free && points >= MIN_POINTS_FREE)
+                    || (eot && (points >= MIN_POINTS_EOT || removals >= MIN_REMOVALS))
+                    || (main && removals >= MIN_REMOVALS);
+            if (!cast) {
+                return chosen; // nothing was targeted yet: nothing held past the decline
+            }
+
+            // 8. filler for the leftover slots, harmless to us: more of the same damage target (the
+            // lethal or kill target, else the weakest damageable opponent's face), else exile the
+            // biggest targetable opponent graveyard
+            GameEntity dmgTgt = lethal != null ? lethal : kill;
+            int dmgSlots = lethal != null ? lethalSlots : killSlots;
+            Player exileTgt = null;
+            int exileSlots = 0;
+            if (slots > 0) {
+                if (dmgTgt == null) {
+                    dmgTgt = weakestDamageableOpponent(ai, dmg, host);
+                }
+                if (dmgTgt != null) {
+                    dmgSlots += slots;
+                } else {
+                    exileTgt = biggestTargetableGraveyard(ai, exile);
+                    if (exileTgt == null) {
+                        return chosen; // no harmless filler: stay out
+                    }
+                    exileSlots = slots;
+                }
+            }
+
+            // 9. targets, then the entries (repeats share the entry; chainAbilities clones each)
+            if (save != null) {
+                phase.getTargets().add(save);
+                chosen.add(phase);
+            }
+            if (draws > 0) {
+                draw.getTargets().add(ai);
+                for (int i = 0; i < draws; i++) {
+                    chosen.add(draw);
+                }
+            }
+            if (exileSlots > 0) {
+                exile.getTargets().add(exileTgt);
+                for (int i = 0; i < exileSlots; i++) {
+                    chosen.add(exile);
+                }
+            }
+            if (dmgSlots > 0) {
+                dmg.getTargets().add(dmgTgt);
+                for (int i = 0; i < dmgSlots; i++) {
+                    chosen.add(dmg);
+                }
+            }
+            if (destroyTgt != null) {
+                destroy.getTargets().add(destroyTgt);
+                chosen.add(destroy);
+            }
+            if (chosen.size() != NUM) {
+                // never expected: undo, so nothing is held past the decline
+                for (final AbilitySub sub : choices) {
+                    if (sub.usesTargeting()) {
+                        sub.resetTargets();
+                    }
+                }
+                chosen.clear();
+            }
+            return chosen;
+        }
+
+        // Skeptic A1: an RNG-free SUFFICIENT condition for paying mv with one W, U, B, R and G pip,
+        // never an estimate. A source is a permanent we control with at least one mana ability that
+        // can be activated now (canPlay: untapped, not summoning-sick), meets its conditions, has no
+        // mana in its own cost (filters such as Prophetic Prism, Crystal Quarry's five-mana ability),
+        // makes at least one mana and may be spent on sa (restrictions read on the root); the sources
+        // isManaSourceReserved refuses on its deterministic branches are left out. Each counts ONCE,
+        // whatever its Amount. Its colours are the union over its qualifying abilities: Any is W U B
+        // R G, a Combo the letters of getComboColors (ColorIdentity and Chosen resolved), anything else
+        // the W/U/B/R/G letters of its production; a reflected (Exotic Orchard) or Special production
+        // counts as colourless. Floating mana is one source per point, with its colour. Pays when there
+        // are at least mv sources and every set of k colours meets at least k of them (Hall's
+        // condition): five distinct sources take the five pips and the rest pay the generic. A private
+        // count: G2 (HonestMana) multiplies Amount and counts one multicolour source toward every
+        // colour it makes, which is not this lower bound. Cost increases (Thalia, Sphere of
+        // Resistance) are not seen: a known residual. Draws nothing; its only write is
+        // setActivatingPlayer on the mana abilities it reads, as the estimate does.
+        static boolean surelyPays(final Player ai, final SpellAbility sa, final int mv) {
+            final List<Integer> masks = new ArrayList<>();
+            int coloured = 0;
+            for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                final int n = ai.getManaPool().getAmountOfColor(MagicColor.WUBRG[i]);
+                for (int k = 0; k < n; k++) {
+                    masks.add(1 << i);
+                }
+                coloured += n;
+            }
+            for (int k = coloured; k < ai.getManaPool().totalMana(); k++) {
+                masks.add(0); // floating colourless
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                boolean source = false;
+                int mask = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)
+                            || AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma) <= 0) {
+                        continue;
+                    }
+                    source = true;
+                    if (ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana()) {
+                        continue; // colourless here: the conservative side
+                    }
+                    mask |= colourMask(mp.isAnyMana() ? "W U B R G"
+                            : mp.isComboMana() ? mp.getComboColors(ma) : mp.getOrigProduced());
+                }
+                if (source) {
+                    masks.add(mask);
+                }
+            }
+            if (masks.size() < mv) {
+                return false;
+            }
+            for (int set = 1; set < (1 << MagicColor.WUBRG.length); set++) {
+                int meet = 0;
+                for (final int m : masks) {
+                    if ((m & set) != 0) {
+                        meet++;
+                    }
+                }
+                if (meet < Integer.bitCount(set)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // the W/U/B/R/G letters of a production, as bits in MagicColor.WUBRG order
+        private static int colourMask(final String letters) {
+            int mask = 0;
+            for (final String t : letters.trim().split(" ")) {
+                if (t.length() != 1) {
+                    continue;
+                }
+                final byte colour = MagicColor.fromName(t.charAt(0));
+                for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                    if (MagicColor.WUBRG[i] == colour) {
+                        mask |= 1 << i;
+                    }
+                }
+            }
+            return mask;
+        }
+
+        // the sources ComputerUtilMana.isManaSourceReserved refuses, in the phases it refuses them
+        // (a private copy of HonestMana's: held for the next spell; held for a block trick outside
+        // declare blockers and cleanup; held for Main 2 outside Main 2 and cleanup, at the 100%
+        // every AI profile reserves with)
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+
+        // the opponent with the least life whom the damage mode can target and whose life each 2 lowers
+        private static Player weakestDamageableOpponent(final Player ai, final AbilitySub dmg, final Card host) {
+            Player best = null;
+            for (final Player p : ai.getOpponents()) {
+                if (!dmg.canTarget(p) || !p.canLoseLife()
+                        || ComputerUtilCombat.predictDamageTo(p, DMG, host, false) < DMG) {
+                    continue;
+                }
+                if (best == null || p.getLife() < best.getLife()) {
+                    best = p;
+                }
+            }
+            return best;
+        }
+
+        // the targetable opponent with the most cards in the graveyard (an empty one is a legal no-op)
+        private static Player biggestTargetableGraveyard(final Player ai, final AbilitySub exile) {
+            Player best = null;
+            for (final Player p : ai.getOpponents()) {
+                if (!exile.canTarget(p)) {
+                    continue;
+                }
+                if (best == null
+                        || p.getCardsIn(ZoneType.Graveyard).size() > best.getCardsIn(ZoneType.Graveyard).size()) {
+                    best = p;
+                }
+            }
+            return best;
+        }
+    }
+
     // Valiant Endeavor (dead-card batch 2, row 96; precon:Aura of Courage (AFC))
     // "Roll two d6 and choose one result. Destroy each creature with power greater than or equal
     // to that result. Then create a number of 2/2 white Knight creature tokens with vigilance

@@ -75,6 +75,13 @@ public class CharmAi extends SpellAbilityAi {
             // Nathan Drake, Epic Experiment, Mizzix's Mastery), copies and triggers never read the
             // hint and keep the stock chooser.
             chosenList = SpecialCardAi.MysticConfluence.chooseModes(ai, sa, choices, num);
+        } else if ("Unite the Coalition".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Unhinted, so A took the stock else below at every held evaluation: its shuffle never
+            // fired (num 5 is never below the five or four offered modes), and
+            // chooseMultipleOptionsAi ran every mode's handler without reaching five passes. The
+            // evaluator replays that pass first, so a decline draws exactly what A drew, and only
+            // then builds its own five slots. Play-effect and cascade casts come here too, on purpose.
+            chosenList = SpecialCardAi.UniteTheCoalition.chooseModes(ai, sa, choices, num);
         } else {
             // only randomize if not all possible together
             if (num < choices.size()) {
