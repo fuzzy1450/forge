@@ -3401,6 +3401,206 @@ public class SpecialCardAi {
         }
     }
 
+    // Chromeshell Crab (dead-card batch 2, row 63)
+    // {4}{U} 3/3, "Morph {4}{U}. When Chromeshell Crab is turned face up, you may exchange control
+    // of target creature you control and target creature an opponent controls." The hard cast is a
+    // vanilla 3/3 for five that can never make the swap (a face-up Crab is never turned face down
+    // again): all of the card's text is on the flip, and its line trades our least valuable
+    // creature (the Crab itself at worst) for an opponent's best, for good. The script keeps
+    // AI:RemoveDeck:All, so the face-up cast, the -10 sort (ComputerUtilAbility :359) and every
+    // other isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) stay as they
+    // were, and the G3 dispatcher (RemoveDeckFilter.readmit) lets exactly two abilities through
+    // AiController's filter, for the player who both owns and controls the Crab (a thief, or a
+    // stolen face-down Crab, keeps the filter):
+    // - the face-down cast ({3}; Kadena's first face-down creature spell each turn costs {3} less)
+    //   from our own hand, in our own Main 2 with an empty stack, or in our Main 1 only when its
+    //   reduced cost is 0. The face-down Spell has no API, so nothing makes it wait for Main 2 the
+    //   way PermanentAi.checkPhaseRestrictions makes a creature wait: in Main 1 it would take the
+    //   mana of a real creature that waits (Seedborn Muse). In Main 2 those sort ahead of it (the
+    //   hint's -10) and claim the mana first, and a creature cast this turn cannot attack anyway.
+    // - the turn-face-up special action (morph {4}{U}, or a manifested or cloaked Crab's flip for
+    //   the same mana cost), at any priority, only when the swap clears the floor: an opposing
+    //   creature we can take and keep worth MIN_GAIN_VALUE or more, and MIN_SWAP_MARGIN more than
+    //   the least valuable creature we could hand over, the Crab itself face up at worst.
+    // Both need RemoveDeckFilter.noManaHeld and the cost as the engine prices it (test-mode
+    // calculateManaCost: Kadena, taxes and every RaiseCost/ReduceCost static) within HonestMana
+    // (G2), in total and in blue, held sources skipped. Never getAvailableManaEstimate, which
+    // counts the words of Produced$ (Golgari Guildgate 3, Command Tower 2) and would admit windows
+    // canPayCost then fails after its isManaSourceReserved draws.
+    // The trigger (TrigFaceUp and CrabExchange carry AILogic$ ChromeshellCrab) re-picks the pair on
+    // live state: PumpAi.doTriggerNoCost asks chooseGive, ControlExchangeAi.chkDrawback asks
+    // chooseTake against the give actually chosen, and confirmTrigger re-runs both at resolution.
+    // Stock would give away our BEST creature (pumpTgtAI, drawing MyRandom in shouldPumpCard) and
+    // swap only best-for-best.
+    // Reads only: no random number, no held mana, no memory write, so a refusal is the old filter
+    // and the first new draw is canPayCost's reservation roll in a window G2 judged payable.
+    public static class ChromeshellCrab {
+        public static final String NAME = "Chromeshell Crab";
+        public static final String LOGIC = "ChromeshellCrab";
+        // Order of Succession's floor: a 4/4 for 4 (220) qualifies; a 3/3 for 3 (190), a 2/2 (160)
+        // or a 1/1 token (105) never does
+        public static final int MIN_GAIN_VALUE = 200;
+        // stock ControlExchangeAi.checkApiLogic's best-for-worst margin; here we pick both sides
+        public static final int MIN_SWAP_MARGIN = 40;
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // face down, getName() is "": judge the paper card, as isCardRemAIDeck does
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())
+                    || !ai.equals(host.getController()) || !ai.equals(host.getOwner())) {
+                return false; // a Play-effect theft or a stolen face-down Crab keeps the filter
+            }
+            return sa.isSpell() ? readmitFaceDownCast(ai, sa, host) : readmitFlip(ai, sa, host);
+        }
+
+        // the face-down cast from our hand: our Main 2, or our Main 1 at a reduced cost of 0
+        private static boolean readmitFaceDownCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (!sa.isCastFaceDown() || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false; // the face-up hard cast stays filtered
+            }
+            if (!ai.canCastSorcery() || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = price(ai, sa);
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai) && cost.getConvertedManaCost() > 0) {
+                return false; // Main 1 only when free: then it starves nothing
+            }
+            return fits(ai, sa, cost);
+        }
+
+        // the turn-face-up special action, only when the swap clears the floor
+        private static boolean readmitFlip(final Player ai, final SpellAbility sa, final Card host) {
+            if (!sa.isTurnFaceUp() || !host.isFaceDown() || !host.isInPlay()) {
+                return false;
+            }
+            // cheap preconditions before any creature loop
+            if (!RemoveDeckFilter.noManaHeld(ai, false) || !fits(ai, sa, price(ai, sa))) {
+                return false;
+            }
+            final Card take = bestTake(ai, null);
+            if (take == null) {
+                return false;
+            }
+            // the Crab as it will be once flipped (SetStateAi.shouldTurnFace's LKI copy), built only
+            // once a take has cleared MIN_GAIN_VALUE
+            final Card up = CardCopyService.getLKICopy(host);
+            up.forceTurnFaceUp();
+            up.updateStateForView();
+            final Card give = worstGive(ai, host, up, null);
+            return give != null
+                    && ComputerUtilCard.evaluateCreature(take) >= ComputerUtilCard.evaluateCreature(give) + MIN_SWAP_MARGIN;
+        }
+
+        // PumpAi.doTriggerNoCost (TrigFaceUp): the creature we hand over, only when the best take
+        // clears MIN_SWAP_MARGIN over it. The AI puts every trigger on the stack with mandatory =
+        // true (PlayerControllerAi.orderAndPlaySimultaneousSa), but this one is optional
+        // (OptionalDecider$ You): not putting it on the stack is declining the "may", so no swap
+        // answers CantPlayAi whatever mandatory says. null (stock) only for a genuinely mandatory
+        // instance.
+        public static AiAbilityDecision chooseGive(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            final SpellAbility takeSa = sa.getSubAbility();
+            final Card take = takeSa == null ? null : bestTake(ai, takeSa);
+            final Card give = take == null ? null : worstGive(ai, null, null, sa);
+            if (give != null
+                    && ComputerUtilCard.evaluateCreature(take) >= ComputerUtilCard.evaluateCreature(give) + MIN_SWAP_MARGIN) {
+                sa.getTargets().add(give);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            if (mandatory && !sa.isOptionalTrigger()) {
+                return null;
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // ControlExchangeAi.chkDrawback (CrabExchange): the creature we take, against the give chosen
+        public static AiAbilityDecision chooseTake(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final SpellAbility parent = sa.getParent();
+            final Card give = parent == null ? null : parent.getTargetCard();
+            final Card take = give == null ? null : bestTake(ai, sa);
+            if (take == null
+                    || ComputerUtilCard.evaluateCreature(take) < ComputerUtilCard.evaluateCreature(give) + MIN_SWAP_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(take);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The opponents' most valuable creature we can take and keep, worth MIN_GAIN_VALUE or more.
+        // takeSa == null at the flip gate: the host is still face down (colourless), so
+        // targetability is read from keywords, conservatively; at trigger time the live
+        // sub-ability decides exactly.
+        private static Card bestTake(final Player ai, final SpellAbility takeSa) {
+            final CardCollection takes = CardLists.filter(ai.getOpponents().getCreaturesInPlay(), c ->
+                    !c.isPhasedOut() && c.canBeControlledBy(ai) && c.getNetPower() > 0
+                    // a triggered ability cannot pay ward: the trigger is countered
+                    && !c.hasKeyword(Keyword.WARD)
+                    // stock ControlExchangeAi.checkApiLogic never grabs a RemoveDeck card
+                    && !ComputerUtilCard.isCardRemAIDeck(c)
+                    // Dash, Blitz, Warp or an end-of-turn copy leaves at the end step: a one-turn
+                    // rental for a permanent give (skeptic F2)
+                    && !c.hasSVar("EndOfTurnLeavePlay")
+                    // our own Aura on it (Journey to Nowhere, Prison Term) makes it a crippled steal
+                    && !c.getEnchantedBy().anyMatch(CardPredicates.isController(ai))
+                    // P/T counted from its controller's board shrinks on our side (Order of Succession)
+                    && !OrderOfSuccession.hasControllerRelativePT(c)
+                    && (takeSa != null ? takeSa.canTarget(c)
+                        : !c.hasKeyword(Keyword.HEXPROOF) && !c.hasKeyword(Keyword.SHROUD)
+                          && !c.hasKeyword(Keyword.PROTECTION)));
+            if (takes.isEmpty()) {
+                return null;
+            }
+            final Card best = ComputerUtilCard.getBestCreatureAI(takes);
+            return best != null && ComputerUtilCard.evaluateCreature(best) >= MIN_GAIN_VALUE ? best : null;
+        }
+
+        // Our least valuable creature we can hand over. At the flip gate the face-down host is
+        // replaced by its face-up copy up; at trigger time host and up are null and the face-up
+        // Crab is simply one of ours.
+        private static Card worstGive(final Player ai, final Card host, final Card up, final SpellAbility giveSa) {
+            final CardCollection gives = CardLists.filter(ai.getCreaturesInPlay(),
+                    c -> !c.equals(host) && eligibleGive(ai, c, giveSa));
+            if (up != null && eligibleGive(ai, up, null)) {
+                gives.add(up);
+            }
+            return gives.isEmpty() ? null : ComputerUtilCard.getWorstCreatureAI(gives);
+        }
+
+        private static boolean eligibleGive(final Player ai, final Card c, final SpellAbility giveSa) {
+            return !c.isPhasedOut()
+                    // a face-down 2/2 (151) is a hidden card, Sagu Mauler or Hooded Hydra, that its
+                    // new controller may turn face up (skeptic F1)
+                    && !c.isFaceDown()
+                    && !(c.isCommander() && ai.equals(c.getOwner())) // never our commander
+                    // our Aura or Equipment would stay ours on their creature
+                    && !c.getEnchantedBy().anyMatch(CardPredicates.isController(ai))
+                    && !c.getEquippedBy().anyMatch(CardPredicates.isController(ai))
+                    // an intrinsic anthem or lord changes sides with it (Order of Succession)
+                    && !OrderOfSuccession.affectsBeyondItself(c)
+                    && (giveSa != null ? giveSa.canTarget(c)
+                        : !c.hasKeyword(Keyword.SHROUD) && !c.hasKeyword(Keyword.PROTECTION));
+        }
+
+        // the cost as the engine prices it, RNG-free (test mode: CostAdjustment only)
+        private static ManaCostBeingPaid price(final Player ai, final SpellAbility sa) {
+            return ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+        }
+
+        // G2 (HonestMana, held sources skipped) covers the price in total and in blue
+        private static boolean fits(final Player ai, final SpellAbility sa, final ManaCostBeingPaid cost) {
+            final int total = cost.getConvertedManaCost();
+            final int blue = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+            if (total <= 0 && blue <= 0) {
+                return true; // free (Kadena's first face-down spell): nothing to count
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= total && mana.colour(MagicColor.BLUE) >= blue;
+        }
+    }
+
     // Clever Concealment
     // "Convoke. Any number of target nonland permanents you control phase out. (Treat them and
     // anything attached to them as though they don't exist until your next turn.)" (printed text =
@@ -22466,6 +22666,8 @@ public class SpecialCardAi {
                     return KheruSpellsnatcher.readmit(ai, sa);
                 case ManascapeRefractor.NAME:
                     return ManascapeRefractor.isOwnHandCast(sa);
+                case ChromeshellCrab.NAME:
+                    return ChromeshellCrab.readmit(ai, sa);
                 case GoblinCadets.NAME:
                     return GoblinCadets.readmit(ai, sa);
                 case ShaperParasite.NAME:

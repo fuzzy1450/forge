@@ -77,6 +77,12 @@ public class ControlExchangeAi extends SpellAbilityAi {
         if ("PowerStruggle".equals(sa.getParam("AILogic"))) {
             return SpecialCardAi.PowerStruggle.considerSecondTarget(aiPlayer, sa);
         }
+        if (SpecialCardAi.ChromeshellCrab.LOGIC.equals(sa.getParam("AILogic"))) {
+            // Dead-card batch 2, row 63. Chromeshell Crab's exchange: the opponent's creature we take,
+            // against the give its Pump parent chose (SpecialCardAi.ChromeshellCrab). The stock
+            // pick below is their best against the parent's target with no margin. No random draw.
+            return SpecialCardAi.ChromeshellCrab.chooseTake(aiPlayer, sa);
+        }
 
         // for TrigTwoTargets logic, only get the opponents' cards for the first target
         CardCollectionView unfilteredList = "TrigTwoTargets".equals(sa.getParam("AILogic")) ?

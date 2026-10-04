@@ -767,6 +767,17 @@ public class PumpAi extends PumpAiBase {
                 return decision;
             }
         }
+        if (SpecialCardAi.ChromeshellCrab.LOGIC.equals(sa.getParam("AILogic"))) {
+            // Dead-card batch 2, row 63. Chromeshell Crab's turned-face-up trigger: the give and the
+            // swap's take are one decision. pumpTgtAI below would give away our BEST creature (our
+            // commander included) and draws MyRandom in shouldPumpCard. The give is chosen in
+            // SpecialCardAi.ChromeshellCrab; no qualifying swap declines the optional trigger, and
+            // null (a genuinely mandatory copy) keeps the stock path. No random draw.
+            final AiAbilityDecision crab = SpecialCardAi.ChromeshellCrab.chooseGive(ai, sa, mandatory);
+            if (crab != null) {
+                return crab;
+            }
+        }
         if (sa.usesTargeting() && SpecialCardAi.CarpetOfFlowers.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             // Carpet of Flowers' main-phase trigger counts the Islands of the opponent it targets: aim it
             // at the one with the most, where the cast floor looked (stock: the first targetable one,
