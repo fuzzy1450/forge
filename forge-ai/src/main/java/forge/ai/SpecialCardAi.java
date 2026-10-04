@@ -21740,6 +21740,239 @@ public class SpecialCardAi {
         }
     }
 
+    // Slaughter the Strong
+    // "Each player chooses any number of creatures they control with total power 4
+    // or less, then sacrifices all other creatures they control." A one-sided wipe
+    // for a low-power board. AI:RemoveDeck:All hid it, and behind the hint nothing
+    // judged it: ChooseCardAi.checkApiLogic answers WillPlay on any board and
+    // SacrificeAllAi.chkDrawback approves the sub unconditionally. Mirror the
+    // resolution instead: each player keeps what the stock chooser keeps
+    // (ChooseCardEffect's WithTotalPower loop with ChooseCardAi's NegativePowerFirst
+    // pick; every sim seat is an AI, so this is the actual keep), then every other
+    // creature that can be sacrificed is. Sacrifice ignores indestructible, shields
+    // and regeneration, so none of the destroy-wipe filters apply. Cast only when the
+    // opponents lose clearly more creature value than we do (Wave of Reckoning's flat
+    // margin), at least one kill is worth a card, and nothing on their side profits
+    // from the deaths or the sacrifices. No RNG: no helper here reaches MyRandom.
+    // No Main-2 wait (unlike Wave of Reckoning): in Main 1 our creature spells are
+    // still held for Main 2, so the wipe resolves before them and they survive it, and
+    // under Felothar the kept walls attack for their toughness into the cleared board.
+    // Waiting let the Main-2 creature cast take the mana or join the losses.
+    // isSlaughter also reads the host's and the card state's name: a card cast face
+    // down from exile (Gonti, Lord of Luxury) reads "" from getAbilitySourceName, and
+    // the hint used to keep that cast off the list.
+    public static class SlaughterTheStrong {
+        public static final String NAME = "Slaughter the Strong";
+        public static final int MARGIN = WaveOfReckoning.MARGIN; // 200
+
+        public static boolean isSlaughter(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card source = sa.getHostCard();
+            final Game game = ai.getGame();
+            final AbilitySub sac = sa.getSubAbility();
+            if (sa.getApi() != ApiType.ChooseCard || !sa.hasParam("WithTotalPower")
+                    || sac == null || sac.getApi() != ApiType.SacrificeAll) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // A copy of a Slaughter already on the stack adds nothing (the copy
+            // resolves first and the original then finds every board already cut).
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility other = si.getSpellAbility();
+                if (other != sa && other.getHostCard() != null && NAME.equals(other.getHostCard().getName())) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            final int totP = AbilityUtils.calculateAmount(source, sa.getParam("WithTotalPower"), sa);
+
+            // Cheap bound before every scan: a player whose creatures' net power fits
+            // totP keeps them all, so some opponent must be over it.
+            boolean oppOver = false;
+            for (final Player o : ai.getOpponents()) {
+                if (Aggregates.sum(o.getCreaturesInPlay(), Card::getNetPower) > totP) {
+                    oppOver = true;
+                    break;
+                }
+            }
+            if (!oppOver) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // RNG parity, hand path: AI:RemoveDeck:All kept A from ever evaluating the
+            // held card, and canPayCost's test payment draws MyRandom
+            // (ComputerUtilMana.isManaSourceReserved), so only a window this RNG-free
+            // upper bound calls payable may pass (W12/W15: one floor pass in an
+            // unpayable window re-rolls the game). Effect casts were evaluated in A and
+            // are paid, or not, by PlayEffect itself; a free one has no mana anyway.
+            final boolean fromHand = source.isInZone(ZoneType.Hand);
+            if (fromHand && sa.getPayCosts() != null) {
+                final ManaCostBeingPaid need = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+                if (manaUpperBound(ai) < need.toManaCost().getCMC()
+                        || !hasWhiteSources(ai, sa, need.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE))) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+
+            // Every creature the resolution sacrifices, all players (Defined$ Player).
+            final CardCollection dying = new CardCollection();
+            for (final Player p : game.getPlayers()) {
+                final CardCollection kept = predictKept(p, totP);
+                for (final Card c : p.getCreaturesInPlay()) {
+                    if (!kept.contains(c) && c.canBeSacrificedBy(sac, true)) {
+                        dying.add(c);
+                    }
+                }
+            }
+
+            // Opponents' payoffs veto: a death watcher (Blood Artist, Zulaport, Grave
+            // Pact) or a harmful own-death trigger (Wave of Reckoning's scan, reused),
+            // or a sacrifice payoff (Korvold, Mazirek: Sacrificed/SacrificedOnce whose
+            // ValidCard and ValidPlayer match). An opposing creature whose own death
+            // leaves value behind is not a kill.
+            final CardCollection noValueKills = new CardCollection();
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    final boolean sacTrig = t.getMode() == TriggerType.Sacrificed
+                            || t.getMode() == TriggerType.SacrificedOnce;
+                    final boolean deathTrig = WaveOfReckoning.isDeathTrigger(t);
+                    if (!sacTrig && !deathTrig) {
+                        continue;
+                    }
+                    for (final Card d : dying) {
+                        if (!t.matchesValidParam("ValidCard", d)) {
+                            continue;
+                        }
+                        if (sacTrig) {
+                            if (t.matchesValidParam("ValidPlayer", d.getController())) {
+                                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                            }
+                            continue;
+                        }
+                        if (!t.matchesValidParam("ValidCards", d)) {
+                            continue;
+                        }
+                        if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                        }
+                        noValueKills.add(d);
+                    }
+                }
+            }
+
+            final CardCollection aiLosses = new CardCollection();
+            final CardCollection oppKills = new CardCollection();
+            for (final Card d : dying) {
+                final Player controller = d.getController();
+                if (ai.equals(controller) || ai.equals(d.getOwner())) {
+                    aiLosses.add(d); // no credit for our own undying/persist
+                } else if (ai.isOpponentOf(controller) && !noValueKills.contains(d)
+                        && !ComputerUtilCard.hasActiveUndyingOrPersist(d) && !d.hasSVar("SacMe")) {
+                    oppKills.add(d);
+                }
+            }
+            // Worth a card (the Meteor Blast filter, as Wave of Reckoning).
+            boolean worthACard = false;
+            for (final Card k : oppKills) {
+                if ((!k.isToken() && k.getCMC() >= 2) || k.getNetPower() >= 3) {
+                    worthACard = true;
+                    break;
+                }
+            }
+            if (!worthACard || ComputerUtilCard.evaluateCreatureList(oppKills)
+                    <= ComputerUtilCard.evaluateCreatureList(aiLosses) + MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // ChooseCardEffect.resolve's WithTotalPower loop (ChooseCardEffect.java:146-170)
+        // with the AI's NegativePowerFirst pick (ChooseCardAi.chooseSingleCard), mirrored.
+        private static CardCollection predictKept(final Player p, final int totP) {
+            final CardCollection all = p.getCreaturesInPlay();
+            final CardCollection negative = CardLists.filterLEPower(all, -1);
+            int negativeNum = Aggregates.sum(negative, Card::getNetPower);
+            CardCollection options = CardLists.filterLEPower(all, totP - negativeNum);
+            final CardCollection kept = new CardCollection();
+            int chosenP = 0;
+            while (!options.isEmpty()) {
+                final Card lowest = Aggregates.itemWithMin(options, Card::getNetPower);
+                final Card c = lowest.getNetPower() <= 0 ? lowest : ComputerUtilCard.getBestCreatureAI(options);
+                if (c == null) {
+                    break;
+                }
+                chosenP += c.getNetPower();
+                kept.add(c);
+                negative.remove(c);
+                negativeNum = Aggregates.sum(negative, Card::getNetPower);
+                options = CardLists.filterLEPower(all, totP - chosenP - negativeNum);
+                options.removeAll(kept);
+            }
+            return kept;
+        }
+
+        // getAvailableManaEstimate counts Produced tokens: "Combo W B G" reads 4 and "Combo
+        // ColorIdentity" 2 (Sandsteppe Citadel, Command Tower, Arcane Signet, Path of
+        // Ancestry, Axebane Guardian on this carrier). A pass on that over-count reaches
+        // canPayCost's reservation roll and fails (W12). A lower number only declines,
+        // and a decline draws nothing. The skeptic's reviewed count, kept as a private
+        // copy: it differs from HonestMana (G2), which skips mana-costing sources and
+        // held sources and reads meetsManaRestrictions.
+        private static int manaUpperBound(final Player ai) {
+            int total = ai.getManaPool().totalMana();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    final int per = produced.startsWith("Combo") ? 1 : produced.split(" ").length;
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    final int cost = ma.getPayCosts().getCostMana() != null
+                            ? ma.getPayCosts().getCostMana().convertAmount() : 0;
+                    best = Math.max(best, per * amount - cost);
+                }
+                total += best;
+            }
+            return total;
+        }
+
+        // Floating white plus untapped sources whose printed production could be white
+        // and whose mana this spell may spend (Mizzix's Mastery's hasRedSources, copied
+        // for white). Judged against the ROOT sa, never host.getFirstSpellAbility()
+        // (row 77's NPE through Play effects).
+        private static boolean hasWhiteSources(final Player ai, final SpellAbility spell, final int needed) {
+            int white = ai.getManaPool().getAmountOfColor(MagicColor.WHITE);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (white >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    if (!ma.getManaPart().meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("W") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        white++;
+                        break;
+                    }
+                }
+            }
+            return white >= needed;
+        }
+    }
+
     // Song of Inspiration
     // Both d20 results return the targets, so this is a five-mana instant Regrowth for up to two
     // permanent cards (15+ also gains life equal to their total mana value). The script uses Pump as

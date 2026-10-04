@@ -38,6 +38,15 @@ public class ChooseCardAi extends SpellAbilityAi {
             // Every other ChooseCard card takes exactly the path it took before.
             return SpecialCardAi.MandateOfAbaddon.consider(ai, sa);
         }
+        if (SpecialCardAi.SlaughterTheStrong.isSlaughter(sa)) {
+            // Judges the whole spell: the generic answer below is WillPlay on any
+            // board and its SacrificeAll sub is approved unconditionally
+            // (SacrificeAllAi.chkDrawback), so without this the AI would sacrifice
+            // its own board for nothing. AI:RemoveDeck:All kept the card out of
+            // every hand-cast evaluation until now. Every other ChooseCard card
+            // takes exactly the path it took before.
+            return SpecialCardAi.SlaughterTheStrong.consider(ai, sa);
+        }
         if (sa.usesTargeting()) {
             if ("Last Night Together".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
                 // Its targets are creatures: the opponent-only search below can
