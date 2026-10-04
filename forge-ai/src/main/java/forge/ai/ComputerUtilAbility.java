@@ -362,6 +362,13 @@ public class ComputerUtilAbility {
                 if (source.hasSVar("AIPriorityModifier")) {
                     p += Integer.parseInt(source.getSVar("AIPriorityModifier"));
                 }
+                // Crown of Doom's {2} pass goes before other SAs of the same cost: kept, the
+                // card only pumps attackers aimed at its controller, and considerCast cast the
+                // Crown only with that {2} still untapped. Every other SA sorts as before.
+                if (sa.isActivatedAbility() && sa.getApi() == ApiType.GainControl
+                        && SpecialCardAi.CrownOfDoom.NAME.equals(source.getName())) {
+                    p += 9;
+                }
                 // try to use it before it's gone
                 if (source.isInPlay() && source.hasSVar("EndOfTurnLeavePlay")) {
                     p += 1;

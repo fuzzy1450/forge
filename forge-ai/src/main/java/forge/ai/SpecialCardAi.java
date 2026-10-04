@@ -5270,6 +5270,129 @@ public class SpecialCardAi {
         }
     }
 
+    // Crown of Doom
+    // "Whenever a creature attacks you or a planeswalker you control, it gets +2/+0 until
+    // end of turn. {2}: Target player other than Crown of Doom's owner gains control of it.
+    // Activate only during your turn." "You" is the controller, so the card is a gift: cast
+    // it and pass it to an opponent in the same turn of ours, and every creature attacking
+    // that opponent gets +2/+0 from then on (in 1v1 for good: the only player other than the
+    // owner is the holder itself). Kept through an opponent's turn it pumps THEIR attackers.
+    // Stock AI: AI:RemoveDeck:All kept it out of every evaluation. Behind it,
+    // PermanentNoncreatureAi approved any affordable cast (no floor), and ControlGainAi
+    // approved the pass with NO target (Player.!CardOwner is not canOnlyTgtOpponent, and its
+    // Defined$ branch returns WillPlay), which MagicStack.add refuses after the {2} is paid,
+    // on every priority. Both are routed here: considerCast from
+    // PermanentNoncreatureAi.checkApiLogic (owner only; a Play-effect theft keeps the stock
+    // path it always had), considerPass from the top of ControlGainAi.canPlay (every
+    // controller). No RNG: the hint kept A from ever evaluating the card, and every decline
+    // below reads game state only (untappedMana, not canPayManaCost, whose
+    // isManaSourceReserved draws percentTrue(RESERVE_MANA_FOR_MAIN2_CHANCE)).
+    // Dead-card batch 2, row 51.
+    public static class CrownOfDoom {
+        public static final String NAME = "Crown of Doom";
+
+        private static SpellAbility passAbility(final Card host) {
+            for (final SpellAbility ab : host.getSpellAbilities()) {
+                if (ab.isActivatedAbility() && ab.getApi() == ApiType.GainControl) {
+                    return ab;
+                }
+            }
+            return null;
+        }
+
+        // opponents of ai, other than the Crown's owner, that the pass can target
+        private static List<Player> passTargets(final Player ai, final Card host, final SpellAbility pass) {
+            pass.setActivatingPlayer(ai); // canTarget's hexproof check needs it (no NPE)
+            final List<Player> res = new ArrayList<>();
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.equals(host.getOwner()) && pass.canTarget(opp)) {
+                    res.add(opp);
+                }
+            }
+            return res;
+        }
+
+        private static Player choosePassTarget(final Player ai, final List<Player> targets) {
+            final Player weakest = ai.getWeakestOpponent(); // life-based, deterministic
+            return targets.contains(weakest) ? weakest : targets.get(0);
+        }
+
+        // Untapped mana now, RNG-free. Not getAvailableManaEstimate: it counts every token
+        // of Produced$, so Commander's Sphere ("Combo ColorIdentity", in the carrier) reads
+        // as 2, and three Islands + Sphere would pass the 5-mana floor with 4 real mana: the
+        // Crown resolves and the {2} pass cannot be paid, which leaves it pumping the
+        // opponent's attackers at us and at Teferi. Filters (mana abilities with a mana
+        // cost) are skipped: an under-count only declines. A private count (WAVES-2.md G2
+        // note: Everflowing Chalice reads its counters, Commander's Sphere 1), not HonestMana.
+        private static int untappedMana(final Player ai) {
+            int total = ai.getManaPool().totalMana();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay() || ma.getPayCosts().getCostMana() != null) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    final int each = produced.startsWith("Combo") ? 1 : produced.split(" ").length;
+                    best = Math.max(best, each
+                            * AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma));
+                }
+                total += best;
+            }
+            return total;
+        }
+
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // the pass is "Activate only during your turn": cast on another turn, the
+            // Crown sits under our control through that player's attacks
+            if (!ai.getGame().getPhaseHandler().isPlayerTurn(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final SpellAbility pass = passAbility(host);
+            if (pass == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final List<Player> targets = passTargets(ai, host, pass);
+            if (targets.isEmpty()) { // hexproof / shroud player, or not the owner
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            // cast AND pass this turn (RNG-free count; 3 + 2, or 0 + 2 when free)
+            final int need = sa.getPayCosts().getTotalMana().getCMC()
+                    + pass.getPayCosts().getTotalMana().getCMC();
+            if (untappedMana(ai) < need) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // value floor: one of our creatures can attack the player it goes to
+            final Player to = choosePassTarget(ai, targets);
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (ComputerUtilCombat.canAttackNextTurn(c, to)) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+        }
+
+        public static AiAbilityDecision considerPass(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Card host = sa.getHostCard();
+            // Only the owner passes. A non-owner holder (a Nathan Drake theft, or the
+            // opponent we passed it to) has no legal opponent in 1v1 and keeps A's
+            // never-activate behaviour in a pod: declined here, with no RNG, instead of
+            // the stock targetless {2} that MagicStack.add refuses.
+            if (!ai.equals(host.getOwner())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final List<Player> targets = passTargets(ai, host, sa);
+            if (targets.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(choosePassTarget(ai, targets));
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Curious Herd
     // "Choose target opponent. You create X 3/3 green Beast creature tokens, where X is the
     // number of artifacts that player controls." Routed from PumpAi.checkApiLogic by

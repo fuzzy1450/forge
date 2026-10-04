@@ -165,6 +165,19 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.GideonChampionOfJustice.considerCast(ai, sa);
         }
 
+        // Crown of Doom dropped AI:RemoveDeck:All. Behind the stock approval it would be cast in
+        // any Main 2 with three mana open, whether or not its {2} pass could follow this turn, and
+        // a Crown kept through an opponent's turn pumps their attackers at us and at Teferi. The
+        // owner's cast is judged here (our turn, a targetable non-owner opponent, untapped mana
+        // for the cast AND the pass, an attacker of ours that can reach that opponent), drawing no
+        // random numbers, before canPlaySa's canPayCost test payment. Owner only: a Play-effect
+        // theft (Nathan Drake's attack trigger; PermanentAi.doTriggerNoCost ends in this
+        // checkApiLogic) keeps the stock WillPlay it always had, since the hint never filtered
+        // that path.
+        if (SpecialCardAi.CrownOfDoom.NAME.equals(sourceName) && ai.equals(host.getOwner())) {
+            return SpecialCardAi.CrownOfDoom.considerCast(ai, sa);
+        }
+
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
             // TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?

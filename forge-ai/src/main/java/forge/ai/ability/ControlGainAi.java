@@ -70,6 +70,15 @@ public class ControlGainAi extends SpellAbilityAi {
             return SpecialCardAi.EntrancingMelody.consider(ai, sa);
         }
 
+        if (SpecialCardAi.CrownOfDoom.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa.isActivatedAbility()) {
+            // Player.!CardOwner is not canOnlyTgtOpponent, so the stock branch below never
+            // targets and the Defined$ return approves a targetless {2} that MagicStack.add
+            // refuses after payment. Judged whole in SpecialCardAi.CrownOfDoom, for every
+            // controller (only the owner passes it).
+            return SpecialCardAi.CrownOfDoom.considerPass(ai, sa);
+        }
+
         final List<String> lose = Lists.newArrayList();
 
         if (sa.hasParam("LoseControl")) {
