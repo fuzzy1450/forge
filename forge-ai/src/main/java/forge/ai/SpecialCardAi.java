@@ -7510,6 +7510,118 @@ public class SpecialCardAi {
         }
     }
 
+    // Epic Experiment
+    // "Exile the top X cards of your library. You may cast instant and sorcery spells with mana value X
+    // or less from among them without paying their mana costs. Then put all cards exiled this way that
+    // weren't cast into your graveyard." ({X}{U}{R} sorcery.) AI:RemoveDeck:All stripped it from the
+    // playable list before any handler ran; behind the hint DigAi announced the largest payable X
+    // through setMaxXValue (MyRandom drawn on its test payments) and cast at any X >= 1, with no
+    // library guard. Routed from the first statement of DigAi.checkApiLogic by name: the source's, the
+    // host's or the card state's (a face-down exile cast by a thief reads "" from the source name).
+    // The value is the printed one: the expected number of free casts among the top X, read from the
+    // library's composition, never its order. A card counts when the AI owns it, it is an instant or
+    // sorcery of mana value X or less, its cost has no X (PlayAi.chooseSingleCard skips those), it has
+    // no AI:RemoveDeck hint, every part is safe to offer the resolution chooser (MizzixsMastery.
+    // safeToOffer: no ...All, Mana, Pump, CannotPlayAi and the rest), and it is not a counterspell (at
+    // resolution the only spell on the stack is this one). Floor: X * counted(MV <= X) >= MIN_HITS *
+    // library, i.e. two free casts expected: the card replaces itself and nets one. Cap: X <= (library
+    // - LIBRARY_RESERVE) / CASTS_COVERED, so the spell and two copies with the same X (Stella Lee,
+    // Galvanic Iteration, Thunderclap Drake, Pyromancer's Goggles, Swarm Intelligence) leave
+    // LIBRARY_RESERVE cards for what the free hits draw (Brainstorm, Treasure Cruise, Dig Through
+    // Time), which a copier that also copies the hits doubles. Mana, RNG-free: X is the largest that
+    // G2 (HonestMana: held sources skipped, restrictions read on this sa) pays after cost changes
+    // (calculateManaCost in test mode: Mizzix's experience, Goblin Electromancer, taxes), with a blue
+    // and a red source by G2's colour count; never getAvailableManaEstimate, which counts the words
+    // of Produced$ (Command Tower and Arcane Signet 2, a Talisman or an Izzet Guildgate 3).
+    // RNG parity: every check here is RNG-free (no setMaxXValue, no canPayCost), so a decline draws
+    // nothing; only a WillPlay leaves X announced, and canPlayAndPayForFace then runs the real
+    // canPayCost. Cost per sorcery-speed consult with the card held: one library scan (safeToOffer
+    // only for owned instants and sorceries of mana value X or less) and, past the composition bound
+    // (which a normal library passes), G2's battlefield scan and at most two test-mode
+    // calculateManaCost calls; no other card's handler runs and nothing re-enters.
+    public static class EpicExperiment {
+        public static final String NAME = "Epic Experiment";
+        public static final int MIN_HITS = 2;
+        private static final int LIBRARY_RESERVE = 20;
+        private static final int CASTS_COVERED = 3; // the spell plus two copies with the same X
+
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || sa.isCopied()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // never touch a copy's X
+            }
+            sa.setXManaCostPaid(null); // an X a declined payment (CantAfford after WillPlay) left behind
+            final AbilitySub play = sa.getSubAbility();
+            if (play == null || play.getApi() != ApiType.Play || !sa.costHasManaX()) {
+                // a no-cost SA (ManaAi's ritual scan copy, Mind's Desire, Apex of Power) pays X = 0
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            final int n = library.size() - (library.contains(host) ? 1 : 0); // Melek casts it from the top
+            final int xCap = (n - LIBRARY_RESERVE) / CASTS_COVERED;
+            if (xCap < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // counted[v] = the cards the resolution would cast free at X = v (made cumulative below)
+            final int[] counted = new int[xCap + 1];
+            for (final Card c : library) {
+                if (c.equals(host) || !(c.isInstant() || c.isSorcery()) || !ai.equals(c.getOwner())) {
+                    continue;
+                }
+                final int mv = c.getCMC();
+                if (mv > xCap || c.getManaCost().countX() > 0 || ComputerUtilCard.isCardRemAIDeck(c)) {
+                    continue;
+                }
+                final SpellAbility first = c.getFirstSpellAbility();
+                if (first == null || first.getApi() == ApiType.Counter || !MizzixsMastery.safeToOffer(c)) {
+                    continue;
+                }
+                counted[mv]++;
+            }
+            for (int v = 1; v <= xCap; v++) {
+                counted[v] += counted[v - 1];
+            }
+            if ((long) xCap * counted[xCap] < (long) MIN_HITS * n) { // no mana makes it reach the floor
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // RNG-free affordability: no canPayCost, no setMaxXValue
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.colour(MagicColor.BLUE) < 1 || mana.colour(MagicColor.RED) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int est = mana.total();
+            int x = xCap;
+            final int capCost = costCmc(ai, sa, xCap);
+            if (capCost > est) {
+                x = xCap - (capCost - est); // each point of X above any reduction is one more generic
+                if (x < 1 || costCmc(ai, sa, x) > est) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            if ((long) x * counted[x] < (long) MIN_HITS * n) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.setXManaCostPaid(x);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The spell's mana value at X = k after CostAdjustment: ComputerUtilMana.calculateManaCost in
+        // test mode (castFrom restored, no MyRandom, the SA's own X untouched).
+        private static int costCmc(final Player ai, final SpellAbility sa, final int k) {
+            return ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, k, false).getConvertedManaCost();
+        }
+    }
+
     // Espers to Magicite
     // "Exile each opponent's graveyard. When you do, choose up to one target creature card exiled
     // this way. Create a token that's a copy of that card, except it's an artifact and it loses all
