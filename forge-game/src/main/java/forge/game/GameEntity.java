@@ -58,6 +58,7 @@ public abstract class GameEntity implements GameObject, IIdentifiable {
     // don't override hashCode), so a HashMultiset iterated in per-JVM-random order.
     protected Multiset<CounterType> counters = LinkedHashMultiset.create();
     protected List<Pair<Integer, Boolean>> damageReceivedThisTurn = Lists.newArrayList();
+    protected List<Pair<Integer, Boolean>> damageReceivedLastTurn = Lists.newArrayList();
 
     protected GameEntity(int id0) {
         id = id0;
@@ -369,6 +370,9 @@ public abstract class GameEntity implements GameObject, IIdentifiable {
     public void setDamageReceivedThisTurn(List<Pair<Integer, Boolean>> dmg) {
         damageReceivedThisTurn.addAll(dmg);
     }
+    public List<Pair<Integer, Boolean>> getDamageReceivedLastTurn() {
+        return damageReceivedLastTurn;
+    }
 
     public void receiveDamage(Pair<Integer, Boolean> dmg) {
         damageReceivedThisTurn.add(dmg);
@@ -381,8 +385,11 @@ public abstract class GameEntity implements GameObject, IIdentifiable {
         return getAssignedDamage(true, null);
     }
     public final int getAssignedDamage(Boolean isCombat, final Card source) {
+        return getAssignedDamage(isCombat, source, false);
+    }
+    public final int getAssignedDamage(Boolean isCombat, final Card source, final boolean lastTurn) {
         int num = 0;
-        for (Pair<Integer, Boolean> dmg : damageReceivedThisTurn) {
+        for (Pair<Integer, Boolean> dmg : (lastTurn ? damageReceivedLastTurn : damageReceivedThisTurn)) {
             if (isCombat != null && dmg.getRight() != isCombat) {
                 continue;
             }
