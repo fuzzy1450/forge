@@ -5370,6 +5370,342 @@ public class SpecialCardAi {
         }
     }
 
+    // Dance of the Manse (dead-card batch 2, row 52; precon:Buckle Up (NEC))
+    // "Return up to X target artifact and/or non-Aura enchantment cards each with mana value X or
+    // less from your graveyard to the battlefield. If X is 6 or more, those permanents are 4/4
+    // creatures in addition to their other types." ({X}{W}{U} sorcery.) Routed from
+    // ChangeZoneAi.checkApiLogic's name gate, the root spell only: Play-effect casts (Nathan
+    // Drake's attack trigger) and copies go through doTriggerNoCost and never come here. X is
+    // both the mana value cap (ValidTgts$ ...cmcLEX) and the target cap (TargetMin$ 0 |
+    // TargetMax$ X), and the generic targeting never sizes it (isPreferredTarget sizes X only
+    // when TargetMin is X), so X and the targets are announced together here (batch-1 row 170:
+    // a target set larger than X is dropped on the stack).
+    // Floor: card advantage that pays for itself. At least MIN_PICKS returns whose summed value
+    // reaches the X + 2 mana paid, a return's value being its mana value, or max(MV, 4) for a
+    // noncreature return when X >= 6 (it arrives as a 4/4 body). For each X the plan takes the
+    // X highest-value candidates with mana value X or less; the best margin wins and a tie keeps
+    // the smaller X, so X >= 6 is bought only when the 4/4 bodies strictly beat every smaller
+    // plan. Never returned: an AI:RemoveDeck:All card (Cataclysmic Gearhulk, whose ETB makes us
+    // sacrifice the other returns; Mirage Mirror), a legend we already control, a card whose ETB
+    // is prevented, a card whose own enters trigger checkETBEffects rejects (dropped, and the
+    // plan made again without it), and at X >= 6 a creature card the 4/4 would shrink (a printed
+    // body above 4/4, or a characteristic-defining P/T such as Master of Etherium's).
+    // Mana, RNG-free and never above what canPayCost can spend: usableMana, a private copy in the
+    // spirit of DayOfTheMoon.usableMana (a Combo, Any, Chosen, reflected or empty production is
+    // ONE mana; the sources isManaSourceReserved refuses are skipped). Never
+    // getAvailableManaEstimate: it counts the words of Produced$ (Command Tower and Arcane Signet
+    // 2, Temple of Enlightenment and Port Town 3), so the best-margin X lands past what the
+    // sources can pay, canPayAndPayForFace refuses, and every main-phase consult re-rolls the
+    // game. White and blue need two distinct sources between them, a Combo production read by
+    // its letters.
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating this card. Everything up to a
+    // plan that passes the floor is RNG-free: no setMaxXValue (its test payments draw MyRandom in
+    // ComputerUtilMana.isManaSourceReserved), no lifeInDanger. checkETBEffects runs only on the
+    // picks of such a plan, once per card; canPlayAndPayForFace runs the real canPayCost only
+    // after a WillPlay. Nothing is held or remembered.
+    public static class DanceOfTheManse {
+        public static final String NAME = "Dance of the Manse";
+        static final int MIN_PICKS = 2;
+        static final int ANIMATE_X = 6;
+        static final int ANIMATED_VALUE = 4;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            sa.setXManaCostPaid(null); // drop a stale value from an earlier window
+
+            // cheap precondition first: two artifact / non-Aura enchantment cards in our graveyard
+            int raw = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                if (c.isArtifact() || (c.isEnchantment() && !c.isAura())) {
+                    raw++;
+                }
+            }
+            if (raw < MIN_PICKS) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // spare mana over {W}{U}; X = 2 is the least X with two returns
+            final SpellAbility root = sa.getRootAbility();
+            final int spare = usableMana(ai, root) - 2;
+            if (spare < MIN_PICKS || !hasWhiteAndBlueSources(ai, root)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+
+            // legal targets at the largest affordable X (cmcLEX reads the announced X)
+            sa.setXManaCostPaid(spare);
+            final CardCollection cands = new CardCollection();
+            for (final Card c : CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa)) {
+                if (ComputerUtilCard.isCardRemAIDeck(c)) {
+                    continue; // Cataclysmic Gearhulk (its ETB sacrifices the other returns), Mirage Mirror
+                }
+                if (!c.ignoreLegendRule() && ai.isCardInPlay(c.getName())) {
+                    continue; // the legend rule would bin it on arrival
+                }
+                if (ComputerUtil.isETBprevented(c)) {
+                    continue;
+                }
+                cands.add(c);
+            }
+            sa.setXManaCostPaid(null);
+            if (cands.size() < MIN_PICKS) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!(ai.getController() instanceof PlayerControllerAi)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+
+            // the best plan, made again without any pick whose own enters trigger the AI would not
+            // run: each verdict is asked once (approved, or the card leaves the candidates), and a
+            // pass that vetoes drops at least one candidate, so there are at most cands.size() + 1
+            // passes. Only when no plan survives does the spell decline.
+            final Set<Card> approved = new HashSet<>();
+            int bestX;
+            CardCollection bestPicks;
+            while (true) {
+                bestX = -1;
+                bestPicks = null;
+                int bestMargin = -1; // a margin of 0 or more: the returns' value reaches the X + 2 paid
+                int maxMv = 0;
+                for (final Card c : cands) {
+                    maxMv = Math.max(maxMv, c.getCMC());
+                }
+                final int top = Math.min(spare, Math.max(ANIMATE_X, Math.max(maxMv, cands.size())));
+                for (int x = MIN_PICKS; x <= top; x++) {
+                    final CardCollection picks = plan(cands, x);
+                    if (picks.size() < MIN_PICKS) {
+                        continue;
+                    }
+                    final int margin = value(picks, x) - (x + 2);
+                    if (margin > bestMargin) { // strict: a tie keeps the smaller X
+                        bestMargin = margin;
+                        bestX = x;
+                        bestPicks = picks;
+                    }
+                }
+                if (bestPicks == null) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                boolean vetoed = false;
+                for (final Card c : bestPicks) {
+                    if (approved.contains(c) || !c.hasETBTrigger(false)) {
+                        continue;
+                    }
+                    if (aic.checkETBEffects(c, sa, null)) {
+                        approved.add(c);
+                    } else {
+                        cands.remove(c);
+                        vetoed = true;
+                    }
+                }
+                if (!vetoed) {
+                    break;
+                }
+            }
+
+            // X: the least that admits these picks (their count and their highest mana value),
+            // raised to ANIMATE_X when the plan won on its 4/4 bodies; never an X chosen for picks
+            // since dropped
+            int x = bestPicks.size();
+            for (final Card c : bestPicks) {
+                x = Math.max(x, c.getCMC());
+            }
+            if (bestX >= ANIMATE_X) {
+                x = Math.max(x, ANIMATE_X);
+            }
+            if (x > spare || value(bestPicks, x) < x + 2) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            sa.setXManaCostPaid(x);
+            for (final Card c : bestPicks) {
+                if (!sa.canTarget(c)) {
+                    sa.resetTargets();
+                    sa.setXManaCostPaid(null);
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+                sa.getTargets().add(c);
+            }
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // up to x candidates with mana value x or less, highest value first (a stable sort:
+        // graveyard order breaks ties); at x >= ANIMATE_X a creature card the 4/4 would shrink is
+        // left out
+        private static CardCollection plan(final CardCollection cands, final int x) {
+            final List<Card> fit = new ArrayList<>();
+            for (final Card c : cands) {
+                if (c.getCMC() <= x && (x < ANIMATE_X || !shrinks(c))) {
+                    fit.add(c);
+                }
+            }
+            fit.sort((a, b) -> Integer.compare(pickValue(b, x), pickValue(a, x)));
+            final CardCollection picks = new CardCollection();
+            for (final Card c : fit) {
+                if (picks.size() >= x) {
+                    break;
+                }
+                picks.add(c);
+            }
+            return picks;
+        }
+
+        private static int value(final CardCollection picks, final int x) {
+            int v = 0;
+            for (final Card c : picks) {
+                v += pickValue(c, x);
+            }
+            return v;
+        }
+
+        private static int pickValue(final Card c, final int x) {
+            final int mv = c.getCMC();
+            return x >= ANIMATE_X && !c.isCreature() ? Math.max(mv, ANIMATED_VALUE) : mv;
+        }
+
+        // SetPower/SetToughness 4 overrides a bigger printed body and a characteristic-defining P/T
+        private static boolean shrinks(final Card c) {
+            if (!c.isCreature()) {
+                return false;
+            }
+            if (c.getBasePower() > ANIMATED_VALUE || c.getBaseToughness() > ANIMATED_VALUE) {
+                return true;
+            }
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (st.isCharacteristicDefining() && (st.hasParam("SetPower") || st.hasParam("SetToughness"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // RNG-free count of the mana canPayCost could spend on this spell, never above it: floating
+        // mana, plus each battlefield source's best mana ability that can be activated now ({T} on
+        // an untapped, non-sick source), meets its conditions, has no mana in its own cost and whose
+        // restrictions accept this spell (root, the ability being judged: batch-1 row 77). An
+        // ability is worth Amount once for a choice production (Combo, Any, Chosen, reflected,
+        // Special or empty) and Amount times its symbols otherwise ("C C" is 2; Sol Ring's "C" with
+        // Amount 2 is 2). Skipped, as isManaSourceReserved refuses them: sources held for the next
+        // spell or for a declare-blockers trick, and outside Main 2 the sources held for Main 2
+        // (RESERVE_MANA_FOR_MAIN2_CHANCE is 100 in every profile, so its roll always refuses them).
+        // Filter lands and Signets ({1}, {T}) are left out, an undercount of one each that errs
+        // safe. A private copy in the spirit of DayOfTheMoon.usableMana, not a refactor of it or of
+        // any shared helper.
+        private static int usableMana(final Player ai, final SpellAbility root) {
+            int total = ai.getManaPool().totalMana();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || !ma.metConditions() || ma.getPayCosts().getCostMana() != null
+                            || !mp.meetsManaRestrictions(root)) {
+                        continue;
+                    }
+                    if (ma.getPayCosts().hasTapCost() && (src.isTapped() || src.isCreature() && src.isSick())) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean choice = produced.isEmpty() || ma.getApi() == ApiType.ManaReflected
+                            || mp.isSpecialMana() || mp.isComboMana() || mp.isAnyMana() || produced.contains("Chosen");
+                    best = Math.max(best, choice ? amount : amount * produced.split(" ").length);
+                }
+                total += best;
+            }
+            return total;
+        }
+
+        // the sources ComputerUtilMana.isManaSourceReserved refuses in our own main phase
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)) {
+                return true;
+            }
+            return !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2)
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+
+        // Paying {W}{U}, RNG-free: floating white and blue plus the sources whose production could
+        // be white / blue and whose mana this spell may spend (held sources skipped, restrictions
+        // read on root); one source pays one pip here, so the two pips need two distinct sources
+        // between them (Hall's condition for two pips). A production is read by its letters
+        // ("Combo W U" is either, "Combo B R" neither, "C" neither); a shape its letters cannot
+        // name (Any, Chosen, ColorIdentity, Special, a reflected or empty production) counts as
+        // either colour. A Signet or filter land counts as a source: its {1} comes back with the
+        // second mana it makes, and usableMana left it out.
+        private static boolean hasWhiteAndBlueSources(final Player ai, final SpellAbility root) {
+            int w = ai.getManaPool().getAmountOfColor(MagicColor.WHITE);
+            int u = ai.getManaPool().getAmountOfColor(MagicColor.BLUE);
+            int either = w + u;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (w >= 1 && u >= 1 && either >= 2) {
+                    break;
+                }
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                boolean canW = false;
+                boolean canU = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || !mp.meetsManaRestrictions(root)) {
+                        continue;
+                    }
+                    if (ma.getPayCosts().hasTapCost() && (src.isTapped() || src.isCreature() && src.isSick())) {
+                        continue;
+                    }
+                    final String p = mp.getOrigProduced().trim();
+                    boolean mayW = false;
+                    boolean mayU = false;
+                    boolean known = !p.isEmpty() && ma.getApi() != ApiType.ManaReflected;
+                    for (final String tok : p.split(" ")) {
+                        switch (tok) {
+                            case "Combo": case "C": case "B": case "R": case "G": break;
+                            case "W": mayW = true; break;
+                            case "U": mayU = true; break;
+                            default: known = false; break;
+                        }
+                    }
+                    if (!known) {
+                        mayW = true;
+                        mayU = true;
+                    }
+                    canW |= mayW;
+                    canU |= mayU;
+                }
+                if (canW) {
+                    w++;
+                }
+                if (canU) {
+                    u++;
+                }
+                if (canW || canU) {
+                    either++;
+                }
+            }
+            return w >= 1 && u >= 1 && either >= 2;
+        }
+    }
+
     // Dance with Calamity - push-your-luck exile: spells among the exiled cards are cast free
     // only if the exiled cards' total mana value is 13 or less. The AI knows its library's
     // contents (not their order: the card shuffles first), so optimal stopping over the

@@ -355,6 +355,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.DiabolicIntent.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.DanceOfTheManse.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // X is both the mana value cap (ValidTgts$ ...cmcLEX) and the target cap (TargetMin$ 0 |
+            // TargetMax$ X), and nothing on the generic path announces it: isPreferredTarget sizes X
+            // only when TargetMin is X, so X reads 0, no card qualifies and the spell fails targeting
+            // on every board (with a mana value 0 artifact in the graveyard it would pass as a
+            // zero-target {W}{U} blank). The evaluator picks the returns and X together behind a
+            // card-advantage floor. AI:RemoveDeck:All stripped the card before any handler ran, so
+            // the stock path drew no random numbers for it. Play-effect casts (Nathan Drake's attack
+            // trigger) and copies go through doTriggerNoCost and never reach checkApiLogic. Every
+            // other ChangeZone card takes exactly the path it took before this branch.
+            return SpecialCardAi.DanceOfTheManse.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
