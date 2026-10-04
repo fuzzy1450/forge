@@ -88,6 +88,13 @@ public class ChooseGenericAi extends SpellAbilityAi {
             // exactly the path it took before.
             return SpecialCardAi.PrisonersDilemma.consider(ai, sa);
         }
+        if (SpecialCardAi.ZimonesHypothesis.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && sa instanceof AbilitySub) {
+            // The odd-or-even choice under its +1/+1 counter, no AILogic, so the fallthrough
+            // below refused it outright. CountersPutAi judged the hand cast (window, mana,
+            // value); a Play-effect cast reaches only this sub, so it is judged here on value.
+            return SpecialCardAi.ZimonesHypothesis.considerSub(ai, sa);
+        }
         if (sa.hasParam("AILogic")) {
             // This is equivalent to what was here before but feels bad
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
@@ -136,6 +143,11 @@ public class ChooseGenericAi extends SpellAbilityAi {
             // Each player's own "discard my hand?" answer: yes only for a real refill
             // (the logic == null fallthrough below answers "Discard" for every player, always).
             return SpecialCardAi.ImposingGrandeur.chooseWheel(player, host, spells);
+        }
+        if (SpecialCardAi.ZimonesHypothesis.NAME.equals(host.getName())) {
+            // odd or even, on the board as it is now (the counter already placed); the
+            // logic == null fallthrough below answered Odd, always
+            return SpecialCardAi.ZimonesHypothesis.chooseParity(player, sa, spells);
         }
         final Game game = host.getGame();
         final String logic = sa.getParam("AILogic");

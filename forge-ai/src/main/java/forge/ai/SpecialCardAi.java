@@ -26429,4 +26429,323 @@ public class SpecialCardAi {
         }
     }
 
+    // Zimone's Hypothesis (dead-card batch 2, row 38)
+    // "You may put a +1/+1 counter on a creature. Then choose odd or even. Return each creature
+    // with power of the chosen quality to its owner's hand. (Zero is even.)" Instant, {3}{U}{U}.
+    // Stock refused it twice: CountersPutAi reads Defined (absent -> Self) and asks shouldPumpCard
+    // about this instant itself, and the GenericChoice sub has no AILogic; at resolution the
+    // counter was a coin flip and the parity always Odd. Judged here as a one-sided parity sweep:
+    // for each parity, and for no counter or a counter on one creature it moves to the other
+    // parity, net = evaluateCreature of the opponents' creatures returned minus ours. Our own
+    // commander, and a creature of ours whose bounce destroys what evaluateCreature cannot see
+    // (two or more +1/+1 counters, or an Aura or Equipment we control on it), carry a penalty no
+    // plan can clear; the counter is how a plan saves one. O(n): a counter moves one creature,
+    // so each option is a base sum plus one delta. Windows: an opponent's end step before our
+    // turn, or our own main 2, stack empty. Floor: the profile's mass-bounce-to-hand margin
+    // (BOUNCE_ALL_TO_HAND_CREAT_EVAL_DIFF, the stock ChangeZoneAllAi test), the returned opposing
+    // creatures' mana value at least this spell's (a tempo floor: they recast what we sent back),
+    // and at least two of theirs, a token of theirs, or one worth twice the margin. Parity mirrors
+    // CardProperty powerEven/powerOdd exactly (a negative odd power is neither). Reads state only
+    // and draws no RNG; holds no mana, writes no AiCardMemory, keeps no plan between calls.
+    public static class ZimonesHypothesis {
+        public static final String NAME = "Zimone's Hypothesis";
+        private static final int OWN_COMMANDER_PENALTY = 10000;
+
+        private static final class Plan {
+            boolean odd;            // the parity to choose
+            Card counter;           // null = no counter
+            int net;
+            int ours;               // our (and teammates') creatures returned
+            int theirs;             // opponents' creatures returned
+            boolean theirToken;
+            int theirMax;           // best single evaluateCreature among them
+            int theirMv;            // their recast cost: mana value (+2 commander tax), token value / 40
+        }
+
+        // hand cast (CountersPutAi.checkApiLogic, after the stock draws)
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean oppEndStep = !ph.isPlayerTurn(ai) && ph.is(PhaseType.END_OF_TURN)
+                    && ph.getNextTurn() == ai;
+            if (!game.getStack().isEmpty() || !(oppEndStep || ph.is(PhaseType.MAIN2, ai))) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (ai.getOpponents().getCreaturesInPlay().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // mana first: an approval we cannot pay would run canPayCost's reservation roll. The
+            // root's own cost, never host.getFirstSpellAbility(); a free cast needs nothing.
+            final SpellAbility root = sa.getRootAbility();
+            final ManaCost cost = root.getPayCosts() == null ? ManaCost.ZERO : root.getPayCosts().getTotalMana();
+            final int blueNeeded = cost.getShardCount(forge.card.mana.ManaCostShard.BLUE);
+            if (manaNow(ai, root) < cost.getCMC() || blueSources(ai, root, blueNeeded) < blueNeeded) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return passes(ai, root, bestPlan(ai, root, true))
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // the GenericChoice sub: value only (a Play-effect cast has no window and may be free)
+        public static AiAbilityDecision considerSub(final Player ai, final SpellAbility sub) {
+            final SpellAbility root = sub.getRootAbility();
+            return passes(ai, root, bestPlan(ai, root, true))
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // resolution: the Optional counter, and where it goes (same plan, board unchanged between)
+        public static boolean wantsCounter(final Player ai, final SpellAbility sa) {
+            final Plan p = bestPlan(ai, sa, true);
+            return p != null && p.counter != null;
+        }
+
+        // the plan's creature, or null (no counter) - never the stock parity-blind getBestAI pick
+        public static Card chooseCounterTarget(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            final Plan p = bestPlan(ai, sa, true);
+            if (p == null || p.counter == null) {
+                return null;
+            }
+            for (final Card c : options) {
+                if (c.equals(p.counter)) {
+                    return c;
+                }
+            }
+            return null;
+        }
+
+        // resolution: odd or even, on the current board (the counter is already on)
+        public static SpellAbility chooseParity(final Player ai, final SpellAbility sa, final List<SpellAbility> spells) {
+            SpellAbility odd = null, even = null;
+            for (final SpellAbility sp : spells) {
+                final String t = sp.getParamOrDefault("ChangeType", "");
+                if (t.contains("powerOdd")) {
+                    odd = sp;
+                } else if (t.contains("powerEven")) {
+                    even = sp;
+                }
+            }
+            if (odd == null || even == null) {
+                return spells.get(0); // script drifted: the stock answer
+            }
+            final Plan p = bestPlan(ai, sa, false);
+            return p == null || p.odd ? odd : even;
+        }
+
+        private static boolean passes(final Player ai, final SpellAbility root, final Plan p) {
+            if (p == null) {
+                return false;
+            }
+            final int margin = AiProfileUtil.getIntProperty(ai, AiProps.BOUNCE_ALL_TO_HAND_CREAT_EVAL_DIFF);
+            return p.net >= margin && p.theirMv >= root.getHostCard().getCMC()
+                    && (p.theirs >= 2 || p.theirToken || p.theirMax >= 2 * margin);
+        }
+
+        // CardProperty.java:1397-1404, same expressions
+        private static boolean in(final boolean odd, final int power) {
+            return odd ? power % 2 == 1 : power % 2 == 0;
+        }
+
+        // + for an opponent's creature, - for ours (or a teammate's); our own commander, and a
+        // creature we control with two or more +1/+1 counters or our Aura or Equipment on it
+        // (bouncing loses them; evaluateCreature prices only its current P/T), -(value + penalty)
+        private static int score(final Player ai, final Card c, final int value) {
+            if (c.getController().isOpponentOf(ai)) {
+                return value;
+            }
+            final boolean protect = (c.isCommander() && ai.equals(c.getOwner()))
+                    || (ai.equals(c.getController())
+                        && (c.getCounters(CounterEnumType.P1P1) >= 2 || carriesOurs(ai, c)));
+            return protect ? -(value + OWN_COMMANDER_PENALTY) : -value;
+        }
+
+        private static boolean carriesOurs(final Player ai, final Card c) {
+            for (final Card a : c.getAttachedCards()) {
+                if ((a.isAura() || a.isEquipment()) && ai.equals(a.getController())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static Plan bestPlan(final Player ai, final SpellAbility sa, final boolean withCounter) {
+            final Game game = ai.getGame();
+            // Game.getCardsIn skips phased-out permanents, which are not returned either
+            final List<Card> creatures = new ArrayList<>();
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isCreature()) {
+                    creatures.add(c);
+                }
+            }
+            if (creatures.isEmpty()) {
+                return null;
+            }
+            final int n = creatures.size();
+            final int[] value = new int[n];
+            final int[] s = new int[n];
+            int baseOdd = 0, baseEven = 0;
+            for (int i = 0; i < n; i++) {
+                final Card c = creatures.get(i);
+                value[i] = ComputerUtilCard.evaluateCreature(c);
+                s[i] = score(ai, c, value[i]);
+                final int pow = c.getNetPower();
+                if (in(true, pow)) {
+                    baseOdd += s[i];
+                } else if (in(false, pow)) {
+                    baseEven += s[i];
+                }
+            }
+            // a counter moves one creature by exactly one power: per parity, the best such move,
+            // taken only when it strictly improves that parity's net
+            Card pickOdd = null, pickEven = null;
+            int deltaOdd = 0, deltaEven = 0;
+            if (withCounter) {
+                final boolean replaced = anyAddCounterReplacement(game);
+                for (int i = 0; i < n; i++) {
+                    final Card x = creatures.get(i);
+                    final int pow = x.getNetPower();
+                    if (pow == Integer.MAX_VALUE || !movesByOne(ai, sa, x, replaced)) {
+                        continue;
+                    }
+                    final int dOdd = s[i] * ((in(true, pow + 1) ? 1 : 0) - (in(true, pow) ? 1 : 0));
+                    final int dEven = s[i] * ((in(false, pow + 1) ? 1 : 0) - (in(false, pow) ? 1 : 0));
+                    if (dOdd > deltaOdd) {
+                        deltaOdd = dOdd;
+                        pickOdd = x;
+                    }
+                    if (dEven > deltaEven) {
+                        deltaEven = dEven;
+                        pickEven = x;
+                    }
+                }
+            }
+            final Plan odd = fill(ai, creatures, value, true, pickOdd, baseOdd + deltaOdd);
+            final Plan even = fill(ai, creatures, value, false, pickEven, baseEven + deltaEven);
+            // the higher net; a tie returns fewer of ours; a full tie keeps Odd, the stock answer
+            if (even.net > odd.net || (even.net == odd.net && even.ours < odd.ours)) {
+                return even;
+            }
+            return odd;
+        }
+
+        // one O(n) pass: who the plan returns, with its counter applied
+        private static Plan fill(final Player ai, final List<Card> creatures, final int[] value,
+                final boolean odd, final Card counter, final int net) {
+            final Plan p = new Plan();
+            p.odd = odd;
+            p.counter = counter;
+            p.net = net;
+            for (int i = 0; i < creatures.size(); i++) {
+                final Card c = creatures.get(i);
+                if (!in(odd, c.getNetPower() + (c.equals(counter) ? 1 : 0))) {
+                    continue;
+                }
+                if (!c.getController().isOpponentOf(ai)) {
+                    p.ours++;
+                    continue;
+                }
+                p.theirs++;
+                p.theirMax = Math.max(p.theirMax, value[i]);
+                p.theirToken |= c.isToken(); // a returned token ceases to exist
+                if (c.isFaceDown()) {
+                    continue; // a face-down creature: 0, nothing we can price as a recast
+                }
+                p.theirMv += c.isToken() ? value[i] / 40 : c.getCMC() + (c.isCommander() ? 2 : 0);
+            }
+            return p;
+        }
+
+        // any AddCounter replacement on the battlefield or in the command zone (Hardened Scales,
+        // Kami of Whispered Hopes, Doubling Season, The Ozolith's kin ...): only then is the
+        // handler asked per candidate
+        private static boolean anyAddCounterReplacement(final Game game) {
+            for (final ZoneType zone : new ZoneType[] {ZoneType.Battlefield, ZoneType.Command}) {
+                for (final Card c : game.getCardsIn(zone)) {
+                    for (final ReplacementEffect re : c.getReplacementEffects()) {
+                        if (re.getMode() == ReplacementType.AddCounter) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // canReceiveCounters(P1P1), and no AddCounter replacement would change the number placed.
+        // Read-only; ReplaceAddCounter.canReplace unboxes EffectOnly, so it must be present.
+        // Over-excluding only drops a counter option.
+        private static boolean movesByOne(final Player ai, final SpellAbility sa, final Card x, final boolean replaced) {
+            if (!x.canReceiveCounters(CounterEnumType.P1P1)) {
+                return false;
+            }
+            if (!replaced) {
+                return true;
+            }
+            final GameEntityCounterTable table = new GameEntityCounterTable();
+            table.put(ai, x, CounterEnumType.P1P1, 1);
+            final Map<forge.game.ability.AbilityKey, Object> repParams = forge.game.ability.AbilityKey.mapFromAffected(x);
+            repParams.put(forge.game.ability.AbilityKey.Cause, sa);
+            repParams.put(forge.game.ability.AbilityKey.EffectOnly, true);
+            repParams.put(forge.game.ability.AbilityKey.ETB, false);
+            repParams.put(forge.game.ability.AbilityKey.CounterMap, table.column(x));
+            return ai.getGame().getReplacementHandler()
+                    .getReplacementList(ReplacementType.AddCounter, repParams, null).isEmpty();
+        }
+
+        // mana we can make now, each untapped source at what it really yields. The stock
+        // getAvailableManaEstimate splits Produced on spaces: "Combo G U" reads 3, Command Tower 2,
+        // Flooded Grove 5. An approval we cannot pay reaches canPayCost, whose isManaSourceReserved
+        // draws percentTrue(100) per source tried, so an over-count re-rolls held games. A private
+        // count (it leaves out sacrifice sources, which G2's HonestMana counts).
+        private static int manaNow(final Player ai, final SpellAbility root) {
+            int total = ai.getManaPool().totalMana();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay() || ma.getPayCosts().hasManaCost()
+                            || ma.getPayCosts().hasSpecificCostType(CostSacrifice.class)
+                            || !ma.getManaPart().meetsManaRestrictions(root)) {
+                        continue; // filters, Signets and sac sources left out: an under-count only declines
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    final int per = produced.isEmpty() || produced.startsWith("Combo")
+                            || produced.contains("Any") || produced.contains("Chosen")
+                            ? 1 : produced.split(" ").length;
+                    best = Math.max(best, per * AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma));
+                }
+                total += best;
+            }
+            return total;
+        }
+
+        // GhostlyFlicker's hasBlueSources as a count (never share a predicate with an accepted
+        // card), judged against the ROOT spell ability rather than host.getFirstSpellAbility():
+        // floating blue plus untapped sources whose printed production could be blue and whose
+        // mana this spell may spend, counted up to the blue shards needed.
+        private static int blueSources(final Player ai, final SpellAbility root, final int needed) {
+            int blue = ai.getManaPool().getAmountOfColor(MagicColor.BLUE);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (blue >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()
+                            || !ma.getManaPart().meetsManaRestrictions(root)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("U") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        blue++;
+                        break;
+                    }
+                }
+            }
+            return blue;
+        }
+    }
+
 }

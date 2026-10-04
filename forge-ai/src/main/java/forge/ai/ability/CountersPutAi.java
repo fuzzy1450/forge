@@ -630,12 +630,22 @@ public class CountersPutAi extends CountersAi {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             // Instant +1/+1
+            // Zimone's Hypothesis (dead-card batch 2, row 38): Defined defaults to Self, so the
+            // pump check below asks about this instant itself and always says no. It is judged
+            // whole after that check, so a decline consumes exactly the random draws and
+            // timestamps it did before; the second test also catches full-sim seats, where
+            // shouldPumpCard answers yes.
+            final boolean zimone = SpecialCardAi.ZimonesHypothesis.NAME.equals(sourceName);
             if (type.equals("P1P1") && !isSorcerySpeed(sa, ai)) {
                 // e.g. Power-Up abilities: use it to survive or win combat
                 if (!hasSacCost && !(ph.getNextTurn() == ai && ph.is(PhaseType.END_OF_TURN) && abCost.isReusuableResource())
-                        && !ComputerUtilCard.shouldPumpCard(ai, sa, cards.get(0), amount, amount, Lists.newArrayList())) {
+                        && !ComputerUtilCard.shouldPumpCard(ai, sa, cards.get(0), amount, amount, Lists.newArrayList())
+                        && !zimone) {
                     return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
+            }
+            if (zimone) {
+                return SpecialCardAi.ZimonesHypothesis.consider(ai, sa);
             }
 
             // Useless since the card already has the keyword (or for another reason)
@@ -909,6 +919,12 @@ public class CountersPutAi extends CountersAi {
     @Override
     public boolean confirmAction(Player player, SpellAbility sa, PlayerActionConfirmMode mode, String message, Map<String, Object> params) {
         final Card source = sa.getHostCard();
+        if (mode == null && sa.hasParam("Choices")
+                && SpecialCardAi.ZimonesHypothesis.NAME.equals(source.getName())) {
+            // "You may put a +1/+1 counter": only when the best parity plan uses one (the
+            // fallthrough below was a coin flip)
+            return SpecialCardAi.ZimonesHypothesis.wantsCounter(player, sa);
+        }
         if (mode == PlayerActionConfirmMode.Tribute) {
             // add counter if that opponent has a giant creature
             final List<Card> creats = player.getCreaturesInPlay();
@@ -956,6 +972,10 @@ public class CountersPutAi extends CountersAi {
 
     @Override
     protected Card chooseSingleCard(final Player ai, SpellAbility sa, Iterable<Card> options, boolean isOptional, Player targetedPlayer, Map<String, Object> params) {
+        if (SpecialCardAi.ZimonesHypothesis.NAME.equals(sa.getHostCard().getName())) {
+            // the plan's creature or none, never the parity-blind best-creature pick below
+            return SpecialCardAi.ZimonesHypothesis.chooseCounterTarget(ai, sa, options);
+        }
         // Bolster does use this
         // TODO need more or less logic there?
         final CounterType m1m1 = CounterEnumType.M1M1;
