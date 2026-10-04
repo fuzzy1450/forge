@@ -10623,6 +10623,254 @@ public class SpecialCardAi {
         }
     }
 
+    // Galepowder Mage (dead-card batch 2, row 111)
+    // "Flying. Whenever Galepowder Mage attacks, exile another target creature. Return that card to
+    // the battlefield under its owner's control at the beginning of the next end step." The trigger
+    // (TrigExile, AILogic$ GalepowderMage, routed from ChangeZoneAi.knownOriginTriggerAI) has no
+    // cost and no optional decider, so it is mandatory with exactly one target. Stock aimed it at
+    // our own creatures: isPreferredTarget's blink branch takes our best nontoken ETB creature,
+    // attacking or not (Dire Fleet Ravager: each player loses a third of their life), else keeps
+    // only opponents' tokens, and isUnpreferredTarget then takes getBestRemovalTargetAI over every
+    // legal target, ours included. It resolves in the declare-attackers step, before blocks, and the
+    // card returns to its OWNER at the next end step (a token never returns). Tiers, in order:
+    //  1   - a nontoken creature we own that an opponent controls, no ward: it comes home;
+    //  2-5 - an opposing creature we do not own, no ward, that is a token (gone for good) or whose
+    //        return is neutral or bad for them (returnIsNeutral): a potential blocker of one of our
+    //        attackers first, a token before a nontoken in each half;
+    //  6   - our own idle creature whose round trip costs nothing (freeRoundTrip), the least
+    //        valuable, quiet ones first (no tap or untap ability, no trigger);
+    //  7   - forced only, least harm first: 7a an opposing creature whose return gives them nothing
+    //        (it failed 2-5 only on ward or on mostly negative counters); 7b our own idle nontoken
+    //        that only loses its counters or Equipment for a turn; 7c any opposing creature not
+    //        enchanted by us; 7d our own idle nontoken (ETB creatures, the commander); 7e our own
+    //        attacker; 7f anything left (our tokens, borrowed creatures, ones carrying our Aura).
+    // Floor: never our token, commander, attacker, countered or equipped creature, or a borrowed one
+    // (it would go home) while an opposing neutral target or a free round trip of ours is
+    // targetable; never an opponent's re-ETB, re-armed undying or persist, split mutate pile, reset
+    // of negative counters or loss of our Aura while such a target exists. The forced tier's harm
+    // is one creature's round trip, one attacker's damage this combat, or one token.
+    // RNG-free: ordered scans of getTargetableCards with Aggregates.itemWithMax/itemWithMin (first
+    // wins ties), CombatUtil.canBlock and evaluateCreature; no AiBlockController and no board
+    // evaluation (the stock getBestRemovalTargetAI's evaluateBoardPosition term reaches
+    // wouldLikeToRandomlyTrade's rolls). Combat is read null-safe: Card.isAttacking is not.
+    public static class GalepowderMage {
+        public static boolean chooseTarget(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            final Combat combat = game.getCombat();
+            // honors Creature.Other, hexproof, shroud and protection
+            final CardCollection all = CardLists.getTargetableCards(game.getCardsIn(ZoneType.Battlefield), sa);
+            if (all.isEmpty()) {
+                return false;
+            }
+            final CardCollection opp = CardLists.filterControlledBy(all, ai.getOpponents());
+
+            // 1. ours, under an opponent's control (a theft): it returns to us
+            Card pick = best(CardLists.filter(opp, c -> ai.equals(c.getOwner()) && !c.isToken()
+                    && !c.hasKeyword(Keyword.WARD)));
+            // 2-5. opposing creatures: potential blockers first, tokens (gone for good) before nontokens
+            if (pick == null) {
+                final CardCollection fair = CardLists.filter(opp, c -> !ai.equals(c.getOwner())
+                        && !c.hasKeyword(Keyword.WARD) && (c.isToken() || returnIsNeutral(ai, c)));
+                final CardCollection blockers = CardLists.filter(fair, c -> canBlockOurAttack(combat, c));
+                pick = best(CardLists.filter(blockers, Card::isToken));
+                if (pick == null) {
+                    pick = best(blockers);
+                }
+                if (pick == null) {
+                    pick = best(CardLists.filter(fair, Card::isToken));
+                }
+                if (pick == null) {
+                    pick = best(fair);
+                }
+            }
+            // 6. our own idle creature whose round trip costs nothing: the least valuable, quiet first
+            if (pick == null) {
+                final CardCollection free = CardLists.filter(all, c -> freeRoundTrip(ai, combat, c));
+                pick = worst(CardLists.filter(free, GalepowderMage::isQuiet));
+                if (pick == null) {
+                    pick = worst(free);
+                }
+            }
+            if (pick == null) {
+                if (!mandatory) {
+                    return false;
+                }
+                // 7. forced: least harm first
+                // 7a. an opposing creature whose return gives them nothing
+                pick = worst(CardLists.filter(all, c -> c.getController().isOpponentOf(ai)
+                        && !enchantedByUs(ai, c) && noReturnValue(c)));
+                // 7b. our own idle nontoken that only loses its counters or Equipment for a turn
+                if (pick == null) {
+                    pick = worst(CardLists.filter(all, c -> ownIdleNontoken(ai, combat, c) && !c.isCommander()
+                            && !c.isFaceDown() && noEnterOrLeaveTrigger(c) && !enchantedByUs(ai, c)));
+                }
+                // 7c. any opposing creature not enchanted by us
+                if (pick == null) {
+                    pick = worst(CardLists.filter(all, c -> c.getController().isOpponentOf(ai) && !enchantedByUs(ai, c)));
+                }
+                // 7d. our own idle nontoken (ETB creatures, the commander)
+                if (pick == null) {
+                    pick = worst(CardLists.filter(all, c -> ownIdleNontoken(ai, combat, c)));
+                }
+                // 7e. our own attacker
+                if (pick == null) {
+                    pick = worst(CardLists.filter(all, c -> ai.equals(c.getController()) && ai.equals(c.getOwner())
+                            && !c.isToken()));
+                }
+                // 7f. our tokens, borrowed creatures, creatures carrying our Aura
+                if (pick == null) {
+                    pick = worst(all);
+                }
+            }
+            if (pick == null || !sa.canTarget(pick)) {
+                return mandatory && sa.isTargetNumberValid();
+            }
+            sa.getTargets().add(pick);
+            return true;
+        }
+
+        // Nothing comes back for its controller: face up (a face-down card returns face up), not a
+        // mutated pile (it returns as separate cards), no ETB trigger or ETB replacement (a clone
+        // copies again), no trigger that fires when it is exiled from the battlefield, and no
+        // undying or persist that the round trip re-arms (a spent one: persist with its -1/-1
+        // counter, undying with its +1/+1 counter).
+        private static boolean noReturnValue(final Card c) {
+            if (c.isFaceDown() || c.isMutated() || !noEnterOrLeaveTrigger(c)) {
+                return false;
+            }
+            return !((c.hasKeyword(Keyword.UNDYING) || c.hasKeyword(Keyword.PERSIST))
+                    && !ComputerUtilCard.hasActiveUndyingOrPersist(c));
+        }
+
+        // Neutral or bad for its controller when it comes back: noReturnValue, no Aura of ours on it
+        // (we would lose it), and not mostly negative counters (they would reset). Its controller's
+        // own Auras, Equipment and +1/+1 counters are stripped by the round trip, which is the point.
+        private static boolean returnIsNeutral(final Player ai, final Card c) {
+            return noReturnValue(c) && !enchantedByUs(ai, c) && !mostlyNegativeCounters(c);
+        }
+
+        private static boolean noEnterOrLeaveTrigger(final Card c) {
+            return !c.hasETBTrigger(false) && !c.hasETBReplacement() && !hasLeavesTrigger(c);
+        }
+
+        // owned and controlled by us, nontoken, face up, not our commander, not attacking, no
+        // counters, nothing attached that we control, no ETB or leaves trigger, no ETB replacement
+        private static boolean freeRoundTrip(final Player ai, final Combat combat, final Card c) {
+            if (!ownIdleNontoken(ai, combat, c) || c.isFaceDown() || c.isCommander() || c.hasCounters()) {
+                return false;
+            }
+            for (final Card attached : c.getAttachedCards()) {
+                if (ai.equals(attached.getController())) {
+                    return false;
+                }
+            }
+            return noEnterOrLeaveTrigger(c);
+        }
+
+        // owned and controlled by us, nontoken, not attacking
+        private static boolean ownIdleNontoken(final Player ai, final Combat combat, final Card c) {
+            return ai.equals(c.getOwner()) && ai.equals(c.getController()) && !c.isToken()
+                    && (combat == null || !combat.isAttacking(c));
+        }
+
+        // Inside tier 6, a creature whose absence until our next turn costs no more than its body:
+        // no tap or untap activated ability (Mother of Runes, mana creatures) and no trigger (combat
+        // engines; freeRoundTrip already excluded ETB and leaves triggers).
+        private static boolean isQuiet(final Card c) {
+            if (!c.getTriggers().isEmpty()) {
+                return false;
+            }
+            for (final SpellAbility ab : c.getSpellAbilities()) {
+                if (ab.isActivatedAbility() && ab.getPayCosts() != null && (ab.getPayCosts().hasTapCost()
+                        || ab.getPayCosts().hasSpecificCostType(forge.game.cost.CostUntap.class))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean enchantedByUs(final Player ai, final Card c) {
+            for (final Card aura : c.getEnchantedBy()) {
+                if (ai.equals(aura.getController())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // ChangeZoneAi.canBouncePermanent's rule: more than half of its counters are negative ones
+        private static boolean mostlyNegativeCounters(final Card c) {
+            int negative = 0;
+            int total = 0;
+            for (final CounterType type : c.getCounters().elementSet()) {
+                final int n = c.getCounters(type);
+                if (ComputerUtil.isNegativeCounter(type, c)) {
+                    negative += n;
+                }
+                total += n;
+            }
+            return total > 0 && negative > total / 2;
+        }
+
+        // a ChangesZone(All) trigger of this card that fires when it is exiled from the battlefield:
+        // a leaves-the-battlefield trigger, not a dies trigger (Destination$ Graveyard)
+        private static boolean hasLeavesTrigger(final Card c) {
+            for (final Trigger tr : c.getTriggers()) {
+                final boolean allMode = tr.getMode() == TriggerType.ChangesZoneAll;
+                if (tr.getMode() != TriggerType.ChangesZone && !allMode) {
+                    continue;
+                }
+                if (!listsZone(tr.getParam("Origin"), ZoneType.Battlefield)
+                        || !listsZone(tr.getParam("Destination"), ZoneType.Exile)) {
+                    continue;
+                }
+                final String valid = tr.getParam(allMode ? "ValidCards" : "ValidCard");
+                if (valid != null && !valid.contains("Self")) {
+                    continue;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // an absent zone list matches any zone; otherwise the list names the zone or Any
+        private static boolean listsZone(final String zones, final ZoneType zone) {
+            if (zones == null) {
+                return true;
+            }
+            for (final String z : zones.split(",")) {
+                final String name = z.trim();
+                if (name.equals(zone.toString()) || name.equals("Any")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // an opposing creature that could block one of our attackers (per attacker, against the
+        // player that attacker attacks)
+        private static boolean canBlockOurAttack(final Combat combat, final Card c) {
+            if (combat == null) {
+                return false;
+            }
+            for (final Card att : combat.getAttackers()) {
+                if (c.getController().equals(combat.getDefenderPlayerByAttacker(att)) && CombatUtil.canBlock(att, c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static Card best(final CardCollection list) {
+            return list.isEmpty() ? null : Aggregates.itemWithMax(list, c -> ComputerUtilCard.evaluateCreature(c));
+        }
+
+        private static Card worst(final CardCollection list) {
+            return list.isEmpty() ? null : Aggregates.itemWithMin(list, c -> ComputerUtilCard.evaluateCreature(c));
+        }
+    }
+
     // Gaze of Granite
     // "X B B G: Destroy each nonland permanent with mana value X or less."
     // DestroyAllAi.doMassRemovalLogic evaluates and pays only the MAX affordable

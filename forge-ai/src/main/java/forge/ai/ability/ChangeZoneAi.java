@@ -1804,6 +1804,13 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        } else if ("GalepowderMage".equals(logic)) {
+            // Mandatory one-target attack blink: the stock blink branch of isPreferredTarget and
+            // isUnpreferredTarget below aim it at our own creatures when the opponent has no token.
+            if (SpecialCardAi.GalepowderMage.chooseTarget(ai, sa, mandatory)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         } else if ("AniktheaHandOfErebos".equals(logic)) {
             // Own-graveyard enchantment for a 3/3 Zombie copy. isPreferredTarget below keeps
             // only opponents' cards for Destination$ Exile, so the pre-cast probe vetoed every cast.
