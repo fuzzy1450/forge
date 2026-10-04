@@ -1105,6 +1105,10 @@ public class AiController {
                     return null;
                 }
                 return new CardCollection(ComputerUtilCard.getWorstAI(discards));
+            } else if ("NantukoCultivator".equals(logic)) {
+                // Optional land discard (min 0): the choose loops below run min times and discard
+                // nothing. Discard the spare lands instead; see SpecialCardAi.NantukoCultivator.
+                return SpecialCardAi.NantukoCultivator.chooseLands(player, validCards, max, sa);
             }
 
             if (sa.hasParam("AnyNumber")) {

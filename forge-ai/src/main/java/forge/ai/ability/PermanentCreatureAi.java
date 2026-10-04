@@ -242,6 +242,13 @@ public class PermanentCreatureAi extends PermanentAi {
             // path it took before. See the class comment.
             return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
         }
+        if (SpecialCardAi.NantukoCultivator.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
+                && !SpecialCardAi.NantukoCultivator.worthCasting(ai, sa)) {
+            // Value floor: a cast paid from hand needs a spare land for its enters trigger, else it
+            // is a 2/2 for four, and real mana with green (canPayCost's test payment draws MyRandom).
+            // A Play-effect cast (a thief) keeps the stock path. No random draw; see the class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
         final ManaCost mana = card.getManaCost();
         final Game game = ai.getGame();
 

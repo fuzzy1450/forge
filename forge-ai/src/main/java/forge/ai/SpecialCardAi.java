@@ -16374,6 +16374,231 @@ public class SpecialCardAi {
         }
     }
 
+    // Nantuko Cultivator
+    // "When this creature enters, you may discard any number of land cards. Put that many +1/+1
+    // counters on this creature and draw that many cards." ({3}{G} 2/2.) AI:RemoveDeck:All kept it
+    // out of every evaluation (AiController.getSpellAbilityToPlay's saList filter), and it hid a real
+    // hole: the discard is Optional$ True, so DiscardEffect asks getCardsToDiscard for min 0, whose
+    // choose loops run min times and discard nothing, and a cast was a vanilla 2/2 for four. The
+    // trigger's AILogic$ NantukoCultivator routes that choice to chooseLands;
+    // PermanentCreatureAi.checkApiLogic asks worthCasting before a cast paid from hand (a Play-effect
+    // cast keeps its stock decision).
+    // A land is spare by the stock discard picker's own rule (AiController.getCardsToDiscard's
+    // canDiscardLands): keep 3 lands with no mana land in play, 2 with 1-2, 1 with 3-5, none with 6+,
+    // plus one while this turn's land drop is still open. The kept lands are the best by
+    // GameStateEvaluator.evaluateLand (what getBestLandToPlayAI maximises) plus NEW_COLOUR_BONUS for a
+    // land that makes a colour no mana source of ours on the battlefield makes, so the only white
+    // source is never binned for a card while Forests stay. Draws are capped by CantDraw statics and
+    // kept outside DrawAi's decking margin; an opponent's draw thief or draw/discard punisher blanks
+    // the discard.
+    // Mana: untappedMana counts each source once by amountOfManaGenerated(true) (Combo/Any = its
+    // Amount). getAvailableManaEstimate counts the words of Produced$ (Jungle Shrine 4, Command Tower
+    // and Arcane Signet 2, all in the carrier), so it approved windows canPayCost then refused after
+    // isManaSourceReserved's roll.
+    // RNG-free: the hint kept A from ever evaluating the card, so every decline draws nothing, and
+    // the resolution chooser never calls getCardPreference or Aggregates.random.
+    public static class NantukoCultivator {
+        public static final String NAME = "Nantuko Cultivator";
+        static final int MIN_DISCARD = 1; // a 3/3 that turns a spare land into a card; uncalibrated
+        static final int NEW_COLOUR_BONUS = 200;
+
+        // Pre-cast floor, for a cast paid from hand. Cheapest checks first: a hand filter and a
+        // battlefield land count, then the mana walk, then the punisher scan and the keeper scores.
+        public static boolean worthCasting(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return false;
+            }
+            final CardCollection lands = CardLists.filter(ai.getCardsIn(ZoneType.Hand), CardPredicates.LANDS);
+            if (lands.size() - keepCount(ai) < MIN_DISCARD) {
+                return false; // no spare land: a 2/2 for four
+            }
+            // Approving lets the cast reach ComputerUtilCost.canPayCost, whose shard payment rolls
+            // MyRandom in ComputerUtilMana.isManaSourceReserved. Refuse unaffordable windows here,
+            // drawing nothing.
+            if (untappedMana(ai) < sa.getPayCosts().getTotalMana().getCMC() || !hasGreenSource(ai, host)) {
+                return false;
+            }
+            if (!ai.canDiscardBy(sa, true)) {
+                return false; // a CantDiscard static would blank the enters trigger
+            }
+            return spareLands(ai, lands, host, lands.size()).size() >= MIN_DISCARD;
+        }
+
+        // Resolution (AiController.getCardsToDiscard, min 0, max = lands in hand): the spare lands.
+        public static CardCollection chooseLands(final Player ai, final CardCollection validCards,
+                                                 final int max, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new CardCollection(); // stay stock: discard none
+            }
+            return spareLands(ai, validCards, host, max);
+        }
+
+        // The lands of cards to discard, at most limit: everything above the keep count, within the
+        // draws allowed; none while a punisher would see the draws or one of these lands.
+        static CardCollection spareLands(final Player ai, final Iterable<Card> cards, final Card host, final int limit) {
+            final CardCollection pool = CardLists.filter(cards, CardPredicates.LANDS);
+            // draws < library - 3 (DrawAi's decking margin), then the CantDraw statics
+            int cap = Math.min(Math.min(pool.size() - keepCount(ai), limit),
+                    ai.getCardsIn(ZoneType.Library).size() - 4);
+            cap = cap <= 0 ? 0 : StaticAbilityCantDraw.canDrawAmount(ai, cap);
+            if (cap <= 0 || drawOrDiscardIsPunished(ai, host, pool)) {
+                return new CardCollection();
+            }
+            final byte any = anyColours(ai);
+            byte have = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                have |= producedColours(ai, src, any);
+            }
+            while (pool.size() > cap) { // keep the lands the AI would rather play; discard the rest
+                pool.remove(bestKeeper(ai, pool, have, any));
+            }
+            return pool;
+        }
+
+        static int keepCount(final Player ai) {
+            final int inPlay = CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS_PRODUCING_MANA);
+            int keep = inPlay > 5 ? 0 : inPlay > 2 ? 1 : inPlay > 0 ? 2 : 3;
+            if (ai.getGame().getPhaseHandler().isPlayerTurn(ai) && ai.getLandsPlayedThisTurn() < ai.getMaxLandPlays()) {
+                keep++; // this turn's land drop is still open: play it, don't discard it
+            }
+            return keep;
+        }
+
+        // evaluateLand plus NEW_COLOUR_BONUS when the land makes a colour our battlefield sources do
+        // not; the first land in hand order wins a tie (strict >, as Aggregates.itemWithMax).
+        private static Card bestKeeper(final Player ai, final CardCollection pool, final byte have, final byte any) {
+            Card best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (final Card c : pool) {
+                int score = forge.ai.simulation.GameStateEvaluator.evaluateLand(c);
+                if ((producedColours(ai, c, any) & ~have) != 0) {
+                    score += NEW_COLOUR_BONUS;
+                }
+                if (score > bestScore) {
+                    best = c;
+                    bestScore = score;
+                }
+            }
+            return best;
+        }
+
+        // Any (and Combo ColorIdentity, through getComboColors) stands for every colour of the
+        // commander identity; every colour without a commander.
+        private static byte anyColours(final Player ai) {
+            final ColorSet identity = ai.getCommanderColorID();
+            return identity == null ? MagicColor.ALL_COLORS : identity.getColor();
+        }
+
+        // The colours a card's printed mana abilities make (getOrigProduced words, Combo letters,
+        // Chosen through the chosen colour); reflected and Special production count as none.
+        private static byte producedColours(final Player ai, final Card c, final byte any) {
+            byte mask = 0;
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                if (mp == null) {
+                    continue;
+                }
+                ma.setActivatingPlayer(ai);
+                if (mp.isAnyMana()) {
+                    mask |= any;
+                    continue;
+                }
+                final String letters = mp.isComboMana() ? mp.getComboColors(ma)
+                        : mp.getOrigProduced().replace("Chosen", mp.getChosenColor(ma));
+                for (final String t : letters.split(" ")) {
+                    if (t.length() == 1) {
+                        mask |= MagicColor.fromName(t.charAt(0));
+                    }
+                }
+            }
+            return mask;
+        }
+
+        // Untapped mana: floating mana plus, per source, its best free ability counted by
+        // amountOfManaGenerated(true) (Combo/Any = its Amount). Undercounting only misses a cast.
+        static int untappedMana(final Player ai) {
+            int total = ai.getManaPool().totalMana();
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getPayCosts().hasManaCost() || !ma.canPlay()) {
+                        continue; // tapped or sick (CostTap), or a filter ability
+                    }
+                    best = Math.max(best, ma.amountOfManaGenerated(true));
+                }
+                total += best;
+            }
+            return total;
+        }
+
+        // Floating green plus untapped sources whose printed production could be green
+        // (BorderlandExplorer.hasGreenSources, copied: never share a predicate with an accepted card).
+        private static boolean hasGreenSource(final Player ai, final Card host) {
+            final ManaCost cost = host.getManaCost();
+            final int needed = cost == null ? 0 : cost.getShardCount(forge.card.mana.ManaCostShard.GREEN);
+            int green = ai.getManaPool().getAmountOfColor(MagicColor.GREEN);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (green >= needed) {
+                    break;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay()) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("G") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        green++;
+                        break;
+                    }
+                }
+            }
+            return green >= needed;
+        }
+
+        // An opponent's draw thief (Notion Thief, Alms Collector) or draw punisher (Orcish Bowmasters,
+        // Spiteful Visions, Fate Unraveler, Nekusar) that would see these draws, or a discard punisher
+        // (Waste Not, Megrim, Tergrid) that would see one of these lands, on the battlefield or in the
+        // Command zone and working where it sits (KnollspineDragon.drawOrDiscardIsPunished, copied, with
+        // the Discarded test run over the lands instead of the whole hand). The host stands in for the
+        // drawn cards: it is ours, so Card.OppOwn matches.
+        private static boolean drawOrDiscardIsPunished(final Player ai, final Card host, final CardCollection lands) {
+            final Game game = ai.getGame();
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                if (controller == null || !controller.isOpponentOf(ai)) {
+                    continue;
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.zonesCheck(game.getZoneOf(c)) && re.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (!t.zonesCheck(game.getZoneOf(c)) || !t.matchesValidParam("ValidPlayer", ai)) {
+                        continue;
+                    }
+                    if (t.getMode() == TriggerType.Drawn && t.matchesValidParam("ValidCard", host)) {
+                        return true;
+                    }
+                    if (t.getMode() == TriggerType.Discarded) {
+                        for (final Card land : lands) {
+                            if (t.matchesValidParam("ValidCard", land)) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Necropotence
     public static class Necropotence {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
