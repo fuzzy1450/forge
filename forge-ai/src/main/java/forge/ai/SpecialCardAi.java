@@ -21375,6 +21375,300 @@ public class SpecialCardAi {
         }
     }
 
+    // Toxic Deluge (dead-card batch 2, row 11)
+    // "As an additional cost to cast this spell, pay X life. All creatures get -X/-X until end of
+    // turn." ({2}{B} Sorcery.) The script carried AI:RemoveDeck:All. Behind it nothing on the stock
+    // PumpAll path chooses this non-mana X (NumAtt/NumDef read -0, and without IsCurse the stock
+    // judge weighs a 0/0 pump of our own creatures), and setMaxXValue would offer the whole life
+    // total, which checkLifeCost vetoes. PumpAllAi.checkApiLogic routes the card here by name,
+    // before any stock code. X is chosen among the opposing creatures' kill thresholds: the best
+    // swing net of LIFE_PER_VALUE per life point, the smaller X on ties. An X is admissible only
+    // when, in order:
+    // (a) an opposing creature dies (an undying or persist creature returns, so it counts on
+    //     neither side's value or cards, but its death still triggers and it still attacks);
+    // (b) the opponents' dying value beats ours by the stock wrath margin, MARGIN / #opponents
+    //     (PumpAllAi's curse test, DestroyAllAi's CREATURE_EVAL_THRESHOLD): evaluateCreature, plus
+    //     COMMANDER_TAX for a commander and PILE_CARD per extra card of a mutated pile, 0 for SacMe;
+    // (c) we are never a card down (a creature token is half a card, Toxic Deluge itself the card
+    //     we pay), and the kill is worth a card: two or more kills worth MULTI_KILL_VALUE, one kill
+    //     worth SINGLE_KILL_VALUE, or an opposing commander (Fire Covenant's floors);
+    // (d) LIFE_PER_VALUE * X does not exceed the net swing (Fire Covenant's price);
+    // (e) no lord of ours dies while a creature of ours that its Continuous AddToughness static
+    //     affects survives this X: the anthem ends and the followers shrink a second time;
+    // (f) we stay out of reach: life - X - the death-trigger drain of every creature that dies -
+    //     the combat damage of every surviving opposing non-Defender >= max(4,
+    //     AI_IN_DANGER_MAX_THRESHOLD), and canPayLife(X). The drain is summed per trigger and per
+    //     part (deathDrain), so Kokusho's 5 and Massacre Wurm's 2 per creature count in full. So
+    //     the stock checkLifeCost (life - X >= 4) never vetoes an approved X.
+    // The stock path never evaluated the card (the hint), so it drew no random number for it, and
+    // every decline here is RNG-free: the zone and stack reads, the board scans, CreatureEvaluator,
+    // canPayLife, calculateManaCost in test mode and HonestMana (G2), and the trigger and static
+    // reads. Only an approval goes on to canPayCost's test payment. Affordability is G2 against the
+    // adjusted cost in total and in black, never getAvailableManaEstimate (it counts the words of
+    // Produced$: Command Tower and Arcane Signet 2, a Talisman 3) and never a Combo-reads-as-black
+    // source test (Deadly Tempest's substitution). X is null on every decline, and every cast with
+    // a non-empty stack declines: a Play effect's trigger is still on the stack while it casts
+    // (MagicStack.resolveStack), so Jeleva's mandatory cast pays 0 life as before.
+    public static class ToxicDeluge {
+        public static final String NAME = "Toxic Deluge";
+        private static final int MARGIN = 200;            // PumpAllAi curse test; DestroyAllAi CREATURE_EVAL_THRESHOLD
+        private static final int LIFE_PER_VALUE = 30;     // Fire Covenant: each life point buys 30 evaluation
+        private static final int MULTI_KILL_VALUE = 320;  // Fire Covenant: two or more kills worth this...
+        private static final int SINGLE_KILL_VALUE = 220; // ...or one kill worth this, or an opposing commander
+        private static final int COMMANDER_TAX = 100;     // the recast tax (Deadly Tempest's term)
+        private static final int PILE_CARD = 100;         // each extra card of a mutated pile dies too
+        private static final int UNKNOWN_DRAIN = 3;       // a death drain whose amount is not a number
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            root.setXManaCostPaid(null); // every decline leaves X null
+            final Card host = sa.getHostCard();
+            final Game game = ai.getGame();
+            if (host == null || host.isInZone(ZoneType.Stack) || !game.getStack().isEmpty()) {
+                // a Play effect's cast (its trigger still resolving), a copy, or a probe of one
+                return new AiAbilityDecision(0, AiPlayDecision.StackNotEmpty);
+            }
+            final CardCollection theirs = ai.getOpponents().getCreaturesInPlay();
+            if (theirs.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!ai.canPayLife(1, false, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int life = ai.getLife();
+            // candidate X: each opposing kill threshold below our life, ascending
+            final TreeSet<Integer> xs = new TreeSet<>();
+            for (final Card c : theirs) {
+                final int k = killAt(c);
+                if (k >= 1 && k < life && !returns(c)) {
+                    xs.add(k);
+                }
+            }
+            if (xs.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            final CardCollection mine = ai.getCreaturesInPlay();
+            final int margin = MARGIN / Math.max(1, ai.getOpponents().size());
+            final int safety = Math.max(4, AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD));
+            final Map<Card, Integer> val = new HashMap<>(); // each creature evaluated once
+            Map<Card, Integer> drainOf = null;              // lazy: only once some X passes (a)-(e)
+            int bestX = -1;
+            int bestScore = Integer.MIN_VALUE;
+            for (final int x : xs) {
+                int oppV = 0, myV = 0, oppC2 = 0, myC2 = 0, oppKills = 0, survivorsPower = 0;
+                boolean commanderKill = false;
+                final List<Card> dead = new ArrayList<>(); // every creature that dies, returners included
+                for (final Card c : theirs) {
+                    if (killAt(c) <= x) {
+                        dead.add(c);
+                        if (!returns(c)) {
+                            oppV += val.computeIfAbsent(c, ToxicDeluge::value);
+                            oppC2 += cardsX2(c);
+                            oppKills++;
+                            commanderKill |= c.isCommander();
+                            continue;
+                        }
+                    }
+                    if (!c.hasKeyword(Keyword.DEFENDER)) { // it survives, or returns: it can attack
+                        survivorsPower += Math.max(0, c.getNetCombatDamage());
+                    }
+                }
+                for (final Card c : mine) {
+                    if (killAt(c) <= x) {
+                        dead.add(c);
+                        if (!returns(c)) {
+                            myV += val.computeIfAbsent(c, ToxicDeluge::value);
+                            myC2 += cardsX2(c);
+                        }
+                    }
+                }
+                final int net = oppV - myV;
+                if (oppKills == 0 || net < margin) {
+                    continue; // (a), (b)
+                }
+                if (oppC2 < myC2 + 2 || !((oppKills >= 2 && oppV >= MULTI_KILL_VALUE)
+                        || (oppKills == 1 && oppV >= SINGLE_KILL_VALUE) || commanderKill)) {
+                    continue; // (c)
+                }
+                if (LIFE_PER_VALUE * x > net) {
+                    continue; // (d)
+                }
+                if (lordLeavesFollower(mine, x)) {
+                    continue; // (e)
+                }
+                if (drainOf == null) {
+                    drainOf = new HashMap<>();
+                }
+                int drain = 0;
+                for (final Card d : dead) {
+                    drain += drainOf.computeIfAbsent(d, c -> deathDrain(ai, c));
+                }
+                if (life - x - drain - survivorsPower < safety || !ai.canPayLife(x, false, sa)) {
+                    continue; // (f)
+                }
+                final int score = net - LIFE_PER_VALUE * x;
+                if (score > bestScore) { // strict: ties keep the smaller X
+                    bestScore = score;
+                    bestX = x;
+                }
+            }
+
+            if (bestX < 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // X already null
+            }
+            root.setXManaCostPaid(bestX);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Smallest X whose -X/-X kills c. Toughness 0 kills through indestructible, shield counters
+        // and regeneration; marked damage lowers the threshold only for what damage can destroy.
+        private static int killAt(final Card c) {
+            final int t = c.getNetToughness();
+            final boolean destroyable = !c.hasKeyword(Keyword.INDESTRUCTIBLE) && c.getCounters(CounterEnumType.SHIELD) <= 0;
+            return destroyable && c.getDamage() > 0 ? t - c.getDamage() : t;
+        }
+
+        private static boolean returns(final Card c) { // comes back as a new object, unaffected
+            return ComputerUtilCard.hasActiveUndyingOrPersist(c);
+        }
+
+        private static int value(final Card c) {
+            if (c.hasSVar("SacMe")) {
+                return 0; // happy to die (the stock predicate)
+            }
+            return ComputerUtilCard.evaluateCreature(c) + (c.isCommander() ? COMMANDER_TAX : 0)
+                    + (c.hasMergedCard() ? PILE_CARD * Math.max(0, c.getMergedCards().size() - 1) : 0);
+        }
+
+        private static int cardsX2(final Card c) { // cards lost, doubled: a creature token counts half
+            if (c.isToken()) {
+                return 1;
+            }
+            return 2 * (c.hasMergedCard() ? Math.max(1, c.getMergedCards().size()) : 1);
+        }
+
+        // (e) A creature of ours that dies at X carries a Continuous static with AddToughness whose
+        // Affected matches a creature of ours that survives X. A static with no Affected buffs only
+        // its own host, which dies anyway. Conditions are not read: over-vetoing only costs a cast.
+        private static boolean lordLeavesFollower(final CardCollection mine, final int x) {
+            for (final Card lord : mine) {
+                if (killAt(lord) > x) {
+                    continue;
+                }
+                for (final StaticAbility st : lord.getStaticAbilities()) {
+                    if (!st.checkMode(StaticAbilityMode.Continuous) || !st.hasParam("AddToughness")
+                            || !st.hasParam("Affected")) {
+                        continue;
+                    }
+                    for (final Card s : mine) {
+                        if (killAt(s) > x && st.matchesValidParam("Affected", s)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // The life a death of d costs us: every opposing battlefield trigger that may fire on it
+        // (FireCovenant.punishesDeath's matching, a private copy: ChangesZone ValidCard or
+        // ChangesZoneAll ValidCards, from the battlefield or Any to a graveyard or Any, YouCtrl
+        // resolved against the trigger's host), summed over every trigger and every part of its
+        // chain: LoseLife its LifeAmount, DealDamage and DamageAll their NumDmg, a non-numeric or
+        // missing amount UNKNOWN_DRAIN, Sacrifice and SacrificeAll 1. Parsed only, never
+        // calculateAmount; a ChangesZoneAll trigger counted once per creature over-counts, which
+        // only costs a cast.
+        private static int deathDrain(final Player ai, final Card d) {
+            int drain = 0;
+            for (final Card host : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : host.getTriggers()) {
+                    final String valid;
+                    if (t.getMode() == TriggerType.ChangesZone) {
+                        valid = "ValidCard";
+                    } else if (t.getMode() == TriggerType.ChangesZoneAll) {
+                        valid = "ValidCards";
+                    } else {
+                        continue;
+                    }
+                    final String origin = t.getParamOrDefault("Origin", "Any");
+                    final String destination = t.getParamOrDefault("Destination", "Any");
+                    if (!("Any".equals(origin) || origin.contains("Battlefield"))
+                            || !("Any".equals(destination) || destination.contains("Graveyard"))
+                            || !t.matchesValidParam(valid, d)) {
+                        continue;
+                    }
+                    drain += chainDrain(t);
+                }
+            }
+            return drain;
+        }
+
+        // The trigger's chain is read without building it (DeadlyTempest.drains' walk, a private
+        // copy): the overriding ability when already built, else the Execute SVar text and its
+        // SubAbility chain, because building an ability allocates a SpellAbility id.
+        private static int chainDrain(final Trigger t) {
+            int drain = 0;
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                for (SpellAbility part = built; part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    drain += partDrain(api == null ? null : api.name(), part.getParam("LifeAmount"), part.getParam("NumDmg"));
+                }
+                return drain;
+            }
+            final Set<String> seen = new HashSet<>();
+            String svar = t.hasParam("Execute") ? t.getParam("Execute") : null;
+            while (svar != null && seen.add(svar)) {
+                final String text = t.getSVar(svar);
+                if (text.isEmpty()) {
+                    break;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                String api = params.get("DB");
+                if (api == null) {
+                    api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+                }
+                drain += partDrain(api, params.get("LifeAmount"), params.get("NumDmg"));
+                svar = params.get("SubAbility");
+            }
+            return drain;
+        }
+
+        private static int partDrain(final String api, final String lifeAmount, final String numDmg) {
+            if (ApiType.LoseLife.name().equals(api)) {
+                return amount(lifeAmount);
+            }
+            if (ApiType.DealDamage.name().equals(api) || ApiType.DamageAll.name().equals(api)) {
+                return amount(numDmg);
+            }
+            if (ApiType.Sacrifice.name().equals(api) || ApiType.SacrificeAll.name().equals(api)) {
+                return 1;
+            }
+            return 0;
+        }
+
+        private static int amount(final String s) {
+            if (s == null || !s.trim().matches("\\d{1,6}")) {
+                return UNKNOWN_DRAIN;
+            }
+            return Integer.parseInt(s.trim());
+        }
+
+        // The cost after CostAdjustment (calculateManaCost in test mode, the G1 ceiling's call: no
+        // MyRandom, nothing written to the SA) against G2's total and black (Deadly Tempest's
+        // affordability, a private copy).
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLACK) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK);
+        }
+    }
+
     // Trace of Abundance
     // "Enchant land. Enchanted land has shroud. Whenever enchanted land is tapped for mana, its
     // controller adds an additional one mana of any color." Pure ramp, so it is judged as ramp

@@ -33,6 +33,15 @@ public class PumpAllAi extends PumpAiBase {
         final Cost abCost = sa.getPayCosts();
         final String logic = sa.getParamOrDefault("AILogic", "");
 
+        if (SpecialCardAi.ToxicDeluge.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                || (source != null && SpecialCardAi.ToxicDeluge.NAME.equals(source.getName()))) { // face-down exile: source name is ""
+            // Dead-card batch 2, row 11: "pay X life, all creatures get -X/-X". Nothing below
+            // chooses this non-mana X (NumAtt/NumDef read -0), and without IsCurse the stock path
+            // judges a 0/0 pump of our own creatures. The evaluator chooses X or declines with X
+            // null, drawing nothing; every other PumpAll card takes the path it took before.
+            return SpecialCardAi.ToxicDeluge.consider(ai, sa);
+        }
+
         if (logic.equals("UntapCombatTrick")) {
             PhaseHandler ph = ai.getGame().getPhaseHandler();
             if (!(ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS, ai)
