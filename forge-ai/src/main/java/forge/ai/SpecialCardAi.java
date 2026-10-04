@@ -17386,6 +17386,91 @@ public class SpecialCardAi {
         }
     }
 
+    // Read the Runes
+    // "Draw X cards. For each card drawn this way, discard a card unless you sacrifice a
+    // permanent." ({X}{U} instant.) Reached from DrawAi.checkApiLogic's name gate; a Play-effect
+    // cast (Nathan Drake's exile-and-cast) goes through doTriggerNoCost -> targetAI and never
+    // reaches it. The script's UnlessAI$ Never makes every resolution discard
+    // (DiscardAi.willPayUnlessCost), never sacrifice: the stock answer paid every Sac<1/Permanent>
+    // of the AI's own effect, and ComputerUtil.chooseSacrificeType's getWorstAI took lands. So the
+    // spell is a filter - draw X, keep the best of the hand, discard X - and it is cast only when
+    // the hand already holds cards to throw away: those beyond the maximum hand size, and every
+    // land in hand once we control six. Without one the discards take cards we want, and from an
+    // empty hand every card drawn. Cast from our own hand in the end step before our own turn
+    // (the mana is what we held through the opponent's turn), with more than five cards in the
+    // library, and X = the largest payable value <= min(spare + 1, library - 3, what we can
+    // draw), never below 2 (X = 1 is a card-neutral {1}{U} loot).
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card. Every decline before the
+    // X probe is RNG-free (G2's honest count, with a blue source, bounds X first); the probe's
+    // test payments (ComputerUtilMana.isManaSourceReserved) are the first draws. They run from the
+    // cap down and stop at the first payable X, never on a window G2 already calls unpayable, and
+    // never with no blue source: a failing test payment records its unpaid cost in
+    // AiCardMemory.UNPAID_COSTS, and an unpaid {U} there steers ChangeZoneAi.basicManaFixing's
+    // land fetches toward Islands until end of turn. X is cleared on entry and set only on
+    // approval: none is held past a decline.
+    public static class ReadTheRunes {
+        public static final String NAME = "Read the Runes";
+        static final int MIN_X = 2;          // X = 1 is a card-neutral {1}{U} loot
+        static final int MIN_LIBRARY = 6;    // more than five cards in the library
+        static final int LIBRARY_MARGIN = 3; // DrawAi.targetAI's deck-out margin: X <= library - 3
+        static final int LAND_GLUT = 6;      // lands in hand are spare once we control this many
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            root.setXManaCostPaid(null); // no X from an earlier window, none held past a decline
+            final Card host = root.getHostCard();
+            final Player activator = root.getActivatingPlayer();
+            if (host == null || activator == null || !ai.equals(activator) || !root.isSpell()
+                    || !host.isInZone(ZoneType.Hand) || host.getZone() == null
+                    || !ai.equals(host.getZone().getPlayer())) {
+                // only the cast from our own hand
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai) || !ai.equals(ph.getNextTurn())) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final int library = ai.getCardsIn(ZoneType.Library).size();
+            if (library < MIN_LIBRARY) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int spare = spareCards(ai, host);
+            if (spare < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            int cap = Math.min(spare + 1, library - LIBRARY_MARGIN);
+            cap = StaticAbilityCantDraw.canDrawAmount(ai, cap);
+            final HonestMana mana = HonestMana.of(ai, root, true);
+            cap = Math.min(cap, mana.total() - 1); // the {U} on top of X
+            if (cap < MIN_X || mana.colour(MagicColor.BLUE) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+            // first random draws: the test payments, from the cap down to MIN_X
+            for (int x = cap; x >= MIN_X; x--) {
+                if (ComputerUtilMana.canPayManaCost(root, ai, x, false)) {
+                    root.setXManaCostPaid(x);
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+        }
+
+        // Cards in hand the discards cost nothing: those beyond the maximum hand size, plus every
+        // land in hand once we control LAND_GLUT lands (the Read the Runes itself is spent).
+        static int spareCards(final Player ai, final Card host) {
+            final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
+            int spare = 0;
+            if (!ai.isUnlimitedHandSize()) {
+                final int others = hand.size() - (hand.contains(host) ? 1 : 0);
+                spare += Math.max(0, others - ai.getMaxHandSize());
+            }
+            if (ai.getLandsInPlay().size() >= LAND_GLUT) {
+                spare += CardLists.count(hand, CardPredicates.LANDS);
+            }
+            return spare;
+        }
+    }
+
     // Recurring Insight
     // "Draw cards equal to the number of cards in target opponent's hand. Rebound."
     // Reached from PumpAi's AILogic$ RecurringInsight branches: checkApiLogic for the cast from

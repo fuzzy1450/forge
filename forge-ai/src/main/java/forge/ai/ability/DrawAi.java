@@ -102,6 +102,13 @@ public class DrawAi extends SpellAbilityAi {
             // Drake) goes through doTriggerNoCost and keeps its stock path.
             return SpecialCardAi.SkeletalScrying.consider(ai, sa);
         }
+        if (SpecialCardAi.ReadTheRunes.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
+            // Draw X, then one discard per card drawn (the script's UnlessAI$ Never: never the
+            // sacrifice): judged whole there (window, hand, library, spare cards, X from real
+            // mana). A Play-effect cast (Nathan Drake) goes through doTriggerNoCost and keeps its
+            // stock path.
+            return SpecialCardAi.ReadTheRunes.consider(ai, sa);
+        }
 
         Card hostCard = sa.getHostCard();
         PhaseHandler ph = ai.getGame().getPhaseHandler();
