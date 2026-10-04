@@ -20650,6 +20650,87 @@ public class SpecialCardAi {
         }
     }
 
+    // Sacred Mesa
+    // "At the beginning of your upkeep, sacrifice Sacred Mesa unless you sacrifice a Pegasus.
+    //  {1}{W}: Create a 1/1 white Pegasus creature token with flying." (printed text, Mirage)
+    // AI:RemoveDeck:All hid it, and behind the hint PermanentAi.checkApiLogic's upkeep check
+    // refuses any permanent whose upkeep unless-cost cannot be paid now; the Mesa is its own only
+    // Pegasus source, so that check refused it in every game. considerCast (PermanentAi.checkApiLogic,
+    // first statement: the owner's cast from hand) casts it in our own main 2 (PermanentAi's phase
+    // check already waits) only when this turn's real mana also buys the first Pegasus, so the
+    // first upkeep is paid, and the mana base can keep paying the tax and still make a flyer each
+    // turn. needsKeepAlive (both TokenAi heads) then makes that Pegasus on time.
+    // - What the upkeep should eat is fodder: a Pegasus token with nothing attached. The stock
+    //   payment (SpellAbilityAi.willPayUnlessCost pays for our own ability, AiCostDecision
+    //   sacrifices the worst Pegasus) eats an equipped or enchanted Pegasus, a Pegasus card or a
+    //   changeling when it is the only one, so neither the cast bar nor the keep-alive counts
+    //   those. No counter or power test: Cathars' Crusade and Marshal's Anthem reach every new
+    //   Pegasus, so such a test would count none and the keep-alive would spend every window.
+    // - Affordability is G2 (HonestMana: held sources skipped, restrictions read on this sa, a
+    //   choice source worth one) against the cost as the engine prices it (calculateManaCost(test):
+    //   taxes and reductions, Pearl Medallion in the carrier), never getAvailableManaEstimate,
+    //   which counts the words of Produced$ (Commander's Sphere 2 in the carrier).
+    // - Sustain is a soft proxy: every mana source, tapped or not, by the estimate, at least
+    //   SUSTAIN_SOURCES. It only ever declines, behind the honest affordability check.
+    // RNG parity: AI:RemoveDeck:All kept A from ever evaluating the card. Every refusal here is
+    // RNG-free and comes before canPlayAndPayForFace's canPayCost, whose test payment draws
+    // MyRandom (ComputerUtilMana.isManaSourceReserved), and an approval is affordable by G2 (the
+    // ElectricSeaweed rule). Nothing is targeted, held or remembered.
+    public static class SacredMesa {
+        public static final String NAME = "Sacred Mesa";
+        private static final int PEGASUS_MANA = 2;     // {1}{W}
+        private static final int SUSTAIN_SOURCES = 6;  // tax {1}{W} + one net flyer {1}{W} + 2 for the hand
+
+        // Pegasus tokens with nothing attached: what the upkeep should eat. An equipped or
+        // enchanted Pegasus, a Pegasus card or a changeling is never counted as the payment.
+        static int fodder(final Player ai) {
+            return CardLists.count(ai.getCardsIn(ZoneType.Battlefield), c -> c.isCreature() && c.isToken()
+                    && c.getType().hasCreatureType("Pegasus") && !c.isEquipped() && !c.isEnchanted());
+        }
+
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (ai.isCardInPlay(NAME)) {
+                // a second Mesa doubles the tax for the same ability
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (sa.getPayCosts() == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final boolean firstPegasus = fodder(ai) == 0;
+            // judged on this spell's own cost (never host.getFirstSpellAbility(): row 77)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost() + (firstPegasus ? PEGASUS_MANA : 0)
+                    || mana.colour(MagicColor.WHITE) < (firstPegasus ? 2 : 1)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (ComputerUtilMana.getAvailableManaEstimate(ai, false) < SUSTAIN_SOURCES) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Our next upkeep is not paid for yet (less fodder than Mesas): make a Pegasus in the first
+        // window left before it. Own turn from main 2 on (after combat and after the Mesa itself
+        // resolved), or any window of an opponent's turn. Stock TokenAi never activates a non-haste
+        // instant-speed token ability on our own turn and rolls 80% per window on theirs, and the AI
+        // never answers its own upkeep trigger, so without this a Mesa could die with the mana for
+        // its Pegasus unspent. The first test is the name: inert, and spawnToken-free, for every
+        // other token ability. Controller-based, so a stolen Mesa is kept alive by its thief.
+        public static boolean needsKeepAlive(final Player ai, final SpellAbility sa, final PhaseHandler ph) {
+            final Card host = sa.getHostCard();
+            if (host == null || !NAME.equals(host.getName()) || sa.isSpell() || !host.isInPlay()
+                    || !ai.equals(host.getController()) || ph == null || ph.getPhase() == null) {
+                return false;
+            }
+            final int mesas = CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.nameEquals(NAME));
+            if (fodder(ai) >= mesas) {
+                return false; // surplus flyers: stock TokenAi decides
+            }
+            return !ph.isPlayerTurn(ai) || !ph.getPhase().isBefore(PhaseType.MAIN2);
+        }
+    }
+
     public static class SarkhanTheMad {
         public static AiAbilityDecision considerDig(final Player ai, final SpellAbility sa) {
             if (sa.getHostCard().getCounters(CounterEnumType.LOYALTY) == 1) {

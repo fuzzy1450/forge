@@ -44,6 +44,11 @@ public class TokenAi extends SpellAbilityAi {
 
     @Override
     protected boolean checkPhaseRestrictions(final Player ai, final SpellAbility sa, final PhaseHandler ph) {
+        // Sacred Mesa: the Pegasus that pays our next upkeep, in any window left before it. Judged
+        // before spawnToken allocates a card id; inert for every other token ability (a name test).
+        if (SpecialCardAi.SacredMesa.needsKeepAlive(ai, sa, ph)) {
+            return true;
+        }
         final Card source = sa.getHostCard();
         // Planeswalker-related flags
         boolean pwMinus = false;
@@ -132,6 +137,11 @@ public class TokenAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision checkApiLogic(final Player ai, final SpellAbility sa) {
+        // Sacred Mesa dropped AI:RemoveDeck:All. Its keep-alive Pegasus is made without the 80%
+        // roll below and before spawnToken allocates a card id; surplus Pegasi stay on the stock path.
+        if (SpecialCardAi.SacredMesa.needsKeepAlive(ai, sa, ai.getGame().getPhaseHandler())) {
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         // Night Soil dropped AI:RemoveDeck:All. Its ability carries AILogic$ AtOppEOT, so it is
         // reached only in the end step before our own turn, after CostExile.canPay found a pair
         // in one graveyard; judged here, before spawnToken allocates a card id and before the

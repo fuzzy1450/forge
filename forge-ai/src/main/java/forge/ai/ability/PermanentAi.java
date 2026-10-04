@@ -62,6 +62,15 @@ public class PermanentAi extends SpellAbilityAi {
     protected AiAbilityDecision checkApiLogic(final Player ai, final SpellAbility sa) {
         final Card source = sa.getHostCard();
 
+        // Sacred Mesa: the upkeep check below refuses it in every game, because its own {1}{W}
+        // ability is its only Pegasus source. The owner's cast from hand is judged by
+        // SpecialCardAi.SacredMesa instead; any other cast (a Play-effect theft from exile, a free
+        // cast) keeps the stock path unchanged. Inert for every other card: a name test first.
+        if (SpecialCardAi.SacredMesa.NAME.equals(source.getName()) && sa.isSpell()
+                && !sa.isCastFromPlayEffect() && source.isInZone(ZoneType.Hand)) {
+            return SpecialCardAi.SacredMesa.considerCast(ai, sa);
+        }
+
         // check on legendary
         if (!source.ignoreLegendRule() && ai.isCardInPlay(source.getName())) {
             // TODO check the risk we'd lose the effect with bad timing
