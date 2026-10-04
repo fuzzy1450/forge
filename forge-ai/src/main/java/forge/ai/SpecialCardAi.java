@@ -10674,7 +10674,7 @@ public class SpecialCardAi {
                 }
                 cands.add(c);
             }
-            cands = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, cands, sa);
+            cands = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, cands);
             ComputerUtilCard.sortByEvaluateCreature(cands); // best first
 
             final Map<Card, Integer> alloc = new LinkedHashMap<>();
@@ -15966,7 +15966,7 @@ public class SpecialCardAi {
                 }
                 return true;
             });
-            candidates = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, candidates, sa);
+            candidates = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, candidates);
             if (candidates.isEmpty()) {
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
             }
@@ -16602,7 +16602,7 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
             opposing = CardLists.filter(opposing, t -> isCandidate(ai, t));
-            opposing = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, opposing, sa);
+            opposing = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, opposing);
             Card best = null;
             int bestNet = 0;
             final Map<String, int[]> groups = new HashMap<>();             // name -> {net, opposing members}
@@ -27770,7 +27770,7 @@ public class SpecialCardAi {
                     && (lethal
                         ? !combat.isBlocked(c) && remain + ComputerUtilCombat.damageIfUnblocked(c, ai, combat, false) >= 1
                         : free || c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= MIN_EVAL));
-            list = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, list, sa);
+            list = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, list);
             if (list.isEmpty()) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
