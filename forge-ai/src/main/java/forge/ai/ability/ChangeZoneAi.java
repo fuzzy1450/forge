@@ -2513,6 +2513,11 @@ public class ChangeZoneAi extends SpellAbilityAi {
 
     @Override
     public boolean willPayUnlessCost(Player payer, SpellAbility sa, Cost cost, boolean alreadyPaid, FCollectionView<Player> payers) {
+        if ("MoonlightBargain".equals(sa.getParam("UnlessAI"))) {
+            // Moonlight Bargain: look at five, 2 life per card kept. The creature-upkeep rule below
+            // would bin every land and noncreature card, and pays down to 4 life.
+            return !alreadyPaid && SpecialCardAi.MoonlightBargain.willPay(payer, sa, cost);
+        }
         final Card host = sa.getHostCard();
 
         int lifeLoss = 0;

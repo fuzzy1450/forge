@@ -18363,6 +18363,156 @@ public class SpecialCardAi {
         }
     }
 
+    // Moonlight Bargain
+    // "Look at the top five cards of your library. For each card, put that card into your graveyard
+    // unless you pay 2 life. Then put the rest into your hand." ({3}{B}{B} instant.) The script
+    // carried AI:RemoveDeck:All, which AiController.getSpellAbilityToPlay filters before any handler
+    // runs. Behind it, PeekAndRevealAi answered WillPlay at the first priority with five mana, and
+    // ChangeZoneAi.willPayUnlessCost paid only for a creature card of base power 2 or more (its rule
+    // for "sacrifice this unless you pay N life" upkeeps), down to 4 life: a five-mana mill 5 that
+    // kept the big creatures. The hint is gone; the script names this class twice, as the root's
+    // AILogic$ MoonlightBargain and the repeated ChangeZone's UnlessAI$ MoonlightBargain, values no
+    // other script carries.
+    // - consider(), from PeekAndRevealAi.checkApiLogic, judges our own cast from hand only (a
+    //   Play-effect cast, Nathan Drake's or Jeleva's, and a card outside the hand keep the stock
+    //   judge). It casts at the opponent's end step right before our turn with an empty stack: never
+    //   a response, mana that untaps next, the kept cards castable on the turn that follows. Then a
+    //   library above LOOK + LIBRARY_MARGIN, room in hand for MIN_KEEPS cards (+1 for next turn's
+    //   land drop), real mana for the adjusted cost with black for each black pip (G2, held sources
+    //   skipped), and life for MIN_KEEPS payments above the floor.
+    // - willPay(), from ChangeZoneAi.willPayUnlessCost, answers every payer, a thief included, once
+    //   per looked-at card, top of the library first. Worth the life: every nonland card, and one
+    //   land while land drops are wanted (fewer than LAND_TARGET lands in play, none in hand or
+    //   already kept), highest mana value first, lands last, within the life budget and the hand
+    //   room. An unpaid card goes to the graveyard, the printed default, which costs no life.
+    // - The floor is Promise of Power's: life after the payments stays at or above
+    //   max(MIN_LIFE_AFTER, AI_IN_DANGER_MAX_THRESHOLD + 1 + the opponents' unblocked damage next
+    //   turn), our blockers ignored, so it only ever holds a payment back.
+    // RNG parity: the hint kept A from ever evaluating the card, so A drew nothing for it. Every
+    // check here (phase, stack, zone sizes, calculateManaCost in test mode, HonestMana,
+    // sumDamageIfUnblocked, canAttackNextTurn, canPayLife) draws nothing and holds nothing, and the
+    // window test comes first, so every other priority costs O(1). canPayCost's MyRandom draws
+    // (ComputerUtilMana.isManaSourceReserved) follow only a WillPlay. The stock pay rule drew nothing
+    // either, so at resolution only the payments differ.
+    public static class MoonlightBargain {
+        public static final int LOOK = 5;
+        public static final int PRICE = 2;           // the life each kept card costs
+        public static final int MIN_KEEPS = 3;       // a cast must afford three payments
+        public static final int MIN_LIFE_AFTER = 10; // Promise of Power's floor
+        public static final int LIBRARY_MARGIN = 3;  // Promise of Power's (DrawAi's) deck-out margin
+        public static final int LAND_TARGET = 7;     // a land is worth the life only below this many in play
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // the opponent's end step right before our turn, empty stack
+            if (!ph.is(PhaseType.END_OF_TURN) || !ai.equals(ph.getNextTurn()) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForEndOfTurn);
+            }
+            // all five leave the library whatever we pay
+            if (ai.getCardsIn(ZoneType.Library).size() <= LOOK + LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // room for MIN_KEEPS kept cards: this card leaves the hand, next turn's land drop frees one more
+            final int handAfter = ai.getCardsIn(ZoneType.Hand).size() - 1;
+            if (!ai.isUnlimitedHandSize() && handAfter + MIN_KEEPS > ai.getMaxHandSize() + 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // a WillPlay goes on into canPayCost, which draws, only when real mana pays
+            if (!manaPays(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // MIN_KEEPS payments above the floor; otherwise the card is a mill 5
+            if (affordable(ai, sa, PRICE) < MIN_KEEPS) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Pay to keep this looked-at card? sa is the repeated ChangeZone (Defined$ Imprinted: the card
+        // RepeatEach is on); RepeatEach walks the looked-at cards top of the library first.
+        public static boolean willPay(final Player payer, final SpellAbility sa, final Cost cost) {
+            final Card host = sa.getHostCard();
+            final forge.game.cost.CostPayLife part = cost.getCostPartByType(forge.game.cost.CostPayLife.class);
+            if (host == null || part == null || cost.getCostParts().size() != 1) {
+                return false; // the script drifted: not paying is the stock answer for a noncreature
+            }
+            final int price = part.getAbilityAmount(sa);
+            final CardCollection defined = AbilityUtils.getDefinedCards(host, sa.getParam("Defined"), sa);
+            if (defined.size() != 1) {
+                return false;
+            }
+            final Card cur = defined.getFirst();
+            // the looked-at cards still in the library, top first: an unpaid one went to the graveyard
+            // and was forgotten (ForgetChanged), so the ones above cur are the ones we kept
+            final List<Card> looked = Lists.newArrayList();
+            for (final Card c : payer.getCardsIn(ZoneType.Library)) {
+                if (host.isRemembered(c)) {
+                    looked.add(c);
+                }
+            }
+            final int at = looked.indexOf(cur);
+            if (at < 0) {
+                return false;
+            }
+            final List<Card> kept = looked.subList(0, at);
+            int budget = affordable(payer, sa, price);
+            if (!payer.isUnlimitedHandSize()) {
+                budget = Math.min(budget, payer.getMaxHandSize() + 1
+                        - payer.getCardsIn(ZoneType.Hand).size() - kept.size());
+            }
+            if (budget <= 0) {
+                return false;
+            }
+            // worth the life: every nonland card, plus one land while land drops are still wanted
+            boolean wantLand = payer.getLandsInPlay().size() < LAND_TARGET
+                    && !payer.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.LANDS)
+                    && kept.stream().noneMatch(Card::isLand);
+            final List<Card> worth = Lists.newArrayList();
+            for (final Card c : looked.subList(at, looked.size())) {
+                if (!c.isLand()) {
+                    worth.add(c);
+                } else if (wantLand) {
+                    worth.add(c);
+                    wantLand = false;
+                }
+            }
+            if (!worth.contains(cur)) {
+                return false;
+            }
+            // highest mana value first, lands last, library order on ties (List.sort is stable)
+            worth.sort(Comparator.comparingInt((Card c) -> c.isLand() ? -1 : c.getCMC()).reversed());
+            return worth.indexOf(cur) < budget;
+        }
+
+        // the payments of price that keep life at or above the floor (Promise of Power's drawSafe:
+        // the opponents' unblocked damage next turn, our blockers ignored)
+        static int affordable(final Player ai, final SpellAbility sa, final int price) {
+            if (price <= 0 || !ai.canPayLife(price, true, sa)) {
+                return 0;
+            }
+            int unblocked = 0;
+            for (final Player opp : ai.getOpponents()) {
+                unblocked += ComputerUtilCombat.sumDamageIfUnblocked(CardLists.filter(opp.getCreaturesInPlay(),
+                        c -> ComputerUtilCombat.canAttackNextTurn(c, ai)), ai);
+            }
+            final int floor = Math.max(MIN_LIFE_AFTER,
+                    AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD) + 1 + unblocked);
+            return Math.max(0, (ai.getLife() - floor) / price);
+        }
+
+        // The cost after CostAdjustment (calculateManaCost in test mode, the G1 ceiling's call: a tax
+        // counts, nothing is drawn or written to the SA) against G2's total and black, held sources
+        // skipped. getAvailableManaEstimate is not this count: it counts the words of Produced$, so
+        // Savage Lands' "Combo B R G" is 4 and Command Tower 2, both in the carrier.
+        private static boolean manaPays(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLACK) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK);
+        }
+    }
+
     // Multiple Choice
     public static class MultipleChoice {
         public static boolean consider(final Player ai, final SpellAbility sa) {

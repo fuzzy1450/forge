@@ -24,6 +24,13 @@ public class PeekAndRevealAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision checkApiLogic(Player aiPlayer, SpellAbility sa) {
         String logic = sa.getParamOrDefault("AILogic", "");
+        // Moonlight Bargain: our own cast from hand meets its floor. A Play-effect cast (Nathan
+        // Drake's or Jeleva's, the card in exile) and a card outside the hand keep the stock judge
+        // below, the one they have always had, so they consume the same RNG as before.
+        if ("MoonlightBargain".equals(logic) && !sa.isCastFromPlayEffect()
+                && sa.getHostCard() != null && sa.getHostCard().isInZone(ZoneType.Hand)) {
+            return SpecialCardAi.MoonlightBargain.consider(aiPlayer, sa);
+        }
         if ("Main2".equals(logic)) {
             if (aiPlayer.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
