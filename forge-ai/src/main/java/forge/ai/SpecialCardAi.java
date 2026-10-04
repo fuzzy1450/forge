@@ -13144,6 +13144,284 @@ public class SpecialCardAi {
         }
     }
 
+    // Maelstrom Pulse (dead-card batch 2, row 42)
+    // "Destroy target nonland permanent and all other permanents with the same name as that
+    // permanent." ({1}{B}{G} sorcery.) A Pump targeting shell; the destruction is its DestroyAll sub
+    // (ValidCards$ TargetedCard.Self,Permanent.NotDefinedTargeted+sharesNameWith Targeted), which
+    // reaches EVERY controller's same-name permanents, nontoken ones and ours included (Legions to
+    // Ashes sweeps only the target controller's tokens, so its exiledWith is not reused). The stock
+    // non-curse Pump targeting offers only our own creatures at +0/+0 (PumpAiBase.getPumpCreatures),
+    // so it returned TargetingFailed in Main 1 and failed its post-combat phase check in Main 2.
+    // Routed from PumpAi.checkApiLogic AFTER the stock pumpTgtAI call: the card is unhinted and our
+    // creatures are legal targets, so A drew MyRandom in shouldPumpCard on every Main 1 consult; that
+    // call still runs in full, then this replaces its verdict and its target. DestroyAllAi.chkDrawback
+    // asks isWorthyTarget: its stock doMassRemovalLogic reads only the first opponent and defers a
+    // creature group worth under 200 to a Main 2 block simulation this shell never reached.
+    // Candidates: targetable opposing permanents we do not own; no ward (canPayCost adds it after
+    // targeting and would refuse the same pick on every consult, blocking a payable second best);
+    // destroyable (canBeDestroyed, no shield counter, no regeneration shield, not SacMe, no undying
+    // or persist that would bring it back); no Aura of ours on it; not Targeting$ Dies (sacrificed on
+    // targeting, the spell fizzles); no activated Regenerate ability and no activated ability that
+    // sacrifices itself (DestroyAi's sacrifice-in-response filter, with no token exception, read
+    // from the script only: its canRegenerate and canPayCost would draw); never a noncreature token
+    // (a targeted Clue, Food or Treasure is cracked in response and the whole spell fizzles, and a
+    // pile of them would outrank a real threat); minus creatures already dying. Each name's group is
+    // valued once: net = the opposing members' value - our own members' value, where ours means any
+    // controller who is not an opponent, our tokens are subtracted and a nontoken permanent of ours
+    // sharing the name vetoes the name; members that survive the sweep (indestructible, a shield
+    // counter, a regeneration shield) are skipped. The pick is the best net that clears its floor,
+    // in battlefield order (the first wins ties):
+    //   a planeswalker at any positive net; a creature at CREATURE_FLOOR; a nontoken noncreature at
+    //   PERMANENT_FLOOR (mana value 3+); any group of 2+ opposing members at GROUP_FLOOR.
+    // Affordability first, before any group is valued: the engine's test-mode cost (calculateManaCost:
+    // taxes and reductions) against G2's total (HonestMana, held sources skipped), and its {B} and
+    // {G} on two DISTINCT untapped sources unless one activation makes both (Golgari Rot Farm's
+    // "B G"). That colour count is a private copy, because G2 counts one multicolour source toward
+    // each colour it can make (a lone Talisman of Impulse, Command Tower or Savage Lands passes for
+    // both). An approval runs on into canPayCost, whose test payment draws MyRandom per source
+    // (ComputerUtilMana.isManaSourceReserved); A's stock refusal never reached it.
+    // Draws nothing on any path; holds nothing past a decline but sa.resetTargets() on its own ability.
+    public static class MaelstromPulse {
+        public static final String NAME = "Maelstrom Pulse";
+        static final int CREATURE_FLOOR = 180;   // a nontoken 3/3 (~190), or a 2/2 with a real ability
+        static final int PERMANENT_FLOOR = 140;  // 50 + 30 * mana value: a noncreature of mana value 3+
+        static final int GROUP_FLOOR = 300;      // Legions to Ashes' multi-for-one bar
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Card host = sa.getHostCard();
+            CardCollection opposing = CardLists.getTargetableCards(
+                    ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa);
+            if (host == null || opposing.isEmpty()) {                      // cheapest precondition
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            opposing = CardLists.filter(opposing, t -> isCandidate(ai, t));
+            opposing = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, opposing, sa);
+            Card best = null;
+            int bestNet = 0;
+            final Map<String, int[]> groups = new HashMap<>();             // name -> {net, opposing members}
+            for (final Card t : opposing) {                                 // battlefield order; first wins ties
+                final String name = t.getName();
+                // a nameless card, or a Spy Kit holder (its sharesNameWith reads more than its name), alone
+                final int[] g = name.isEmpty() || t.hasNonLegendaryCreatureNames()
+                        ? group(ai, t) : groups.computeIfAbsent(name, n -> group(ai, t));
+                if (g[0] > bestNet && clearsFloor(t, g)) {
+                    best = t;
+                    bestNet = g[0];
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // DestroyAllAi.chkDrawback: the same judgement for a target already chosen (by consider, or
+        // by the stock Play-effect path, whose pick of the caster's own creature is never worthy).
+        public static boolean isWorthyTarget(final Player ai, final Card t) {
+            return t != null && t.getController().isOpponentOf(ai) && isCandidate(ai, t)
+                    && clearsFloor(t, group(ai, t));
+        }
+
+        private static boolean isCandidate(final Player ai, final Card t) {
+            if (ai.equals(t.getOwner()) || t.hasKeyword(Keyword.WARD) || !t.canBeDestroyed()
+                    || t.getShieldCount() > 0 || t.getCounters(CounterEnumType.SHIELD) > 0
+                    || t.hasSVar("SacMe") || "Dies".equals(t.getSVar("Targeting"))) {
+                return false;
+            }
+            if (!t.isCreature() && (t.isToken() || t.isTokenCard())) {
+                return false;                       // cracked in response: the spell fizzles
+            }
+            if ((t.hasKeyword(Keyword.UNDYING) && t.getCounters(CounterEnumType.P1P1) == 0)
+                    || (t.hasKeyword(Keyword.PERSIST) && t.getCounters(CounterEnumType.M1M1) == 0)) {
+                return false;
+            }
+            for (final Card aura : t.getEnchantedBy()) {
+                if (ai.equals(aura.getController())) {
+                    return false;                   // our Aura already answers it, and would die with it
+                }
+            }
+            // Structural stand-ins for DestroyAi's canRegenerate and sacrifice-in-response filters,
+            // which call canPayCost (MyRandom through the payment test); these read the script only.
+            for (final SpellAbility ab : t.getAllSpellAbilities()) {
+                if (!ab.isActivatedAbility()) {
+                    continue;
+                }
+                if (ab.getApi() == ApiType.Regenerate) {
+                    return false;
+                }
+                final Cost cost = ab.getPayCosts();
+                if (cost == null) {
+                    continue;
+                }
+                for (final CostPart part : cost.getCostParts()) {
+                    if (part instanceof CostSacrifice && ((CostSacrifice) part).payCostFromSource()) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // {net, opposing members}; net = Integer.MIN_VALUE when a nontoken permanent of ours shares
+        // the name. Matched as the engine matches the sweep: Targeted.sharesNameWith(member).
+        private static int[] group(final Player ai, final Card t) {
+            int opp = 0, own = 0, members = 0;
+            for (final Card m : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (m != t && !t.sharesNameWith(m)) {
+                    continue;
+                }
+                if (!m.canBeDestroyed() || m.getCounters(CounterEnumType.SHIELD) > 0 || m.getShieldCount() > 0) {
+                    continue;                       // survives the sweep
+                }
+                if (m.getController().isOpponentOf(ai)) {
+                    opp += value(m);
+                    members++;
+                } else if (m.isToken() || m.isTokenCard()) {
+                    own += value(m);
+                } else {
+                    return new int[] {Integer.MIN_VALUE, 0};
+                }
+            }
+            return new int[] {opp - own, members};
+        }
+
+        private static boolean clearsFloor(final Card t, final int[] g) {
+            final int net = g[0];
+            if (net <= 0) {
+                return false;                       // also covers the MIN_VALUE veto
+            }
+            if (g[1] >= 2 && net >= GROUP_FLOOR) {
+                return true;
+            }
+            if (t.isPlaneswalker()) {
+                return true;
+            }
+            if (t.isCreature()) {
+                return net >= CREATURE_FLOOR;
+            }
+            return !t.isToken() && !t.isTokenCard() && net >= PERMANENT_FLOOR;
+        }
+
+        // LegionsToAshes.removalValue, copied (an accepted helper is not refactored):
+        // evaluateRemovalTargetPriority's per-card term, without its per-controller board term.
+        private static int value(final Card c) {
+            if (c.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(c);
+            }
+            int v = 50 + 30 * c.getCMC();
+            if (c.isPlaneswalker()) {
+                v += c.getCounters(CounterEnumType.LOYALTY) * 10;
+            }
+            return v;
+        }
+
+        // The engine's own test-mode cost (calculateManaCost: taxes and reductions applied; RNG-free
+        // for this spell) against G2's total with held sources skipped, then its coloured pips on
+        // distinct sources. Judged on sa, never host.getFirstSpellAbility() (row 77).
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            return HonestMana.of(ai, sa, true).total() >= cost.getConvertedManaCost()
+                    && coloursOnDistinctSources(ai, sa, cost);
+        }
+
+        // {B} and {G} on DISTINCT sources (skeptic amendment 1). The floating pool pays its own
+        // colours first. A source counts once, for the colours one activation of a counted ability
+        // can make, read as G2 reads them (Combo letters through getComboColors, so ColorIdentity
+        // through the commander's identity; Any as every colour; Chosen as the chosen colour;
+        // reflected, Special and colourless as none); it pays both pips at once only when one
+        // activation makes both with no choice ("B G"). Counted abilities and held sources are G2's
+        // (canPlay, no mana in its own cost, conditions met, meetsManaRestrictions on sa); this is a
+        // private copy, G2 is frozen. Under-counts (the safe side): multi-symbol single-colour
+        // sources and choice abilities with Amount 2+ pay one pip.
+        private static boolean coloursOnDistinctSources(final Player ai, final SpellAbility sa,
+                final ManaCostBeingPaid cost) {
+            int needB = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)
+                    - ai.getManaPool().getAmountOfColor(MagicColor.BLACK);
+            int needG = cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN)
+                    - ai.getManaPool().getAmountOfColor(MagicColor.GREEN);
+            int onlyB = 0, onlyG = 0, either = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                boolean b = false, g = false, both = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    if (AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma) <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean reflectedOrSpecial = ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana();
+                    final boolean choice = reflectedOrSpecial || produced.isEmpty() || mp.isComboMana()
+                            || mp.isAnyMana() || produced.contains("Chosen");
+                    final String letters;
+                    if (reflectedOrSpecial) {
+                        letters = "";
+                    } else if (mp.isComboMana()) {
+                        letters = mp.getComboColors(ma);
+                    } else if (mp.isAnyMana()) {
+                        letters = "W U B R G";
+                    } else if (produced.contains("Chosen")) {
+                        letters = produced.replace("Chosen", mp.getChosenColor(ma));
+                    } else {
+                        letters = produced;
+                    }
+                    boolean mb = false, mg = false;
+                    for (final String s : letters.split(" ")) {
+                        if (s.length() == 1) {
+                            final byte c = MagicColor.fromName(s.charAt(0));
+                            mb |= c == MagicColor.BLACK;
+                            mg |= c == MagicColor.GREEN;
+                        }
+                    }
+                    b |= mb;
+                    g |= mg;
+                    both |= !choice && mb && mg;
+                }
+                if (both && needB > 0 && needG > 0) {
+                    needB--;
+                    needG--;
+                } else if (b && g) {
+                    either++;
+                } else if (b) {
+                    onlyB++;
+                } else if (g) {
+                    onlyG++;
+                }
+            }
+            return Math.max(0, needB - onlyB) + Math.max(0, needG - onlyG) <= either;
+        }
+
+        // HonestMana.isHeld, copied (G2 is frozen and keeps it private): the sources
+        // ComputerUtilMana.isManaSourceReserved refuses, in the phases it refuses them.
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+    }
+
     // Maestros Confluence (dead-card batch 2, row 67)
     // "Choose three. You may choose the same mode more than once. Return target monocolored
     // instant or sorcery card from your graveyard to your hand; target creature gets -3/-3 until

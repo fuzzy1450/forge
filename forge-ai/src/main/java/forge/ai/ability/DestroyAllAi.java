@@ -33,6 +33,15 @@ public class DestroyAllAi extends SpellAbilityAi {
 
     @Override
     public AiAbilityDecision chkDrawback(Player aiPlayer, SpellAbility sa) {
+        if (SpecialCardAi.MaelstromPulse.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && SpecialCardAi.MaelstromPulse.isWorthyTarget(aiPlayer, sa.getRootAbility().getTargetCard())) {
+            // Dead-card batch 2, row 42. The group was judged whole by SpecialCardAi.MaelstromPulse,
+            // our own same-name permanents included. doMassRemovalLogic below reads only the first
+            // opponent, and it defers a creature group worth under 200 to a Main 2 block simulation
+            // that this shell never reaches. A target the evaluator would not pick (the stock pick of
+            // a Play-effect cast: cascade, Jeleva, Nathan Drake) takes the stock path unchanged.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         return doMassRemovalLogic(aiPlayer, sa);
     }
 

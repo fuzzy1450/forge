@@ -452,7 +452,21 @@ public class PumpAi extends PumpAiBase {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
-        if (pumpTgtAI(ai, sa, defense, attack, false, false)) {
+        final boolean stockTargeted = pumpTgtAI(ai, sa, defense, attack, false, false);
+        if (SpecialCardAi.MaelstromPulse.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && !(sa instanceof AbilitySub)) {
+            // Dead-card batch 2, row 42. A Pump targeting shell (the destruction is its DestroyAll
+            // sub). The non-curse targeting above offers only our own creatures, at +0/+0 with no
+            // keywords, so it failed on every consult (Main 2 at its phase check) and never chose an
+            // opposing permanent. It still runs first and in full: our creatures are legal targets,
+            // so shouldPumpCard drew MyRandom (two draws per creature, an AiAttackController and two
+            // game timestamps) on every Main 1 consult in A. The evaluator then replaces its verdict
+            // and its target, and draws nothing when it declines. Play-effect casts take
+            // doTriggerNoCost and never come here; every other Pump card takes exactly the path it
+            // took before this branch.
+            return SpecialCardAi.MaelstromPulse.consider(ai, sa);
+        }
+        if (stockTargeted) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
