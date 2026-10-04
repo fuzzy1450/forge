@@ -125,6 +125,22 @@ public class PermanentNoncreatureAi extends PermanentAi {
             }
         }
 
+        // Manifold Key dropped AI:RemoveDeck:All. Behind the stock approval its {1} was paid with
+        // whatever Main 2 had left, and the stock payer reaches a sacrifice source last but does
+        // reach it (Phyrexian Altar sacrificed a Hullbreaker Horror for it): paid casts (from hand,
+        // or a MayPlay thief's) only when untapped sources whose mana spends nothing they cannot
+        // use again (no sacrifice, no mana) cover the cost. Every decline draws no random numbers
+        // and returns before canPlaySa's canPayCost test payment. A Play-effect cast (Nathan
+        // Drake's attack trigger, Call Forth the Tempest's cascade; PermanentAi.doTriggerNoCost
+        // ends in this checkApiLogic) keeps the stock answer it had while the hint was on the
+        // card: the hint never applied there.
+        if (sa.isSpell() && SpecialCardAi.ManifoldKey.NAME.equals(sourceName) && !sa.isCastFromPlayEffect()) {
+            final AiAbilityDecision cast = SpecialCardAi.ManifoldKey.considerCast(ai, sa);
+            if (!cast.willingToPlay()) {
+                return cast;
+            }
+        }
+
         // Night Soil dropped AI:RemoveDeck:All. Behind the stock approval it would be cast as a
         // do-nothing {G}{G} in any Main 2: cast only while some graveyard holds a pair its
         // activation would pay with right now (the chooser its activation and AiCostDecision

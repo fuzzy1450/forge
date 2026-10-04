@@ -14003,6 +14003,14 @@ public class SpecialCardAi {
     // routed here by name: UntapAi.checkApiLogic (stock untapPrefTargeting refuses a mana-costed
     // untap of anything without UntapMe or "doesn't untap") and EffectAi.checkApiLogic ahead of its
     // randomReturn roll.
+    // The cast (PermanentNoncreatureAi.checkApiLogic, after the stock approval, paid casts only;
+    // dead-card retry 1): the floating pool plus one per untapped, unheld battlefield source (held
+    // as HonestMana.isHeld holds it) with a mana ability that can be played, may be spent on the
+    // Key, spends nothing it cannot use again (Cost.isReusuableResource: never a sacrifice, life or
+    // counters) and has no mana in its cost must cover the cost the engine charges (test mode).
+    // The stock payer reaches a sacrifice source last but does reach it: in W12's replays
+    // Phyrexian Altar sacrificed a Hullbreaker Horror for the Key's {1}. So the Altar, a Treasure
+    // or Lotus Petal is never why the Key is cast.
     // The untap, from an untapped Key whose {1} is payable (the engine's test-mode cost against
     // HonestMana, G2, held sources skipped; never getAvailableManaEstimate), has two value lines:
     // - (A) at the end step of the opponent whose turn comes before ours, The One Ring a second
@@ -14023,16 +14031,57 @@ public class SpecialCardAi {
     //   round, and the Ring's n+1 cards come first.
     // The unblockable ability: our own Main 1, opponents with creatures and {3} payable (as above),
     // then EffectAi's MakeUnblockable body verbatim: a lethal hit on the weakest opponent, or a
-    // creature that attacks only if it can't be blocked.
-    // RNG parity: A never evaluated the card. The windows, the mana bound, the Ring and rock scans
-    // and the Ring floor (TheOneRing.consider, sumDamageIfUnblocked, canAttackNextTurn, the trigger
-    // and replacement scan) draw nothing. The first draws are line B's payer tests and canPlaySa and
-    // the unblockable body's attack simulations, all with the Key on the battlefield. No
-    // AiCardMemory, no mana hold, and a decline leaves no target behind.
+    // creature that attacks only if it can't be blocked. Two skips per candidate (retry 1), after
+    // canBeBlocked:
+    // - (2a) both branches: the attack tax (CantAttackUnless statics: Ghostly Prison, Propaganda,
+    //   Sphere of Safety) on the candidate plus every other untapped creature of ours that can
+    //   attack, at the opponent that charges most, must fit the mana the {3} leaves; otherwise
+    //   the attack AI sends someone else and the {3} buys nothing (W12: a 2/2 Army made
+    //   unblockable under Ghostly Prison never attacked);
+    // - (2b) short of lethal only: the candidate deals 3 or more combat damage, is a commander, or
+    //   is a valid source of a combat-damage-to-a-player trigger on a card of ours (Sauron's
+    //   Army tempt, Coastal Piracy) (W12: a 1/1 Goblin Army poked twice for nothing).
+    // RNG parity: A never evaluated the card. The windows, the cast floor, the mana bound, the Ring
+    // and rock scans, the Ring floor (TheOneRing.consider, sumDamageIfUnblocked,
+    // canAttackNextTurn, the trigger and replacement scan) and the attack tax and payoff scans draw
+    // nothing. The first draws are line B's payer tests and canPlaySa and the unblockable body's
+    // attack simulations, all with the Key on the battlefield. No AiCardMemory, no mana hold, and
+    // a decline leaves no target behind.
     public static class ManifoldKey {
         public static final String NAME = "Manifold Key";
         static final int RING_DRAIN_UPKEEPS = 3; // the raised drain, three upkeeps ahead
         static final int LIBRARY_MARGIN = 4;     // DrawAi's sub declines at numCards >= library - 3
+        static final int MIN_POKE_DAMAGE = 3;    // (2b) a non-lethal unblockable hit worth the {3}
+
+        // (1) PermanentNoncreatureAi.checkApiLogic's name gate, after the stock approval, paid casts
+        // only (the caller leaves Play-effect casts stock): the cost as the engine charges it (test
+        // mode, cost statics applied) against the pool plus one per untapped, unheld source whose
+        // mana ability spends nothing it cannot use again and no mana. RNG-free, before canPlaySa's
+        // canPayCost.
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            int free = ai.getManaPool().totalMana();
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isUntapped() || HonestMana.isHeld(ai, c)) {
+                    continue; // HonestMana.isHeld, called unchanged: the sources isManaSourceReserved refuses
+                }
+                for (final SpellAbility m : c.getManaAbilities()) {
+                    if (m.getManaPart() == null) {
+                        continue;
+                    }
+                    m.setActivatingPlayer(ai);
+                    final Cost pay = m.getPayCosts();
+                    if (m.canPlay() && m.getManaPart().meetsManaRestrictions(sa)
+                            && (pay == null || (pay.isReusuableResource() && !pay.hasManaCost()))) {
+                        free++; // one per source, whatever it makes: Sol Ring counts 1
+                        break;
+                    }
+                }
+            }
+            if (free < manaCost(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford); // never Altar, Treasure or Petal mana
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
 
         public static AiAbilityDecision considerUntap(final Player ai, final SpellAbility sa) {
             final Game game = ai.getGame();
@@ -14089,11 +14138,12 @@ public class SpecialCardAi {
             if (!phase.is(PhaseType.MAIN1, ai) || ai.getOpponents().getCreaturesInPlay().isEmpty()) {
                 return new AiAbilityDecision(0, AiPlayDecision.AnotherTime); // stock acts only in our Main 1
             }
-            if (HonestMana.of(ai, sa, true).total() < manaCost(ai, sa)) {
+            final int rest = HonestMana.of(ai, sa, true).total() - manaCost(ai, sa); // mana the {3} leaves
+            if (rest < 0) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford); // RNG-free, before the attack sims
             }
-            // EffectAi's MakeUnblockable body from here on, verbatim; the stock branch is left as it is
-            // (54 other scripts use it)
+            // EffectAi's MakeUnblockable body from here on, verbatim but for the skips (2a) and (2b);
+            // the stock branch is left as it is (54 other scripts use it)
             CardCollection options = new CardCollection(CardUtil.getValidCardsToTarget(sa));
             options = CardLists.filterControlledBy(options, ai);
             options = CardLists.filter(options, CombatUtil::canAttack);
@@ -14112,10 +14162,16 @@ public class SpecialCardAi {
                 if (!CombatUtil.canBeBlocked(card, ai.getOpponents().getCreaturesInPlay(), phase.getCombat())) {
                     continue;
                 }
+                if (attackTax(ai, card) > rest) {
+                    continue; // (2a) the attack tax would keep it home: the {3} buys nothing
+                }
                 if (card.getNetPower() >= ai.getWeakestOpponent().getLife() && ai.getWeakestOpponent().canLoseLife() && !ai.getWeakestOpponent().cantLoseForZeroOrLessLife()) {
                     // try to finish off the opponent with an unblockable creature
                     sa.getTargets().add(card);
                     return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+                if (!hitPaysOff(ai, card)) {
+                    continue; // (2b) a non-lethal poke must be worth the {3}
                 }
                 final Card copy = CardCopyService.getLKICopy(card);
                 String cantBeBlocked = "Mode$ CantBlockBy | ValidAttacker$ Creature.Self";
@@ -14128,6 +14184,50 @@ public class SpecialCardAi {
                 }
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // (2a) the attack tax (CantAttackUnless statics) on card plus every other untapped creature of
+        // ours that can attack, at the opponent that charges most; RNG-free
+        private static int attackTax(final Player ai, final Card card) {
+            final Game game = ai.getGame();
+            int tax = 0;
+            for (final Player opp : ai.getOpponents()) {
+                int sum = attackCostCmc(game, card, opp);
+                for (final Card x : ai.getCreaturesInPlay()) {
+                    if (!x.equals(card) && x.isUntapped() && CombatUtil.canAttack(x)) {
+                        sum += attackCostCmc(game, x, opp);
+                    }
+                }
+                tax = Math.max(tax, sum);
+            }
+            return tax;
+        }
+
+        private static int attackCostCmc(final Game game, final Card attacker, final Player opp) {
+            final Cost cost = CombatUtil.getAttackCost(game, attacker, opp);
+            return cost == null ? 0 : cost.getTotalMana().getCMC();
+        }
+
+        // (2b) a non-lethal unblockable hit has a payoff: 3+ combat damage, a commander (commander
+        // damage), or a card of ours whose combat-damage-to-a-player trigger takes it as its source
+        // (Sauron's "Whenever an Army you control deals combat damage to a player"); RNG-free
+        private static boolean hitPaysOff(final Player ai, final Card card) {
+            if (card.getNetCombatDamage() >= MIN_POKE_DAMAGE || card.isCommander()) {
+                return true;
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() != TriggerType.DamageDone || !"True".equals(t.getParam("CombatDamage"))) {
+                        continue;
+                    }
+                    final String target = t.getParamOrDefault("ValidTarget", "");
+                    if ((target.contains("Player") || target.contains("Opponent"))
+                            && t.matchesValidParam("ValidSource", card)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         // the activation's mana as the engine charges it now (test mode: cost statics applied, no draw)
