@@ -14201,6 +14201,115 @@ public class SpecialCardAi {
         }
     }
 
+    // Kheru Spellsnatcher (dead-card batch 2, row 41)
+    // {3}{U} 3/3, "Morph {4}{U}{U}. When Kheru Spellsnatcher is turned face up, counter target
+    // spell. If that spell is countered this way, exile it instead of putting it into its owner's
+    // graveyard. You may cast that card without paying its mana cost for as long as it remains
+    // exiled." The hard cast is a vanilla 3/3 for four that throws the counter away for good (a
+    // face-up Kheru is never turned face down again): all of the card's text is on the flip. The
+    // script keeps AI:RemoveDeck:All, so the face-up cast, the -10 sort (ComputerUtilAbility :359)
+    // and every other isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) stay
+    // as they were, and the G3 dispatcher (RemoveDeckFilter.readmit) lets exactly two abilities
+    // through AiController's filter:
+    // - the face-down cast ({3}; Kadena's first face-down creature spell each turn costs {3} less)
+    //   from our own hand, in our own Main 2 with an empty stack, or in our Main 1 only when its
+    //   reduced cost is 0. The face-down Spell has no API, so nothing makes it wait for Main 2 the
+    //   way PermanentAi.checkPhaseRestrictions makes a creature wait: in Main 1 it would take the
+    //   mana of a real four-drop that waits. In Main 2 those sort ahead of it (the hint's -10) and
+    //   claim the mana first, and a creature cast this turn cannot attack anyway.
+    // - the turn-face-up special action (morph {4}{U}{U}, or the manifest or cloak flip for the
+    //   mana cost {3}{U}), only while the top of the stack is an opponent's counterable spell that
+    //   Overcharged Amalgam's strict test calls worth a counter (hostile to a permanent of ours,
+    //   this face-down Kheru included; aimed at our spell; a mass-hostile effect; or mana value 3+
+    //   not aimed only at a third party). The mandatory trigger then takes the stack top-first
+    //   (stock CounterAi), so it counters that same spell. A morph flip of a manifested or cloaked
+    //   Kheru steps aside while the cheaper mana-cost flip fits.
+    // Both need RemoveDeckFilter.noManaHeld and the cost as the engine prices it (test-mode
+    // calculateManaCost: Kadena, taxes and every RaiseCost/ReduceCost static) within HonestMana
+    // (G2), in total and in blue, held sources skipped. Never getAvailableManaEstimate, which
+    // counts the words of Produced$ (Command Tower 2, a guildgate or gainland 3, Opulent Palace 4)
+    // and would admit windows canPayCost then fails after its isManaSourceReserved draws. Both
+    // need Kheru owned and controlled by the asking player, so a thief keeps the old filter.
+    // Reads only: no random number, no held mana, no memory write, so a refusal is the old filter
+    // and the first new draw is canPayCost's reservation roll in a window G2 judged payable.
+    public static class KheruSpellsnatcher {
+        public static final String NAME = "Kheru Spellsnatcher";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // face down, getName() is "": judge the paper card, as isCardRemAIDeck does
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())
+                    || !ai.equals(host.getController()) || !ai.equals(host.getOwner())) {
+                return false; // a Play-effect theft or a stolen face-down Kheru keeps the filter
+            }
+            return sa.isSpell() ? readmitFaceDownCast(ai, sa, host) : readmitFlip(ai, sa, host);
+        }
+
+        // the face-down cast from our hand: our Main 2, or our Main 1 at a reduced cost of 0
+        private static boolean readmitFaceDownCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (!sa.isCastFaceDown() || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false; // the face-up hard cast stays filtered
+            }
+            if (!ai.canCastSorcery() || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = price(ai, sa);
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai) && cost.getConvertedManaCost() > 0) {
+                return false; // Main 1 only when free: then it starves nothing
+            }
+            return fits(ai, sa, cost);
+        }
+
+        // the turn-face-up special action, only into the opponent's worthy spell on top of the stack
+        private static boolean readmitFlip(final Player ai, final SpellAbility sa, final Card host) {
+            if (!sa.isTurnFaceUp() || !host.isFaceDown() || !host.isInPlay()) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty()) {
+                return false; // the counter would have no target: six mana for +1/+1
+            }
+            final SpellAbility top = game.getStack().peekAbility();
+            if (top == null || !top.isSpell() || !OverchargedAmalgam.isWorthCountering(ai, null, top, true)) {
+                return false;
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, false) || !fits(ai, sa, price(ai, sa))) {
+                return false;
+            }
+            if (sa.isMorphUp() && (host.isManifested() || host.isCloaked())) {
+                // the mana-cost flip ({3}{U}) turns the same trigger for less: let it go instead
+                final CardState orig = host.getState(forge.card.CardStateName.Original);
+                final SpellAbility cheaper = orig == null ? null
+                        : host.isManifested() ? orig.getManifestUp() : orig.getCloakUp();
+                if (cheaper != null) {
+                    cheaper.setActivatingPlayer(ai);
+                    if (fits(ai, cheaper, price(ai, cheaper))) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // the cost as the engine prices it, RNG-free (test mode: CostAdjustment only)
+        private static ManaCostBeingPaid price(final Player ai, final SpellAbility sa) {
+            return ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+        }
+
+        // G2 (HonestMana, held sources skipped) covers the price in total and in blue
+        private static boolean fits(final Player ai, final SpellAbility sa, final ManaCostBeingPaid cost) {
+            final int total = cost.getConvertedManaCost();
+            final int blue = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+            if (total <= 0 && blue <= 0) {
+                return true; // free (Kadena's first face-down spell): nothing to count
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= total && mana.colour(MagicColor.BLUE) >= blue;
+        }
+    }
+
     // Knollspine Dragon
     // "When it enters, you may discard your hand and draw cards equal to the damage dealt to target
     // opponent this turn." The target lives on the Draw sub; the "may" is asked at resolution
@@ -21386,6 +21495,8 @@ public class SpecialCardAi {
                 // one case per G3 readmit row, added by that row's own commit
                 case GrabTheReins.NAME:
                     return GrabTheReins.admits(ai, sa);
+                case KheruSpellsnatcher.NAME:
+                    return KheruSpellsnatcher.readmit(ai, sa);
                 case ManascapeRefractor.NAME:
                     return ManascapeRefractor.isOwnHandCast(sa);
                 case GoblinCadets.NAME:
