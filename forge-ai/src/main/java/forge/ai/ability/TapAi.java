@@ -22,6 +22,16 @@ public class TapAi extends TapAiBase {
 
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        // Dispatch (dead-card batch 2, row 20): judged as the metalcraft exile it is
+        // (SpecialCardAi.Dispatch), routed before the tap-down windows below, which open only before
+        // an opponent's declare-attackers step and never weigh the exile. AI:RemoveDeck:All kept the
+        // card out of every evaluation; nothing here draws random numbers. A cast through a Play
+        // effect (Nathan Drake's attack trigger, Discover) goes to TapAiBase.doTriggerNoCost and is
+        // unchanged.
+        if (SpecialCardAi.Dispatch.handles(sa)) {
+            return SpecialCardAi.Dispatch.consider(ai, sa);
+        }
+
         final PhaseHandler phase = ai.getGame().getPhaseHandler();
         final Player turn = phase.getPlayerTurn();
 

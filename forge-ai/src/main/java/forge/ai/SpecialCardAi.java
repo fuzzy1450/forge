@@ -6561,6 +6561,159 @@ public class SpecialCardAi {
         }
     }
 
+    // Dispatch (dead-card batch 2, row 20)
+    // "Tap target creature. Metalcraft - If you control three or more artifacts, exile that
+    // creature." ({W} Instant.) A lone tap is not worth a card, so the AI casts it only as the
+    // exile: with metalcraft that survives paying for it, on an opposing creature worth removing,
+    // in the two windows stock instant removal weighs highest (ComputerUtilCard.useRemovalNow's
+    // threat and tempo multipliers, taken without its closing MyRandom roll): an opponent's
+    // declare-attackers or declare-blockers step, on an attacker aimed at us that our blocks do
+    // not already kill, or an opponent's end step, on any opposing creature. Our own turn is never
+    // a window (removing a blocker there would need AiAttackController.declareAttackers, which
+    // draws). Behind its AI:RemoveDeck:All hint the stock TapAi windows were an opponent's turn
+    // before attackers and nothing else, with no floor on the pick.
+    // Floor: the target is an opposing creature we do not own, targetable, without ward
+    // (canPayCost prices ward only after targeting and can stick on an unpayable pick), not
+    // useless, not wearing our aura, not already aimed at by our own stack object, not leaving
+    // this turn anyway (EndOfTurnLeavePlay other than Dash or Warp), and worth Oubliette's 160 or
+    // a commander. The pick is the stock removal formula without its board term (evaluateCreature,
+    // +30 for a token; the same pick in 1v1), never getBestRemovalTargetAI, whose
+    // evaluateBoardPosition term runs AiBlockController and lifeInDanger's MyRandom draw. Mana is
+    // G2 (HonestMana, held sources skipped) against the engine's test-mode cost, never
+    // getAvailableManaEstimate, which counts the words of Produced$, and never "any Combo is
+    // white" (a Talisman of Creativity cannot pay {W}).
+    // Reached from the first statement of TapAi.checkApiLogic (a normal cast, a MayPlay theft, or
+    // a canPlaySa probe); Play-effect casts take TapAiBase.doTriggerNoCost and are unchanged.
+    // Draws no random numbers, and every refusal returns before canPlayAndPayForFace's
+    // canPayCost. Holds nothing past a decline but sa.resetTargets() on its own ability.
+    public static class Dispatch {
+        public static final String NAME = "Dispatch";
+
+        // the targeted root spell, by source, host or card-state name: a card cast face down from
+        // exile (Gonti, Siphon Insight, Petty Larceny) reads "" from getAbilitySourceName (row 106's
+        // isMeteor idiom)
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || !sa.usesTargeting()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Player active = ph.getPlayerTurn();
+            if (active == null || !active.isOpponentOf(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Combat combat = game.getCombat();
+            final boolean combatWindow = combat != null
+                    && (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS));
+            if (!combatWindow && !ph.is(PhaseType.END_OF_TURN)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!metalcraftSurvivesPayment(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.NeedsToPlayCriteriaNotMet);
+            }
+            // RNG-free necessary condition for canPayCost (whose test payment draws MyRandom)
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            CardCollection list;
+            if (combatWindow) {
+                final boolean afterBlocks = ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS);
+                list = CardLists.filter(combat.getAttackers(), c -> ai.equals(combat.getDefenderPlayerByAttacker(c))
+                        // our blocks already kill it: not worth a card
+                        && !(afterBlocks && combat.isBlocked(c) && ComputerUtilCombat.attackerWouldBeDestroyed(ai, c, combat)));
+            } else {
+                list = CardLists.filter(ai.getOpponents().getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES);
+            }
+            list = CardLists.getTargetableCards(list, sa);
+            list = ComputerUtil.filterAITgts(sa, ai, list, true);
+            list = CardLists.filter(list, c -> c.isCreature()
+                    && c.getController().isOpponentOf(ai)
+                    // exiling a card we own puts our own card in exile
+                    && !ai.equals(c.getOwner())
+                    // canPayCost prices ward only after targeting and can stick on an unpayable pick
+                    && !c.hasKeyword(Keyword.WARD)
+                    && !ComputerUtilCard.isUselessCreature(c.getController(), c)
+                    && c.getEnchantedBy().stream().noneMatch(a -> ai.equals(a.getController()))
+                    && !targetedByOurStack(ai, game, c)
+                    // it leaves at end of turn anyway (unearth, blitz, Kiki-Jiki copies, Ball Lightning)
+                    && !leavesThisTurn(c)
+                    && (c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= Oubliette.MIN_TARGET_VALUE));
+            if (list.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            list = ComputerUtilCard.prioritizeCreaturesWorthRemovingNow(ai, list, false);
+            // getBestRemovalTargetAI's formula without its evaluateBoardPosition term, which draws;
+            // itemWithMax keeps the first maximum
+            final Card best = Aggregates.itemWithMax(list,
+                    c -> ComputerUtilCard.evaluateCreature(c) + (c.isToken() ? 30 : 0));
+            if (best == null || !sa.canTarget(best)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Condition$ Metalcraft is checked again at resolution. Paying {W} can sacrifice at most one
+        // artifact (Treasure, Gold, Lotus Petal), so exactly three with such a source among them may
+        // pay the metalcraft away and leave a bare tap.
+        private static boolean metalcraftSurvivesPayment(final Player ai) {
+            final CardCollection arts = CardLists.filter(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.ARTIFACTS);
+            if (arts.size() != 3) {
+                return arts.size() > 3;
+            }
+            for (final Card a : arts) {
+                for (final SpellAbility ma : a.getManaAbilities()) {
+                    if (ma.getPayCosts() != null && ma.getPayCosts().hasSpecificCostType(CostSacrifice.class)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // The engine's own test-mode cost (calculateManaCost: taxes and reductions applied, castFrom
+        // restored; RNG-free for this spell, which has no Announce$ NumTimes and no cost feature that
+        // asks a controller) against G2's count with held sources skipped: its mana value against the
+        // total and its {W} against the white sources (Combo letters read, judged on sa, never
+        // host.getFirstSpellAbility(), row 77). A private ceiling for one spell, in
+        // CommanderCastCeiling's shape; G1 and G2 are called or read, never changed.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
+        }
+
+        // EndOfTurnLeavePlay: AtEOT (unearth, myriad, encore, mobilize, Kiki-Jiki and Twinflame
+        // copies), Blitz, or True (Ball Lightning). A Dash creature returns to its owner's hand and a
+        // Warp creature is exiled with permission to recast it, so exiling either is real removal.
+        private static boolean leavesThisTurn(final Card c) {
+            final String v = c.getSVar("EndOfTurnLeavePlay");
+            return !v.isEmpty() && !"Dash".equals(v) && !"Warp".equals(v);
+        }
+
+        // one of our own stack objects already aims at it (removal cast earlier in this window)
+        private static boolean targetedByOurStack(final Player ai, final Game game, final Card c) {
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                for (SpellAbility s = si.getSpellAbility(); s != null; s = s.getSubAbility()) {
+                    if (ai.equals(s.getActivatingPlayer()) && s.getTargets() != null
+                            && s.getTargets().getTargetCards().contains(c)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Donate
     public static class Donate {
         public static AiAbilityDecision considerTargetingOpponent(final Player ai, final SpellAbility sa) {
