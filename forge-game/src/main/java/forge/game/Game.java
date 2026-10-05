@@ -49,6 +49,7 @@ import forge.game.trigger.TriggerType;
 import forge.game.zone.*;
 import forge.trackable.Tracker;
 import forge.util.*;
+import forge.util.SimScope;
 import forge.util.collect.FCollection;
 import org.apache.commons.lang3.tuple.Pair;
 import org.tinylog.Logger;
@@ -65,7 +66,7 @@ public class Game {
     private static final TaggedLogger netLog = Logger.tag("NETWORK");
 
     private static int maxId = 0;
-    private static int nextId() { return ++maxId; }
+    private static int nextId() { return SimScope.nextId(SimScope.Counter.GAME, () -> ++maxId); }
 
     private boolean noGUIUser;
 

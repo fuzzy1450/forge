@@ -27,6 +27,7 @@ import forge.game.card.*;
 import forge.game.cost.CostSacrifice;
 import forge.game.staticability.StaticAbilityCantBeCopied;
 import forge.util.*;
+import forge.util.SimScope;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 
@@ -76,7 +77,7 @@ import forge.game.zone.ZoneType;
  */
 public abstract class SpellAbility extends CardTraitBase implements ISpellAbility, IIdentifiable, Comparable<SpellAbility> {
     private static int maxId = 0;
-    private static int nextId() { return ++maxId; }
+    private static int nextId() { return SimScope.nextId(SimScope.Counter.SPELL_ABILITY, () -> ++maxId); }
 
     public static class EmptySa extends SpellAbility {
         public EmptySa(Card sourceCard) { super(sourceCard, Cost.Zero); setActivatingPlayer(sourceCard.getController());}

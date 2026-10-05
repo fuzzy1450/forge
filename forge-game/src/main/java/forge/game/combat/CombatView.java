@@ -14,6 +14,7 @@ import forge.game.card.CardView;
 import forge.trackable.TrackableObject;
 import forge.trackable.TrackableProperty;
 import forge.trackable.Tracker;
+import forge.util.SimScope;
 import forge.util.collect.FCollection;
 
 public class CombatView extends TrackableObject {
@@ -24,7 +25,7 @@ public class CombatView extends TrackableObject {
     private static int nextId = -2;
 
     public CombatView(final Tracker tracker) {
-        super(nextId--, tracker);
+        super(SimScope.nextId(SimScope.Counter.COMBAT_VIEW, () -> nextId--), tracker);
         set(TrackableProperty.AttackersWithDefenders, new ConcurrentHashMap<CardView, GameEntityView>());
         set(TrackableProperty.AttackersWithBlockers, new ConcurrentHashMap<CardView, FCollection<CardView>>());
         set(TrackableProperty.BandsWithDefenders, new ConcurrentHashMap<FCollection<CardView>, GameEntityView>());

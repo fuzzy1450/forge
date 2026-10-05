@@ -37,6 +37,7 @@ import forge.game.zone.ZoneType;
 import forge.util.CardTranslation;
 import forge.util.ITranslatable;
 import forge.util.Lang;
+import forge.util.SimScope;
 import forge.util.TextUtil;
 
 import org.apache.commons.lang3.Strings;
@@ -53,7 +54,7 @@ import java.util.*;
  */
 public abstract class Trigger extends TriggerReplacementBase {
     private static int maxId = 0;
-    private static int nextId() { return ++maxId; }
+    private static int nextId() { return SimScope.nextId(SimScope.Counter.TRIGGER, () -> ++maxId); }
 
     /**
      * <p>
@@ -61,7 +62,7 @@ public abstract class Trigger extends TriggerReplacementBase {
      * </p>
      */
     public static void resetIDs() {
-        Trigger.maxId = 50000;
+        SimScope.reset(SimScope.Counter.TRIGGER, 50000, () -> Trigger.maxId = 50000);
     }
 
     /** The ID. */

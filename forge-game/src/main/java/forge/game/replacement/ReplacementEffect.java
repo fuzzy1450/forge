@@ -40,6 +40,7 @@ import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
 import forge.util.CardTranslation;
 import forge.util.Lang;
+import forge.util.SimScope;
 import forge.util.TextUtil;
 
 /**
@@ -48,7 +49,7 @@ import forge.util.TextUtil;
  */
 public abstract class ReplacementEffect extends TriggerReplacementBase {
     private static int maxId = 0;
-    private static int nextId() { return ++maxId; }
+    private static int nextId() { return SimScope.nextId(SimScope.Counter.REPLACEMENT, () -> ++maxId); }
 
     /** The ID. */
     private int id;

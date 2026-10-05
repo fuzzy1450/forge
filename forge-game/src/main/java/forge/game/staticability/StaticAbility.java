@@ -46,13 +46,14 @@ import forge.game.spellability.SpellAbility;
 import forge.game.zone.Zone;
 import forge.game.zone.ZoneType;
 import forge.util.*;
+import forge.util.SimScope;
 
 /**
  * The Class StaticAbility.
  */
 public class StaticAbility extends CardTraitBase implements IIdentifiable, Cloneable, Comparable<StaticAbility> {
     private static int maxId = 0;
-    private static int nextId() { return ++maxId; }
+    private static int nextId() { return SimScope.nextId(SimScope.Counter.STATIC_ABILITY, () -> ++maxId); }
 
     private int id;
 

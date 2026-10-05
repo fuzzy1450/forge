@@ -27,6 +27,7 @@ import forge.game.card.Card;
 import forge.game.card.CardView;
 import forge.game.card.IHasCardView;
 import forge.game.player.Player;
+import forge.util.SimScope;
 import forge.util.TextUtil;
 
 /**
@@ -39,7 +40,7 @@ import forge.util.TextUtil;
  */
 public class SpellAbilityStackInstance implements IIdentifiable, IHasCardView {
     private static int maxId = 0;
-    public static int nextId() { return ++maxId; }
+    public static int nextId() { return SimScope.nextId(SimScope.Counter.STACK_INSTANCE, () -> ++maxId); }
 
     // At some point I want this functioning more like Target/Target Choices
     // where the SA has an "active"
