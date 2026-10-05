@@ -57,20 +57,28 @@ public class MyRandom {
     }
 
     /**
-     * Gets the random.
-     * 
+     * Gets the random: the bound {@link SimScope}'s stream when a simulated game is running on
+     * this thread, else the process-wide static (the GUI's case).
+     *
      * @return the random
      */
     public static Random getRandom() {
-        return MyRandom.random;
+        return SimScope.random(() -> MyRandom.random);
     }
 
     /**
-     * Sets the random provider. Used for deterministic simulation.
+     * Sets the random provider. Used for deterministic simulation: re-seeds the bound scope's
+     * stream when one is bound, else replaces the static.
      * @param random the random
      */
     public static void setRandom(Random random) {
-        MyRandom.random = random;
+        SimScope s = SimScope.current();
+        if (s != null) {
+            s.setRandom(random);
+        } else {
+            SimScope.requireUnboundAllowed("MyRandom.setRandom");
+            MyRandom.random = random;
+        }
     }
 
     /** The stream for cosmetic picks only (see {@link #cosmeticRandom}): never the game's. */
@@ -80,11 +88,10 @@ public class MyRandom {
 
     public static int[] splitIntoRandomGroups(final int value, final int numGroups) {
         int[] groups = new int[numGroups];
-
+        Random r = getRandom();
         for (int i = 0; i < value; i++) {
-            groups[random.nextInt(numGroups)]++;
+            groups[r.nextInt(numGroups)]++;
         }
-
         return groups;
     }
 }
