@@ -1,8 +1,10 @@
 package forge.sim;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -12,12 +14,24 @@ import org.testng.Assert;
 import org.testng.annotations.Test;
 
 import forge.card.CardEdition;
+import forge.game.card.Card;
 import forge.game.card.CounterCustomType;
 import forge.game.card.CounterType;
+import forge.game.keyword.Keyword;
+import forge.trackable.TrackableTypes;
 
 /** The lazily filled static caches a shared JVM fills from several game threads at once.
- *  Against the unsynchronized HashMaps these tests fail NONDETERMINISTICALLY (lost entries,
- *  two objects for one key); after the fix they never fail. */
+ *
+ *  <p>{@code customCounterTypesSurviveConcurrentFirstUse} is the race detector: the threads
+ *  register the same keys at the same time, and against the unsynchronized HashMap it failed
+ *  nondeterministically (two objects for one key, a lost entry); after the fix it never fails.
+ *
+ *  <p>{@code sortableCollectorNumbersAgreeAcrossThreads} is a read-path smoke test only: its
+ *  cache is filled before the pool starts, so the threads never write and it also passes
+ *  against a plain HashMap.
+ *
+ *  <p>{@code lookupCachesAreConcurrentMaps} pins the intent for the four lookup caches (Card,
+ *  Keyword, TrackableTypes, CardEdition), which have no red-then-green test of their own. */
 public class CacheConcurrencyTest {
 
     @Test(timeOut = 120_000)
@@ -66,5 +80,25 @@ public class CacheConcurrencyTest {
             f.get(100, TimeUnit.SECONDS);
         }
         pool.shutdown();
+    }
+
+    /** The four lookup caches (a card's keyword set, a trackable enum type, a sortable collector
+     *  number, the UI card cache) are pure caches whose only hazard is the unsynchronized write,
+     *  so each must be a ConcurrentMap. Nothing but a race tells the map types apart, so this
+     *  reads the private static fields. */
+    @Test
+    public void lookupCachesAreConcurrentMaps() throws Exception {
+        assertConcurrentMap(Card.class, "cp2card");
+        assertConcurrentMap(Keyword.class, "cardKeywordSetLookup");
+        assertConcurrentMap(TrackableTypes.class, "enumTypes");
+        assertConcurrentMap(CardEdition.class, "sortableCollNumberLookup");
+    }
+
+    private static void assertConcurrentMap(Class<?> owner, String fieldName) throws Exception {
+        Field field = owner.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        Object map = field.get(null);
+        Assert.assertTrue(map instanceof ConcurrentMap, owner.getSimpleName() + "#" + fieldName
+                + " must be a ConcurrentMap, but is " + (map == null ? "null" : map.getClass().getName()));
     }
 }
