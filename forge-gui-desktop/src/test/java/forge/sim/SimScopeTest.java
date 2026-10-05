@@ -11,6 +11,7 @@ import org.testng.annotations.Test;
 
 import forge.util.GameAbandoned;
 import forge.util.SimScope;
+import forge.util.UnscopedAccessError;
 
 public class SimScopeTest {
 
@@ -96,11 +97,11 @@ public class SimScopeTest {
                 "unbound, non-strict: the static steps");
 
         SimScope.setStrict(true);
-        Assert.assertThrows(IllegalStateException.class, () -> SimScope.random(() -> fallback));
-        Assert.assertThrows(IllegalStateException.class, () -> SimScope.nextId(SimScope.Counter.TRIGGER, () -> ++counter[0]));
-        Assert.assertThrows(IllegalStateException.class,
+        Assert.assertThrows(UnscopedAccessError.class, () -> SimScope.random(() -> fallback));
+        Assert.assertThrows(UnscopedAccessError.class, () -> SimScope.nextId(SimScope.Counter.TRIGGER, () -> ++counter[0]));
+        Assert.assertThrows(UnscopedAccessError.class,
                 () -> SimScope.reset(SimScope.Counter.TRIGGER, 50000, () -> counter[0] = 50000));
-        Assert.assertThrows(IllegalStateException.class, () -> SimScope.requireUnboundAllowed("test"));
+        Assert.assertThrows(UnscopedAccessError.class, () -> SimScope.requireUnboundAllowed("test"));
         Assert.assertEquals(counter[0], 11, "strict mode never ran a fallback");
 
         SimScope s = new SimScope(3L);

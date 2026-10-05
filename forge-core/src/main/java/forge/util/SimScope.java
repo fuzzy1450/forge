@@ -12,7 +12,7 @@ import java.util.function.Supplier;
  * counters, a cancelled flag and a scratch map. Bound to the game's thread with {@link #enter};
  * {@link MyRandom} and the id counters consult {@link #current()} and fall back to their statics
  * when no scope is bound, so the GUI, which never binds one, behaves exactly as before. Under
- * {@link #setStrict strict mode} an unbound access throws instead of falling back.
+ * {@link #setStrict strict mode} an unbound access throws {@link UnscopedAccessError} instead of falling back.
  *
  * <p>Thread confinement: a scope is used by one game thread and, through {@link #adopting}, by a
  * child thread that runs while the game thread blocks on it, so nothing here is synchronized.
@@ -112,11 +112,12 @@ public final class SimScope {
         return strict;
     }
 
-    /** Throws under strict mode: the caller is about to touch a static that a simulation must
-     *  never reach unscoped. */
+    /** Throws {@link UnscopedAccessError} under strict mode: the caller is about to touch a
+     *  static that a simulation must never reach unscoped. An Error, so that Forge's many
+     *  {@code catch (Exception)} sites cannot swallow the violation into a crippled game. */
     public static void requireUnboundAllowed(String seam) {
         if (strict) {
-            throw new IllegalStateException("SimScope: unbound access to " + seam + " on thread "
+            throw new UnscopedAccessError("SimScope: unbound access to " + seam + " on thread "
                     + Thread.currentThread().getName() + " with strict mode on");
         }
     }

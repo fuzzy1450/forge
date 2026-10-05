@@ -10,6 +10,7 @@ import org.testng.annotations.Test;
 
 import forge.util.MyRandom;
 import forge.util.SimScope;
+import forge.util.UnscopedAccessError;
 
 public class MyRandomScopeTest {
 
@@ -77,9 +78,9 @@ public class MyRandomScopeTest {
     @Test
     public void strictModeRefusesUnboundUse() {
         SimScope.setStrict(true);
-        Assert.assertThrows(IllegalStateException.class, MyRandom::getRandom);
-        Assert.assertThrows(IllegalStateException.class, () -> MyRandom.setRandom(new Random(1L)));
-        Assert.assertThrows(IllegalStateException.class, () -> MyRandom.percentTrue(50));
-        Assert.assertThrows(IllegalStateException.class, () -> MyRandom.splitIntoRandomGroups(3, 2));
+        Assert.assertThrows(UnscopedAccessError.class, MyRandom::getRandom);
+        Assert.assertThrows(UnscopedAccessError.class, () -> MyRandom.setRandom(new Random(1L)));
+        Assert.assertThrows(UnscopedAccessError.class, () -> MyRandom.percentTrue(50));
+        Assert.assertThrows(UnscopedAccessError.class, () -> MyRandom.splitIntoRandomGroups(3, 2));
     }
 }
