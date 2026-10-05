@@ -37,6 +37,7 @@ import java.io.FilenameFilter;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -162,7 +163,7 @@ public final class CardEdition implements Comparable<CardEdition> {
         return draftOptions;
     }
 
-    private static final Map<String, String> sortableCollNumberLookup = new HashMap<>();
+    private static final Map<String, String> sortableCollNumberLookup = new ConcurrentHashMap<>();
     /**
      * This method implements the main strategy to allow for natural ordering of collectorNumber
      * (i.e. "1" < "10"), overloading the default lexicographic order (i.e. "10" < "1").

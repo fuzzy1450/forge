@@ -19,14 +19,14 @@ public record CounterKeywordType(KeywordView keyword) implements CounterType {
             "Indestructible", "Lifelink", "Menace", "Reach", "Shadow", "Trample", "Vigilance");
     private static Map<String, CounterKeywordType> sMap = Maps.newHashMap();
 
-    public static CounterKeywordType get(String s) {
+    public static synchronized CounterKeywordType get(String s) {
         if (!sMap.containsKey(s)) {
             sMap.put(s, new CounterKeywordType(Keyword.getInstance(s).getView()));
         }
         return sMap.get(s);
     }
 
-    public static Set<CounterType> getValues() {
+    public static synchronized Set<CounterType> getValues() {
         // add fixed first
         Set<CounterType> result = keywordCounter.stream().map(CounterKeywordType::get).collect(Collectors.toCollection(LinkedHashSet::new));
         // add variable ones later

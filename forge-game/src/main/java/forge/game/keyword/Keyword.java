@@ -5,6 +5,7 @@ import forge.item.PaperCard;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public enum Keyword {
     UNDEFINED("", SimpleKeyword.class, false, ""),
@@ -292,7 +293,7 @@ public enum Keyword {
         return getKeywordDetails(k).getKey();
     }
 
-    private static final Map<String, Set<Keyword>> cardKeywordSetLookup = new HashMap<>();
+    private static final Map<String, Set<Keyword>> cardKeywordSetLookup = new ConcurrentHashMap<>();
 
     public static Set<Keyword> getKeywordSet(PaperCard card) {
         String name = card.getName();

@@ -31,6 +31,7 @@ import forge.game.staticability.StaticAbilityMustTarget;
 import forge.game.zone.ZoneType;
 import forge.util.Aggregates;
 import forge.util.MyRandom;
+import forge.util.SimScope;
 import forge.util.collect.FCollectionView;
 
 import org.apache.commons.lang3.StringUtils;
@@ -48,8 +49,14 @@ public class ChangeZoneAi extends SpellAbilityAi {
      */
 
     // multipleCardsToChoose is used by Intuition and can be adapted to be used by other
-    // cards where multiple cards are fetched at once and they need to be coordinated
+    // cards where multiple cards are chosen at the same time. The static is the GUI's; a
+    // simulated game keeps its own in its SimScope, so concurrent games never share one.
     private static CardCollection multipleCardsToChoose = new CardCollection();
+
+    private static CardCollection cardsToChoose() {
+        SimScope s = SimScope.current();
+        return s == null ? multipleCardsToChoose : s.scratch(ChangeZoneAi.class, CardCollection::new);
+    }
 
     protected boolean willPayCosts(Player payer, SpellAbility sa, Cost cost, Card source) {
         if (sa.isHidden()) {
@@ -178,7 +185,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.NetherbornAltar.consider(aiPlayer, sa);
         }
 
-        multipleCardsToChoose.clear();
+        cardsToChoose().clear();
 
         if ("Spelltwine".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
             // Picks and targets both graveyard cards itself (the copies are
@@ -411,7 +418,9 @@ public class ChangeZoneAi extends SpellAbilityAi {
             } else if (aiLogic.equals("Intuition")) {
                 // This logic only fills the multiple cards array, the decision to play is made
                 // separately in hiddenOriginCanPlayAI later.
-                multipleCardsToChoose = SpecialCardAi.Intuition.considerMultiple(aiPlayer, sa);
+                CardCollection chosen = cardsToChoose();
+                chosen.clear();
+                chosen.addAll(SpecialCardAi.Intuition.considerMultiple(aiPlayer, sa));
             } else if (aiLogic.equals("MazesEnd")) {
                 return SpecialCardAi.MazesEnd.consider(aiPlayer, sa);
             } else if (aiLogic.equals("HuaTuo")) {
@@ -1956,9 +1965,10 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 }
                 // nothing our filter would return: the stock Battlefield pick below
             } else if ("Intuition".equals(logic)) {
-                if (!multipleCardsToChoose.isEmpty()) {
-                    Card choice = multipleCardsToChoose.get(0);
-                    multipleCardsToChoose.remove(0);
+                CardCollection chosen = cardsToChoose();
+                if (!chosen.isEmpty()) {
+                    Card choice = chosen.get(0);
+                    chosen.remove(0);
                     return choice;
                 }
             } else if (logic.startsWith("ExilePreference")) {

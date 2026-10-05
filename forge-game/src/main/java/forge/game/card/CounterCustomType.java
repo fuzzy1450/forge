@@ -9,14 +9,14 @@ import com.google.common.collect.Maps;
 public record CounterCustomType(String keyword) implements CounterType {
     private static Map<String, CounterCustomType> sMap = Maps.newHashMap();
 
-    public static CounterCustomType get(String s) {
+    public static synchronized CounterCustomType get(String s) {
         if (!sMap.containsKey(s)) {
             sMap.put(s, new CounterCustomType(s));
         }
         return sMap.get(s);
     }
 
-    public static Set<CounterType> getValues() {
+    public static synchronized Set<CounterType> getValues() {
         return new LinkedHashSet<CounterType>(sMap.values());
     }
     

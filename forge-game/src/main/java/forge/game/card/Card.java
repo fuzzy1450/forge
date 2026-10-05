@@ -70,6 +70,7 @@ import org.tinylog.Logger;
 
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -7485,7 +7486,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return CardFactory.getCard(pc, owner, owner == null ? null : owner.getGame());
     }
 
-    private static final Map<PaperCard, Card> cp2card = Maps.newHashMap();
+    private static final Map<PaperCard, Card> cp2card = new ConcurrentHashMap<>();
     public static Card getCardForUi(IPaperCard pc) {
         if (pc instanceof PaperCard) {
             Card res = cp2card.get(pc);

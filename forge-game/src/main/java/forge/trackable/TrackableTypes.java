@@ -3,8 +3,8 @@ package forge.trackable;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
-import com.google.common.collect.Maps;
 import com.google.common.collect.Multiset;
 
 import forge.card.CardType;
@@ -136,7 +136,7 @@ public class TrackableTypes {
     public static final TrackableType<Object> ObjectType = new TrackableType<Object>(null);
 
     //make this quicker than having to define a new class for every single enum
-    private static Map<Class<? extends Enum<?>>, TrackableType<?>> enumTypes = Maps.newHashMap();
+    private static Map<Class<? extends Enum<?>>, TrackableType<?>> enumTypes = new ConcurrentHashMap<>();
 
     @SuppressWarnings("unchecked")
     public static <E extends Enum<E>> TrackableType<E> EnumType(final Class<E> enumType) {
