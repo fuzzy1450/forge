@@ -1728,7 +1728,9 @@ public class AiController {
 
             return null;
         });
-        Thread t = new Thread(future, "Game AI Eval");
+        // The decision runs on its own thread; under a simulation it must draw from THIS game's
+        // scope, so the task adopts the scope bound here (explicit, never inherited by a pool).
+        Thread t = new Thread(SimScope.adopting(future), "Game AI Eval");
         t.setDaemon(true);
         t.start();
         try {
