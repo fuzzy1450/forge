@@ -809,6 +809,10 @@ public class CountersPutAi extends CountersAi {
             }
 
             if (!mandatory) {
+                if (SpecialCardAi.EnduringScalelord.NAME.equals(source.getName())) {
+                    // the two-Scalelord counter loop: judged in SpecialCardAi.EnduringScalelord.consider
+                    return SpecialCardAi.EnduringScalelord.consider(ai, sa);
+                }
                 // TODO - If Trigger isn't mandatory, when wouldn't we want to
                 // put a counter?
                 // things like Powder Keg, which are way too complex for the AI

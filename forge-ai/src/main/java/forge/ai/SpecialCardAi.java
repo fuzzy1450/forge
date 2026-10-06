@@ -9337,6 +9337,40 @@ public class SpecialCardAi {
 
     // Entrancing Melody
     // "X U U sorcery: gain control of target creature with mana value X" -
+    // Enduring Scalelord (the 2026-10-06 SimScope determinism battery, pod P1-P4 seed 7000003)
+    // "Whenever one or more +1/+1 counters are put on another creature you control, you may put
+    // a +1/+1 counter on CARDNAME." Two of them (Breed Lethality's beside a Progenitor Mimic
+    // token copy of it) feed each other: each counter one takes fires the other's trigger, and
+    // the stock CountersPutAi answer to an optional untargeted PutCounter is always yes, so the
+    // game never leaves that priority loop (turn 58 reached in a minute, then 1200 s of about a
+    // hundred trigger resolutions a second until the harness's timeout). The AI stops accepting
+    // once this Scalelord's power is at least twice the largest opponent life total and at least
+    // 40 (a Commander starting life): past that a further counter cannot change the outcome, and
+    // every later counter event asks again against the live life totals, so an opponent who
+    // gains life reopens the tap. Only the optional trigger is judged here: a mandatory
+    // PutCounter never reaches this class. Draws no RNG.
+    public static class EnduringScalelord {
+        public static final String NAME = "Enduring Scalelord";
+        public static final int MIN_ENOUGH_POWER = 40;
+
+        /** Twice the largest opponent life total, at least MIN_ENOUGH_POWER. */
+        public static int enoughPower(final Player ai) {
+            int maxLife = 0;
+            for (final Player opp : ai.getOpponents()) {
+                maxLife = Math.max(maxLife, opp.getLife());
+            }
+            return Math.max(MIN_ENOUGH_POWER, 2 * maxLife);
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host != null && host.getNetPower() >= enoughPower(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // ControlGainAi never announces this X, so ValidTgts$ Creature.cmcEQX reads
     // X=0 and only mana-value-0 creatures are ever legal. Announce X ourselves
     // as the chosen creature's mana value, checking canTarget at that X per
