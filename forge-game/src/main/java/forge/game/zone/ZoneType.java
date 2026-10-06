@@ -7,6 +7,7 @@ import forge.util.Localizer;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * The Enum Zone.
@@ -38,6 +39,12 @@ public enum ZoneType implements ITranslatable {
     public static final EnumSet<ZoneType> PART_OF_COMMAND_ZONE = EnumSet.of(Command, SchemeDeck, PlanarDeck, AttractionDeck, ContraptionDeck, Junkyard);
     public static final EnumSet<ZoneType> DECK_ZONES = EnumSet.of(Library, SchemeDeck, PlanarDeck, AttractionDeck, ContraptionDeck);
     public static final EnumSet<ZoneType> ORDERED_ZONES = EnumSet.of(Library, SchemeDeck, PlanarDeck, AttractionDeck, ContraptionDeck, Hand, Graveyard, Stack);
+
+    // listValueOf's separator, compiled once. String.split compiles its regex on every call for any pattern longer
+    // than one character, and SpellAbility.isManaAbility parses Origin/Destination through listValueOf for every
+    // ability of every card the AI looks at in every simulated state: the 2026-10-06 thread dumps of a hybrid_sim
+    // game showed each evaluation thread spending 4-8 s of one core in Pattern.compile reached from this line.
+    private static final Pattern LIST_SEPARATOR = Pattern.compile("[, ]+");
 
     private final boolean holdsHiddenInfo;
     private final String label;
@@ -78,7 +85,7 @@ public enum ZoneType implements ITranslatable {
             return List.of(Battlefield, Hand, Graveyard, Exile, Stack, Library, Command);
         }
         final List<ZoneType> result = new ArrayList<>();
-        for (final String s : values.split("[, ]+")) {
+        for (final String s : LIST_SEPARATOR.split(values)) {
             ZoneType zt = ZoneType.smartValueOf(s);
             if (zt != null) {
                 result.add(zt);
