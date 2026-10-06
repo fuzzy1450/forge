@@ -70,8 +70,10 @@ public final class JobFile {
             String val = line.substring(eq + 1).trim();
             if (key.startsWith("seat.")) {
                 String[] parts = key.split("\\.", 3);
+                if (parts.length < 3) {
+                    throw new BadJob("unknown job key " + key);
+                }
                 SeatFields s = seats.computeIfAbsent(seatIndex(key, parts[1]), k -> new SeatFields());
-                if (parts.length < 3 || parts[2].isEmpty()) throw new BadJob("unknown job key " + key);
                 switch (parts[2]) {
                     case "deck_file": s.deckFile = val; break;
                     case "deck_hash": s.deckHash = val; break;
@@ -116,12 +118,14 @@ public final class JobFile {
         }
     }
 
-    /** One {@link GameRunner.GameSpec} per game, at seed + i, each with the job's timeout and its seats in order. */
+    /** One {@link GameRunner.GameSpec} per game, at seed + i, each with the job's timeout and the same immutable
+     *  list of its seats, in order. */
     public List<GameRunner.GameSpec> specs() {
-        List<GameRunner.SeatSpec> seatSpecs = new ArrayList<>();
+        List<GameRunner.SeatSpec> built = new ArrayList<>();
         for (Seat s : seats) {
-            seatSpecs.add(new GameRunner.SeatSpec(Paths.get(s.deckFile()), s.profile(), s.ai()));
+            built.add(new GameRunner.SeatSpec(Paths.get(s.deckFile()), s.profile(), s.ai()));
         }
+        List<GameRunner.SeatSpec> seatSpecs = List.copyOf(built);
         List<GameRunner.GameSpec> out = new ArrayList<>();
         for (int g = 0; g < games; g++) {
             out.add(new GameRunner.GameSpec(seed + g, timeoutS, seatSpecs));

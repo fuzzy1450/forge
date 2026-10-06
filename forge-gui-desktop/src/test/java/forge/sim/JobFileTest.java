@@ -12,7 +12,7 @@ import forge.sim.GameRunner.GameSpec;
 public class JobFileTest {
     static final List<String> SAMPLE = List.of(
             "games=3", "seed=42000000000", "timeout_s=300", "format=Commander", "raw_dir=",
-            "seat.0.deck_file=C:/decks/a.dck", "seat.0.deck_hash=aaaa", "seat.0.profile=Default", "seat.0.ai=default",
+            "seat.0.deck_file=C:/decks/a.dck", "seat.0.deck_hash=aaaa", "seat.0.profile=Reckless", "seat.0.ai=hybrid_sim",
             "seat.1.deck_file=C:/decks/b.dck", "seat.1.deck_hash=bbbb", "seat.1.profile=", "seat.1.ai=",
             "", "seed=7000000");                               // blank lines skipped; the LAST value wins
 
@@ -25,7 +25,7 @@ public class JobFileTest {
         Assert.assertEquals(job.format, "Commander");
         Assert.assertEquals(job.rawDir, "");
         Assert.assertEquals(job.seats.size(), 2);
-        Assert.assertEquals(job.seats.get(0), new JobFile.Seat("C:/decks/a.dck", "aaaa", "Default", "default"));
+        Assert.assertEquals(job.seats.get(0), new JobFile.Seat("C:/decks/a.dck", "aaaa", "Reckless", "hybrid_sim"));
         Assert.assertEquals(job.seats.get(1), new JobFile.Seat("C:/decks/b.dck", "bbbb", "Default", "default"),
                 "an empty profile is Default and an empty ai is default, as Harness.Job.load reads them");
     }
@@ -41,6 +41,16 @@ public class JobFileTest {
     }
 
     @Test
+    public void seatsAreInIndexOrderWithTheHarnessDefaults() {
+        JobFile job = JobFile.parse(List.of("seat.1.deck_file=b.dck", "seat.1.deck_hash=b",
+                                            "seat.0.deck_file=a.dck", "seat.0.deck_hash=a"));
+        Assert.assertEquals(job.rawDir, "");
+        Assert.assertEquals(job.seats, List.of(new JobFile.Seat("a.dck", "a", "Default", "default"),
+                                               new JobFile.Seat("b.dck", "b", "Default", "default")),
+                "seats in index order, not file order; an absent profile is Default and an absent ai default");
+    }
+
+    @Test
     public void specsAreOnePerGameWithConsecutiveSeeds() {
         List<GameSpec> specs = JobFile.parse(SAMPLE).specs();
         Assert.assertEquals(specs.size(), 3);
@@ -48,6 +58,8 @@ public class JobFileTest {
             Assert.assertEquals(specs.get(i).seed(), 7_000_000L + i);
             Assert.assertEquals(specs.get(i).timeoutSeconds(), 300);
             Assert.assertEquals(specs.get(i).seats().get(0).deckFile(), Path.of("C:/decks/a.dck"));
+            Assert.assertEquals(specs.get(i).seats().get(0).profile(), "Reckless");
+            Assert.assertEquals(specs.get(i).seats().get(0).ai(), "hybrid_sim");
             Assert.assertEquals(specs.get(i).seats().get(1).profile(), "Default");
             Assert.assertEquals(specs.get(i).seats().get(1).ai(), "default");
         }
@@ -66,6 +78,8 @@ public class JobFileTest {
                           "seat.1.deck_file=b", "seat.1.deck_hash=b"), "games");
         expectBad(List.of("seat.0=x", "seat.0.deck_file=a", "seat.0.deck_hash=a",
                           "seat.1.deck_file=b", "seat.1.deck_hash=b"), "seat.0");
+        expectBad(List.of("seat.x.deck_file=a", "seat.0.deck_file=a", "seat.0.deck_hash=a",
+                          "seat.1.deck_file=b", "seat.1.deck_hash=b"), "seat.x.deck_file");
     }
 
     private static void expectBad(List<String> lines, String fragment) {
@@ -80,7 +94,11 @@ public class JobFileTest {
     @Test
     public void loadReadsAFile() throws Exception {
         Path f = Files.createTempFile("jobfile", ".job");
-        Files.write(f, SAMPLE);
-        Assert.assertEquals(JobFile.load(f).games, 3);
+        try {
+            Files.write(f, SAMPLE);
+            Assert.assertEquals(JobFile.load(f).games, 3);
+        } finally {
+            Files.deleteIfExists(f);
+        }
     }
 }
