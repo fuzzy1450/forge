@@ -21,6 +21,7 @@ import com.google.common.eventbus.Subscribe;
 import forge.GuiDesktop;
 import forge.ai.AIOption;
 import forge.ai.AiProfileUtil;
+import forge.card.CardEdition;
 import forge.deck.Deck;
 import forge.deck.io.DeckSerializer;
 import forge.game.Game;
@@ -43,6 +44,7 @@ import forge.localinstance.properties.ForgeConstants;
 import forge.localinstance.properties.ForgePreferences.FPref;
 import forge.model.FModel;
 import forge.player.GamePlayerUtil;
+import forge.token.TokenDb;
 import forge.util.GameAbandoned;
 import forge.util.Localizer;
 import forge.util.MyRandom;
@@ -128,8 +130,8 @@ public final class GameRunner {
 
     // ------------------------------------------------------------------ boot
 
-    /** Today's harness boot: the GUI interface Forge's model needs, the card database and a check that the
-     *  Default AI profile exists, once per JVM. On every call it re-arms strict mode and, if
+    /** Today's harness boot: the GUI interface Forge's model needs, the card database, every edition's tokens and a
+     *  check that the Default AI profile exists, once per JVM. On every call it re-arms strict mode and, if
      *  {@link #installHaltOnUncaught} was asked for, the halt handler. */
     public static synchronized void boot() {
         if (!booted) {
@@ -143,6 +145,7 @@ public final class GameRunner {
                 preferences.setPref(FPref.UI_LANGUAGE, "en-US");
                 return null;
             });
+            preloadTokens(FModel.getMagicDb().getAllTokens(), FModel.getMagicDb().getEditions());
             if (!AiProfileUtil.getProfilesDisplayList().contains("Default")) {
                 throw new IllegalStateException("AI profile 'Default' is missing from " + ForgeConstants.AI_PROFILE_DIR
                         + ": this Forge tree cannot run the simulation");
@@ -155,6 +158,25 @@ public final class GameRunner {
             // the runner's wins whenever it was asked for.
             Thread.setDefaultUncaughtExceptionHandler(HALT_ON_UNCAUGHT);
         }
+    }
+
+    /** Loads every token an edition lists, once, at boot: TokenDb otherwise fills its multimap from whichever thread
+     *  asks first, and several game threads ask at once. TokenDb.preloadTokens() (the GUI token viewer's) would do it
+     *  but aborts on the first entry naming a token that has no script (FRC lists the card Gingerbrute among its
+     *  tokens), so each listed token is asked for instead, which loads every art of it: TokenDb rejects such an entry
+     *  before it writes anything, and a game that asks for it fails as it always did. Returns the entries skipped. */
+    static int preloadTokens(TokenDb tokens, Iterable<CardEdition> editions) {
+        int skipped = 0;
+        for (CardEdition edition : editions) {
+            for (String token : edition.getTokens().keySet()) {
+                try {
+                    tokens.getToken(token, edition.getCode());
+                } catch (RuntimeException noScript) {
+                    skipped++;
+                }
+            }
+        }
+        return skipped;
     }
 
     /** Today's HALT_ON_UNCAUGHT for a process that only plays games: anything a game thread did

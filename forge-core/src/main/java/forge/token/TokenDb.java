@@ -187,17 +187,21 @@ public class TokenDb implements ITokenDatabase {
         }
 
         CardRules cr = rulesByName.get(tokenName);
-        if (!extraTokensByName.containsKey(fullName) && cr != null) {
-            try {
-                PaperToken pt = new PaperToken(cr, realEdition, tokenName, "", IPaperCard.NO_ARTIST_NAME);
-                extraTokensByName.put(fullName, pt);
-                return pt;
-            } catch(Exception e) {
-                throw e;
+        // Game threads fill this map on first use, several at once in a simulation: one lock keeps the
+        // TreeMap whole and creates each token once, so every caller gets the same object.
+        synchronized (extraTokensByName) {
+            if (!extraTokensByName.containsKey(fullName) && cr != null) {
+                try {
+                    PaperToken pt = new PaperToken(cr, realEdition, tokenName, "", IPaperCard.NO_ARTIST_NAME);
+                    extraTokensByName.put(fullName, pt);
+                    return pt;
+                } catch(Exception e) {
+                    throw e;
+                }
             }
-        }
 
-        return extraTokensByName.get(fullName);
+            return extraTokensByName.get(fullName);
+        }
     }
 
     @Override

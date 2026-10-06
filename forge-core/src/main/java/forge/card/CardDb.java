@@ -68,7 +68,8 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
     private final CardEdition.Collection editions;
     private final Set<String> filtered;
 
-    private final Map<String, Boolean> nonLegendaryCreatureNames = Maps.newHashMap();
+    // written by every game's legend-rule check, from as many game threads as are playing
+    private final Map<String, Boolean> nonLegendaryCreatureNames = new ConcurrentHashMap<>();
 
     public enum CardArtPreference implements Comparator<CardEdition> {
         LATEST_ART_ALL_EDITIONS(false, true),
