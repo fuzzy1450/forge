@@ -1,14 +1,19 @@
 package forge.sim;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.Test;
 
+import forge.ai.ability.ChangeZoneAi;
 import forge.game.combat.CombatView;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.trigger.Trigger;
 import forge.trackable.Tracker;
 import forge.util.SimScope;
+import forge.util.UnscopedAccessError;
 
 public class ScopedIdsTest {
 
@@ -50,5 +55,22 @@ public class ScopedIdsTest {
         Trigger.resetIDs();
         Assert.assertEquals(s.nextId(SimScope.Counter.TRIGGER), 50001,
                 "Match.prepareAllZones' reset lands on the scope");
+    }
+
+    /** ChangeZoneAi's Intuition cards, like AiCache: bound, the scope's own; unbound under strict mode, refused (and
+     *  counted) rather than quietly the GUI's static. */
+    @Test
+    public void changeZoneAiRefusesTheGuisCardsUnboundUnderStrictMode() throws Exception {
+        Method cardsToChoose = ChangeZoneAi.class.getDeclaredMethod("cardsToChoose");
+        cardsToChoose.setAccessible(true);
+        long before = SimScope.VIOLATIONS.get();
+        SimScope.setStrict(true);
+        try {
+            InvocationTargetException thrown = Assert.expectThrows(InvocationTargetException.class, () -> cardsToChoose.invoke(null));
+            Assert.assertTrue(thrown.getCause() instanceof UnscopedAccessError, "unbound under strict mode: " + thrown.getCause());
+            Assert.assertEquals(SimScope.VIOLATIONS.get() - before, 1L, "the refusal is counted");
+        } finally {
+            SimScope.setStrict(false);
+        }
     }
 }

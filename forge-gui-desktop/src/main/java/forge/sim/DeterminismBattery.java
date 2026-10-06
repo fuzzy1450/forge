@@ -85,6 +85,16 @@ public final class DeterminismBattery {
     // loaded (spec 7.1), so a game whose solo play did not time out cannot read as a divergence for want of time.
     static final int CONCURRENT_BUDGET_FACTOR = 3;
 
+    // The full list is built from exactly these Commander precons, in this order: what Precons.commander() listed when
+    // the list was fixed (spec 7.1: fixed and versioned). A Forge merge that ships another precon must not change it unseen.
+    static final List<String> FULL_LIST_PRECONS = List.of("Arcane Wizardry.dck", "Breed Lethality.dck",
+            "Call the Spirits.dck", "Draconic Domination.dck", "Entropic Uprising.dck", "Feline Ferocity.dck",
+            "Invent Superiority.dck", "Open Hostility.dck", "Plunder the Graves.dck", "Seize Control.dck",
+            "Stalwart Unity.dck", "Swell the Host.dck", "Vampiric Bloodlust.dck", "Wade into Battle.dck");
+
+    static final String USAGE =
+            "usage: forge.sim.DeterminismBattery [--arms A,B,C] [--slots 6] [--list games.tsv | --smoke] [--out dir]";
+
     private DeterminismBattery() { }
 
     // ------------------------------------------------------------------ the lists (spec 7.1)
@@ -94,8 +104,11 @@ public final class DeterminismBattery {
         // Precons.commander() reads ForgeConstants, whose initializer needs Forge booted.
         GameRunner.boot();
         List<Path> p = Precons.commander();
-        if (p.size() < 14) {
-            throw new IllegalStateException("the battery needs 14 Commander precons, found " + p.size() + " in " + p);
+        List<String> names = p.stream().map(d -> d.getFileName().toString()).collect(Collectors.toList());
+        if (!names.equals(FULL_LIST_PRECONS)) {
+            throw new IllegalStateException("the battery's full list is built from the Commander precons " + FULL_LIST_PRECONS
+                    + ", but this Forge tree has " + names + ": the list is fixed and versioned (spec 7.1), so a changed"
+                    + " precon set is a deliberate edit of FULL_LIST_PRECONS, never a silent one");
         }
         List<Entry> out = new ArrayList<>();
         for (int i = 0; i + 1 < 14; i += 2) {
@@ -349,29 +362,76 @@ public final class DeterminismBattery {
 
     // ------------------------------------------------------------------ the CLI
 
+    /** Says what was wrong with the command line, prints the usage line and exits 2. */
+    private static void exitUsage(String problem) {
+        System.err.println("DeterminismBattery: " + problem);
+        System.err.println(USAGE);
+        System.exit(2);
+    }
+
     public static void main(String[] args) throws Exception {
         GameRunner.installHaltOnUncaught();
         // Our lines on fd 1; Forge's own chatter (card loading, the AI) goes to stderr.
         PrintStream out = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8);
         System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.err), true, StandardCharsets.UTF_8));
 
+        // A bad command line is a usage error, exit 2, never an exception for the halt handler's 4.
         List<String> arms = List.of("A", "B", "C");
         int slots = 6;
         Path listFile = null, outDir = null;
         boolean smoke = false;
-        for (int i = 0; i < args.length; i++) {
-            switch (args[i]) {
-                case "--arms":  arms = Arrays.asList(args[++i].split(",")); break;
-                case "--slots": slots = Integer.parseInt(args[++i]); break;
-                case "--list":  listFile = Paths.get(args[++i]); break;
-                case "--out":   outDir = Paths.get(args[++i]); break;
-                case "--smoke": smoke = true; break;
-                default:
-                    System.err.println("usage: forge.sim.DeterminismBattery [--arms A,B,C] [--slots 6] [--list games.tsv | --smoke] [--out dir]");
-                    System.exit(2);
+        try {
+            for (int i = 0; i < args.length; i++) {
+                String flag = args[i];
+                if (flag.equals("--smoke")) {
+                    smoke = true;
+                    continue;
+                }
+                if (!List.of("--arms", "--slots", "--list", "--out").contains(flag)) {
+                    throw new IllegalArgumentException("unknown argument " + flag);
+                }
+                if (i + 1 == args.length) {
+                    throw new IllegalArgumentException(flag + " needs a value");
+                }
+                String value = args[++i];
+                switch (flag) {
+                    case "--arms":
+                        arms = Arrays.asList(value.split(",", -1));
+                        if (!List.of("A", "B", "C").containsAll(arms)) {
+                            throw new IllegalArgumentException("--arms takes the arms A, B and C, got " + value);
+                        }
+                        break;
+                    case "--slots":
+                        try {
+                            slots = Integer.parseInt(value);
+                        } catch (NumberFormatException notANumber) {
+                            throw new IllegalArgumentException("--slots takes a whole number, got " + value);
+                        }
+                        if (slots < 1) {
+                            throw new IllegalArgumentException("--slots must be at least 1, got " + slots);
+                        }
+                        break;
+                    case "--list":
+                        listFile = Paths.get(value);
+                        break;
+                    default:
+                        outDir = Paths.get(value);
+                        break;
+                }
             }
+        } catch (IllegalArgumentException bad) {
+            exitUsage(bad.getMessage());
         }
-        List<Entry> list = listFile != null ? readList(listFile) : smoke ? smokeList() : fullList();
+        List<Entry> list = null;
+        if (listFile != null) {
+            try {
+                list = readList(listFile);
+            } catch (IOException | IllegalArgumentException bad) {
+                exitUsage("cannot read the --list file " + listFile + ": " + bad);
+            }
+        } else {
+            list = smoke ? smokeList() : fullList();
+        }
         out.println("LIST\t" + list.size() + "\tgames\t" + String.join(",", arms) + "\tslots=" + slots);
 
         Report r = run(list, arms, slots, out);

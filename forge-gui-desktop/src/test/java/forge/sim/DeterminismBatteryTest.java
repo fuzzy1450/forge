@@ -86,6 +86,13 @@ public class DeterminismBatteryTest {
         return new Played(entry, arm, result);
     }
 
+    @Test(timeOut = 120_000)
+    public void fullListIsTheFixed180GameList() {
+        List<Entry> full = DeterminismBattery.fullList();
+        Assert.assertEquals(full.size(), 180);
+        Assert.assertEquals(full.get(0).label(), "1v1-default/Arcane Wizardry+Breed Lethality/" + SEED);
+    }
+
     @Test
     public void budgetIsTheListTimeoutOrThreeTimesTheSoloWall() {
         Assert.assertEquals(DeterminismBattery.budgetSeconds(1200, 100_000L), 1200);

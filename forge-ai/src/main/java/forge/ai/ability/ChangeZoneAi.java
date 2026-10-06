@@ -55,7 +55,12 @@ public class ChangeZoneAi extends SpellAbilityAi {
 
     private static CardCollection cardsToChoose() {
         SimScope s = SimScope.current();
-        return s == null ? multipleCardsToChoose : s.scratch(ChangeZoneAi.class, CardCollection::new);
+        if (s != null) {
+            return s.scratch(ChangeZoneAi.class, CardCollection::new);
+        }
+        // unbound under strict mode is a thread no game adopted: refused, never quietly the GUI's static
+        SimScope.requireUnboundAllowed("ChangeZoneAi.multipleCardsToChoose");
+        return multipleCardsToChoose;
     }
 
     protected boolean willPayCosts(Player payer, SpellAbility sa, Cost cost, Card source) {
