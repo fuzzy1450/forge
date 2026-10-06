@@ -243,11 +243,11 @@ public final class GameRecords {
      *  seats (their deck_hash, profile and ai). */
     public static Map<String, Object> record(Stats stats, int g, long seed, List<JobFile.Seat> specs,
                                              boolean timedOut, String error, long ms) {
-        // After a timeout the game thread is still running: TimeLimitedCodeBlock only
-        // interrupts it, and Forge's game loop is compute-bound and never checks. So
-        // on that path we report what the subscriber already collected and touch no
-        // live engine state — no getOutcome(), no getRegisteredPlayers(), no
-        // getCardsIn(). final_life and final_zone stay null for a timed-out game.
+        // After a timeout the game was cancelled wherever it stood, and on a poisoned
+        // runner its thread may still be running; so on that path we report what the
+        // subscriber collected and touch no live engine state — no getOutcome(), no
+        // getRegisteredPlayers(), no getCardsIn(). final_life and final_zone stay null
+        // for a timed-out game.
         // A Stats with no game (the observer never ran) is read the same way.
         boolean live = !timedOut && stats.game != null;
         GameOutcome out = live ? stats.game.getOutcome() : null;
@@ -300,10 +300,11 @@ public final class GameRecords {
         // docs/superpowers/specs/2026-10-04-win-reasons-design.md section 2): the
         // losing seat's GameLossReason, verbatim, and the card Forge names for it.
         // Decided two-seat games only; null otherwise. Read after the game, like
-        // final_life, and never on the timeout path. Compared as strings, never by a
-        // switch on the loss state: javac compiles a switch over any enumeration, one
-        // imported from Forge included, into a synthetic Harness$1.class, an eighth
-        // class file the farm refuses to serve and every volunteer's pin rejects.
+        // final_life, and never on the timeout path. As Harness.java must: compared as
+        // strings, never by a switch on the loss state: javac compiles a switch over any
+        // enumeration, one imported from Forge included, into a synthetic
+        // Harness$1.class, an eighth class file the farm refuses to serve and every
+        // volunteer's pin rejects.
         String winReason = null, winCard = null;
         if (!timedOut && winner != null && stats.nSeats == 2 && bySeat[1 - winner] != null) {
             PlayerOutcome lost = bySeat[1 - winner].getOutcome();
@@ -371,7 +372,7 @@ public final class GameRecords {
      * Last-resort record for when {@link #record} itself throws — possible on the
      * timeout path, where the still-running game thread may be writing the very maps
      * record() walks. Reads no live engine state and no collection this subscriber
-     * maintains, so run() always has a record to print and a timeout still exits 3.
+     * maintains, so the job always has a record to emit for the game.
      */
     public static Map<String, Object> fallbackRecord(Stats stats, int g, long seed, List<JobFile.Seat> specs,
                                                      boolean timedOut, String error, Throwable t, long ms) {

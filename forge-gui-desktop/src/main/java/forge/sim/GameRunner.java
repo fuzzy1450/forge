@@ -226,10 +226,10 @@ public class GameRunner {
     /** Plays one game and returns its result. {@code observer} runs on the game thread, under the game's scope, after
      *  the game is created and before it starts -- where a stats subscriber attaches. It must only listen: it runs
      *  under that scope, so a draw or an id request it made would become part of the seeded game and its digest. It is
-     *  never called when {@code createGame()} fails, so a subscriber may never have attached. A throwable from it ends
-     *  the game as an Error like any other. An interrupt of the calling thread while it waits is a cancellation
-     *  request: the game is cancelled as on a timeout, its slot is returned, and InterruptedException is thrown with
-     *  the interrupt status left set. */
+     *  never called when {@code createGame()} fails or a timeout's cancellation ends the game during setup, so a
+     *  subscriber may never have attached. A throwable from it ends the game as an Error like any other. An interrupt
+     *  of the calling thread while it waits is a cancellation request: the game is cancelled as on a timeout, its slot
+     *  is returned, and InterruptedException is thrown with the interrupt status left set. */
     public GameResult play(GameSpec spec, Consumer<Game> observer) throws InterruptedException {
         if (!booted) {
             throw new IllegalStateException("GameRunner.boot() first");
