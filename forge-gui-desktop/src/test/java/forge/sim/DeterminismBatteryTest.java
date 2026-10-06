@@ -3,6 +3,7 @@ package forge.sim;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.testng.Assert;
@@ -11,6 +12,7 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import forge.sim.DeterminismBattery.Entry;
+import forge.sim.DeterminismBattery.Played;
 import forge.sim.DeterminismBattery.Report;
 import forge.sim.GameRunner.GameResult;
 import forge.sim.GameRunner.GameSpec;
@@ -70,6 +72,19 @@ public class DeterminismBatteryTest {
         return new GameResult(SEED, null, "Error", 0, 0, false, "game ended without finishing", ms, "ERROR", List.of());
     }
 
+    // For the comparator probe: a decided play with a digest the test chooses, a Timeout play, and a play of an entry in an arm.
+    private static GameResult decided(String digest) {
+        return new GameResult(SEED, 0, "AllOpponentsLost", 24, 0, false, null, 1_000L, digest, List.of());
+    }
+
+    private static GameResult timeout() {
+        return soloTimeout(1_000L);
+    }
+
+    private static Played played(Entry entry, String arm, GameResult result) {
+        return new Played(entry, arm, result);
+    }
+
     @Test
     public void budgetIsTheListTimeoutOrThreeTimesTheSoloWall() {
         Assert.assertEquals(DeterminismBattery.budgetSeconds(1200, 100_000L), 1200);
@@ -100,6 +115,37 @@ public class DeterminismBatteryTest {
         Assert.assertEquals(DeterminismBattery.specAfterReference(e, soloDecided(1_000L)).seats(), e.spec().seats());
     }
 
+    @Test
+    public void mismatchesReportsDivergenceAndMissingPlaysButSkipsUntestableGames() {
+        List<Path> precons = Precons.commander();
+        Entry g1 = entry("1v1-default", precons.subList(0, 2), SEED, 300);
+        Entry g2 = entry("pod-default", precons.subList(0, 4), SEED, 1);
+        Entry g3 = entry("1v1-default", precons.subList(0, 2), SEED + 1, 300);
+        List<Entry> list = List.of(g1, g2, g3);
+        List<String> arms = List.of("A", "B");
+        List<Played> played = List.of(
+                played(g1, "A", decided("d1")), played(g1, "B", decided("d2")),      // divergence
+                played(g2, "A", decided("same")),                                     // missing in B
+                played(g3, "A", timeout()),                                           // untestable: skipped in B by design
+                played(g3, "B", timeout()));                                          // (if it were ever played, it is still skipped)
+        Set<String> untestable = Set.of(g3.label());
+        List<String> m = DeterminismBattery.mismatches(list, arms, played, untestable);
+        Assert.assertEquals(m.size(), 2, "the divergence and the missing play, nothing for the untestable game");
+        Assert.assertTrue(m.get(0).startsWith("MISMATCH\t" + g1.label()), m.get(0));
+        Assert.assertTrue(m.get(0).contains("\tA=d1\tB=d2"), m.get(0));
+        Assert.assertTrue(m.get(1).startsWith("MISMATCH\t" + g2.label()), m.get(1));
+        Assert.assertTrue(m.get(1).contains("\tA=same\tB=missing"), m.get(1));
+        Assert.assertEquals(DeterminismBattery.mismatches(list, arms, played, Set.of()).size(), 2,
+                "unmarked, g3 still agrees: both arms played it and its two Timeouts digest alike, so the count stays 2, not 3");
+        // The production shape: the later arm never played the untestable game, so only the skip keeps it out of the report.
+        List<Played> asRun = played.subList(0, 4);
+        Assert.assertEquals(DeterminismBattery.mismatches(list, arms, asRun, untestable).size(), 2, "g3 is skipped, not missing in B");
+        Assert.assertEquals(DeterminismBattery.mismatches(list, arms, asRun, Set.of()).size(), 3, "without the skip g3 reads as missing in B");
+        List<String> p = DeterminismBattery.problems(played, untestable);
+        Assert.assertEquals(p.size(), 0, "the solo Timeout of the untestable game is not a problem");
+        Assert.assertEquals(DeterminismBattery.problems(played, Set.of()).size(), 2, "without the untestable set both Timeout plays are problems");
+    }
+
     @Test(timeOut = 600_000)
     public void aSoloTimeoutMakesTheGameUntestableAndItIsNotPlayedAgain() {
         List<Entry> list = podThenOneVsOne();
@@ -125,6 +171,29 @@ public class DeterminismBatteryTest {
         Assert.assertEquals(r.played().size(), 4);
         Assert.assertEquals(r.problems().size(), 2);
         Assert.assertFalse(r.passed());
+    }
+
+    @Test(timeOut = 600_000)
+    public void armAIsTheReferenceOnlyWhenItRunsFirst() {
+        // The same two-entry list with A second: B plays first, so there is no reference and nothing is untestable.
+        Report r = DeterminismBattery.run(podThenOneVsOne(), List.of("B", "A", "C"), 2, null);
+        Assert.assertEquals(r.untestable(), List.of(), "A ran second: no reference");
+        Assert.assertEquals(r.played().size(), 6, "every arm played both games");
+        Assert.assertEquals(r.problems().size(), 3, "the pod's Timeout in each of the three arms");
+        Assert.assertFalse(r.passed());
+    }
+
+    @Test(timeOut = 600_000)
+    public void theProductionShapeSkipsAnUntestableGameInEveryLaterArm() {
+        List<Entry> list = podThenOneVsOne();
+        String podLabel = list.get(0).label();
+        Report r = DeterminismBattery.run(list, List.of("A", "B", "C"), 2, null);
+        Assert.assertEquals(r.untestable(), List.of(podLabel));
+        Assert.assertEquals(r.played().stream().filter(p -> p.arm().equals("A")).count(), 2L);
+        Assert.assertEquals(r.played().stream().filter(p -> p.arm().equals("B")).count(), 1L, "B skipped the pod");
+        Assert.assertEquals(r.played().stream().filter(p -> p.arm().equals("C")).count(), 1L, "C skipped the pod too");
+        Assert.assertEquals(r.timings().stream().map(t -> t.games()).toList(), List.of(2, 1, 1));
+        Assert.assertTrue(r.passed());
     }
 
     /** Beyond the brief's four: arm C plays the list reversed, so with arms A,C it meets the two untestable pods

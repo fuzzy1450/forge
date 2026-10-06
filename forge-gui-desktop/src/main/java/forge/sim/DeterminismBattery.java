@@ -32,9 +32,13 @@ import forge.sim.GameRunner.SeatSpec;
  * A: one slot in list order, B: {@code slots} slots in list order, C: {@code slots} slots in
  * reversed order -- whose digests must be identical game for game. Arm A, when it is the first
  * arm run, is the reference (spec 7.1, 7.4): a game whose solo play ends in {@code Timeout} is
- * untestable, played in no later arm and compared nowhere, and a game it decided gets
- * {@code max(its list timeout, 3 x its solo wall)} seconds in each later arm. Without a leading A
- * every arm plays every game with its list timeout and every non-decided end is a problem.
+ * untestable, played in no later arm and compared nowhere, and a game whose solo play did not
+ * time out gets {@code max(its list timeout, 3 x its solo wall)} seconds in each later arm (an
+ * Error result is budgeted and played again too, and stays a problem). A game is untestable once
+ * a later arm meets it, so with {@code --arms A} alone a solo Timeout stays a problem (the replay
+ * subcommand of MTG_DeckMaker's sim_scope_replay_check.py runs that shape and compares against the
+ * store anyway). Without a leading A every arm plays every game with its list timeout and every
+ * non-decided end is a problem.
  *
  * <pre>
  * java ... forge.sim.DeterminismBattery [--arms A,B,C] [--slots 6] [--list games.tsv | --smoke] [--out dir]
@@ -58,7 +62,8 @@ public final class DeterminismBattery {
     public record ArmTiming(String arm, int slots, long wallMs, int games) { }
 
     /** {@code untestable} holds the labels, in list order, of the games whose solo play timed out (spec 7.1): they are
-     *  neither compared nor problems, so they never fail the run. */
+     *  neither compared nor problems, so they never fail the run. A game is listed once a later arm meets it, so a
+     *  solo-only run ({@code --arms A}) leaves its Timeout a problem. */
     public record Report(List<Entry> list, List<Played> played, List<ArmTiming> timings,
                          List<String> mismatches, List<String> problems, List<String> untestable, boolean poisoned) {
         public boolean passed() {
@@ -74,7 +79,7 @@ public final class DeterminismBattery {
     static final Set<String> DECIDED = Set.of("AllOpponentsLost", "WinsGameSpellEffect", "Draw");
     // The arms after the solo reference give a game max(its list timeout, this x its solo wall) seconds. The concurrent
     // arms ran a game a median 1.01x, p90 1.29x, max 1.68x its solo wall on the idle desktop and a median 1.4x, max 2.1x
-    // loaded (spec 7.1), so a game the solo arm decided cannot read as a divergence for want of time.
+    // loaded (spec 7.1), so a game whose solo play did not time out cannot read as a divergence for want of time.
     static final int CONCURRENT_BUDGET_FACTOR = 3;
 
     private DeterminismBattery() { }
