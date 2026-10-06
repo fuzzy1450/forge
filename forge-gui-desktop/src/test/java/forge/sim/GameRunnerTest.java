@@ -4,6 +4,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.testng.Assert;
@@ -179,5 +180,33 @@ public class GameRunnerTest {
         GameResult r = runner.play(spec(7_000_000L, 300));        // the refusals left the one slot free
         Assert.assertTrue(DECIDED.contains(r.endReason()), r.toString());
         Assert.assertNull(r.error(), r.toString());
+    }
+
+    @Test(timeOut = 300_000)
+    public void anObserverSeesTheGameBeforeItStartsOnTheGameThreadUnderItsScope() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        GameSpec spec = spec(7_000_000L, 300);
+        AtomicReference<String> thread = new AtomicReference<>();
+        AtomicBoolean underScope = new AtomicBoolean(false);
+        AtomicBoolean overBeforeStart = new AtomicBoolean(true);
+        AtomicBoolean sawStart = new AtomicBoolean(false);
+        Object startWatcher = new Object() {
+            @com.google.common.eventbus.Subscribe
+            public void onStarted(forge.game.event.GameEventGameStarted ev) {
+                sawStart.set(true);
+            }
+        };
+        GameResult observed = runner.play(spec, g -> {
+            thread.set(Thread.currentThread().getName());
+            underScope.set(SimScope.current() != null);
+            overBeforeStart.set(g.isGameOver());
+            g.subscribeToEvents(startWatcher);
+        });
+        Assert.assertTrue(thread.get().startsWith("Game-sim-"), thread.get());
+        Assert.assertTrue(underScope.get(), "the observer runs under the game's scope");
+        Assert.assertFalse(overBeforeStart.get(), "the observer runs before the game starts");
+        Assert.assertTrue(sawStart.get(), "a subscriber attached by the observer sees GameEventGameStarted");
+        GameResult plain = runner.play(spec);
+        Assert.assertEquals(observed.digest(), plain.digest(), "an observer that only listens changes no digest");
     }
 }

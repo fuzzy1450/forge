@@ -15,6 +15,7 @@ import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import com.google.common.eventbus.Subscribe;
 
@@ -221,10 +222,12 @@ public class GameRunner {
 
     // ------------------------------------------------------------------ play
 
-    /** Plays one game and returns its result. An interrupt of the calling thread while it waits is a cancellation
-     *  request: the game is cancelled as on a timeout, its slot is returned, and InterruptedException is thrown with
-     *  the interrupt status left set. */
-    public GameResult play(GameSpec spec) throws InterruptedException {
+    /** Plays one game and returns its result. {@code observer} runs on the game thread, under the game's scope, after
+     *  the game is created and before it starts -- where a stats subscriber attaches. A throwable from it ends the game
+     *  as an Error like any other. An interrupt of the calling thread while it waits is a cancellation request: the
+     *  game is cancelled as on a timeout, its slot is returned, and InterruptedException is thrown with the interrupt
+     *  status left set. */
+    public GameResult play(GameSpec spec, Consumer<Game> observer) throws InterruptedException {
         if (!booted) {
             throw new IllegalStateException("GameRunner.boot() first");
         }
@@ -244,7 +247,7 @@ public class GameRunner {
                 throw new PoisonedException();
             }
             SimScope scope = new SimScope(spec.seed());
-            Body body = new Body(spec, players, scope);
+            Body body = new Body(spec, players, scope, observer);
             Thread t = new Thread(body, "Game-sim-" + slot);       // the "Game" prefix: ThreadUtil.isGameThread()
             t.setDaemon(true);
             long violationsAtStart = SimScope.VIOLATIONS.get();
@@ -280,6 +283,11 @@ public class GameRunner {
         } finally {
             freeSlots.add(slot);                                     // capacity is guaranteed; unlike put, add cannot throw on a pending interrupt
         }
+    }
+
+    /** Plays one game and returns its result, with nothing observing it: {@code play(spec, g -> { })}. */
+    public GameResult play(GameSpec spec) throws InterruptedException {
+        return play(spec, g -> { });
     }
 
     /** Joins for at most {@code ms} whatever the caller's interrupt status: an interrupt is remembered, not acted on,
@@ -365,15 +373,17 @@ public class GameRunner {
         final GameSpec spec;
         final List<RegisteredPlayer> players;
         final SimScope scope;
+        final Consumer<Game> observer;
         final Stats stats = new Stats();
         volatile Game game;
         volatile String error;
         volatile boolean finished;
 
-        Body(GameSpec spec, List<RegisteredPlayer> players, SimScope scope) {
+        Body(GameSpec spec, List<RegisteredPlayer> players, SimScope scope, Consumer<Game> observer) {
             this.spec = spec;
             this.players = players;
             this.scope = scope;
+            this.observer = observer;
         }
 
         @Override
@@ -392,6 +402,7 @@ public class GameRunner {
                     g.AI_CAN_USE_TIMEOUT = false;
                     g.subscribeToEvents(stats);
                     game = g;
+                    observer.accept(g);                               // the records' subscriber attaches here (spec 3.2)
                     match.startGame(g);
                 } catch (GameAbandoned abandoned) {
                     return;                                           // cancelled from outside: the verdict is already Timeout
