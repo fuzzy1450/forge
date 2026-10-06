@@ -75,6 +75,12 @@ public final class GameRecords {
             for (int i = 0; i < nSeats; i++) cards.add(new TreeMap<>());
         }
 
+        /** A Stats with no game: JobRunner's, for a game whose observer never ran. {@link GameRecords#record} reads it
+         *  as it reads a timed-out game's, touching no live state. */
+        Stats(int nSeats) {
+            this(null, nSeats);
+        }
+
         static int seatOf(String playerName) {
             return GameRunner.seatOf(playerName);
         }
@@ -242,7 +248,9 @@ public final class GameRecords {
         // on that path we report what the subscriber already collected and touch no
         // live engine state — no getOutcome(), no getRegisteredPlayers(), no
         // getCardsIn(). final_life and final_zone stay null for a timed-out game.
-        GameOutcome out = timedOut ? null : stats.game.getOutcome();
+        // A Stats with no game (the observer never ran) is read the same way.
+        boolean live = !timedOut && stats.game != null;
+        GameOutcome out = live ? stats.game.getOutcome() : null;
         Integer winner = null;
         String reason;
         if (timedOut) {
@@ -267,7 +275,7 @@ public final class GameRecords {
         int lastTurn = out != null ? out.getLastTurnNumber() : stats.turn;
         // final life / final zones / late eliminations — live state, so not after a timeout
         Player[] bySeat = new Player[stats.nSeats];
-        if (!timedOut) {
+        if (live) {
             for (Player p : stats.game.getRegisteredPlayers()) {
                 int seat = Stats.seatOf(p.getName());
                 if (seat >= 0 && seat < stats.nSeats) bySeat[seat] = p;
