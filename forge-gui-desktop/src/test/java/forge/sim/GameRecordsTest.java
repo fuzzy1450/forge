@@ -66,11 +66,19 @@ public class GameRecordsTest {
         Assert.assertEquals(rec.get("game"), 0);
         Assert.assertEquals(rec.get("seed"), 7_000_000L);
         Assert.assertTrue(List.of("AllOpponentsLost", "WinsGameSpellEffect", "Draw").contains(rec.get("end_reason")), String.valueOf(rec.get("end_reason")));
-        // The record finds its winner by player name, the runner by registration order: the two must agree.
-        Assert.assertEquals(rec.get("winner_seat"), r.winnerSeat(), "the record's winner is the runner's");
-        Assert.assertEquals(rec.get("end_reason"), r.endReason(), "the record's end_reason is the runner's");
-        Assert.assertEquals(rec.get("turns"), r.turns(), "the record's turns are the runner's");
-        Assert.assertEquals(rec.get("first_seat"), r.firstSeat(), "the record's first_seat is the runner's");
+        // The record finds its winner by player name, the runner by registration order: the two must agree, on two
+        // decided games won by different seats, so that a record naming one seat whatever happened cannot pass.
+        Recorded other = play(runner, GameRunnerTest.spec(7_000_003L, 300), 1);
+        for (Recorded p : List.of(played, other)) {
+            Assert.assertEquals(p.rec().get("winner_seat"), p.result().winnerSeat(), "the record's winner is the runner's");
+            Assert.assertEquals(p.rec().get("end_reason"), p.result().endReason(), "the record's end_reason is the runner's");
+            Assert.assertEquals(p.rec().get("turns"), p.result().turns(), "the record's turns are the runner's");
+            Assert.assertEquals(p.rec().get("first_seat"), p.result().firstSeat(), "the record's first_seat is the runner's");
+        }
+        Assert.assertNotNull(r.winnerSeat(), "seed 7_000_000 has a winner");
+        Assert.assertNotNull(other.result().winnerSeat(), "seed 7_000_003 has a winner");
+        Assert.assertNotEquals(other.result().winnerSeat(), r.winnerSeat(),
+                "seeds 7_000_000 and 7_000_003 are won by different seats; if an engine change breaks that, pick two that are");
         if (rec.get("winner_seat") != null) {
             Assert.assertNotNull(rec.get("win_reason"), "a decided two-seat game says how the loser lost");
         }
@@ -165,7 +173,8 @@ public class GameRecordsTest {
         Assert.assertEquals(GameRecords.Json.write("a\nb"), "\"a\\nb\"");
         Assert.assertEquals(GameRecords.Json.write("a\rb"), "\"a\\rb\"");
         Assert.assertEquals(GameRecords.Json.write("a\tb"), "\"a\\tb\"");
-        Assert.assertEquals(GameRecords.Json.write("a" + (char) 1 + "b"), "\"a\\" + "u0001b\"");   // a control character as Harness.Json writes it
+        // A control character as Harness.Json writes it: four hex digits, lower case (ESC's hex has a letter).
+        Assert.assertEquals(GameRecords.Json.write("a" + (char) 0x1b + "b"), "\"a\\" + "u001bb\"");
     }
 
     @Test
