@@ -69,7 +69,13 @@ public class GameRunnerTest {
     @Test(timeOut = 120_000)
     public void timeoutIsCooperativeAndLeavesNoThread() throws Exception {
         GameRunner runner = new GameRunner(1);
-        GameResult r = runner.play(spec(7_000_001L, 1));      // a Commander game never ends inside one second
+        List<Path> precons = Precons.commander();
+        GameSpec pod = new GameSpec(7_000_001L, 1, List.of(
+                new SeatSpec(precons.get(0), "Default", "default"),
+                new SeatSpec(precons.get(1), "Default", "default"),
+                new SeatSpec(precons.get(2), "Default", "default"),
+                new SeatSpec(precons.get(3), "Default", "default")));
+        GameResult r = runner.play(pod);                      // a four-seat pod runs well over ten seconds, so the one-second timeout always fires
         Assert.assertTrue(r.timedOut(), r.toString());
         Assert.assertEquals(r.endReason(), "Timeout");
         Assert.assertNull(r.winnerSeat());
