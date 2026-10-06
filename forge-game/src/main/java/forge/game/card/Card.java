@@ -7486,13 +7486,36 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return CardFactory.getCard(pc, owner, owner == null ? null : owner.getGame());
     }
 
+    // the GUI's cache: a simulated game keeps its own (see uiCards())
     private static final Map<PaperCard, Card> cp2card = new ConcurrentHashMap<>();
+
+    /**
+     * The UI-card cache this thread reads and fills, picked as AiCache.cache() picks its map. A miss builds a whole
+     * Card, whose spell, abilities, triggers, statics and replacement effects each take an id from the scope bound on
+     * this thread, and a game reaches this (CardView's merged view of a mutated permanent). With one process-wide map
+     * only the first game in the JVM to view a card paid those ids, so a later game's id stream differed from a fresh
+     * JVM's first game. A simulated game therefore keeps its own map in its SimScope, empty at its start as the static
+     * is in a fresh JVM; an unbound thread under strict mode builds without caching; unbound otherwise is the GUI: the
+     * static map, as before.
+     */
+    private static Map<PaperCard, Card> uiCards() {
+        SimScope s = SimScope.current();
+        if (s != null) {
+            return s.scratch(Card.class, HashMap::new);
+        }
+        return SimScope.isStrict() ? null : cp2card;
+    }
+
     public static Card getCardForUi(IPaperCard pc) {
         if (pc instanceof PaperCard) {
-            Card res = cp2card.get(pc);
+            Map<PaperCard, Card> cache = uiCards();
+            if (cache == null) {
+                return fromPaperCard(pc, null);
+            }
+            Card res = cache.get(pc);
             if (res == null) {
                 res = fromPaperCard(pc, null);
-                cp2card.put((PaperCard) pc, res);
+                cache.put((PaperCard) pc, res);
             }
             return res;
         }
