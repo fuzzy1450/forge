@@ -1,6 +1,8 @@
 package forge.sim;
 
 import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -76,6 +78,20 @@ public final class GameRunner {
     static final List<ZoneType> DIGEST_ZONES = List.of(ZoneType.Library, ZoneType.Hand, ZoneType.Battlefield,
             ZoneType.Graveyard, ZoneType.Exile, ZoneType.Command);
 
+    // Encoded at class load: halt() can run after an OutOfMemoryError, and a line built at that moment can be the
+    // allocation that fails again (as sim/java/mtgsim/Harness.java).
+    private static final FileOutputStream RAW_ERR = new FileOutputStream(FileDescriptor.err);
+    private static final byte[] UNCAUGHT_LINE =
+            ("GameRunner: uncaught throwable; halting with exit " + EXIT_UNCAUGHT + "\n").getBytes(StandardCharsets.UTF_8);
+    private static final byte[] OOM_LINE =
+            ("GameRunner: java.lang.OutOfMemoryError; halting with exit " + EXIT_UNCAUGHT + "\n").getBytes(StandardCharsets.UTF_8);
+
+    /** What {@link #installHaltOnUncaught} installs: report the throwable and halt with {@link #EXIT_UNCAUGHT}. */
+    public static final Thread.UncaughtExceptionHandler HALT_ON_UNCAUGHT = GameRunner::halt;
+
+    /** True once {@link #installHaltOnUncaught} has run, so that {@link #boot} re-asserts the handler. Package-private for the test. */
+    static volatile boolean haltInstalled;
+
     private static volatile boolean booted = false;
 
     private final int slotCount;
@@ -108,8 +124,9 @@ public final class GameRunner {
 
     // ------------------------------------------------------------------ boot
 
-    /** Today's harness boot, once per JVM: the GUI interface Forge's model needs, the card
-     *  database, a check that the Default AI profile exists, then strict mode on. */
+    /** Today's harness boot: the GUI interface Forge's model needs, the card database and a check that the
+     *  Default AI profile exists, once per JVM. On every call it re-arms strict mode and, if
+     *  {@link #installHaltOnUncaught} was asked for, the halt handler. */
     public static synchronized void boot() {
         if (!booted) {
             System.setProperty("java.util.Arrays.useLegacyMergeSort", "true");
@@ -129,22 +146,51 @@ public final class GameRunner {
             booted = true;
         }
         SimScope.setStrict(true);   // on every call: a test class may have relaxed it after itself
+        if (haltInstalled) {
+            // Forge's boot may install its own default handler (a modal Bug Report dialog nobody answers):
+            // the runner's wins whenever it was asked for.
+            Thread.setDefaultUncaughtExceptionHandler(HALT_ON_UNCAUGHT);
+        }
     }
 
     /** Today's HALT_ON_UNCAUGHT for a process that only plays games: anything a game thread did
      *  not catch (an OutOfMemoryError above all) is reported and the JVM halts with 4, because a
-     *  shared heap's state is unknowable after one. The battery tool installs this; tests do not. */
+     *  shared heap's state is unknowable after one. The battery tool installs this, before or after
+     *  {@link #boot}: boot re-asserts it. */
     public static void installHaltOnUncaught() {
-        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
-            System.err.println("uncaught on " + t.getName() + ": " + e);
+        try {
+            // Forge's forge.error.ExceptionHandler installs itself as the JVM's default handler from its static
+            // initializer. Loading it first uses that up, so nothing later can install Forge's handler over ours.
+            Class.forName("forge.error.ExceptionHandler", true, GameRunner.class.getClassLoader());
+        } catch (ClassNotFoundException | LinkageError absent) {
+            // no Forge handler to pre-empt
+        }
+        Thread.setDefaultUncaughtExceptionHandler(HALT_ON_UNCAUGHT);
+        Thread.currentThread().setUncaughtExceptionHandler(HALT_ON_UNCAUGHT);
+        haltInstalled = true;
+    }
+
+    /** Reports a throwable that reached no catch and halts with {@link #EXIT_UNCAUGHT}. The first write is a line
+     *  encoded at class load, so it still goes out when the heap is gone; the thread and the stack trace come after
+     *  it, as best effort. Runtime.halt rather than System.exit, so no shutdown hook can hold the JVM open. */
+    static void halt(Thread t, Throwable e) {
+        try {
+            RAW_ERR.write(e instanceof OutOfMemoryError ? OOM_LINE : UNCAUGHT_LINE);
+            System.err.println("in thread \"" + t.getName() + "\":");
             e.printStackTrace(System.err);
             System.err.flush();
+        } catch (Throwable reportFailed) {
+            // the fixed line is the part that has to get out
+        } finally {
             Runtime.getRuntime().halt(EXIT_UNCAUGHT);
-        });
+        }
     }
 
     // ------------------------------------------------------------------ play
 
+    /** Plays one game and returns its result. An interrupt of the calling thread while it waits is a cancellation
+     *  request: the game is cancelled as on a timeout, its slot is returned, and InterruptedException is thrown with
+     *  the interrupt status left set. */
     public GameResult play(GameSpec spec) throws InterruptedException {
         if (!booted) {
             throw new IllegalStateException("GameRunner.boot() first");
@@ -161,28 +207,68 @@ public final class GameRunner {
         List<RegisteredPlayer> players = registerPlayers(spec);     // refuses a bad deck or profile before a slot is taken
         int slot = freeSlots.take();
         try {
+            if (poisoned) {                                          // another game can poison the runner while this one waits for a slot
+                throw new PoisonedException();
+            }
             SimScope scope = new SimScope(spec.seed());
             Body body = new Body(spec, players, scope);
             Thread t = new Thread(body, "Game-sim-" + slot);       // the "Game" prefix: ThreadUtil.isGameThread()
             t.setDaemon(true);
             long t0 = System.currentTimeMillis();
             t.start();
-            t.join(TimeUnit.SECONDS.toMillis(spec.timeoutSeconds()));
+            boolean interrupted = false;
+            try {
+                t.join(TimeUnit.SECONDS.toMillis(spec.timeoutSeconds()));
+            } catch (InterruptedException ie) {
+                interrupted = true;                                  // a cancellation request: cancel the game below, then report it
+            }
             boolean timedOut = t.isAlive();
             if (timedOut) {
                 scope.cancel();                                      // every draw and id request now throws GameAbandoned
                 Game g = body.game;
                 if (g != null) {
-                    g.setGameOver(GameEndReason.Draw);               // the phase loop exits at its next check
+                    try {
+                        g.setGameOver(GameEndReason.Draw);           // the phase loop exits at its next check
+                    } catch (RuntimeException ignored) {
+                        // the engine is still moving under us: the grace join and the poison check below must run regardless
+                    }
                 }
-                t.join(GRACE_MS);
+                joinUninterruptibly(t, GRACE_MS);
                 if (t.isAlive()) {
                     poisoned = true;
                 }
             }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+                throw new InterruptedException("interrupted while waiting for the game with seed " + spec.seed());
+            }
             return body.result(timedOut, System.currentTimeMillis() - t0);
         } finally {
-            freeSlots.put(slot);
+            freeSlots.add(slot);                                     // capacity is guaranteed; unlike put, add cannot throw on a pending interrupt
+        }
+    }
+
+    /** Joins for at most {@code ms} whatever the caller's interrupt status: an interrupt is remembered, not acted on,
+     *  and the caller's interrupt flag is set again before returning. */
+    private static void joinUninterruptibly(Thread t, long ms) {
+        boolean interrupted = false;
+        try {
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ms);
+            while (t.isAlive()) {
+                long remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+                if (remaining <= 0) {
+                    return;
+                }
+                try {
+                    t.join(remaining);
+                } catch (InterruptedException ie) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -279,7 +365,7 @@ public final class GameRunner {
                     throw oom;                                        // not a game result: the uncaught handler halts
                 } catch (Throwable t) {
                     Throwable root = t;
-                    while (root.getCause() != null && root.getCause() != root) {
+                    for (int hops = 0; hops < 16 && root.getCause() != null && root.getCause() != root; hops++) {
                         root = root.getCause();
                     }
                     String msg = t.getClass().getName() + ": " + t.getMessage();
@@ -307,7 +393,7 @@ public final class GameRunner {
                 String err = timedOut ? null : (error != null ? error : "game ended without finishing");
                 List<String> lines = List.of(outcomeLine(null, reason, stats.turn, stats.firstSeat, err));
                 return new GameResult(spec.seed(), null, reason, stats.turn, stats.firstSeat, timedOut, err, ms,
-                        reason.toUpperCase(), lines);
+                        timedOut ? "TIMEOUT" : "ERROR", lines);
             }
             GameOutcome out = g.getOutcome();
             Integer winner = null;
@@ -366,7 +452,7 @@ public final class GameRunner {
                 StringBuilder sb = new StringBuilder("zone\t").append(seat).append('\t').append(zt.name()).append('\t');
                 if (p != null) {
                     boolean first = true;
-                    for (Card c : p.getCardsIn(zt)) {
+                    for (Card c : p.getCardsIn(zt, false)) {          // false: phased-out permanents are in the zone too (spec 7.3)
                         if (!first) {
                             sb.append('|');
                         }
