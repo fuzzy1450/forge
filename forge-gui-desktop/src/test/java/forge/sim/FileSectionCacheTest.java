@@ -20,7 +20,8 @@ import forge.util.FileSection;
 /** FileSection.parseToMap memoizes parsed lines in a static table that every game thread fills while
  *  cards are built. The table must be safe to fill from several threads at once and no write may be
  *  lost. A lost write shows in no parsed value (the line is simply parsed again), so the fill test
- *  counts the table's cells instead. */
+ *  checks that each cell it wrote is present; a count of the table's cells would let any other
+ *  thread's stray cell spoil it. */
 public class FileSectionCacheTest {
 
     @Test(timeOut = 120_000)
@@ -28,7 +29,6 @@ public class FileSectionCacheTest {
         Field f = FileSection.class.getDeclaredField("parseToMapCache");
         f.setAccessible(true);
         Table<?, ?, ?> table = (Table<?, ?, ?>) f.get(null);
-        int before = table.size();
         final int threads = 8, lines = 4_000;
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         CyclicBarrier go = new CyclicBarrier(threads);                  // every thread starts writing at the same moment
@@ -50,7 +50,15 @@ public class FileSectionCacheTest {
         } finally {
             pool.shutdownNow();
         }
-        Assert.assertEquals(table.size() - before, threads * lines, "cells lost to concurrent writes");
+        int missing = 0;
+        for (int id = 0; id < threads; id++) {
+            for (int i = 0; i < lines; i++) {
+                if (!table.contains("T" + id + ":" + i, FileSection.COLON_KV_SEPARATOR)) {
+                    missing++;
+                }
+            }
+        }
+        Assert.assertEquals(missing, 0, "cells lost to concurrent writes");
     }
 
     @Test

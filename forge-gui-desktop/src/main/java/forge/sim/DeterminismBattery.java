@@ -164,6 +164,15 @@ public final class DeterminismBattery {
         return new GameSpec(spec.seed(), budgetSeconds(spec.timeoutSeconds(), soloWallMs), spec.seats());
     }
 
+    /** What a later arm plays for {@code e} given the reference arm's result for it: the list spec when there is no
+     *  reference, null (untestable) when the solo play timed out, else the spec with the budgeted timeout. */
+    static GameSpec specAfterReference(Entry e, GameResult solo) {
+        if (solo == null) {
+            return e.spec();
+        }
+        return "Timeout".equals(solo.endReason()) ? null : budgeted(e.spec(), solo.ms());
+    }
+
     public static Report run(List<Entry> list, List<String> arms, int slots, PrintStream progress) {
         GameRunner.boot();
         List<Played> played = new ArrayList<>();
@@ -187,13 +196,10 @@ public final class DeterminismBattery {
             long t0 = System.currentTimeMillis();
             List<Future<Played>> futures = new ArrayList<>();
             for (Entry e : order) {
-                GameResult solo = reference.get(e.label());
-                if (solo == null) {
-                    futures.add(pool.submit(() -> new Played(e, arm, runner.play(e.spec()))));
-                } else if ("Timeout".equals(solo.endReason())) {
+                GameSpec spec = specAfterReference(e, reference.get(e.label()));
+                if (spec == null) {
                     untestable.add(e.label());
                 } else {
-                    GameSpec spec = budgeted(e.spec(), solo.ms());
                     futures.add(pool.submit(() -> new Played(e, arm, runner.play(spec))));
                 }
             }

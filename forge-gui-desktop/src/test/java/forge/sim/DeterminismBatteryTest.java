@@ -12,6 +12,7 @@ import org.testng.annotations.Test;
 
 import forge.sim.DeterminismBattery.Entry;
 import forge.sim.DeterminismBattery.Report;
+import forge.sim.GameRunner.GameResult;
 import forge.sim.GameRunner.GameSpec;
 import forge.sim.GameRunner.SeatSpec;
 import forge.util.SimScope;
@@ -55,6 +56,20 @@ public class DeterminismBatteryTest {
         return List.of(entry("pod-default", precons.subList(0, 4), 1), entry("1v1-default", precons.subList(0, 2), 300));
     }
 
+    // Fabricated solo results, built with the record's constructor: the fields GameRunner.Body.result fills for a Timeout,
+    // a decided game and an Error. Digests and lines are placeholders; only the end reason and the wall matter to the rule.
+    static GameResult soloTimeout(long ms) {
+        return new GameResult(SEED, null, "Timeout", 0, 0, true, null, ms, "TIMEOUT", List.of());
+    }
+
+    static GameResult soloDecided(long ms) {
+        return new GameResult(SEED, 0, "AllOpponentsLost", 24, 0, false, null, ms, "placeholder", List.of());
+    }
+
+    static GameResult soloError(long ms) {
+        return new GameResult(SEED, null, "Error", 0, 0, false, "game ended without finishing", ms, "ERROR", List.of());
+    }
+
     @Test
     public void budgetIsTheListTimeoutOrThreeTimesTheSoloWall() {
         Assert.assertEquals(DeterminismBattery.budgetSeconds(1200, 100_000L), 1200);
@@ -71,6 +86,18 @@ public class DeterminismBatteryTest {
         Assert.assertEquals(b.seats(), spec.seats());
         Assert.assertEquals(b.timeoutSeconds(), 2655);
         Assert.assertEquals(DeterminismBattery.budgeted(spec, 1_000L).timeoutSeconds(), 300, "a fast solo game keeps the list timeout");
+    }
+
+    @Test
+    public void specAfterReferenceBudgetsDecidedGamesSkipsSoloTimeoutsAndKeepsErrorsPlayable() {
+        Entry e = entry("1v1-default", Precons.commander().subList(0, 2), 300);
+        Assert.assertSame(DeterminismBattery.specAfterReference(e, null), e.spec(), "no reference: the list spec");
+        Assert.assertNull(DeterminismBattery.specAfterReference(e, soloTimeout(1_200_009L)), "a solo Timeout: untestable");
+        Assert.assertEquals(DeterminismBattery.specAfterReference(e, soloDecided(884_927L)).timeoutSeconds(), 2655, "a decided game: the budget");
+        GameSpec err = DeterminismBattery.specAfterReference(e, soloError(1_000L));
+        Assert.assertNotNull(err, "a solo Error is played again and stays a problem; it is never untestable");
+        Assert.assertEquals(err.timeoutSeconds(), 300);
+        Assert.assertEquals(DeterminismBattery.specAfterReference(e, soloDecided(1_000L)).seats(), e.spec().seats());
     }
 
     @Test(timeOut = 600_000)
