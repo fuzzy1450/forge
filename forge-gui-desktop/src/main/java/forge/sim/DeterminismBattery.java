@@ -21,6 +21,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
 import forge.sim.GameRunner.GameResult;
@@ -180,7 +181,18 @@ public final class DeterminismBattery {
         return "Timeout".equals(solo.endReason()) ? null : budgeted(e.spec(), solo.ms());
     }
 
+    /** Plays {@code list} through {@code arms} (see the class comment) on a new runner per arm. */
     public static Report run(List<Entry> list, List<String> arms, int slots, PrintStream progress) {
+        return run(list, arms, slots, progress, GameRunner::new);
+    }
+
+    /** {@link #run(List, List, int, PrintStream)} with the runner each arm plays on made by {@code runnerFactory} from
+     *  the arm's slot count: the seam DeterminismBatteryTest poisons a runner through. Once a runner is poisoned (spec
+     *  6.3: a game thread outlived its grace period, and the runner refuses every game from then on) the run ends: the
+     *  arm's pool is stopped, what was played is kept, the arms left are skipped and the report is poisoned. Such a
+     *  report compares only the arms that played every game they were given: a game the poison kept from an arm is not
+     *  missing from it, as an untestable game is not. */
+    static Report run(List<Entry> list, List<String> arms, int slots, PrintStream progress, IntFunction<GameRunner> runnerFactory) {
         GameRunner.boot();
         List<Played> played = new ArrayList<>();
         List<ArmTiming> timings = new ArrayList<>();
@@ -190,7 +202,8 @@ public final class DeterminismBattery {
         Map<String, GameResult> reference = new HashMap<>();
         Set<String> untestable = new LinkedHashSet<>();
         boolean poisoned = false;
-        for (int i = 0; i < arms.size(); i++) {
+        int armsCompared = 0, playsCompared = 0;          // the arms that played every game, and their plays
+        for (int i = 0; i < arms.size() && !poisoned; i++) {
             String arm = arms.get(i);
             boolean fillsReference = i == 0 && arm.equals("A");
             int armSlots = arm.equals("A") ? 1 : slots;
@@ -198,21 +211,37 @@ public final class DeterminismBattery {
             if (arm.equals("C")) {
                 Collections.reverse(order);
             }
-            GameRunner runner = new GameRunner(armSlots);
+            GameRunner runner = runnerFactory.apply(armSlots);
             ExecutorService pool = Executors.newFixedThreadPool(armSlots);
             long t0 = System.currentTimeMillis();
-            List<Future<Played>> futures = new ArrayList<>();
-            for (Entry e : order) {
-                GameSpec spec = specAfterReference(e, reference.get(e.label()));
-                if (spec == null) {
-                    untestable.add(e.label());
-                } else {
-                    futures.add(pool.submit(() -> new Played(e, arm, runner.play(spec))));
+            int playsBefore = played.size();
+            boolean refused = false;
+            try {
+                List<Future<Played>> futures = new ArrayList<>();
+                for (Entry e : order) {
+                    GameSpec spec = specAfterReference(e, reference.get(e.label()));
+                    if (spec == null) {
+                        untestable.add(e.label());
+                    } else {
+                        futures.add(pool.submit(() -> new Played(e, arm, runner.play(spec))));
+                    }
                 }
-            }
-            for (Future<Played> f : futures) {
-                try {
-                    Played p = f.get();
+                for (Future<Played> f : futures) {
+                    Played p;
+                    try {
+                        p = f.get();
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("interrupted while arm " + arm + " was playing", ie);
+                    } catch (ExecutionException ee) {
+                        if (ee.getCause() instanceof GameRunner.PoisonedException) {
+                            // Every game before this one in the arm's order was waited for and is recorded; this one
+                            // and the rest are refused, or cancelled by the shutdown below.
+                            refused = true;
+                            break;
+                        }
+                        throw new IllegalStateException("arm " + arm + " could not play a game: " + ee.getCause(), ee.getCause());
+                    }
                     played.add(p);
                     if (fillsReference) {
                         reference.put(p.entry().label(), p.result());
@@ -221,20 +250,23 @@ public final class DeterminismBattery {
                         progress.println(gameLine(p));
                         progress.flush();
                     }
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("interrupted while arm " + arm + " was playing", ie);
-                } catch (ExecutionException ee) {
-                    throw new IllegalStateException("arm " + arm + " could not play a game: " + ee.getCause(), ee.getCause());
                 }
+            } finally {
+                // Whatever ended the arm, no queued game starts and none in flight outlives it: the pool's threads are
+                // not daemons, so an exception must not leave them playing on.
+                pool.shutdownNow();
             }
-            pool.shutdown();
-            timings.add(new ArmTiming(arm, armSlots, System.currentTimeMillis() - t0, futures.size()));
-            poisoned |= runner.isPoisoned();
+            timings.add(new ArmTiming(arm, armSlots, System.currentTimeMillis() - t0, played.size() - playsBefore));
+            poisoned = refused || runner.isPoisoned();     // one poisoned arm poisons the run
+            if (!refused) {
+                armsCompared = i + 1;
+                playsCompared = played.size();
+            }
         }
         List<String> untestableInListOrder = list.stream().map(Entry::label).filter(untestable::contains).collect(Collectors.toList());
-        return new Report(list, played, timings, mismatches(list, arms, played, untestable), problems(played, untestable),
-                untestableInListOrder, poisoned);
+        return new Report(list, played, timings,
+                mismatches(list, arms.subList(0, armsCompared), played.subList(0, playsCompared), untestable),
+                problems(played, untestable), untestableInListOrder, poisoned);
     }
 
     /** One play's {@code GAME} line; a play during which strict mode refused an access gets one more column,

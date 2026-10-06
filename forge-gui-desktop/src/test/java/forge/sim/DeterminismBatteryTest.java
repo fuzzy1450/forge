@@ -4,6 +4,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import org.testng.Assert;
@@ -227,5 +228,39 @@ public class DeterminismBatteryTest {
         Assert.assertEquals(r.mismatches(), List.of());
         Assert.assertTrue(r.passed());
         Assert.assertFalse(r.poisoned());
+    }
+
+    /** A runner that poisons itself on its second play, as a game thread that outlived its grace period would: its
+     *  own poison check then refuses that play and every later one with a PoisonedException. */
+    static GameRunner poisonedOnSecondPlay(int slots) {
+        return new GameRunner(slots) {
+            private final AtomicInteger plays = new AtomicInteger();
+
+            @Override
+            public GameResult play(GameSpec spec) throws InterruptedException {
+                if (plays.incrementAndGet() == 2) {
+                    poisonForTest();
+                }
+                return super.play(spec);
+            }
+        };
+    }
+
+    @Test(timeOut = 600_000)
+    public void aPoisonedRunnerEndsTheRunWithAPoisonedReport() {
+        List<Path> precons = Precons.commander();
+        List<Entry> list = List.of(entry("1v1-default", precons.subList(0, 2), SEED, 300),
+                entry("1v1-default", precons.subList(0, 2), SEED + 1, 300),
+                entry("1v1-default", precons.subList(0, 2), SEED + 2, 300));
+        Report r = DeterminismBattery.run(list, List.of("A", "B", "C"), 2, null, DeterminismBatteryTest::poisonedOnSecondPlay);
+        Assert.assertTrue(r.poisoned());
+        Assert.assertFalse(r.passed());
+        Assert.assertEquals(r.played().size(), 1, "the game played before the poison is recorded, the refused ones are not");
+        Assert.assertEquals(r.played().get(0).arm(), "A");
+        Assert.assertEquals(r.played().get(0).entry().label(), list.get(0).label());
+        Assert.assertEquals(r.timings().size(), 1, "arms B and C never ran");
+        Assert.assertEquals(r.timings().get(0).games(), 1, "arm A's timing counts the game it played");
+        Assert.assertEquals(r.mismatches(), List.of(), "an arm the poison stopped, and the arms it skipped, compare nothing");
+        Assert.assertEquals(r.problems(), List.of());
     }
 }

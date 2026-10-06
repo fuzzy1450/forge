@@ -54,9 +54,10 @@ import forge.util.SimScope;
  * Plays Commander games in THIS JVM, several at once, each on its own thread under its own
  * {@link SimScope}. {@link #boot()} once, then {@link #play} as often as wanted; at most
  * {@code slots} games run at a time. Design: MTG_DeckMaker's
- * docs/superpowers/specs/2026-10-05-sim-scope-design.md, sections 5 and 6.
+ * docs/superpowers/specs/2026-10-05-sim-scope-design.md, sections 5 and 6. Not final only so that
+ * DeterminismBatteryTest can poison a runner on a chosen play.
  */
-public final class GameRunner {
+public class GameRunner {
 
     public record SeatSpec(Path deckFile, String profile, String ai) { }
 
@@ -121,6 +122,12 @@ public final class GameRunner {
 
     public boolean isPoisoned() {
         return poisoned;
+    }
+
+    /** Test seam (DeterminismBatteryTest): marks this runner poisoned, as a game thread that outlived its grace
+     *  period would, so that {@link #play} refuses every game from now on. Never called outside the tests. */
+    void poisonForTest() {
+        poisoned = true;
     }
 
     /** The process exit code once every game in flight has finished: 5 if poisoned, else 0. */
