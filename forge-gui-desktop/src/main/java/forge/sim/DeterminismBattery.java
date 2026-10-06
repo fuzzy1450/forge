@@ -55,7 +55,10 @@ public final class DeterminismBattery {
     }
 
     static final long SEED_BASE = 7_000_000L;
-    static final int TIMEOUT_S = 300;
+    // Per game. The concurrent arms run a game a median 1.4x slower than solo (p90 1.7x, max 2.1x on the
+    // 2026-10-05 desktop), so a game that takes 150-270 s alone would time out only in arms B and C at the
+    // farm's 300 s: a wall-clock artifact, not a determinism signal. A real hang still ends in a Timeout.
+    static final int TIMEOUT_S = 1200;
     static final Set<String> DECIDED = Set.of("AllOpponentsLost", "WinsGameSpellEffect", "Draw");
 
     private DeterminismBattery() { }
