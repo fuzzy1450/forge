@@ -49,7 +49,8 @@ import forge.util.SimScope;
  *  <p>StaticData is not read-only after boot by itself: TokenDb loads tokens and CardDb answers
  *  legend-rule names lazily, from whichever game thread asks first. {@code bootPreloadsEveryEditionToken}
  *  pins that boot loads every token an edition lists; {@code tokensAndLegendRuleNamesAgreeAcrossThreads}
- *  has eight threads ask for the same tokens and names at once. */
+ *  has eight threads ask for the same tokens and names at once; {@code aTokenNoEditionListsIsCreatedOnceInEveryFreshTokenDb}
+ *  races the once-only fill of tokens no edition lists in twenty fresh TokenDbs, so a missing lock fails every run. */
 public class CacheConcurrencyTest {
 
     @BeforeClass
@@ -149,6 +150,52 @@ public class CacheConcurrencyTest {
         Object map = f.get(cards);
         Assert.assertTrue(map instanceof ConcurrentMap, "CardDb#nonLegendaryCreatureNames is written from every game's"
                 + " legend-rule check, so it must be a ConcurrentMap, but is " + map.getClass().getName());
+    }
+
+    /** The once-only fill of tokens no edition lists, raced in twenty fresh TokenDbs: in each, eight threads ask for
+     *  every such token at the same moment, and no two may be handed different objects for one token. A single race
+     *  missed a removed lock about a third of the time; twenty make a miss negligible. */
+    @Test(timeOut = 120_000)
+    public void aTokenNoEditionListsIsCreatedOnceInEveryFreshTokenDb() throws Exception {
+        TokenDb booted = StaticData.instance().getAllTokens();
+        CardEdition.Collection editions = StaticData.instance().getEditions();
+        Set<String> inSomeEdition = new HashSet<>();
+        for (CardEdition e : editions) {
+            inSomeEdition.addAll(e.getTokens().keySet());
+        }
+        List<String> unlisted = booted.getRules().keySet().stream().filter(n -> !inSomeEdition.contains(n)).sorted()
+                .collect(Collectors.toList());
+        Assert.assertFalse(unlisted.isEmpty(), "Forge has token scripts that no edition lists");
+        final int threads = 8, dbs = 20;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            for (int d = 0; d < dbs; d++) {
+                TokenDb fresh = new TokenDb(booted.getRules(), editions);
+                GameRunner.preloadTokens(fresh, editions);                // as boot leaves the real one
+                CyclicBarrier go = new CyclicBarrier(threads);            // every thread asks at the same moment
+                List<Future<List<PaperToken>>> done = new ArrayList<>();
+                for (int t = 0; t < threads; t++) {
+                    done.add(pool.submit(() -> {
+                        go.await();
+                        List<PaperToken> seen = new ArrayList<>();
+                        for (String name : unlisted) {
+                            seen.add(fresh.getToken(name));
+                        }
+                        return seen;
+                    }));
+                }
+                List<PaperToken> first = done.get(0).get(100, TimeUnit.SECONDS);
+                for (Future<List<PaperToken>> f : done) {
+                    List<PaperToken> other = f.get(100, TimeUnit.SECONDS);
+                    for (int i = 0; i < unlisted.size(); i++) {
+                        Assert.assertSame(other.get(i), first.get(i), "fresh TokenDb " + d + " created " + unlisted.get(i)
+                                + " more than once");
+                    }
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test(timeOut = 120_000)

@@ -1,5 +1,6 @@
 package forge.sim;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -69,6 +70,24 @@ public class UiCardScopeTest {
         Assert.assertTrue(first > 1, "building the card took SpellAbility ids from the first scope: next id " + first);
         Assert.assertEquals(second, first, "the second scope built the card again and paid the same ids: its map started"
                 + " empty, as a fresh JVM's first game's does");
+    }
+
+    /** Within one game the map is a memo: the second ask answers the same Card and spends no id. CardView.getBackup
+     *  sends every double-faced, flip, adventure and cloned card's view update through it, so a memo that rebuilt the
+     *  card would shift the game's ids alike in every arm, where only the replay check could see it. */
+    @Test(timeOut = 60_000)
+    public void aScopeAnswersTheSameCardWithoutNewIds() throws Exception {
+        PaperCard elves = FModel.getMagicDb().getCommonCards().getCard("Llanowar Elves");
+        List<Object> seen = under(new SimScope(3L), () -> {
+            Card first = Card.getCardForUi(elves);
+            int before = SimScope.current().nextId(SimScope.Counter.SPELL_ABILITY);
+            Card second = Card.getCardForUi(elves);
+            int after = SimScope.current().nextId(SimScope.Counter.SPELL_ABILITY);
+            return List.of(first, second, before, after);
+        });
+        Assert.assertSame(seen.get(1), seen.get(0), "the same game asked twice: the same Card");
+        Assert.assertEquals((int) seen.get(3) - (int) seen.get(2), 1,
+                "the second ask spent no SpellAbility id: only the read itself moved the counter");
     }
 
     @Test(timeOut = 60_000)

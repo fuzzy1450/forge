@@ -15,6 +15,7 @@ import forge.sim.GameRunner.GameResult;
 import forge.sim.GameRunner.GameSpec;
 import forge.sim.GameRunner.SeatSpec;
 import forge.util.SimScope;
+import forge.util.UnscopedAccessError;
 
 public class GameRunnerTest {
     static final Set<String> DECIDED = Set.of("AllOpponentsLost", "WinsGameSpellEffect", "Draw");
@@ -66,6 +67,35 @@ public class GameRunnerTest {
         Assert.assertEquals(b.violations(), 0L, "strict mode refused nothing while the game played: " + b);
         Assert.assertFalse(runner.isPoisoned());
         Assert.assertEquals(runner.exitCodeAfterDrain(), 0);
+    }
+
+    /** The count play() reports is the process-wide count's delta over the game, so a refusal anywhere while the game
+     *  plays is in it: here a deliberate one on this thread, unbound under strict mode. */
+    @Test(timeOut = 600_000)
+    public void aStrictRefusalDuringAPlayIsInItsViolations() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        AtomicReference<GameResult> result = new AtomicReference<>();
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread caller = new Thread(() -> {
+            try {
+                result.set(runner.play(spec(7_000_000L, 300)));
+            } catch (Throwable t) {
+                thrown.set(t);
+            }
+        }, "play-caller");
+        caller.start();
+        awaitGameThread();                                    // the game is under way: its count started before its thread
+        try {
+            SimScope.requireUnboundAllowed("GameRunnerTest.deliberate");
+            Assert.fail("strict mode is on and this thread has no scope: the access must be refused");
+        } catch (UnscopedAccessError expected) {
+            // refused, and counted before it was thrown
+        }
+        caller.join(300_000);
+        Assert.assertFalse(caller.isAlive(), "the play returned");
+        Assert.assertNull(thrown.get(), String.valueOf(thrown.get()));
+        Assert.assertTrue(result.get().violations() >= 1, "the refusal while the game played is in its count, which is "
+                + result.get().violations() + " (" + result.get().endReason() + " after " + result.get().ms() + " ms)");
     }
 
     @Test(timeOut = 120_000)

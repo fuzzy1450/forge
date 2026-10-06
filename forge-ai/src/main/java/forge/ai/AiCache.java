@@ -31,10 +31,10 @@ public class AiCache {
      * choice shifted (one seed tapped a different Island, or skipped a block, from run to run). A simulated game
      * therefore keeps its own map in its SimScope, cleared only by its own decisions, as the global map is when one
      * game runs alone; thread-confined like the rest of the scope (the game thread, and the AI eval thread while the
-     * game thread waits on it). An unbound thread under strict mode -- the common pool that AiAttackController's
-     * must-attack evaluation runs on -- belongs to no game it could cache for: null, so it computes without caching
-     * (what it reaches there, isPreventCombatDamageThisTurn, is a pure read). Unbound otherwise is the GUI: the global
-     * map, as before.
+     * game thread waits on it; a simulated game runs AiAttackController's must-attack checks on its own thread too,
+     * never on the common pool). An unbound thread under strict mode is a thread no game adopted and belongs to no
+     * game it could cache for: null, so it computes without caching. Unbound otherwise is the GUI, the must-attack
+     * checks it runs on the common pool included: the global map, as before.
      */
     private static Multimap<String, List<Object>> cache() {
         SimScope s = SimScope.current();

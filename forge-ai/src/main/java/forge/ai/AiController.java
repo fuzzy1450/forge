@@ -1746,10 +1746,10 @@ public class AiController {
             }
             Error wrapped = SimScope.simulationError(e);
             if (wrapped != null) {
-                // A simulated game rethrows an Error from further down the chain too: a strict-mode
-                // refusal AbilityFactory wrapped, or one that AiAttackController's must-attack checks
-                // carried out in a CompletionException. Read as "nothing to play", it would leave a
-                // silently crippled game that every arm of the determinism battery agrees on.
+                // A simulated game rethrows an Error from further down the chain too, such as a
+                // strict-mode refusal or an abandoned game that AbilityFactory wrapped in a
+                // RuntimeException while it built an ability. Read as "nothing to play", it would leave
+                // a silently crippled game that every arm of the determinism battery agrees on.
                 throw wrapped;
             }
             e.printStackTrace();
