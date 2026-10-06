@@ -39,6 +39,16 @@ public class GameRunnerTest {
                 new SeatSpec(precons.get(1), "Default", "default")));
     }
 
+    /** A four-seat pod of the first four Commander precons. */
+    static GameSpec pod(long seed, int timeoutSeconds) {
+        List<Path> precons = Precons.commander();
+        return new GameSpec(seed, timeoutSeconds, List.of(
+                new SeatSpec(precons.get(0), "Default", "default"),
+                new SeatSpec(precons.get(1), "Default", "default"),
+                new SeatSpec(precons.get(2), "Default", "default"),
+                new SeatSpec(precons.get(3), "Default", "default")));
+    }
+
     /** Blocks until a game thread exists: the caller that started it is then inside play()'s wait for the game. */
     static void awaitGameThread() throws InterruptedException {
         long deadline = System.nanoTime() + 60_000_000_000L;
@@ -102,13 +112,7 @@ public class GameRunnerTest {
     @Test(timeOut = 120_000)
     public void timeoutIsCooperativeAndLeavesNoThread() throws Exception {
         GameRunner runner = new GameRunner(1);
-        List<Path> precons = Precons.commander();
-        GameSpec pod = new GameSpec(7_000_001L, 1, List.of(
-                new SeatSpec(precons.get(0), "Default", "default"),
-                new SeatSpec(precons.get(1), "Default", "default"),
-                new SeatSpec(precons.get(2), "Default", "default"),
-                new SeatSpec(precons.get(3), "Default", "default")));
-        GameResult r = runner.play(pod);                      // a four-seat pod runs well over ten seconds, so the one-second timeout always fires
+        GameResult r = runner.play(pod(7_000_001L, 1));       // a four-seat pod runs well over ten seconds, so the one-second timeout always fires
         Assert.assertTrue(r.timedOut(), r.toString());
         Assert.assertEquals(r.endReason(), "Timeout");
         Assert.assertNull(r.winnerSeat());
