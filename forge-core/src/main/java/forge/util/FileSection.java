@@ -49,8 +49,8 @@ public class FileSection {
     public static final Pattern COLON_KV_SEPARATOR = Pattern.compile(Pattern.quote(":"));
     private static final String BAR_PAIR_SPLITTER = Pattern.quote("|");
 
-    // Filled from every game thread while cards are built; a pure memo of the parsed line, so it only
-    // needs its writes to be safe (two threads parsing the same line store equal maps).
+    // Filled from every game thread while cards are built; the synchronized wrapper makes each get and
+    // each put atomic. No atomic get-or-compute is needed: two threads parsing the same line store equal maps.
     private static final Table<String, Pattern, Map<String, String>> parseToMapCache =
             Tables.synchronizedTable(HashBasedTable.create());
 
