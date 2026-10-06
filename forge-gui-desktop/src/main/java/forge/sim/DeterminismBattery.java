@@ -11,7 +11,9 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -28,7 +30,11 @@ import forge.sim.GameRunner.SeatSpec;
 /**
  * The determinism battery (spec section 7): a fixed list of games played through three arms --
  * A: one slot in list order, B: {@code slots} slots in list order, C: {@code slots} slots in
- * reversed order -- whose digests must be identical game for game.
+ * reversed order -- whose digests must be identical game for game. Arm A, when it is the first
+ * arm run, is the reference (spec 7.1, 7.4): a game whose solo play ends in {@code Timeout} is
+ * untestable, played in no later arm and compared nowhere, and a game it decided gets
+ * {@code max(its list timeout, 3 x its solo wall)} seconds in each later arm. Without a leading A
+ * every arm plays every game with its list timeout and every non-decided end is a problem.
  *
  * <pre>
  * java ... forge.sim.DeterminismBattery [--arms A,B,C] [--slots 6] [--list games.tsv | --smoke] [--out dir]
@@ -36,8 +42,12 @@ import forge.sim.GameRunner.SeatSpec;
  *
  * A {@code --list} file has one game per line: {@code seed TAB timeout_s TAB seat TAB seat...},
  * each seat {@code deckfile;profile;ai}. Output (stdout, tab-separated): {@code GAME} lines per
- * game and arm, {@code ARM} timings, {@code MISMATCH} and {@code PROBLEM} findings, one
- * {@code RESULT} line. Exit 0 on PASS, 1 on FAIL, 5 if the runner was poisoned.
+ * game and arm, {@code ARM} timings, {@code MISMATCH} and {@code PROBLEM} findings,
+ * {@code UNTESTABLE TAB label TAB solo Timeout at <timeout_s> s: not compared} for each game the
+ * solo arm could not finish, and one line
+ * {@code RESULT TAB PASS|FAIL TAB n games TAB m mismatches TAB p problems TAB u untestable}
+ * (plus {@code TAB POISONED} when the runner was poisoned). Untestable games never fail the run.
+ * Exit 0 on PASS, 1 on FAIL, 5 if the runner was poisoned.
  */
 public final class DeterminismBattery {
 
@@ -47,8 +57,10 @@ public final class DeterminismBattery {
 
     public record ArmTiming(String arm, int slots, long wallMs, int games) { }
 
+    /** {@code untestable} holds the labels, in list order, of the games whose solo play timed out (spec 7.1): they are
+     *  neither compared nor problems, so they never fail the run. */
     public record Report(List<Entry> list, List<Played> played, List<ArmTiming> timings,
-                         List<String> mismatches, List<String> problems, boolean poisoned) {
+                         List<String> mismatches, List<String> problems, List<String> untestable, boolean poisoned) {
         public boolean passed() {
             return mismatches.isEmpty() && problems.isEmpty() && !poisoned;
         }
@@ -60,6 +72,10 @@ public final class DeterminismBattery {
     // farm's 300 s: a wall-clock artifact, not a determinism signal. A real hang still ends in a Timeout.
     static final int TIMEOUT_S = 1200;
     static final Set<String> DECIDED = Set.of("AllOpponentsLost", "WinsGameSpellEffect", "Draw");
+    // The arms after the solo reference give a game max(its list timeout, this x its solo wall) seconds. The concurrent
+    // arms ran a game a median 1.01x, p90 1.29x, max 1.68x its solo wall on the idle desktop and a median 1.4x, max 2.1x
+    // loaded (spec 7.1), so a game the solo arm decided cannot read as a divergence for want of time.
+    static final int CONCURRENT_BUDGET_FACTOR = 3;
 
     private DeterminismBattery() { }
 
@@ -137,12 +153,30 @@ public final class DeterminismBattery {
 
     // ------------------------------------------------------------------ the arms (spec 7.2)
 
+    /** Spec 7.1: the budget, in seconds, of a game in an arm after the solo reference: its list timeout or
+     *  {@link #CONCURRENT_BUDGET_FACTOR} times its solo wall, whichever is longer. */
+    static int budgetSeconds(int listTimeoutS, long soloWallMs) {
+        return Math.max(listTimeoutS, (int) Math.ceil(soloWallMs * (double) CONCURRENT_BUDGET_FACTOR / 1000.0));
+    }
+
+    /** The same game, seed and seats untouched, with {@link #budgetSeconds} for its timeout. */
+    static GameSpec budgeted(GameSpec spec, long soloWallMs) {
+        return new GameSpec(spec.seed(), budgetSeconds(spec.timeoutSeconds(), soloWallMs), spec.seats());
+    }
+
     public static Report run(List<Entry> list, List<String> arms, int slots, PrintStream progress) {
         GameRunner.boot();
         List<Played> played = new ArrayList<>();
         List<ArmTiming> timings = new ArrayList<>();
+        // Spec 7.1: arm A, when it is the first arm run, is the reference. What it did to a game decides what the later
+        // arms do with it: a solo Timeout makes the game untestable (not played again), anything else is played with a
+        // budget scaled from the solo wall. With no leading A there is no reference and every arm plays every game.
+        Map<String, GameResult> reference = new HashMap<>();
+        Set<String> untestable = new LinkedHashSet<>();
         boolean poisoned = false;
-        for (String arm : arms) {
+        for (int i = 0; i < arms.size(); i++) {
+            String arm = arms.get(i);
+            boolean fillsReference = i == 0 && arm.equals("A");
             int armSlots = arm.equals("A") ? 1 : slots;
             List<Entry> order = new ArrayList<>(list);
             if (arm.equals("C")) {
@@ -153,12 +187,23 @@ public final class DeterminismBattery {
             long t0 = System.currentTimeMillis();
             List<Future<Played>> futures = new ArrayList<>();
             for (Entry e : order) {
-                futures.add(pool.submit(() -> new Played(e, arm, runner.play(e.spec()))));
+                GameResult solo = reference.get(e.label());
+                if (solo == null) {
+                    futures.add(pool.submit(() -> new Played(e, arm, runner.play(e.spec()))));
+                } else if ("Timeout".equals(solo.endReason())) {
+                    untestable.add(e.label());
+                } else {
+                    GameSpec spec = budgeted(e.spec(), solo.ms());
+                    futures.add(pool.submit(() -> new Played(e, arm, runner.play(spec))));
+                }
             }
             for (Future<Played> f : futures) {
                 try {
                     Played p = f.get();
                     played.add(p);
+                    if (fillsReference) {
+                        reference.put(p.entry().label(), p.result());
+                    }
                     if (progress != null) {
                         progress.println(gameLine(p));
                         progress.flush();
@@ -171,10 +216,12 @@ public final class DeterminismBattery {
                 }
             }
             pool.shutdown();
-            timings.add(new ArmTiming(arm, armSlots, System.currentTimeMillis() - t0, order.size()));
+            timings.add(new ArmTiming(arm, armSlots, System.currentTimeMillis() - t0, futures.size()));
             poisoned |= runner.isPoisoned();
         }
-        return new Report(list, played, timings, mismatches(list, arms, played), problems(played), poisoned);
+        List<String> untestableInListOrder = list.stream().map(Entry::label).filter(untestable::contains).collect(Collectors.toList());
+        return new Report(list, played, timings, mismatches(list, arms, played, untestable), problems(played, untestable),
+                untestableInListOrder, poisoned);
     }
 
     public static String gameLine(Played p) {
@@ -186,13 +233,17 @@ public final class DeterminismBattery {
 
     // ------------------------------------------------------------------ the comparison (spec 7.4, 7.5)
 
-    static List<String> mismatches(List<Entry> list, List<String> arms, List<Played> played) {
+    /** An untestable game is left out: the later arms never played it (spec 7.1), which is not a missing result. */
+    static List<String> mismatches(List<Entry> list, List<String> arms, List<Played> played, Set<String> untestable) {
         Map<String, Map<String, Played>> byLabel = new LinkedHashMap<>();
         for (Played p : played) {
             byLabel.computeIfAbsent(p.entry().label(), k -> new LinkedHashMap<>()).put(p.arm(), p);
         }
         List<String> out = new ArrayList<>();
         for (Entry e : list) {
+            if (untestable.contains(e.label())) {
+                continue;
+            }
             Map<String, Played> arm = byLabel.getOrDefault(e.label(), Map.of());
             Set<String> digests = arm.values().stream().map(p -> p.result().digest()).collect(Collectors.toSet());
             if (digests.size() <= 1 && arm.size() == arms.size()) {
@@ -227,10 +278,14 @@ public final class DeterminismBattery {
         return "the first " + n + " lines agree; " + x.arm() + " has " + lx.size() + " lines, " + y.arm() + " has " + ly.size();
     }
 
-    /** A game that did not end decided, or that strict mode stopped, is a finding whatever its digests say. */
-    static List<String> problems(List<Played> played) {
+    /** A game that did not end decided, or that strict mode stopped, is a finding whatever its digests say. The solo
+     *  Timeout that made a game untestable is not one (spec 7.4). */
+    static List<String> problems(List<Played> played, Set<String> untestable) {
         List<String> out = new ArrayList<>();
         for (Played p : played) {
+            if (untestable.contains(p.entry().label())) {
+                continue;
+            }
             GameResult r = p.result();
             if (!DECIDED.contains(r.endReason())) {
                 out.add("PROBLEM\t" + p.entry().label() + "\t" + p.arm() + "\t" + r.endReason() + "\t" + (r.error() == null ? "" : r.error()));
@@ -280,6 +335,11 @@ public final class DeterminismBattery {
         for (String p : r.problems()) {
             out.println(p);
         }
+        for (Entry e : r.list()) {
+            if (r.untestable().contains(e.label())) {
+                out.println("UNTESTABLE\t" + e.label() + "\tsolo Timeout at " + e.spec().timeoutSeconds() + " s: not compared");
+            }
+        }
         if (outDir != null) {
             Files.createDirectories(outDir);
             List<String> lines = new ArrayList<>();
@@ -296,7 +356,8 @@ public final class DeterminismBattery {
             }
         }
         out.println("RESULT\t" + (r.passed() ? "PASS" : "FAIL") + "\t" + list.size() + " games\t" + r.mismatches().size()
-                + " mismatches\t" + r.problems().size() + " problems" + (r.poisoned() ? "\tPOISONED" : ""));
+                + " mismatches\t" + r.problems().size() + " problems\t" + r.untestable().size() + " untestable"
+                + (r.poisoned() ? "\tPOISONED" : ""));
         out.flush();
         System.exit(r.poisoned() ? GameRunner.EXIT_POISONED : r.passed() ? 0 : 1);
     }
