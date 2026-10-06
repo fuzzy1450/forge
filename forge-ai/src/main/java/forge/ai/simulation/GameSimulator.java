@@ -11,6 +11,7 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.TargetChoices;
+import forge.util.SimScope;
 import forge.util.collect.FCollectionView;
 
 import java.util.*;
@@ -49,7 +50,7 @@ public class GameSimulator {
         eval = new GameStateEvaluator();
 
         origLines = new ArrayList<>();
-        debugLines = origLines;
+        setDebugLines(origLines);
 
         debugPrint = false;
         origScore = eval.getScoreForGameState(origGame, origAiPlayer);
@@ -63,7 +64,7 @@ public class GameSimulator {
         // want to compare to the eval score after simulating.
         if (COPY_STACK && !origGame.getStackZone().isEmpty()) {
             origLines = new ArrayList<>();
-            debugLines = origLines;
+            setDebugLines(origLines);
             Game copyOrigGame = copier.makeCopy();
             Player copyOrigAiPlayer = copyOrigGame.getPlayers().get(1);
             resolveStack(copyOrigGame, copyOrigGame.getPlayers().get(0));
@@ -71,18 +72,18 @@ public class GameSimulator {
         }
 
         debugPrint = false;
-        debugLines = null;
+        setDebugLines(null);
     }
 
     private void ensureGameCopyScoreMatches(Game origGame, Player origAiPlayer) {
         eval.setDebugging(true);
         List<String> simLines = new ArrayList<>();
-        debugLines = simLines;
+        setDebugLines(simLines);
         Score simScore = eval.getScoreForGameState(simGame, aiPlayer);
         if (!simScore.equals(origScore)) {
             // Re-eval orig with debug printing.
             origLines = new ArrayList<>();
-            debugLines = origLines;
+            setDebugLines(origLines);
             eval.getScoreForGameState(origGame, origAiPlayer);
             // Print debug info.
             printDiff(origLines, simLines);
@@ -126,13 +127,44 @@ public class GameSimulator {
     }
 
     public static boolean debugPrint;
+    // the GUI's debug lines: a simulated game keeps its own (see getDebugLines())
     public static List<String> debugLines;
+
+    /** A simulated game's debug lines, kept in its SimScope. */
+    private static final class ScopedDebugLines {
+        List<String> lines;
+    }
+
+    /**
+     * The list debugPrint appends to on this thread. Every hybrid or full-sim decision constructs a GameSimulator,
+     * which starts a list, fills it while it scores the game and drops it again; with one process-wide list, two games
+     * simulating at once appended to each other's list or nulled it under each other, so an add could throw inside the
+     * AI's evaluation, which AiController then reads as "nothing to play", and one game's decision depended on another
+     * game's timing. A simulated game therefore keeps its own list in its SimScope (a GameSimulator runs on the game's
+     * thread or on the AI eval thread that adopted its scope); unbound, the static is the list, as before.
+     */
+    public static List<String> getDebugLines() {
+        SimScope s = SimScope.current();
+        return s == null ? debugLines : s.scratch(GameSimulator.class, ScopedDebugLines::new).lines;
+    }
+
+    /** Starts ({@code lines}) or drops ({@code null}) this thread's debug lines; see {@link #getDebugLines()}. */
+    public static void setDebugLines(List<String> lines) {
+        SimScope s = SimScope.current();
+        if (s == null) {
+            debugLines = lines;
+        } else {
+            s.scratch(GameSimulator.class, ScopedDebugLines::new).lines = lines;
+        }
+    }
+
     public static void debugPrint(String str) {
         if (debugPrint) {
             System.out.println(str);
         }
-        if (debugLines != null) {
-            debugLines.add(str);
+        List<String> lines = getDebugLines();       // read once: a check and an add on two reads could see two lists
+        if (lines != null) {
+            lines.add(str);
         }
     }
 
@@ -237,12 +269,12 @@ public class GameSimulator {
         if (debugPrint) {
             debugPrint("SimGame:");
             simLines = new ArrayList<>();
-            debugLines = simLines;
+            setDebugLines(simLines);
             debugPrint = false;
         }
         Score score = eval.getScoreForGameState(simGame, aiPlayer);
         if (simLines != null) {
-            debugLines = null;
+            setDebugLines(null);
             debugPrint = true;
             printDiff(origLines, simLines);
         }
