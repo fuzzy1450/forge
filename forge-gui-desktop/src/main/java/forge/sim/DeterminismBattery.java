@@ -50,7 +50,9 @@ import forge.sim.GameRunner.SeatSpec;
  * {@code UNTESTABLE TAB label TAB solo Timeout at <timeout_s> s: not compared} for each game the
  * solo arm could not finish, and one line
  * {@code RESULT TAB PASS|FAIL TAB n games TAB m mismatches TAB p problems TAB u untestable}
- * (plus {@code TAB POISONED} when the runner was poisoned). Untestable games never fail the run.
+ * (plus {@code TAB POISONED} when the runner was poisoned). Untestable games never fail the run,
+ * except through {@code PROBLEM TAB label TAB arm TAB StrictViolations TAB n}: a play during which
+ * strict mode refused an unbound access is a problem whatever else is true of it.
  * Exit 0 on PASS, 1 on FAIL, 5 if the runner was poisoned.
  */
 public final class DeterminismBattery {
@@ -235,11 +237,14 @@ public final class DeterminismBattery {
                 untestableInListOrder, poisoned);
     }
 
+    /** One play's {@code GAME} line; a play during which strict mode refused an access gets one more column,
+     *  {@code violations=<n>}, after the digest, so the columns before it never move. */
     public static String gameLine(Played p) {
         GameResult r = p.result();
         return "GAME\t" + p.entry().label() + "\t" + r.seed() + "\t" + p.arm() + "\t"
                 + (r.winnerSeat() == null ? "" : r.winnerSeat()) + "\t" + r.endReason() + "\t" + r.turns() + "\t"
-                + (r.firstSeat() == null ? "" : r.firstSeat()) + "\t" + r.ms() + "\t" + r.digest();
+                + (r.firstSeat() == null ? "" : r.firstSeat()) + "\t" + r.ms() + "\t" + r.digest()
+                + (r.violations() > 0 ? "\tviolations=" + r.violations() : "");
     }
 
     // ------------------------------------------------------------------ the comparison (spec 7.4, 7.5)
@@ -290,14 +295,19 @@ public final class DeterminismBattery {
     }
 
     /** A game that did not end decided, or that strict mode stopped, is a finding whatever its digests say. The solo
-     *  Timeout that made a game untestable is not one (spec 7.4). */
+     *  Timeout that made a game untestable is not one (spec 7.4). A play during which strict mode refused an unbound
+     *  access ({@code StrictViolations}) is one in every case, decided or untestable: Forge's code can swallow the
+     *  refusal into a game that still ends decided, the same in every arm. */
     static List<String> problems(List<Played> played, Set<String> untestable) {
         List<String> out = new ArrayList<>();
         for (Played p : played) {
+            GameResult r = p.result();
+            if (r.violations() > 0) {
+                out.add("PROBLEM\t" + p.entry().label() + "\t" + p.arm() + "\tStrictViolations\t" + r.violations());
+            }
             if (untestable.contains(p.entry().label())) {
                 continue;
             }
-            GameResult r = p.result();
             if (!DECIDED.contains(r.endReason())) {
                 out.add("PROBLEM\t" + p.entry().label() + "\t" + p.arm() + "\t" + r.endReason() + "\t" + (r.error() == null ? "" : r.error()));
             }

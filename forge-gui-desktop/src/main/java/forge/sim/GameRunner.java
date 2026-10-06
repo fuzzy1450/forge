@@ -60,8 +60,12 @@ public final class GameRunner {
 
     public record GameSpec(long seed, int timeoutSeconds, List<SeatSpec> seats) { }
 
+    /** {@code violations}: the unbound accesses strict mode refused anywhere in this process while the game played
+     *  ({@link SimScope#VIOLATIONS}), 0 normally. A refusal happens on a thread bound to no game, so a game that played
+     *  beside another can carry that one's count too. Never part of the digest. */
     public record GameResult(long seed, Integer winnerSeat, String endReason, int turns, Integer firstSeat,
-                             boolean timedOut, String error, long ms, String digest, List<String> digestLines) { }
+                             boolean timedOut, String error, long ms, String digest, List<String> digestLines,
+                             long violations) { }
 
     /** Thrown by {@link #play} once a game thread has outlived its cancellation. */
     public static final class PoisonedException extends IllegalStateException {
@@ -214,6 +218,7 @@ public final class GameRunner {
             Body body = new Body(spec, players, scope);
             Thread t = new Thread(body, "Game-sim-" + slot);       // the "Game" prefix: ThreadUtil.isGameThread()
             t.setDaemon(true);
+            long violationsAtStart = SimScope.VIOLATIONS.get();
             long t0 = System.currentTimeMillis();
             t.start();
             boolean interrupted = false;
@@ -242,7 +247,7 @@ public final class GameRunner {
                 Thread.currentThread().interrupt();
                 throw new InterruptedException("interrupted while waiting for the game with seed " + spec.seed());
             }
-            return body.result(timedOut, System.currentTimeMillis() - t0);
+            return body.result(timedOut, System.currentTimeMillis() - t0, SimScope.VIOLATIONS.get() - violationsAtStart);
         } finally {
             freeSlots.add(slot);                                     // capacity is guaranteed; unlike put, add cannot throw on a pending interrupt
         }
@@ -384,7 +389,7 @@ public final class GameRunner {
             }
         }
 
-        GameResult result(boolean timedOut, long ms) {
+        GameResult result(boolean timedOut, long ms, long violations) {
             Game g = game;
             if (timedOut || !finished || g == null) {
                 // Live state may still be moving (a thread past its grace) or may never have existed:
@@ -393,7 +398,7 @@ public final class GameRunner {
                 String err = timedOut ? null : (error != null ? error : "game ended without finishing");
                 List<String> lines = List.of(outcomeLine(null, reason, stats.turn, stats.firstSeat, err));
                 return new GameResult(spec.seed(), null, reason, stats.turn, stats.firstSeat, timedOut, err, ms,
-                        timedOut ? "TIMEOUT" : "ERROR", lines);
+                        timedOut ? "TIMEOUT" : "ERROR", lines, violations);
             }
             GameOutcome out = g.getOutcome();
             Integer winner = null;
@@ -418,7 +423,8 @@ public final class GameRunner {
             }
             int turns = out != null ? out.getLastTurnNumber() : stats.turn;
             List<String> lines = digestLines(g, players.size(), winner, reason, turns, stats.firstSeat, err);
-            return new GameResult(spec.seed(), winner, reason, turns, stats.firstSeat, false, err, ms, sha256(lines), lines);
+            return new GameResult(spec.seed(), winner, reason, turns, stats.firstSeat, false, err, ms, sha256(lines), lines,
+                    violations);
         }
     }
 

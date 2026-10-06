@@ -62,6 +62,8 @@ public class GameRunnerTest {
         Assert.assertTrue(a.digestLines().size() > 10, "the digest covers the game log and the zones");
         Assert.assertEquals(b.digest(), a.digest(), "the same seed replays byte-identically in one JVM");
         Assert.assertEquals(b.digestLines(), a.digestLines());
+        Assert.assertEquals(a.violations(), 0L, "strict mode refused nothing while the game played: " + a);
+        Assert.assertEquals(b.violations(), 0L, "strict mode refused nothing while the game played: " + b);
         Assert.assertFalse(runner.isPoisoned());
         Assert.assertEquals(runner.exitCodeAfterDrain(), 0);
     }

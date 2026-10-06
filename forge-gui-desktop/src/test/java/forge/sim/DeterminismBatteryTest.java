@@ -61,20 +61,20 @@ public class DeterminismBatteryTest {
     // Fabricated solo results, built with the record's constructor: the fields GameRunner.Body.result fills for a Timeout,
     // a decided game and an Error. Digests and lines are placeholders; only the end reason and the wall matter to the rule.
     static GameResult soloTimeout(long ms) {
-        return new GameResult(SEED, null, "Timeout", 0, 0, true, null, ms, "TIMEOUT", List.of());
+        return new GameResult(SEED, null, "Timeout", 0, 0, true, null, ms, "TIMEOUT", List.of(), 0L);
     }
 
     static GameResult soloDecided(long ms) {
-        return new GameResult(SEED, 0, "AllOpponentsLost", 24, 0, false, null, ms, "placeholder", List.of());
+        return new GameResult(SEED, 0, "AllOpponentsLost", 24, 0, false, null, ms, "placeholder", List.of(), 0L);
     }
 
     static GameResult soloError(long ms) {
-        return new GameResult(SEED, null, "Error", 0, 0, false, "game ended without finishing", ms, "ERROR", List.of());
+        return new GameResult(SEED, null, "Error", 0, 0, false, "game ended without finishing", ms, "ERROR", List.of(), 0L);
     }
 
     // For the comparator probe: a decided play with a digest the test chooses, a Timeout play, and a play of an entry in an arm.
     private static GameResult decided(String digest) {
-        return new GameResult(SEED, 0, "AllOpponentsLost", 24, 0, false, null, 1_000L, digest, List.of());
+        return new GameResult(SEED, 0, "AllOpponentsLost", 24, 0, false, null, 1_000L, digest, List.of(), 0L);
     }
 
     private static GameResult timeout() {
@@ -144,6 +144,21 @@ public class DeterminismBatteryTest {
         List<String> p = DeterminismBattery.problems(played, untestable);
         Assert.assertEquals(p.size(), 0, "the solo Timeout of the untestable game is not a problem");
         Assert.assertEquals(DeterminismBattery.problems(played, Set.of()).size(), 2, "without the untestable set both Timeout plays are problems");
+    }
+
+    @Test
+    public void aPlayDuringWhichStrictModeRefusedAnAccessIsAProblemEvenWhenDecided() {
+        Entry e = entry("1v1-default", Precons.commander().subList(0, 2), 300);
+        GameResult swallowed = new GameResult(SEED, 0, "AllOpponentsLost", 24, 0, false, null, 1_000L, "placeholder", List.of(), 2L);
+        String expected = "PROBLEM\t" + e.label() + "\tA\tStrictViolations\t2";
+        Assert.assertEquals(DeterminismBattery.problems(List.of(played(e, "A", swallowed)), Set.of()), List.of(expected),
+                "a decided game is a problem when strict mode refused an access while it played: the refusal may have been swallowed");
+        Assert.assertEquals(DeterminismBattery.problems(List.of(played(e, "A", swallowed)), Set.of(e.label())), List.of(expected),
+                "untestable or not: a refusal is a finding wherever it happens");
+        Assert.assertEquals(DeterminismBattery.problems(List.of(played(e, "A", decided("d"))), Set.of()), List.of(), "no refusal, no problem");
+        Assert.assertTrue(DeterminismBattery.gameLine(played(e, "A", swallowed)).endsWith("\tplaceholder\tviolations=2"),
+                DeterminismBattery.gameLine(played(e, "A", swallowed)));
+        Assert.assertTrue(DeterminismBattery.gameLine(played(e, "A", decided("d"))).endsWith("\td"), "no count, no column");
     }
 
     @Test(timeOut = 600_000)

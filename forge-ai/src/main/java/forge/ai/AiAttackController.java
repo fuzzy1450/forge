@@ -54,6 +54,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.concurrent.atomic.AtomicInteger;
 
 
@@ -857,6 +858,25 @@ public class AiAttackController {
     final boolean LOG_AI_ATTACKS = false;
 
     /**
+     * One must-attack check run on the calling thread, a simulated game's (see declareAttackers):
+     * a RuntimeException reads as "no requirement", as the pool path's exceptionally reads one,
+     * unless an Error sits in its cause chain - a strict-mode refusal AbilityFactory wrapped, an
+     * abandoned game - which is rethrown as that Error. An Error the check throws propagates as it is.
+     */
+    private static GameEntity checkOnThisThread(final Supplier<GameEntity> check) {
+        try {
+            return check.get();
+        } catch (RuntimeException ex) {
+            Error wrapped = SimScope.simulationError(ex);
+            if (wrapped != null) {
+                throw wrapped;
+            }
+            ex.printStackTrace();
+            return null;
+        }
+    }
+
+    /**
      * <p>
      * Getter for the field <code>attackers</code>.
      * </p>
@@ -947,10 +967,17 @@ public class AiAttackController {
             // As a bonus the evaluations now read a combat that is not being mutated under
             // them mid-check, and a timed-out straggler can no longer mutate combat behind
             // the main thread's back (its result is simply never applied).
+            // A simulated game (a SimScope bound on this thread) runs the checks here instead, one
+            // after another in declaration order: the common pool is bound to no game, and a check
+            // can build an ability lazily (predictPowerBonusOfAttacker -> Trigger.ensureAbility),
+            // which takes a SpellAbility id - from this game's scope here, and refused by strict
+            // mode on the pool. Every check still reads the combat before any result is applied,
+            // so the decisions are those of the pool path.
+            final boolean checkHere = SimScope.current() != null;
             final List<Card> mustAttackCandidates = new ArrayList<>(this.attackers);
             for (final Card attacker : mustAttackCandidates) {
                 final GameEntity finalDefender = defender;
-                futures.add(CompletableFuture.supplyAsync(()-> {
+                final Supplier<GameEntity> check = () -> {
                     GameEntity mustAttackDef = null;
                     if (attacker.getSVar("MustAttack").equals("True")) {
                         mustAttackDef = finalDefender;
@@ -998,12 +1025,21 @@ public class AiAttackController {
                         }
                     }
                     return mustAttackDef;
-                }).exceptionally(ex -> {
+                };
+                if (checkHere) {
+                    futures.add(CompletableFuture.completedFuture(checkOnThisThread(check)));
+                    continue;
+                }
+                futures.add(CompletableFuture.supplyAsync(check).exceptionally(ex -> {
                     // an Error in a requirement check ends the game rather than reading as "no
                     // requirement" (see AiController.chooseSpellAbilityToPlayFromList)
                     Throwable cause = ex instanceof CompletionException && ex.getCause() != null ? ex.getCause() : ex;
                     if (cause instanceof Error err) {
                         throw err;
+                    }
+                    Error wrapped = SimScope.simulationError(ex);    // strict mode: an Error anywhere in the chain
+                    if (wrapped != null) {
+                        throw wrapped;
                     }
                     ex.printStackTrace();
                     return null;

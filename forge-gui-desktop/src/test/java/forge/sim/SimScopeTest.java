@@ -3,6 +3,7 @@ package forge.sim;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.testng.Assert;
@@ -112,6 +113,33 @@ public class SimScopeTest {
         Assert.assertEquals(SimScope.nextId(SimScope.Counter.TRIGGER, () -> ++counter[0]), 50001,
                 "reset moved the scope's counter, not the static");
         Assert.assertEquals(counter[0], 11);
+    }
+
+    @Test
+    public void aStrictRefusalIsCountedBeforeItThrows() {
+        long before = SimScope.VIOLATIONS.get();
+        SimScope.setStrict(true);
+        Assert.assertThrows(UnscopedAccessError.class, () -> SimScope.requireUnboundAllowed("x"));
+        Assert.assertEquals(SimScope.VIOLATIONS.get() - before, 1L,
+                "counted once, before the throw, so a refusal that Forge's code swallows still shows");
+        SimScope.setStrict(false);
+        SimScope.requireUnboundAllowed("x");
+        Assert.assertEquals(SimScope.VIOLATIONS.get() - before, 1L, "not strict: nothing refused, nothing counted");
+    }
+
+    @Test
+    public void simulationErrorFindsAWrappedErrorOnlyUnderASimulation() {
+        UnscopedAccessError violation = new UnscopedAccessError("x");
+        Throwable wrapped = new CompletionException(new RuntimeException("AbilityFactory's wrapper", violation));
+        Assert.assertNull(SimScope.simulationError(wrapped),
+                "unbound and not strict, the GUI's case: no walk, so its one-level checks stay as they were");
+        SimScope.setStrict(true);
+        Assert.assertSame(SimScope.simulationError(wrapped), violation, "strict: found two wrappers down");
+        Assert.assertNull(SimScope.simulationError(new CompletionException(new IllegalStateException())),
+                "no Error in the chain: nothing to rethrow");
+        SimScope.setStrict(false);
+        SimScope.enter(new SimScope(1L));
+        Assert.assertSame(SimScope.simulationError(wrapped), violation, "bound: found as well");
     }
 
     @Test

@@ -1744,6 +1744,14 @@ public class AiController {
                 // (walk 7 game 671988). Rethrown, it ends the game as an Error, every run alike.
                 throw err;
             }
+            Error wrapped = SimScope.simulationError(e);
+            if (wrapped != null) {
+                // A simulated game rethrows an Error from further down the chain too: a strict-mode
+                // refusal AbilityFactory wrapped, or one that AiAttackController's must-attack checks
+                // carried out in a CompletionException. Read as "nothing to play", it would leave a
+                // silently crippled game that every arm of the determinism battery agrees on.
+                throw wrapped;
+            }
             e.printStackTrace();
             if (e instanceof TimeoutException) {
                 // log where the eval thread currently is - each timeout doubles as a

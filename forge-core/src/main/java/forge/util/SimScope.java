@@ -4,6 +4,7 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 
@@ -112,14 +113,43 @@ public final class SimScope {
         return strict;
     }
 
+    /** Every unbound access strict mode has refused in this process, counted before the refusal is thrown: Forge's
+     *  code can catch and swallow the {@link UnscopedAccessError} (AbilityFactory wraps it, a CompletableFuture
+     *  carries it, a catch reads the failure as "no decision"), and the count still shows it. The runner records each
+     *  game's delta; the battery fails a play with any. */
+    public static final AtomicLong VIOLATIONS = new AtomicLong();
+
     /** Throws {@link UnscopedAccessError} under strict mode: the caller is about to touch a
      *  static that a simulation must never reach unscoped. An Error, so that Forge's many
      *  {@code catch (Exception)} sites cannot swallow the violation into a crippled game. */
     public static void requireUnboundAllowed(String seam) {
         if (strict) {
+            VIOLATIONS.incrementAndGet();
             throw new UnscopedAccessError("SimScope: unbound access to " + seam + " on thread "
                     + Thread.currentThread().getName() + " with strict mode on");
         }
+    }
+
+    /**
+     * The Error to rethrow from a failure that Forge's AI is about to read as "no decision", when this thread runs a
+     * simulation (a scope bound here, or strict mode on): the first Error anywhere in {@code failure}'s cause chain,
+     * through CompletionException and ExecutionException wrappers and the RuntimeException AbilityFactory wraps around
+     * an Error raised while an ability is built. A strict-mode refusal or an abandoned game is never a decision. Null
+     * when the chain holds no Error, and always null unbound and not strict -- the GUI and the unbound farm harness --
+     * whose call sites keep the one-level checks they had.
+     */
+    public static Error simulationError(Throwable failure) {
+        if (BOUND.get() == null && !strict) {
+            return null;
+        }
+        Throwable t = failure;
+        for (int hops = 0; t != null && hops < 16; hops++) {      // bounded: a cause chain can loop
+            if (t instanceof Error e) {
+                return e;
+            }
+            t = t.getCause();
+        }
+        return null;
     }
 
     // ------------------------------------------------------------------ the seams Forge's statics call
