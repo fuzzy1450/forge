@@ -10,6 +10,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -223,10 +224,12 @@ public class GameRunner {
     // ------------------------------------------------------------------ play
 
     /** Plays one game and returns its result. {@code observer} runs on the game thread, under the game's scope, after
-     *  the game is created and before it starts -- where a stats subscriber attaches. A throwable from it ends the game
-     *  as an Error like any other. An interrupt of the calling thread while it waits is a cancellation request: the
-     *  game is cancelled as on a timeout, its slot is returned, and InterruptedException is thrown with the interrupt
-     *  status left set. */
+     *  the game is created and before it starts -- where a stats subscriber attaches. It must only listen: it runs
+     *  under that scope, so a draw or an id request it made would become part of the seeded game and its digest. It is
+     *  never called when {@code createGame()} fails, so a subscriber may never have attached. A throwable from it ends
+     *  the game as an Error like any other. An interrupt of the calling thread while it waits is a cancellation
+     *  request: the game is cancelled as on a timeout, its slot is returned, and InterruptedException is thrown with
+     *  the interrupt status left set. */
     public GameResult play(GameSpec spec, Consumer<Game> observer) throws InterruptedException {
         if (!booted) {
             throw new IllegalStateException("GameRunner.boot() first");
@@ -240,6 +243,7 @@ public class GameRunner {
         if (spec.timeoutSeconds() < 1) {
             throw new IllegalArgumentException("timeoutSeconds must be >= 1, got " + spec.timeoutSeconds());
         }
+        Objects.requireNonNull(observer, "observer");
         List<RegisteredPlayer> players = registerPlayers(spec);     // refuses a bad deck or profile before a slot is taken
         int slot = freeSlots.take();
         try {
@@ -285,7 +289,7 @@ public class GameRunner {
         }
     }
 
-    /** Plays one game and returns its result, with nothing observing it: {@code play(spec, g -> { })}. */
+    /** Plays one game and returns its result: {@link #play(GameSpec, Consumer)} with no observer. */
     public GameResult play(GameSpec spec) throws InterruptedException {
         return play(spec, g -> { });
     }
@@ -402,7 +406,7 @@ public class GameRunner {
                     g.AI_CAN_USE_TIMEOUT = false;
                     g.subscribeToEvents(stats);
                     game = g;
-                    observer.accept(g);                               // the records' subscriber attaches here (spec 3.2)
+                    observer.accept(g);                               // the records' subscriber attaches here (harness-in-engine spec 3.2)
                     match.startGame(g);
                 } catch (GameAbandoned abandoned) {
                     return;                                           // cancelled from outside: the verdict is already Timeout

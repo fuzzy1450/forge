@@ -181,6 +181,7 @@ public class GameRunnerTest {
                 () -> runner.play(new GameSpec(1L, 300, List.of(
                         new SeatSpec(Paths.get("no-such-deck.dck"), "Default", "default"),
                         spec(1L, 300).seats().get(1)))));
+        Assert.assertThrows(NullPointerException.class, () -> runner.play(spec(1L, 300), null));
         GameResult r = runner.play(spec(7_000_000L, 300));        // the refusals left the one slot free
         Assert.assertTrue(DECIDED.contains(r.endReason()), r.toString());
         Assert.assertNull(r.error(), r.toString());
@@ -210,7 +211,23 @@ public class GameRunnerTest {
         Assert.assertTrue(underScope.get(), "the observer runs under the game's scope");
         Assert.assertFalse(overBeforeStart.get(), "the observer runs before the game starts");
         Assert.assertTrue(sawStart.get(), "a subscriber attached by the observer sees GameEventGameStarted");
+        Assert.assertTrue(DECIDED.contains(observed.endReason()), observed.toString());
+        Assert.assertNull(observed.error(), observed.toString());
         GameResult plain = runner.play(spec);
         Assert.assertEquals(observed.digest(), plain.digest(), "an observer that only listens changes no digest");
+    }
+
+    @Test(timeOut = 300_000)
+    public void aThrowingObserverEndsItsGameAsAnErrorAndNothingMore() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        GameResult r = runner.play(spec(7_000_000L, 300), g -> {
+            throw new IllegalStateException("boom");
+        });
+        Assert.assertEquals(r.endReason(), "Error", r.toString());
+        Assert.assertTrue(r.error() != null && r.error().contains("boom"), r.toString());
+        Assert.assertFalse(runner.isPoisoned(), "a throwing observer does not poison the runner");
+        GameResult next = runner.play(spec(7_000_000L, 300));     // the same runner: its one slot came back
+        Assert.assertTrue(DECIDED.contains(next.endReason()), next.toString());
+        Assert.assertNull(next.error(), next.toString());
     }
 }
