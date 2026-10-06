@@ -21,7 +21,12 @@ public final class JobRunner {
     /** Plays every game of {@code job} in order; hands each record and finally the summary to {@code sink} as
      *  Maps (the caller serialises). Returns the summary's counts. A game that times out or errors is recorded
      *  and the job continues. A PoisonedException from the runner propagates after the games played so far
-     *  were handed over; no summary is written then. */
+     *  were handed over; no summary is written then. An IllegalArgumentException from the runner -- registerPlayers
+     *  refusing a deck it cannot load, an unknown profile or an unknown AI, or a timeout_s below 1 -- comes out at
+     *  the first game, after no record and with no summary. An InterruptedException propagates with no record for
+     *  the interrupted game and no summary. A poison caused by the job's own last game is not reported here: the
+     *  summary is written and run returns normally, so a caller that must know asks the runner
+     *  ({@link GameRunner#isPoisoned()}). */
     public Map<String, Integer> run(JobFile job, Consumer<Map<String, Object>> sink) throws InterruptedException {
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (String r : GameRecords.END_REASONS) {
