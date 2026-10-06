@@ -94,6 +94,36 @@ public class GameRecordsTest {
     }
 
     @Test
+    public void aStatsWithNoGameIsRecordedWithoutLiveReads() {
+        List<JobFile.Seat> seats = List.of(new JobFile.Seat("a.dck", "hash-0", "Default", "default"),
+                new JobFile.Seat("b.dck", "hash-1", "Default", "default"));
+        Map<String, Object> rec = GameRecords.record(new GameRecords.Stats(2), 4, 11L, seats, false, "boom", 7L);
+        Assert.assertEquals(new ArrayList<>(rec.keySet()), RECORD_KEYS);
+        Assert.assertEquals(rec.get("end_reason"), "Error");
+        Assert.assertEquals(rec.get("error"), "boom", "the runner's error, not a failure to build the record");
+        Assert.assertNull(rec.get("winner_seat"));
+        Assert.assertEquals(rec.get("turns"), 0);
+        Assert.assertNull(rec.get("first_seat"));
+        @SuppressWarnings("unchecked") List<Map<String, Object>> recSeats = (List<Map<String, Object>>) rec.get("seats");
+        Assert.assertEquals(recSeats.size(), 2);
+        for (Map<String, Object> s : recSeats) {
+            Assert.assertEquals(new ArrayList<>(s.keySet()), SEAT_KEYS);
+            Assert.assertNull(s.get("final_life"), "no game, no live read");
+        }
+        Assert.assertEquals(rec.get("cards"), List.of());
+        Map<String, Object> noError = GameRecords.record(new GameRecords.Stats(2), 4, 11L, seats, false, null, 7L);
+        Assert.assertEquals(noError.get("end_reason"), "Error");
+        Assert.assertEquals(noError.get("error"), "game ended without an outcome");
+        Map<String, Object> timedOut = GameRecords.record(new GameRecords.Stats(2), 4, 11L, seats, true, null, 7L);
+        Assert.assertEquals(timedOut.get("end_reason"), "Timeout");
+        Map<String, Object> fallback = GameRecords.fallbackRecord(new GameRecords.Stats(2), 4, 11L, seats, false, "boom",
+                new IllegalStateException("x"), 7L);
+        Assert.assertEquals(new ArrayList<>(fallback.keySet()), RECORD_KEYS);
+        Assert.assertEquals(fallback.get("end_reason"), "Error");
+        Assert.assertEquals(fallback.get("error"), "boom | record failed: java.lang.IllegalStateException: x");
+    }
+
+    @Test
     public void theSummaryHasTodaysShape() {
         Map<String, Integer> counts = new java.util.LinkedHashMap<>();
         for (String r : GameRecords.END_REASONS) counts.put(r, 0);
