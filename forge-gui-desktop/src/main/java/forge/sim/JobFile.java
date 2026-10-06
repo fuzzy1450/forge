@@ -71,6 +71,7 @@ public final class JobFile {
             if (key.startsWith("seat.")) {
                 String[] parts = key.split("\\.", 3);
                 SeatFields s = seats.computeIfAbsent(seatIndex(key, parts[1]), k -> new SeatFields());
+                if (parts.length < 3 || parts[2].isEmpty()) throw new BadJob("unknown job key " + key);
                 switch (parts[2]) {
                     case "deck_file": s.deckFile = val; break;
                     case "deck_hash": s.deckHash = val; break;

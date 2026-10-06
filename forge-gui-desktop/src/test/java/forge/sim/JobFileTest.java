@@ -64,6 +64,8 @@ public class JobFileTest {
                           "seat.1.deck_file=b", "seat.1.deck_hash=b"), "seat.0.colour");
         expectBad(List.of("games=three", "seat.0.deck_file=a", "seat.0.deck_hash=a",
                           "seat.1.deck_file=b", "seat.1.deck_hash=b"), "games");
+        expectBad(List.of("seat.0=x", "seat.0.deck_file=a", "seat.0.deck_hash=a",
+                          "seat.1.deck_file=b", "seat.1.deck_hash=b"), "seat.0");
     }
 
     private static void expectBad(List<String> lines, String fragment) {
