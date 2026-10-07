@@ -14,8 +14,9 @@ import java.util.TreeMap;
  * {@code Job.load}: {@code games}, {@code seed}, {@code timeout_s}, {@code format} and {@code raw_dir}, and per seat
  * {@code seat.<N>.deck_file}, {@code seat.<N>.deck_hash}, {@code seat.<N>.profile} (empty: Default) and
  * {@code seat.<N>.ai} (empty: default). Blank lines and lines without {@code =} are skipped, the last value of a key
- * wins, the seats are taken in index order, and a job needs at least two of them and format Commander. A job that
- * cannot be loaded is a {@link BadJob} naming the key or the rule. {@link #specs()} yields one
+ * wins, the seats are taken in index order, and a job needs at least two of them and format Commander. Beyond the
+ * harness, {@code games} below 0 and {@code timeout_s} below 1 are refused too, as bad fields (harness-in-engine spec
+ * 4). A job that cannot be loaded is a {@link BadJob} naming the key or the rule. {@link #specs()} yields one
  * {@link GameRunner.GameSpec} per game; the players are built from those by {@link GameRunner#registerPlayers},
  * which also maps the ai string to AI options.
  */
@@ -96,6 +97,12 @@ public final class JobFile {
                 }
             }
         }
+        if (games < 0) {
+            throw new BadJob("bad value for games: " + games + " (at least 0)");
+        }
+        if (timeoutS < 1) {
+            throw new BadJob("bad value for timeout_s: " + timeoutS + " (at least 1)");
+        }
         if (seats.size() < 2) {
             throw new BadJob("a job needs at least two seats");
         }
@@ -121,15 +128,26 @@ public final class JobFile {
     /** One {@link GameRunner.GameSpec} per game, at seed + i, each with the job's timeout and the same immutable
      *  list of its seats, in order. */
     public List<GameRunner.GameSpec> specs() {
-        List<GameRunner.SeatSpec> built = new ArrayList<>();
-        for (Seat s : seats) {
-            built.add(new GameRunner.SeatSpec(Paths.get(s.deckFile()), s.profile(), s.ai()));
-        }
-        List<GameRunner.SeatSpec> seatSpecs = List.copyOf(built);
+        List<GameRunner.SeatSpec> seatSpecs = seatSpecs();
         List<GameRunner.GameSpec> out = new ArrayList<>();
         for (int g = 0; g < games; g++) {
             out.add(new GameRunner.GameSpec(seed + g, timeoutS, seatSpecs));
         }
         return out;
+    }
+
+    /** Game 0's spec, which a job of no games has too: the one Serve has the runner validate before it accepts the
+     *  job. Every game shares its timeout and seats; only the seed moves on. */
+    GameRunner.GameSpec firstSpec() {
+        return new GameRunner.GameSpec(seed, timeoutS, seatSpecs());
+    }
+
+    /** The job's seats as the runner takes them, in seat order, as one immutable list. */
+    private List<GameRunner.SeatSpec> seatSpecs() {
+        List<GameRunner.SeatSpec> built = new ArrayList<>();
+        for (Seat s : seats) {
+            built.add(new GameRunner.SeatSpec(Paths.get(s.deckFile()), s.profile(), s.ai()));
+        }
+        return List.copyOf(built);
     }
 }

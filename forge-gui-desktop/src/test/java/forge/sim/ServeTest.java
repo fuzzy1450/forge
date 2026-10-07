@@ -2,15 +2,21 @@ package forge.sim;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
@@ -20,11 +26,28 @@ import org.testng.annotations.Test;
 import forge.util.SimScope;
 
 public class ServeTest {
+    /** Every temp file and directory the tests made, in the order made: deleted after the class, newest first. */
+    static final List<Path> TEMP = Collections.synchronizedList(new ArrayList<>());
+
     @BeforeClass
     public static void boot() { GameRunner.boot(); }
 
     @AfterClass
     public static void relaxStrict() { SimScope.setStrict(false); }
+
+    @AfterClass
+    public void deleteTempFiles() throws IOException {
+        for (int i = TEMP.size() - 1; i >= 0; i--) {
+            Files.deleteIfExists(TEMP.get(i));
+        }
+        TEMP.clear();
+    }
+
+    /** {@code p}, to be deleted after the class. */
+    static Path temp(Path p) {
+        TEMP.add(p);
+        return p;
+    }
 
     static Path jobFile(int games, long seed, int timeoutS, int seats) throws Exception {
         List<String> lines = new ArrayList<>(List.of("games=" + games, "seed=" + seed, "timeout_s=" + timeoutS));
@@ -33,19 +56,24 @@ public class ServeTest {
             lines.add("seat." + i + ".deck_file=" + precons.get(i));
             lines.add("seat." + i + ".deck_hash=h" + i);
         }
-        Path f = Files.createTempFile("serve", ".job");
+        return jobFile(lines);
+    }
+
+    /** A job file of exactly these lines. */
+    static Path jobFile(List<String> lines) throws IOException {
+        Path f = temp(Files.createTempFile("serve", ".job"));
         Files.write(f, lines);
         return f;
     }
 
-    /** Runs a Serve over the given stdin text; returns {exit code, stdout lines}. */
+    /** Runs a Serve over the given stdin text; returns {exit code, stdout lines, stderr text}. */
     static Object[] serve(GameRunner runner, String stdin) throws Exception {
         ByteArrayOutputStream outBytes = new ByteArrayOutputStream(), errBytes = new ByteArrayOutputStream();
         PrintStream out = new PrintStream(outBytes, true, StandardCharsets.UTF_8);
         PrintStream err = new PrintStream(errBytes, true, StandardCharsets.UTF_8);
         int code = new Serve(runner, new BufferedReader(new StringReader(stdin)), out, err).run();
         List<String> lines = List.of(outBytes.toString(StandardCharsets.UTF_8).split("\\R"));
-        return new Object[] {code, lines};
+        return new Object[] {code, lines, errBytes.toString(StandardCharsets.UTF_8)};
     }
 
     static List<String> linesOf(List<String> all, String id) {
@@ -54,11 +82,48 @@ public class ServeTest {
         return mine;
     }
 
+    /** The job's only line is its error, which starts with {@code error}: it was refused, never accepted. */
+    static void assertRefused(List<String> lines, String id, String error) {
+        List<String> mine = linesOf(lines, id);
+        Assert.assertEquals(mine.size(), 1, "one error line and no accepted line: " + mine);
+        Assert.assertTrue(mine.get(0).startsWith("{\"job\":\"" + id + "\",\"error\":\"" + error), mine.get(0));
+    }
+
+    /** A one-slot runner poisoned after its first game, as a game thread that outlived its grace would leave it: every
+     *  later play throws PoisonedException. */
+    static GameRunner poisonedAfterItsFirstGame() {
+        return new GameRunner(1) {
+            @Override
+            public GameResult play(GameSpec spec, java.util.function.Consumer<forge.game.Game> observer) throws InterruptedException {
+                GameResult r = super.play(spec, observer);
+                poisonForTest();
+                return r;
+            }
+        };
+    }
+
     @Test(timeOut = 600_000)
     public void twoJobsInterleaveOnTwoSlotsAndEveryLineIsAttributed() throws Exception {
+        AtomicInteger inFlight = new AtomicInteger();
+        AtomicInteger mostInFlight = new AtomicInteger();
+        Set<String> slotThreads = ConcurrentHashMap.newKeySet();
+        GameRunner runner = new GameRunner(2) {
+            @Override
+            public GameResult play(GameSpec spec, java.util.function.Consumer<forge.game.Game> observer) throws InterruptedException {
+                slotThreads.add(Thread.currentThread().getName());
+                mostInFlight.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
+                try {
+                    return super.play(spec, observer);
+                } finally {
+                    inFlight.decrementAndGet();
+                }
+            }
+        };
         Path a = jobFile(2, 7_000_000L, 300, 2), b = jobFile(1, 7_000_010L, 300, 2);
-        Object[] r = serve(new GameRunner(2), "run a " + a + "\nrun b " + b + "\nquit\n");
+        Object[] r = serve(runner, "run a " + a + "\nrun b " + b + "\nquit\n");
         Assert.assertEquals(r[0], 0);
+        Assert.assertEquals(mostInFlight.get(), 2, "the two jobs played at once, a game on each slot");
+        Assert.assertEquals(slotThreads, Set.of("serve-slot-0", "serve-slot-1"), "each job on a slot thread of its own, numbered");
         @SuppressWarnings("unchecked") List<String> lines = (List<String>) r[1];
         for (String l : lines) Assert.assertTrue(l.startsWith("{\"job\":"), "every line is attributed: " + l);
         List<String> la = linesOf(lines, "a"), lb = linesOf(lines, "b");
@@ -72,7 +137,10 @@ public class ServeTest {
     @Test(timeOut = 300_000)
     public void badLinesAnswerAnErrorAndTheServerLivesOn() throws Exception {
         Path a = jobFile(1, 7_000_000L, 300, 2);
-        Object[] r = serve(new GameRunner(1), "hello\nrun onlytwo\nrun a " + a + "\nrun a " + a + "\nrun c C:/no/such.job\nquit\n");
+        Path badJob = jobFile(List.of("seat.0=x"));                    // a seat key with no field: JobFile's BadJob
+        Path noGames = jobFile(0, 7_000_000L, 300, 2);                 // games=0: accepted, then its summary
+        Object[] r = serve(new GameRunner(1), "hello\nrun onlytwo\nrun a " + a + "\nrun a " + a + "\nrun c C:/no/such.job\n"
+                + "run bj " + badJob + "\nafter-the-bad-job\nrun z " + noGames + "\nafter-no-games\nquit\nrun q " + a + "\n");
         Assert.assertEquals(r[0], 0);
         @SuppressWarnings("unchecked") List<String> lines = (List<String>) r[1];
         Assert.assertTrue(lines.get(0).startsWith("{\"job\":null,\"error\":\"unknown command"), lines.get(0));
@@ -82,6 +150,52 @@ public class ServeTest {
         Assert.assertEquals(lc.size(), 1, lc.toString());
         Assert.assertTrue(lc.get(0).contains("\"error\":"), "a job that cannot start answers one error line");
         Assert.assertEquals(linesOf(lines, "a").size(), 3, "a ran: accepted, record, summary");
+        assertRefused(lines, "bj", "BadJob: unknown job key seat.0");
+        Assert.assertTrue(lines.contains("{\"job\":null,\"error\":\"unknown command: after-the-bad-job\"}"),
+                "the line after a refused job file is read: " + lines);
+        Assert.assertEquals(linesOf(lines, "z").size(), 2, "a job of no games: accepted, summary: " + lines);
+        Assert.assertTrue(lines.contains("{\"job\":null,\"error\":\"unknown command: after-no-games\"}"),
+                "the line after a job of no games is read: " + lines);
+        Assert.assertEquals(linesOf(lines, "q"), List.of(), "quit accepts nothing more: the run after it is never read");
+    }
+
+    /** A job's accepted line goes out before the job can write one. This out lets go of the lock Serve holds around a
+     *  write while it writes an accepted line, for up to two seconds or until another line is written: were the job
+     *  started first, its summary (a job of no games writes nothing else) would get in ahead. */
+    @Test(timeOut = 120_000)
+    public void theAcceptedLineIsWrittenBeforeTheJobCanWriteOne() throws Exception {
+        ByteArrayOutputStream outBytes = new ByteArrayOutputStream();
+        PrintStream out = new PrintStream(outBytes, true, StandardCharsets.UTF_8) {
+            private int written;
+
+            @Override
+            public void println(String line) {
+                synchronized (this) {
+                    if (line.contains("\"accepted\":true")) {
+                        int before = written;
+                        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+                        try {
+                            while (written == before && System.nanoTime() < deadline) {
+                                wait(Math.max(1, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())));
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                    super.println(line);
+                    written++;
+                    notifyAll();
+                }
+            }
+        };
+        PrintStream err = new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8);
+        String stdin = "run z " + jobFile(0, 7_000_000L, 300, 2) + "\nquit\n";
+        int code = new Serve(new GameRunner(1), new BufferedReader(new StringReader(stdin)), out, err).run();
+        Assert.assertEquals(code, 0);
+        List<String> lines = List.of(outBytes.toString(StandardCharsets.UTF_8).split("\\R"));
+        Assert.assertEquals(lines.size(), 2, lines.toString());
+        Assert.assertTrue(lines.get(0).startsWith("{\"job\":\"z\",\"accepted\":true"), "accepted, then the summary: " + lines);
+        Assert.assertTrue(lines.get(1).startsWith("{\"job\":\"z\",\"summary\":{"), "accepted, then the summary: " + lines);
     }
 
     @Test(timeOut = 300_000)
@@ -95,60 +209,58 @@ public class ServeTest {
 
     @Test(timeOut = 600_000)
     public void aPoisonedRunnerRefusesTheRestAndExitsFive() throws Exception {
-        GameRunner runner = new GameRunner(1) {
-            @Override
-            public GameResult play(GameSpec spec, java.util.function.Consumer<forge.game.Game> observer) throws InterruptedException {
-                GameResult r = super.play(spec, observer);
-                poisonForTest();                                     // the first game played; the runner is poisoned after it
-                return r;
-            }
-        };
         Path a = jobFile(1, 7_000_000L, 300, 2), b = jobFile(1, 7_000_010L, 300, 2);
-        Object[] r = serve(runner, "run a " + a + "\nrun b " + b + "\nquit\n");
+        Object[] r = serve(poisonedAfterItsFirstGame(), "run a " + a + "\nrun b " + b + "\nquit\n");
         Assert.assertEquals(r[0], 5, "poisoned: exit 5");
         @SuppressWarnings("unchecked") List<String> lines = (List<String>) r[1];
         List<String> la = linesOf(lines, "a"), lb = linesOf(lines, "b");
         Assert.assertEquals(la.size(), 3, "a: accepted, its record, its summary (the poison came after its game)");
+        Assert.assertTrue(la.get(2).contains("\"summary\":{"),
+                "a had no game left when its own last game poisoned the runner, so its summary still ends it: " + la.get(2));
         Assert.assertEquals(lb.size(), 2, "b: accepted, then error poisoned: " + lb);
         Assert.assertTrue(lb.get(1).contains("\"error\":\"poisoned\""), lb.get(1));
+        String err = (String) r[2];
+        Assert.assertTrue(err.contains("job b: poisoned"), "a job refused at its start ends on err too: " + err);
+        Assert.assertFalse(err.contains("job b: 1 games"), "it never started: " + err);
     }
 
     @Test(timeOut = 600_000)
     public void aJobWithGamesLeftOnAPoisonedRunnerEndsPoisonedAfterTheRecordsItPlayed() throws Exception {
-        GameRunner runner = new GameRunner(1) {
-            @Override
-            public GameResult play(GameSpec spec, java.util.function.Consumer<forge.game.Game> observer) throws InterruptedException {
-                GameResult r = super.play(spec, observer);
-                poisonForTest();                                     // after the first game: the second finds the runner poisoned
-                return r;
-            }
-        };
-        Object[] r = serve(runner, "run a " + jobFile(2, 7_000_000L, 300, 2) + "\nquit\n");
+        Object[] r = serve(poisonedAfterItsFirstGame(), "run a " + jobFile(2, 7_000_000L, 300, 2) + "\nquit\n");
         Assert.assertEquals(r[0], 5, "poisoned: exit 5");
         @SuppressWarnings("unchecked") List<String> lines = (List<String>) r[1];
         List<String> la = linesOf(lines, "a");
         Assert.assertEquals(la.size(), 3, "accepted, the first game's record, then poisoned instead of a summary: " + la);
         Assert.assertTrue(la.get(1).contains("\"game\":0,"), la.get(1));
         Assert.assertEquals(la.get(2), "{\"job\":\"a\",\"error\":\"poisoned\"}");
+        String err = (String) r[2];
+        Assert.assertTrue(err.contains("job a: 2 games") && err.contains("job a: poisoned"),
+                "the job's start line, then its error as its end line: " + err);
     }
 
     @Test(timeOut = 300_000)
-    public void aDeckTheRunnerCannotLoadEndsAnAcceptedJobWithOneErrorLine() throws Exception {
-        Path bad = Files.createTempFile("serve", ".job");
-        Files.write(bad, List.of("games=2", "seat.0.deck_file=" + Precons.commander().get(0), "seat.1.deck_file=C:/no/such.dck"));
+    public void aJobWhoseDeckProfileOrAiCannotBeLoadedIsRefusedBeforeItIsAccepted() throws Exception {
+        String seat0 = "seat.0.deck_file=" + Precons.commander().get(0), seat1 = "seat.1.deck_file=" + Precons.commander().get(1);
+        Path deck = jobFile(List.of("games=2", seat0, "seat.1.deck_file=C:/no/such.dck"));
+        Path deckNoGames = jobFile(List.of("games=0", seat0, "seat.1.deck_file=C:/no/such.dck"));
+        Path profile = jobFile(List.of("games=2", seat0, seat1, "seat.1.profile=NoSuchProfile"));
+        Path ai = jobFile(List.of("games=2", seat0, seat1, "seat.1.ai=no_such_ai"));
         Path next = jobFile(0, 7_000_000L, 300, 2);                    // games=0: accepted, then its summary; nothing is played
-        Object[] r = serve(new GameRunner(1), "run bad " + bad + "\nrun next " + next + "\nquit\n");
+        Object[] r = serve(new GameRunner(1), "run deck " + deck + "\nrun nogames " + deckNoGames + "\nrun profile " + profile
+                + "\nrun ai " + ai + "\nrun next " + next + "\nquit\n");
         Assert.assertEquals(r[0], 0);
         @SuppressWarnings("unchecked") List<String> lines = (List<String>) r[1];
-        List<String> lb = linesOf(lines, "bad");
-        Assert.assertEquals(lb.size(), 2, "the file loads, so accepted; the first game refuses the deck: one error, no summary: " + lb);
-        Assert.assertTrue(lb.get(1).startsWith("{\"job\":\"bad\",\"error\":\"IllegalArgumentException: could not load deck"), lb.get(1));
-        Assert.assertEquals(linesOf(lines, "next").size(), 2, "the slot plays on: accepted, summary");
+        assertRefused(lines, "deck", "IllegalArgumentException: could not load deck");
+        assertRefused(lines, "nogames", "IllegalArgumentException: could not load deck");
+        assertRefused(lines, "profile", "IllegalArgumentException: unknown AI profile NoSuchProfile");
+        assertRefused(lines, "ai", "IllegalArgumentException: unknown ai mode no_such_ai");
+        Assert.assertEquals(linesOf(lines, "next").size(), 2, "the server plays on: accepted, summary");
     }
 
     @Test(timeOut = 120_000)
     public void aBareRunIsMalformedAndTheJobFileIsTheRestOfTheLine() throws Exception {
-        Path spaced = Files.copy(jobFile(0, 7_000_000L, 300, 2), Files.createTempDirectory("serve dir").resolve("a job.job"));
+        Path dir = temp(Files.createTempDirectory("serve dir"));
+        Path spaced = temp(Files.copy(jobFile(0, 7_000_000L, 300, 2), dir.resolve("a job.job")));
         Path tabbed = jobFile(0, 7_000_000L, 300, 2);                  // games=0 (both): accepted, then the summary
         Object[] r = serve(new GameRunner(1), "run\nrun spaced " + spaced + "\nrun\ttabbed\t" + tabbed + "\nquit\n");
         Assert.assertEquals(r[0], 0);
@@ -159,7 +271,8 @@ public class ServeTest {
     }
 
     /** The facade makes GameRunner's halt handler the default handler (exit 4, spec section 6), so an Error out of a
-     *  job has to reach that handler; a Future nobody reads (pool.submit) would keep it. */
+     *  job has to reach that handler; a Future nobody reads (pool.submit) would keep it. run answers the handler's exit
+     *  code itself, so that the process exits 4 whichever of the halt and the end of the drain comes first. */
     @Test(timeOut = 120_000)
     public void anErrorOutOfAJobReachesTheUncaughtHandler() throws Exception {
         Error boom = new Error("boom");
@@ -179,10 +292,56 @@ public class ServeTest {
             }
         });
         try {
-            serve(runner, "run a " + jobFile(1, 7_000_000L, 300, 2) + "\nquit\n");
+            Object[] r = serve(runner, "run a " + jobFile(1, 7_000_000L, 300, 2) + "\nquit\n");
             Assert.assertTrue(reached.await(30, TimeUnit.SECONDS), "the Error reached the default uncaught handler");
+            Assert.assertEquals(r[0], GameRunner.EXIT_UNCAUGHT, "run answers the halt handler's exit code");
         } finally {
             Thread.setDefaultUncaughtExceptionHandler(saved);
         }
+    }
+
+    /** An Error on the reading thread (an OutOfMemoryError in JobFile.load, say) goes on to that thread's uncaught
+     *  handler at once: run does not first wait for the jobs it accepted. */
+    @Test(timeOut = 120_000)
+    public void anErrorOnTheReadingThreadLeavesWithoutWaitingForTheJobs() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        GameRunner runner = new GameRunner(1) {
+            @Override
+            public GameResult play(GameSpec spec, java.util.function.Consumer<forge.game.Game> observer) throws InterruptedException {
+                release.await();                                      // job a holds its slot until the test lets it go
+                throw new IllegalStateException("let go");
+            }
+        };
+        Error boom = new Error("read failed");
+        String first = "run a " + jobFile(1, 7_000_000L, 300, 2);
+        BufferedReader in = new BufferedReader(new StringReader("")) {
+            private boolean sent;
+
+            @Override
+            public String readLine() {
+                if (sent) {
+                    throw boom;
+                }
+                sent = true;
+                return first;
+            }
+        };
+        PrintStream out = new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8);
+        PrintStream err = new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8);
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread reading = new Thread(() -> {
+            try {
+                new Serve(runner, in, out, err).run();
+            } catch (Throwable t) {
+                thrown.set(t);
+            }
+        }, "serve-reading");
+        reading.start();
+        reading.join(10_000);
+        boolean left = !reading.isAlive();
+        release.countDown();
+        reading.join(60_000);
+        Assert.assertTrue(left, "run left on the reading thread's Error while job a still held its slot");
+        Assert.assertSame(thrown.get(), boom);
     }
 }

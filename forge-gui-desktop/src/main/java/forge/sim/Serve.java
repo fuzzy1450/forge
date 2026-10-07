@@ -11,6 +11,8 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The harness's server loop (harness-in-engine spec 4): reads commands from {@code in}, one per line, and runs the
@@ -19,8 +21,10 @@ import java.util.concurrent.TimeUnit;
  * memory.
  * <ul>
  * <li>{@code run <id> <job file>}: the id is any token not used before; the job file is the rest of the line. A job
- * whose file loads is answered {@code {"job": id, "accepted": true, "games": n}} and waits FIFO for a free slot; one
- * whose file does not is answered with one {@code {"job": id, "error": "..."}} and nothing further.</li>
+ * whose file loads and whose first game passes the checks {@link GameRunner#play} makes before it takes a slot (two
+ * seats or more, a timeout of a second or more, every deck, profile and AI loaded) is answered
+ * {@code {"job": id, "accepted": true, "games": n}} and waits FIFO for a free slot; any other is answered with one
+ * {@code {"job": id, "error": "..."}} and nothing further.</li>
  * <li>{@code quit}, or the end of {@code in}: accept nothing more, finish the queue and the jobs in flight.</li>
  * <li>Anything else, a {@code run} without an id and a file, or one whose id was used before: one
  * {@code {"job": null, "error": "..."}}.</li>
@@ -29,11 +33,12 @@ import java.util.concurrent.TimeUnit;
  * line, then its records in game order, then its summary or one error line, either of which ends it. Lines of
  * different jobs interleave. A poisoned runner plays no further game: each job with games still to play ends with
  * {@code "error": "poisoned"} instead of a summary, and {@link #run} returns {@link #EXIT_POISONED}. {@code err} gets
- * one line when a job starts playing and one when it is done (its summary written); an error that ends a job is on
- * {@code out} alone.
+ * a line when an accepted job starts playing and one when it ends: {@code done} with its counts, or its error.
  */
 public final class Serve {
     public static final int EXIT_OK = 0;
+    /** GameRunner's halt handler's code: a throwable escaped a job. */
+    public static final int EXIT_UNCAUGHT = GameRunner.EXIT_UNCAUGHT;
     public static final int EXIT_POISONED = GameRunner.EXIT_POISONED;
     /** How many characters of an unknown command its error line quotes. */
     private static final int CLIP = 120;
@@ -52,13 +57,18 @@ public final class Serve {
     }
 
     /** Runs the command loop to its end (quit or EOF, then every accepted job finished or refused) and returns the
-     *  exit code: 0, or 5 when the runner was poisoned. */
+     *  exit code: {@link #EXIT_UNCAUGHT} (4) when a throwable escaped a job, else 5 when the runner was poisoned, else
+     *  0. A throwable out of a job still goes on to its slot thread's uncaught handler, which the facade makes
+     *  GameRunner's halt handler, so that exit code only matters when the drain ends before the halt. An Error on the
+     *  reading thread itself leaves at once: nothing more is accepted, and the queue is not waited for. */
     public int run() throws InterruptedException {
+        AtomicInteger threads = new AtomicInteger();
         ExecutorService pool = Executors.newFixedThreadPool(runner.slots(), r -> {
-            Thread t = new Thread(r, "serve-slot");
+            Thread t = new Thread(r, "serve-slot-" + threads.getAndIncrement());
             t.setDaemon(true);
             return t;
         });
+        AtomicReference<Throwable> fatal = new AtomicReference<>();
         try {
             String line;
             while ((line = readLine()) != null) {
@@ -86,21 +96,33 @@ public final class Serve {
                 JobFile job;
                 try {
                     job = JobFile.load(Paths.get(parts[2]));
+                    GameRunner.validate(job.firstSpec());             // a deck, profile or AI the runner cannot load: the job cannot start
                 } catch (IOException | RuntimeException e) {          // BadJob is a RuntimeException, as is a path Paths.get refuses
-                    emitError(id, e.getClass().getSimpleName() + ": " + e.getMessage());
+                    emitError(id, describe(e));
                     continue;
                 }
                 Map<String, Object> accepted = new LinkedHashMap<>();
                 accepted.put("accepted", true);
                 accepted.put("games", job.games);
                 emit(id, accepted);                                   // written before the job can write a line of its own
-                // execute, not submit: an Error out of a job must reach the slot thread's uncaught handler, which the
-                // facade makes GameRunner's halt handler (exit 4); submit would keep it in a Future nobody reads.
-                pool.execute(() -> playJob(id, job));
+                // execute, not submit: a throwable out of a job must reach the slot thread's uncaught handler, which the
+                // facade makes GameRunner's halt handler (exit 4); submit would keep it in a Future nobody reads. It is
+                // noted first, so that run answers 4 too if the drain ends before the halt.
+                pool.execute(() -> {
+                    try {
+                        playJob(id, job);
+                    } catch (Throwable t) {
+                        fatal.compareAndSet(null, t);
+                        throw t;
+                    }
+                });
             }
         } finally {
-            pool.shutdown();                                          // the queue and the jobs in flight still finish
-            pool.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
+            pool.shutdown();                                          // accept nothing more, however the loop ended
+        }
+        pool.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);   // only after a quit or EOF: the queue and the jobs in flight finish
+        if (fatal.get() != null) {
+            return EXIT_UNCAUGHT;
         }
         return runner.isPoisoned() ? EXIT_POISONED : EXIT_OK;
     }
@@ -108,7 +130,7 @@ public final class Serve {
     /** One job on a slot thread: its records, then its summary, or else one error line that ends it. */
     private void playJob(String id, JobFile job) {
         if (runner.isPoisoned()) {
-            emitError(id, "poisoned");
+            fail(id, "poisoned");
             return;
         }
         err.println("job " + id + ": " + job.games + " games");
@@ -116,15 +138,21 @@ public final class Serve {
             Map<String, Integer> counts = new JobRunner(runner).run(job, rec -> emit(id, rec));
             err.println("job " + id + ": done " + counts);
         } catch (GameRunner.PoisonedException poisoned) {
-            emitError(id, "poisoned");                                // the games played so far were written; no summary
+            fail(id, "poisoned");                                     // the games played so far were written; no summary
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            emitError(id, "interrupted");
+            fail(id, "interrupted");
         } catch (RuntimeException e) {
-            // A deck or profile the runner cannot load is refused here, by GameRunner.registerPlayers inside
-            // JobRunner.run, not by JobFile.load: the job was accepted, and this error line ends it (no summary follows).
-            emitError(id, e.getClass().getSimpleName() + ": " + e.getMessage());
+            // The runner's own refusals were checked when the job was accepted (GameRunner.validate), so one here means a
+            // deck file changed or went away since, or a bug: either way this error line ends the job, with no summary.
+            fail(id, describe(e));
         }
+    }
+
+    /** Ends an accepted job with an error: its error line on {@code out}, and its end line on {@code err}. */
+    private void fail(String id, String message) {
+        emitError(id, message);
+        err.println("job " + id + ": " + message);
     }
 
     /** Writes one line: {@code job} first, then {@code body}'s entries in their order, under one lock so that lines
@@ -145,6 +173,11 @@ public final class Serve {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("error", message);
         emit(id, body);
+    }
+
+    /** An exception as an error line gives it: its class's simple name, then its message. */
+    private static String describe(Exception e) {
+        return e.getClass().getSimpleName() + ": " + e.getMessage();
     }
 
     /** The next line of {@code in}, or null at its end; a read that fails is its end too, so it drains as quit does. */

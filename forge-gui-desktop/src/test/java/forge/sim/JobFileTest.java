@@ -82,6 +82,24 @@ public class JobFileTest {
                           "seat.1.deck_file=b", "seat.1.deck_hash=b"), "seat.x.deck_file");
     }
 
+    @Test
+    public void aNegativeGameCountIsRefusedByNameAndNoGamesIsAJob() {
+        expectBad(List.of("games=-1", "seat.0.deck_file=a", "seat.0.deck_hash=a",
+                          "seat.1.deck_file=b", "seat.1.deck_hash=b"), "bad value for games: -1");
+        JobFile none = JobFile.parse(List.of("games=0", "seat.0.deck_file=a", "seat.0.deck_hash=a",
+                                             "seat.1.deck_file=b", "seat.1.deck_hash=b"));
+        Assert.assertEquals(none.games, 0);
+        Assert.assertEquals(none.specs(), List.of(), "a job of no games: no game to play");
+    }
+
+    @Test
+    public void aTimeoutBelowOneSecondIsRefusedByName() {
+        expectBad(List.of("timeout_s=0", "seat.0.deck_file=a", "seat.0.deck_hash=a",
+                          "seat.1.deck_file=b", "seat.1.deck_hash=b"), "bad value for timeout_s: 0");
+        Assert.assertEquals(JobFile.parse(List.of("timeout_s=1", "seat.0.deck_file=a", "seat.0.deck_hash=a",
+                                                  "seat.1.deck_file=b", "seat.1.deck_hash=b")).timeoutS, 1);
+    }
+
     private static void expectBad(List<String> lines, String fragment) {
         try {
             JobFile.parse(lines);

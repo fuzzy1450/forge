@@ -237,14 +237,8 @@ public class GameRunner {
         if (poisoned) {
             throw new PoisonedException();
         }
-        if (spec.seats().size() < 2) {
-            throw new IllegalArgumentException("a game needs at least two seats");
-        }
-        if (spec.timeoutSeconds() < 1) {
-            throw new IllegalArgumentException("timeoutSeconds must be >= 1, got " + spec.timeoutSeconds());
-        }
         Objects.requireNonNull(observer, "observer");
-        List<RegisteredPlayer> players = registerPlayers(spec);     // refuses a bad deck or profile before a slot is taken
+        List<RegisteredPlayer> players = validate(spec);            // refuses a bad spec, deck, profile or AI before a slot is taken
         int slot = freeSlots.take();
         try {
             if (poisoned) {                                          // another game can poison the runner while this one waits for a slot
@@ -325,6 +319,20 @@ public class GameRunner {
             case "full_sim":   return EnumSet.of(AIOption.USE_FULL_SIMULATION);
             default: throw new IllegalArgumentException("unknown ai mode " + ai + " (default|hybrid_sim|full_sim)");
         }
+    }
+
+    /** The checks {@link #play} makes on a spec before it takes a slot, returning the game's players: at least two seats,
+     *  a timeout of at least one second, and every seat's deck, AI profile and AI mode loaded by
+     *  {@link #registerPlayers}. Serve makes the same checks on a job before it accepts it. Static, so it reads and
+     *  changes no runner's state; an IllegalArgumentException names what is wrong. */
+    static List<RegisteredPlayer> validate(GameSpec spec) {
+        if (spec.seats().size() < 2) {
+            throw new IllegalArgumentException("a game needs at least two seats");
+        }
+        if (spec.timeoutSeconds() < 1) {
+            throw new IllegalArgumentException("timeoutSeconds must be >= 1, got " + spec.timeoutSeconds());
+        }
+        return registerPlayers(spec);
     }
 
     /** This game's own players, built from its deck files: nothing is shared across games. */
