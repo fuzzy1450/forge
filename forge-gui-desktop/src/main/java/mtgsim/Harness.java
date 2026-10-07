@@ -60,10 +60,11 @@ public final class Harness {
 
     /** main's body less its exit, public for the tests. No arguments is the usage line and 2 before anything else, as
      *  the frozen harness had it. Otherwise System.out goes onto {@code err} first, then GameRunner's halt handler is
-     *  installed and Forge boots: a boot that throws a RuntimeException or a LinkageError (GuiDesktop's screen probe on
-     *  a machine with no display) is "fatal: boot failed" and 2 (spec 6), while an OutOfMemoryError or any other
-     *  VirtualMachineError goes on to the halt handler (4). Then {@link #dispatch}; both streams are flushed and the
-     *  exit code returned. The halt handler and System.out stay as it set them. */
+     *  installed and Forge boots: a boot that throws a RuntimeException or a LinkageError (a NoClassDefFoundError,
+     *  ExceptionInInitializerError or UnsatisfiedLinkError from a broken install) is "fatal: boot failed" and 2
+     *  (spec 6), while an OutOfMemoryError or any other VirtualMachineError goes on to the halt handler (4). Then
+     *  {@link #dispatch}; both streams are flushed and the exit code returned. The halt handler and System.out stay as
+     *  it set them. */
     public static int launch(String[] args, BufferedReader stdin, PrintStream out, PrintStream err) {
         if (args.length < 1) {
             return usage(err);                                    // before any Forge class is touched, as the frozen harness

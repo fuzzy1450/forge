@@ -369,10 +369,11 @@ public final class GameRecords {
     }
 
     /**
-     * Last-resort record for when {@link #record} itself throws — possible on the
-     * timeout path, where the still-running game thread may be writing the very maps
-     * record() walks. Reads no live engine state and no collection this subscriber
-     * maintains, so the job always has a record to emit for the game.
+     * Last-resort record for when {@link #record} itself throws -- possible on the
+     * timeout path, where in this runtime the one game thread that can still be writing
+     * the very maps record() walks is a poisoned runner's: one that outlived its 15 s
+     * grace ({@link GameRunner#GRACE_MS}). Reads no live engine state and no collection
+     * this subscriber maintains, so the job always has a record to emit for the game.
      */
     public static Map<String, Object> fallbackRecord(Stats stats, int g, long seed, List<JobFile.Seat> specs,
                                                      boolean timedOut, String error, Throwable t, long ms) {

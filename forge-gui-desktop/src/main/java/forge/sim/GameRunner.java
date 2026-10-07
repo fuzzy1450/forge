@@ -146,7 +146,9 @@ public class GameRunner {
         if (!booted) {
             System.setProperty("java.util.Arrays.useLegacyMergeSort", "true");
             System.setProperty("sun.java2d.d3d", "false");
-            // GuiDesktop's static initializer probes the screen; headless=true would make it throw.
+            // As the frozen harness's boot sets it (harness-in-engine spec, decision 1: the display requirement
+            // stays). GuiDesktop's screen probe no longer needs it: since upstream #11761 the probe runs on first
+            // use, not at class load, and answers a scale of 1.0 when there is no display or the probe throws.
             System.setProperty("java.awt.headless", "false");
             GuiBase.setInterface(new GuiDesktop());
             FModel.initialize(null, preferences -> {
