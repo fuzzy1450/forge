@@ -32,15 +32,16 @@ import forge.sim.Serve;
  * The farm harness, inside the engine since the shared-JVM program's sub-project 2
  * (MTG_DeckMaker docs/superpowers/specs/2026-10-06-harness-in-engine-design.md).
  *
- *   mtgsim.Harness check <names.txt>      resolve card names against Forge's database
- *   mtgsim.Harness run <job.job>          play the job, one game at a time, records on stdout
- *   mtgsim.Harness serve --slots N        play jobs from stdin on N slots, attributed records on stdout
- *   mtgsim.Harness --selftest             name checks + two precon games
+ *   mtgsim.Harness check {@code <names.txt>}   resolve card names against Forge's database
+ *   mtgsim.Harness run {@code <job.job>}       play the job, one game at a time, records on stdout
+ *   mtgsim.Harness serve [--slots N]           play jobs from stdin on N slots (default 1), attributed records on stdout
+ *   mtgsim.Harness --selftest                  name checks + two precon games
  *
- * Exit codes: 0 ok, 1 selftest failed, 2 fatal (usage, job, deck, profile), 3 one-shot run poisoned
- * (a timed-out game's thread outlived its grace), 4 uncaught throwable (GameRunner's halt handler),
- * 5 serve poisoned. The class keeps its name so every launcher's classpath finds it first in the jar.
- * {@link #main} is {@link #launch} and an exit; the work is forge.sim's (JobFile, JobRunner, Serve).
+ * Exit codes: 0 ok, 1 selftest failed, 2 fatal (usage, a boot failure, a job, deck or profile that cannot be loaded,
+ * or any other exception out of a command), 3 one-shot run poisoned (a timed-out game's thread outlived its grace),
+ * 4 uncaught throwable (GameRunner's halt handler: an Error, an OutOfMemoryError above all), 5 serve poisoned. The
+ * class keeps its name so every launcher's classpath finds it first in the jar. {@link #main} is {@link #launch} and
+ * an exit; the work is forge.sim's (JobFile, JobRunner, Serve).
  */
 public final class Harness {
     static final int EXIT_FATAL = 2;
@@ -57,13 +58,26 @@ public final class Harness {
         System.exit(code);                                        // Forge leaves non-daemon threads behind
     }
 
-    /** main's body less its exit, public for the tests: GameRunner's halt handler, then System.out onto {@code err},
-     *  then boot, then {@link #dispatch}; flushes both streams and returns the exit code. The halt handler and
-     *  System.out stay as it set them. */
+    /** main's body less its exit, public for the tests. No arguments is the usage line and 2 before anything else, as
+     *  the frozen harness had it. Otherwise System.out goes onto {@code err} first, then GameRunner's halt handler is
+     *  installed and Forge boots: a boot that throws a RuntimeException or a LinkageError (GuiDesktop's screen probe on
+     *  a machine with no display) is "fatal: boot failed" and 2 (spec 6), while an OutOfMemoryError or any other
+     *  VirtualMachineError goes on to the halt handler (4). Then {@link #dispatch}; both streams are flushed and the
+     *  exit code returned. The halt handler and System.out stay as it set them. */
     public static int launch(String[] args, BufferedReader stdin, PrintStream out, PrintStream err) {
-        GameRunner.installHaltOnUncaught();                       // first: an Error from here on, in boot or in any job, halts with 4
-        System.setOut(err);                                       // before boot: Forge's chatter, the card count included, never prefixes a JSON line
-        GameRunner.boot();                                        // GuiDesktop, FModel, strict mode, the halt handler again
+        if (args.length < 1) {
+            return usage(err);                                    // before any Forge class is touched, as the frozen harness
+        }
+        System.setOut(err);                                       // before anything else: no Forge line, boot's included, prefixes a JSON line
+        GameRunner.installHaltOnUncaught();                       // an Error from here on, in boot or in any job, halts with 4
+        try {
+            GameRunner.boot();                                    // GuiDesktop, FModel, strict mode, the halt handler again
+        } catch (RuntimeException | LinkageError bootFailed) {   // spec 6: 2; OutOfMemoryError and other VirtualMachineErrors still halt with 4
+            err.println("fatal: boot failed");
+            bootFailed.printStackTrace(err);
+            err.flush();
+            return EXIT_FATAL;
+        }
         int code = dispatch(args, stdin, out, err);
         out.flush();
         err.flush();
@@ -71,7 +85,8 @@ public final class Harness {
     }
 
     /** The command and its exit code, without exiting and without touching the halt handler or System.out: the tests'
-     *  entry. Boot must have run. */
+     *  entry. Boot must have run. Any exception out of a command is a fatal line and 2, as the frozen harness's catch of
+     *  Exception made it; only an Error goes on to the halt handler. */
     public static int dispatch(String[] args, BufferedReader stdin, PrintStream out, PrintStream err) {
         if (args.length < 1) {
             return usage(err);
@@ -93,6 +108,10 @@ public final class Harness {
             Thread.currentThread().interrupt();
             err.println("fatal: interrupted");
             return EXIT_FATAL;
+        } catch (RuntimeException e) {                          // anything else out of a command: 2, as today
+            err.println("fatal: " + e);
+            e.printStackTrace(err);
+            return EXIT_FATAL;
         }
     }
 
@@ -107,7 +126,7 @@ public final class Harness {
      *  {@code out}, and a progress line per game on {@code err}. Returns 0, or 3 when the runner is poisoned: either its
      *  PoisonedException stopped the job (no summary then) or the job's own last game poisoned it, which JobRunner
      *  does not report (the summary is written). An IllegalArgumentException, a deck, profile or AI the runner cannot
-     *  load, comes out at the first game, before any record. */
+     *  load, comes out before the first game, with no record and no summary, a job of no games included. */
     public static int run(JobFile job, GameRunner runner, PrintStream out, PrintStream err) throws InterruptedException {
         try {
             new JobRunner(runner).run(job, rec -> {
@@ -147,7 +166,13 @@ public final class Harness {
         if (slots < 1) {
             throw new Usage();
         }
-        return new Serve(new GameRunner(slots), stdin, out, err).run();
+        return serve(new GameRunner(slots), stdin, out, err);
+    }
+
+    /** The server loop on {@code runner}, public for the tests: Serve's exit code, 0, 4 or 5, passed through. */
+    public static int serve(GameRunner runner, BufferedReader stdin, PrintStream out, PrintStream err)
+            throws InterruptedException {
+        return new Serve(runner, stdin, out, err).run();
     }
 
     // ------------------------------------------------------------------ check
@@ -262,7 +287,7 @@ public final class Harness {
     }
 
     static int usage(PrintStream err) {
-        err.println("usage: mtgsim.Harness check <names.txt> | run <job.job> | serve --slots N | --selftest");
+        err.println("usage: mtgsim.Harness check <names.txt> | run <job.job> | serve [--slots N] | --selftest");
         return EXIT_FATAL;
     }
 }

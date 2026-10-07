@@ -230,4 +230,71 @@ public class HarnessFacadeTest {
         Assert.assertSame(readerWhileReading.get(), GameRunner.HALT_ON_UNCAUGHT, "and the reading thread's own");
         Assert.assertSame(systemOutWhileReading.get(), err, "System.out was the err stream before Serve read a command");
     }
+
+    /** Spec 6: anything else out of a command is exit 2, as the frozen harness's catch (Exception) made it. A name of
+     *  just "|" sends CardRequest.fromString past the end of an empty split. */
+    @Test
+    public void anyOtherExceptionOutOfACommandIsFatal() throws IOException {
+        Path names = tempFile(List.of("Sol Ring", "|", "Sol Ring"));
+        Assert.assertEquals(dispatch("", "check", names.toString()), 2);
+        Assert.assertTrue(lastErr.startsWith("fatal: java.lang."), lastErr);
+        Assert.assertTrue(lastErr.contains("\tat "), "and its stack trace: " + lastErr);
+        Assert.assertEquals(List.of(lastOut.split("\\R")), List.of("{\"name\":\"Sol Ring\",\"forge\":\"Sol Ring\"}"),
+                "the names before it were answered");
+    }
+
+    /** serve's exit code is Serve's: a runner already poisoned answers 5, though no job is read and no game runs. */
+    @Test
+    public void aPoisonedServerExitsFiveThroughTheFacade() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        runner.poisonForTest();
+        ByteArrayOutputStream outBytes = new ByteArrayOutputStream();
+        PrintStream out = new PrintStream(outBytes, true, StandardCharsets.UTF_8);
+        PrintStream err = new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8);
+        int code = mtgsim.Harness.serve(runner, new BufferedReader(new StringReader("")), out, err);
+        Assert.assertEquals(code, 5, "Serve.run's poisoned exit code, passed through");
+        Assert.assertEquals(outBytes.toString(StandardCharsets.UTF_8), "", "no job, no game, no line");
+    }
+
+    /** A job of no games is refused like any other when a deck cannot load (JobRunner validates the job's first spec
+     *  before its loop), as the frozen harness built its players before it played anything. */
+    @Test
+    public void aJobOfNoGamesWhoseDeckCannotLoadIsFatal() throws IOException {
+        Path job = tempFile(List.of("games=0", "seed=9", "timeout_s=300", "seat.0.deck_file=C:/no/such.dck",
+                "seat.1.deck_file=" + Precons.commander().get(1)));
+        Assert.assertEquals(dispatch("", "run", job.toString()), 2, "refused before its summary");
+        Assert.assertTrue(lastErr.contains("fatal") && lastErr.contains("could not load deck"), lastErr);
+        Assert.assertEquals(lastOut, "", "no summary");
+    }
+
+    /** No arguments: the usage line and exit 2 before anything else, as the frozen harness printed it before boot.
+     *  launch returns before it moves System.out or installs the halt handler, so before it boots. */
+    @Test
+    public void noArgumentsIsUsageBeforeAnythingElse() {
+        PrintStream savedOut = System.out;
+        Thread.UncaughtExceptionHandler savedDefault = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.UncaughtExceptionHandler savedThread = Thread.currentThread().getUncaughtExceptionHandler();
+        boolean savedInstalled = GameRunner.haltInstalled;
+        ByteArrayOutputStream errBytes = new ByteArrayOutputStream();
+        PrintStream out = new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8);
+        PrintStream err = new PrintStream(errBytes, true, StandardCharsets.UTF_8);
+        int code;
+        PrintStream systemOutAfter;
+        Thread.UncaughtExceptionHandler defaultAfter;
+        try {
+            code = mtgsim.Harness.launch(new String[0], new BufferedReader(new StringReader("")), out, err);
+            systemOutAfter = System.out;
+            defaultAfter = Thread.getDefaultUncaughtExceptionHandler();
+        } finally {
+            System.setOut(savedOut);                                      // put back whatever launch did, before asserting
+            Thread.setDefaultUncaughtExceptionHandler(savedDefault);
+            Thread.currentThread().setUncaughtExceptionHandler(savedThread);
+            GameRunner.haltInstalled = savedInstalled;
+        }
+        Assert.assertEquals(code, 2);
+        String text = errBytes.toString(StandardCharsets.UTF_8);
+        Assert.assertTrue(text.startsWith("usage: mtgsim.Harness "), text);
+        Assert.assertSame(systemOutAfter, savedOut, "System.out was never moved");
+        Assert.assertSame(defaultAfter, savedDefault, "the halt handler was never installed");
+    }
 }

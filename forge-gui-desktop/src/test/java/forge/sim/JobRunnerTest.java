@@ -140,7 +140,7 @@ public class JobRunnerTest {
     }
 
     @Test
-    public void aDeckTheRunnerCannotLoadStopsTheJobAtItsFirstGame() {
+    public void aDeckTheRunnerCannotLoadStopsTheJobBeforeItsFirstGame() {
         JobFile job = JobFile.parse(List.of("games=2", "seed=9", "timeout_s=300", "seat.0.deck_file=no-such-deck.dck",
                 "seat.1.deck_file=" + Precons.commander().get(1)));
         List<Map<String, Object>> out = new ArrayList<>();
@@ -148,6 +148,19 @@ public class JobRunnerTest {
                 () -> new JobRunner(new GameRunner(1)).run(job, out::add));
         Assert.assertTrue(refused.getMessage().contains("no-such-deck.dck"), refused.getMessage());
         Assert.assertTrue(out.isEmpty(), "no record and no summary");
+    }
+
+    /** A job of no games has no first game to refuse its deck at: the job's first spec is validated before the loop,
+     *  so the sink is never called, not even for the summary. */
+    @Test
+    public void aJobOfNoGamesWhoseDeckCannotBeLoadedIsRefusedWithNoSummary() {
+        JobFile job = JobFile.parse(List.of("games=0", "seed=9", "timeout_s=300", "seat.0.deck_file=no-such-deck.dck",
+                "seat.1.deck_file=" + Precons.commander().get(1)));
+        List<Map<String, Object>> out = new ArrayList<>();
+        IllegalArgumentException refused = Assert.expectThrows(IllegalArgumentException.class,
+                () -> new JobRunner(new GameRunner(1)).run(job, out::add));
+        Assert.assertTrue(refused.getMessage().contains("no-such-deck.dck"), refused.getMessage());
+        Assert.assertTrue(out.isEmpty(), "the sink was never called: " + out);
     }
 
     @Test
