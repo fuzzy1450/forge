@@ -30,10 +30,10 @@ public class ServeTest {
     static final List<Path> TEMP = Collections.synchronizedList(new ArrayList<>());
 
     @BeforeClass
-    public static void boot() { GameRunner.boot(); }
+    public void boot() { GameRunner.boot(); }
 
     @AfterClass
-    public static void relaxStrict() { SimScope.setStrict(false); }
+    public void relaxStrict() { SimScope.setStrict(false); }
 
     @AfterClass
     public void deleteTempFiles() throws IOException {

@@ -23,12 +23,12 @@ public class GameRecordsTest {
             "times_cast", "first_cast_turn", "owner_casts", "owner_first_cast_turn", "died", "final_zone");
 
     @BeforeClass
-    public static void boot() {
+    public void boot() {
         GameRunner.boot();
     }
 
     @AfterClass
-    public static void relaxStrict() {
+    public void relaxStrict() {
         SimScope.setStrict(false);
     }
 

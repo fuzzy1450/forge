@@ -18,10 +18,10 @@ import forge.util.SimScope;
 
 public class JobRunnerTest {
     @BeforeClass
-    public static void boot() { GameRunner.boot(); }
+    public void boot() { GameRunner.boot(); }
 
     @AfterClass
-    public static void relaxStrict() { SimScope.setStrict(false); }
+    public void relaxStrict() { SimScope.setStrict(false); }
 
     /** A job over the first two quest precons, as JobFile would parse it. */
     static JobFile job(int games, long seed, int timeoutS, int seats) {
