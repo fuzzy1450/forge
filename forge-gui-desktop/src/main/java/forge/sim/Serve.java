@@ -20,20 +20,23 @@ import java.util.concurrent.atomic.AtomicReference;
  * at once than the runner has slots. It takes streams rather than System.in and System.out, so that tests drive it in
  * memory.
  * <ul>
- * <li>{@code run <id> <job file>}: the id is any token not used before; the job file is the rest of the line. A job
- * whose file loads and whose first game passes the checks {@link GameRunner#play} makes before it takes a slot (two
- * seats or more, a timeout of a second or more, every deck, profile and AI loaded) is answered
- * {@code {"job": id, "accepted": true, "games": n}} and waits FIFO for a free slot; any other is answered with one
- * {@code {"job": id, "error": "..."}} and nothing further.</li>
+ * <li>{@code run <id> <job file>}: the id is any token not used before; the job file is the rest of the line. Once the
+ * runner is poisoned, a run is answered with one {@code {"job": id, "error": "poisoned"}} and nothing further, its job
+ * file unread. Before that, a job whose file loads and whose first game passes the checks {@link GameRunner#play}
+ * makes before it takes a slot (two seats or more, a timeout of a second or more, every deck, profile and AI loaded)
+ * is answered {@code {"job": id, "accepted": true, "games": n}} and waits FIFO for a free slot; any other is answered
+ * with one {@code {"job": id, "error": "..."}} and nothing further.</li>
  * <li>{@code quit}, or the end of {@code in}: accept nothing more, finish the queue and the jobs in flight.</li>
  * <li>Anything else, a {@code run} without an id and a file, or one whose id was used before: one
  * {@code {"job": null, "error": "..."}}.</li>
  * </ul>
  * Every line on {@code out} is one JSON object whose first key is {@code job}. An accepted job's lines are its accepted
  * line, then its records in game order, then its summary or one error line, either of which ends it. Lines of
- * different jobs interleave. A poisoned runner plays no further game: each job with games still to play ends with
- * {@code "error": "poisoned"} instead of a summary, and {@link #run} returns {@link #EXIT_POISONED}. {@code err} gets
- * a line when an accepted job starts playing and one when it ends: {@code done} with its counts, or its error.
+ * different jobs interleave. A poisoned runner plays no further game: each accepted job with games still to play, or
+ * still waiting for its slot, ends with {@code "error": "poisoned"} instead of a summary; a run read after the poison
+ * is refused as above; and once the input has ended and the drain is done, {@link #run} returns
+ * {@link #EXIT_POISONED}. {@code err} gets a line when an accepted job starts playing and one when it ends:
+ * {@code done} with its counts, or its error; a run refused as poisoned gets that end line too.
  */
 public final class Serve {
     public static final int EXIT_OK = 0;
@@ -57,10 +60,11 @@ public final class Serve {
     }
 
     /** Runs the command loop to its end (quit or EOF, then every accepted job finished or refused) and returns the
-     *  exit code: {@link #EXIT_UNCAUGHT} (4) when a throwable escaped a job, else 5 when the runner was poisoned, else
-     *  0. A throwable out of a job still goes on to its slot thread's uncaught handler, which the facade makes
-     *  GameRunner's halt handler, so that exit code only matters when the drain ends before the halt. An Error on the
-     *  reading thread itself leaves at once: nothing more is accepted, and the queue is not waited for. */
+     *  exit code: {@link #EXIT_UNCAUGHT} (4) when a throwable escaped a job, else the runner's own
+     *  {@link GameRunner#exitCodeAfterDrain()}: {@link #EXIT_POISONED} (5) when it was poisoned, else
+     *  {@link #EXIT_OK} (0). A throwable out of a job still goes on to its slot thread's uncaught handler, which the
+     *  facade makes GameRunner's halt handler, so that exit code only matters when the drain ends before the halt. An
+     *  Error on the reading thread itself leaves at once: nothing more is accepted, and the queue is not waited for. */
     public int run() throws InterruptedException {
         AtomicInteger threads = new AtomicInteger();
         ExecutorService pool = Executors.newFixedThreadPool(runner.slots(), r -> {
@@ -91,6 +95,10 @@ public final class Serve {
                 String id = parts[1];
                 if (!ids.add(id)) {
                     emitError(null, "job id already used: " + id);
+                    continue;
+                }
+                if (runner.isPoisoned()) {                            // no game will start: refused here, its id spent, its file unread
+                    fail(id, "poisoned");
                     continue;
                 }
                 JobFile job;
@@ -124,7 +132,7 @@ public final class Serve {
         if (fatal.get() != null) {
             return EXIT_UNCAUGHT;
         }
-        return runner.isPoisoned() ? EXIT_POISONED : EXIT_OK;
+        return runner.exitCodeAfterDrain();
     }
 
     /** One job on a slot thread: its records, then its summary, or else one error line that ends it. */
@@ -149,7 +157,8 @@ public final class Serve {
         }
     }
 
-    /** Ends an accepted job with an error: its error line on {@code out}, and its end line on {@code err}. */
+    /** Ends a job with an error, an accepted one or a run refused because the runner is poisoned: its error line on
+     *  {@code out}, and its end line on {@code err}. */
     private void fail(String id, String message) {
         emitError(id, message);
         err.println("job " + id + ": " + message);

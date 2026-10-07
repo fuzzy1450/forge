@@ -68,10 +68,15 @@ public class ServeTest {
 
     /** Runs a Serve over the given stdin text; returns {exit code, stdout lines, stderr text}. */
     static Object[] serve(GameRunner runner, String stdin) throws Exception {
+        return serve(runner, new BufferedReader(new StringReader(stdin)));
+    }
+
+    /** Runs a Serve over the given stdin; returns {exit code, stdout lines, stderr text}. */
+    static Object[] serve(GameRunner runner, BufferedReader stdin) throws Exception {
         ByteArrayOutputStream outBytes = new ByteArrayOutputStream(), errBytes = new ByteArrayOutputStream();
         PrintStream out = new PrintStream(outBytes, true, StandardCharsets.UTF_8);
         PrintStream err = new PrintStream(errBytes, true, StandardCharsets.UTF_8);
-        int code = new Serve(runner, new BufferedReader(new StringReader(stdin)), out, err).run();
+        int code = new Serve(runner, stdin, out, err).run();
         List<String> lines = List.of(outBytes.toString(StandardCharsets.UTF_8).split("\\R"));
         return new Object[] {code, lines, errBytes.toString(StandardCharsets.UTF_8)};
     }
@@ -92,9 +97,15 @@ public class ServeTest {
     /** A one-slot runner poisoned after its first game, as a game thread that outlived its grace would leave it: every
      *  later play throws PoisonedException. */
     static GameRunner poisonedAfterItsFirstGame() {
+        return poisonedAfterItsFirstGame(new CountDownLatch(0));
+    }
+
+    /** The same runner, each play held until {@code gate} opens. */
+    static GameRunner poisonedAfterItsFirstGame(CountDownLatch gate) {
         return new GameRunner(1) {
             @Override
             public GameResult play(GameSpec spec, java.util.function.Consumer<forge.game.Game> observer) throws InterruptedException {
+                gate.await();
                 GameResult r = super.play(spec, observer);
                 poisonForTest();
                 return r;
@@ -207,10 +218,25 @@ public class ServeTest {
         Assert.assertEquals(linesOf(lines, "a").size(), 3);
     }
 
+    /** b is accepted before the poison and refused when it reaches its slot. a's game waits until the reading thread
+     *  asks for the line after b's, so b has had its answer by then: a run read after the poison is refused where it
+     *  is read (aRunReadAfterThePoisonIsRefusedWithOneErrorLineAndNoAcceptedLine). */
     @Test(timeOut = 600_000)
     public void aPoisonedRunnerRefusesTheRestAndExitsFive() throws Exception {
         Path a = jobFile(1, 7_000_000L, 300, 2), b = jobFile(1, 7_000_010L, 300, 2);
-        Object[] r = serve(poisonedAfterItsFirstGame(), "run a " + a + "\nrun b " + b + "\nquit\n");
+        CountDownLatch bRead = new CountDownLatch(1);
+        BufferedReader stdin = new BufferedReader(new StringReader("run a " + a + "\nrun b " + b + "\nquit\n")) {
+            private int read;
+
+            @Override
+            public String readLine() throws IOException {
+                if (read++ == 2) {
+                    bRead.countDown();                                // the line after b's: b has been answered
+                }
+                return super.readLine();
+            }
+        };
+        Object[] r = serve(poisonedAfterItsFirstGame(bRead), stdin);
         Assert.assertEquals(r[0], 5, "poisoned: exit 5");
         @SuppressWarnings("unchecked") List<String> lines = (List<String>) r[1];
         List<String> la = linesOf(lines, "a"), lb = linesOf(lines, "b");
@@ -236,6 +262,77 @@ public class ServeTest {
         String err = (String) r[2];
         Assert.assertTrue(err.contains("job a: 2 games") && err.contains("job a: poisoned"),
                 "the job's start line, then its error as its end line: " + err);
+    }
+
+    /** A run read once the runner is poisoned is refused where it is read: one poisoned error line, no accepted line.
+     *  The input is a client's that sends run b only after it has read job a's end, the poisoned error a's second game
+     *  got. b's id is spent as any other's (its repeat is answered as a repeat, so b's error stays its last line), and c
+     *  is refused before its job file, which does not exist, is read. Then the input ends, with no quit, and the
+     *  process exits 5. */
+    @Test(timeOut = 600_000)
+    public void aRunReadAfterThePoisonIsRefusedWithOneErrorLineAndNoAcceptedLine() throws Exception {
+        String aPoisoned = "{\"job\":\"a\",\"error\":\"poisoned\"}", bPoisoned = "{\"job\":\"b\",\"error\":\"poisoned\"}";
+        CountDownLatch aEnded = new CountDownLatch(1);
+        ByteArrayOutputStream outBytes = new ByteArrayOutputStream(), errBytes = new ByteArrayOutputStream();
+        PrintStream out = new PrintStream(outBytes, true, StandardCharsets.UTF_8) {
+            @Override
+            public void println(String line) {
+                super.println(line);
+                if (line.equals(aPoisoned)) {
+                    aEnded.countDown();
+                }
+            }
+        };
+        PrintStream err = new PrintStream(errBytes, true, StandardCharsets.UTF_8);
+        String runB = "run b " + jobFile(1, 7_000_010L, 300, 2);
+        List<String> sent = List.of("run a " + jobFile(2, 7_000_000L, 300, 2), runB, runB, "run c C:/no/such.job");
+        BufferedReader in = new BufferedReader(new StringReader("")) {
+            private int read;
+
+            @Override
+            public String readLine() {
+                if (read == 1) {
+                    try {
+                        Assert.assertTrue(aEnded.await(300, TimeUnit.SECONDS), "job a ended, poisoned, before run b was sent");
+                    } catch (InterruptedException e) {
+                        throw new AssertionError("interrupted while waiting for job a's end", e);
+                    }
+                }
+                return read < sent.size() ? sent.get(read++) : null;      // then the end of input
+            }
+        };
+        int code = new Serve(poisonedAfterItsFirstGame(), in, out, err).run();
+        Assert.assertEquals(code, 5, "poisoned: exit 5 once the input has ended");
+        List<String> lines = List.of(outBytes.toString(StandardCharsets.UTF_8).split("\\R"));
+        List<String> la = linesOf(lines, "a");
+        Assert.assertEquals(la.size(), 3, "a: accepted, game 0's record, then poisoned instead of a summary: " + la);
+        Assert.assertEquals(la.get(2), aPoisoned);
+        Assert.assertEquals(linesOf(lines, "b"), List.of(bPoisoned), "b: one error line and no accepted line: " + lines);
+        Assert.assertTrue(lines.contains("{\"job\":null,\"error\":\"job id already used: b\"}"), "b's repeat: " + lines);
+        Assert.assertEquals(linesOf(lines, "c"), List.of("{\"job\":\"c\",\"error\":\"poisoned\"}"),
+                "c: poisoned, not its missing file: " + lines);
+        Assert.assertEquals(lines.size(), 6, "nothing else was written: " + lines);
+        String errText = errBytes.toString(StandardCharsets.UTF_8);
+        Assert.assertTrue(errText.contains("job b: poisoned"), "the refusal ends b on err too: " + errText);
+        Assert.assertFalse(errText.contains("job b: 1 games"), "b never started: " + errText);
+    }
+
+    /** Spec 8.5: a 1 s pod through serve is recorded as a Timeout, gives its slot back, and its job goes on: the job's
+     *  second game needs the runner's one slot, and the summary still ends the job. */
+    @Test(timeOut = 600_000)
+    public void aOneSecondPodTimesOutAndItsJobGoesOnToItsSummary() throws Exception {
+        Object[] r = serve(new GameRunner(1), "run p " + jobFile(2, 7_000_000L, 1, 4) + "\nquit\n");
+        Assert.assertEquals(r[0], 0, "a timed-out game that unwinds within its grace leaves the runner unpoisoned");
+        @SuppressWarnings("unchecked") List<String> lines = (List<String>) r[1];
+        List<String> lp = linesOf(lines, "p");
+        Assert.assertEquals(lp.size(), 4, "accepted, two records, summary: " + lp);
+        Assert.assertEquals(lp.get(0), "{\"job\":\"p\",\"accepted\":true,\"games\":2}");
+        for (int g = 0; g < 2; g++) {
+            String rec = lp.get(1 + g);
+            Assert.assertTrue(rec.startsWith("{\"job\":\"p\",\"game\":" + g + ",") && rec.contains("\"end_reason\":\"Timeout\""), rec);
+        }
+        Assert.assertTrue(lp.get(3).startsWith("{\"job\":\"p\",\"summary\":{\"games\":2,")
+                && lp.get(3).contains("\"Timeout\":2,\"Error\":0,"), "the summary ends the job: " + lp.get(3));
     }
 
     @Test(timeOut = 300_000)
