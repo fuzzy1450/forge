@@ -324,8 +324,12 @@ public class GameRunner {
     /** The checks {@link #play} makes on a spec before it takes a slot, returning the game's players: at least two seats,
      *  a timeout of at least one second, and every seat's deck, AI profile and AI mode loaded by
      *  {@link #registerPlayers}. Serve makes the same checks on a job before it accepts it. Static, so it reads and
-     *  changes no runner's state; an IllegalArgumentException names what is wrong. */
+     *  changes no runner's state; an IllegalArgumentException names what is wrong. Before boot it refuses every spec
+     *  as play does: registerPlayers would fail on Forge's unloaded profiles with a bare NullPointerException. */
     static List<RegisteredPlayer> validate(GameSpec spec) {
+        if (!booted) {
+            throw new IllegalStateException("GameRunner.boot() first");
+        }
         if (spec.seats().size() < 2) {
             throw new IllegalArgumentException("a game needs at least two seats");
         }
