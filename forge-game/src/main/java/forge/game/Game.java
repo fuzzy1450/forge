@@ -641,18 +641,29 @@ public class Game {
     }
 
     public CardCollectionView getCardsIn(final Iterable<ZoneType> zones) {
-        CardCollection cards = new CardCollection();
+        // the zones' cards are gathered as they are and checked for duplicates once, at the end
+        final List<Card> cards = new ArrayList<>();
         for (final ZoneType z : zones) {
             if (z == ZoneType.Stack) {
-                cards.addAll(getStackZone().getCards());
+                addCards(cards, getStackZone().getCards());
                 continue;
             }
             // adding each player's zone to the result directly avoids building a collection per zone
             for (final Player p : getPlayers()) {
-                cards.addAll(p.getCardsIn(z));
+                addCards(cards, p.getCardsIn(z));
             }
         }
-        return cards;
+        return CardCollection.copyOf(cards);
+    }
+
+    private static void addCards(final List<Card> cards, final CardCollectionView zoneCards) {
+        // a missing or empty zone adds nothing; iterating copies no array per zone, as ArrayList.addAll would
+        if (zoneCards == null || zoneCards.isEmpty()) {
+            return;
+        }
+        for (final Card c : zoneCards) {
+            cards.add(c);
+        }
     }
 
     public CardCollectionView getCardsInOwnedBy(final Iterable<ZoneType> zones, Player p) {

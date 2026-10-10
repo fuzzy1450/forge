@@ -2,6 +2,7 @@ package forge.game.card;
 
 import forge.util.collect.FCollection;
 
+import java.util.List;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
@@ -88,6 +89,58 @@ public class CardCollection extends FCollection<Card> implements CardCollectionV
             viewWithCards = CardCollection.EMPTY;
         }
         return viewWithCards;
+    }
+
+    /**
+     * Create a new {@link CardCollection} of the given cards, in their order,
+     * leaving out every card equal to an earlier one: the collection that
+     * adding them one at a time makes. Cards are equal only when their ids
+     * are, so when no two of them share an id none is left out, and a list
+     * long enough to need a hash set is taken as it is instead of each card
+     * being checked against the ones before it.
+     *
+     * @param cards
+     *            a list of cards, possibly with repeats.
+     * @return a new collection.
+     */
+    public static CardCollection copyOf(final List<Card> cards) {
+        final CardCollection result = new CardCollection();
+        if (cards.size() > HASH_THRESHOLD && haveDistinctIds(cards)) {
+            result.addAllDistinct(cards);
+        } else {
+            result.addAll(cards);
+        }
+        return result;
+    }
+
+    /**
+     * Whether no card of a non-empty list is null and no two have the same id,
+     * with a bit per id from the smallest to the largest. Ids spread wider than
+     * about four longs a card give false, which only means the cards get checked.
+     */
+    private static boolean haveDistinctIds(final List<Card> cards) {
+        int min = Integer.MAX_VALUE;
+        int max = Integer.MIN_VALUE;
+        for (final Card c : cards) {
+            if (c == null) {
+                return false;
+            }
+            final int id = c.getId();
+            min = Math.min(min, id);
+            max = Math.max(max, id);
+        }
+        if ((long) max - min >= 256L * cards.size()) {
+            return false;
+        }
+        final long[] seen = new long[((max - min) >>> 6) + 1];
+        for (final Card c : cards) {
+            final int bit = c.getId() - min;
+            if ((seen[bit >>> 6] & (1L << bit)) != 0) {
+                return false;
+            }
+            seen[bit >>> 6] |= 1L << bit;
+        }
+        return true;
     }
 
     /**

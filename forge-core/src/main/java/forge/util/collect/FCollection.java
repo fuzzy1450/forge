@@ -37,7 +37,7 @@ public class FCollection<T> implements List<T>, /*Set<T>,*/ FCollectionView<T>, 
      * these collections - trait rebuilds create tens of millions of one- and two-element ones per
      * game - never grow past a handful of entries or get looked up by value at all.
      */
-    private static final int HASH_THRESHOLD = 8;
+    protected static final int HASH_THRESHOLD = 8;
 
     /**
      * The {@link Set} representation of this collection. Materialized on demand; while it is
@@ -362,6 +362,21 @@ public class FCollection<T> implements List<T>, /*Set<T>,*/ FCollectionView<T>, 
             changed |= add(e);
         }
         return changed;
+    }
+
+    /**
+     * Add all the elements of a collection, in order, without looking for an
+     * equal element first: for subclasses that know that no two of them are
+     * equal and that none of them equals an element of this collection. Like
+     * the copy constructor, this leaves the hash set to be built on demand.
+     *
+     * @param c distinct elements, none of them already in this collection.
+     */
+    protected void addAllDistinct(final Collection<? extends T> c) {
+        list.addAll(c);
+        if (set != null) {
+            set.addAll(c);
+        }
     }
 
     /**
