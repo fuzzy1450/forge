@@ -20,6 +20,12 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
     // don't use enumKeys it causes a slow down
     private final Multimap<Keyword, KeywordInterface> map = MultimapBuilder.hashKeys()
             .linkedHashSetValues().build();
+    // the values of map in the order map.values() iterates them, for the trait rebuilds, which walk a card's
+    // keywords millions of times a game: an array is walked without allocating the multimap's iterators.
+    // Built on demand, and dropped right before every change to map, so it never differs from map.values();
+    // getValues(), getValues(Keyword) and iterator() hand out live views of map: change it only through the
+    // methods here, which drop the array
+    private KeywordInterface[] valueArray = null;
 
     public KeywordCollection() {
         super();
@@ -56,6 +62,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
         Keyword keyword = inst.getKeyword();
         Collection<KeywordInterface> list = map.get(keyword);
         if (list.isEmpty() || !inst.redundant(list)) {
+            valueArray = null;
             list.add(inst);
             return true;
         }
@@ -85,6 +92,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
         while (it.hasNext()) {
             KeywordInterface k = it.next();
             if (k.getOriginal().startsWith(keyword)) {
+                valueArray = null;
                 it.remove();
                 result = true;
             }
@@ -94,10 +102,12 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
     }
 
     public boolean remove(KeywordInterface keyword) {
+        valueArray = null;
         return map.remove(keyword.getKeyword(), keyword);
     }
 
     public boolean removeAll(Keyword kenum) {
+        valueArray = null;
         return !map.removeAll(kenum).isEmpty();
     }
 
@@ -114,6 +124,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
     public boolean removeInstances(Iterable<KeywordInterface> keywords) {
         boolean result = false;
         for (KeywordInterface k : keywords) {
+            valueArray = null;
             if (map.remove(k.getKeyword(), k)) {
                 result = true;
             }
@@ -122,6 +133,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
     }
 
     public void clear() {
+        valueArray = null;
         map.clear();
     }
 
@@ -181,12 +193,22 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
         return sb.toString();
     }
 
+    // the keywords in map.values() order: valueArray, built first when there is none
+    private KeywordInterface[] valueArray() {
+        KeywordInterface[] result = valueArray;
+        if (result == null) {
+            result = map.values().toArray(new KeywordInterface[map.size()]);
+            valueArray = result;
+        }
+        return result;
+    }
+
     @Override
     public List<SpellAbility> applySpellAbility(List<SpellAbility> list) {
         if (map.isEmpty()) {
             return list;
         }
-        for (KeywordInterface k : getValues()) {
+        for (KeywordInterface k : valueArray()) {
             k.applySpellAbility(list);
         }
         return list;
@@ -196,7 +218,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
         if (map.isEmpty()) {
             return list;
         }
-        for (KeywordInterface k : getValues()) {
+        for (KeywordInterface k : valueArray()) {
             k.applyTrigger(list);
         }
         return list;
@@ -206,7 +228,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
         if (map.isEmpty()) {
             return list;
         }
-        for (KeywordInterface k : getValues()) {
+        for (KeywordInterface k : valueArray()) {
             k.applyReplacementEffect(list);
         }
         return list;
@@ -218,7 +240,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
         if (map.isEmpty()) {
             return list;
         }
-        for (KeywordInterface k : getValues()) {
+        for (KeywordInterface k : valueArray()) {
             k.applyStaticAbility(list);
         }
         return list;
