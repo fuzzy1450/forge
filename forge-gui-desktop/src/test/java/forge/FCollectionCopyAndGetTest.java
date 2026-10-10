@@ -1,4 +1,4 @@
-package forge.util.collect;
+package forge;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
@@ -14,6 +14,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 
 import org.testng.annotations.Test;
+
+import forge.util.collect.FCollection;
 
 /**
  * The copy constructor leaves an empty source alone instead of copying its list, and {@link FCollection#get(Object)}
@@ -46,6 +48,12 @@ public class FCollectionCopyAndGetTest {
         public String toString() {
             return "Key" + value;
         }
+    }
+
+    /** FCollection's hash threshold, protected there, so read through a subclass. */
+    private static final class Threshold extends FCollection<Object> {
+        private static final long serialVersionUID = 1L;
+        private static final int VALUE = HASH_THRESHOLD;
     }
 
     private static List<Key> keys(final int from, final int to) {
@@ -104,10 +112,10 @@ public class FCollectionCopyAndGetTest {
         assertTrue(c.isEmpty());
 
         // add past the hash threshold one at a time, refusing a repeat on each side of it
-        final List<Key> added = keys(0, FCollection.HASH_THRESHOLD * 3);
+        final List<Key> added = keys(0, Threshold.VALUE * 3);
         for (final Key k : added) {
             assertTrue(c.add(k), "adding " + k);
-            if (k.value == 3 || k.value == FCollection.HASH_THRESHOLD + 3) {
+            if (k.value == 3 || k.value == Threshold.VALUE + 3) {
                 assertFalse(c.add(new Key(k.value)), "a repeat of " + k);
             }
         }
@@ -152,7 +160,7 @@ public class FCollectionCopyAndGetTest {
 
     @Test
     public void aCopyOfAFilledCollectionHoldsItsElementsInOrder() {
-        for (final int n : new int[] {1, FCollection.HASH_THRESHOLD, FCollection.HASH_THRESHOLD + 1, 30}) {
+        for (final int n : new int[] {1, Threshold.VALUE, Threshold.VALUE + 1, 30}) {
             final List<Key> elements = keys(0, n);
             final FCollection<Key> source = new FCollection<>(elements);
             final FCollection<Key> copy = new FCollection<>(source);
@@ -181,7 +189,7 @@ public class FCollectionCopyAndGetTest {
             assertSame(new FCollection<>(source).get(probe), probe);
         }
         // a held equal element is returned in place of the argument, below and past the threshold
-        for (final int n : new int[] {1, FCollection.HASH_THRESHOLD, 30}) {
+        for (final int n : new int[] {1, Threshold.VALUE, 30}) {
             final List<Key> elements = keys(0, n);
             final FCollection<Key> c = new FCollection<>(elements);
             for (final Key k : elements) {
