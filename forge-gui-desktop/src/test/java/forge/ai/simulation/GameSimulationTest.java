@@ -2706,6 +2706,22 @@ public class GameSimulationTest extends SimulationTest {
     }
 
     @Test
+    public void testVolrathsShapeshiftersLKICopyHasTheCopiedName() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p);
+
+        Card volrath = addCard("Volrath's Shapeshifter", p);
+        addCardToZone("Prodigal Sorcerer", p, ZoneType.Graveyard);
+        game.getAction().checkStateEffects(true);
+        AssertJUnit.assertEquals("Prodigal Sorcerer", volrath.getName());
+
+        // the copied name is one of the card's changed names, which Card.copyFrom hands to the copy
+        Card lki = CardCopyService.getLKICopy(volrath);
+        AssertJUnit.assertEquals("Prodigal Sorcerer", lki.getName());
+    }
+
+    @Test
     public void testHenzie() {
         Game game = initAndCreateGame();
         Player p = game.getPlayers().get(0);
