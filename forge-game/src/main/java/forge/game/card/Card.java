@@ -138,6 +138,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     private boolean mayHaveChangedCardTypes = false;
 
     private final Table<Long, Long, CardChangedName> changedCardNames = TreeBasedTable.create(); // Layer 3
+    // false until something is put into changedCardNames, so until then it is known to be empty without reading
+    // it: every getName asks, and most cards never get a changed name
+    private boolean mayHaveChangedCardNames = false;
     private final Table<Long, Long, IKeywordsChange> changedCardKeywordsByText = TreeBasedTable.create(); // Layer 3 by Text Change
     protected KeywordsChange changedCardKeywordsByWord = new KeywordsChange(ImmutableList.<KeywordInterface>of(), ImmutableList.<KeywordInterface>of(), false); // Layer 3 by Word Change
     private final Table<Long, Long, KeywordsChange> changedCardKeywords = TreeBasedTable.create(); // Layer 6
@@ -990,6 +993,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
     public final String getName(CardState state) {
         String name = state.getName();
+        if (!mayHaveChangedCardNames) {
+            return name;
+        }
         for (CardChangedName change : this.changedCardNames.values()) {
             if (change.isOverwrite()) {
                 name = change.newName();
@@ -1030,6 +1036,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public void addChangedName(final String name0, boolean addNonLegendaryCreatureNames, long timestamp, long staticId) {
+        mayHaveChangedCardNames = true;
         changedCardNames.put(timestamp, staticId, new CardChangedName(name0, addNonLegendaryCreatureNames));
         updateNameforView();
     }
@@ -8305,6 +8312,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         this.changedCardTypesCharacterDefining.putAll(in.changedCardTypesCharacterDefining);
         updateTypeCache();
 
+        if (!in.changedCardNames.isEmpty()) {
+            mayHaveChangedCardNames = true;
+        }
         this.changedCardNames.putAll(in.changedCardNames);
         setChangedCardTraits(in.getChangedCardTraits());
 

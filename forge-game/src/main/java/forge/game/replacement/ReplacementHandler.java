@@ -50,6 +50,7 @@ import forge.game.zone.ZoneType;
 import forge.util.Localizer;
 import forge.util.TextUtil;
 import forge.util.Visitor;
+import forge.util.collect.FCollectionView;
 
 public class ReplacementHandler {
     private final Game game;
@@ -140,7 +141,12 @@ public class ReplacementHandler {
                 }
             }
 
-            for (final ReplacementEffect replacementEffect : c.getReplacementEffects()) {
+            // most cards have no replacement effect; skip allocating an iterator to discover that
+            final FCollectionView<ReplacementEffect> replacementEffects = c.getReplacementEffects();
+            if (replacementEffects.isEmpty()) {
+                return true;
+            }
+            for (final ReplacementEffect replacementEffect : replacementEffects) {
                 if (!replacementEffect.hasRun() && !hasRun.contains(replacementEffect)
                         && (layer == null || replacementEffect.getLayer() == layer)
                         && replacementEffect.modeCheck(event, runParams)

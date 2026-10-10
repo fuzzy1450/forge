@@ -96,8 +96,12 @@ public class FCollection<T> implements List<T>, /*Set<T>,*/ FCollectionView<T>, 
     public FCollection(final Iterable<? extends T> i) {
         if (i instanceof FCollection) {
             // The source already enforces uniqueness, so there is nothing for a dedup pass to
-            // find - copy the backing list straight across.
-            list.addAll(((FCollection<? extends T>) i).list);
+            // find - copy the backing list straight across. Trait rebuilds copy a lot of empty
+            // lists, and ArrayList.addAll would copy even an empty one to a new array first.
+            final List<? extends T> source = ((FCollection<? extends T>) i).list;
+            if (!source.isEmpty()) {
+                list.addAll(source);
+            }
             return;
         }
         this.addAll(i);
@@ -618,6 +622,10 @@ public class FCollection<T> implements List<T>, /*Set<T>,*/ FCollectionView<T>, 
     public T get(final T obj) {
         if (obj == null) {
             return null;
+        }
+        // nothing to find in an empty collection; skip allocating an iterator to discover that
+        if (list.isEmpty()) {
+            return obj;
         }
         for(T x : this) {
             if (x.equals(obj)) {
