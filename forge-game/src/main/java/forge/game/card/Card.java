@@ -134,6 +134,8 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     private final Table<Long, Long, ICardChangedType> changedCardTypesByText = TreeBasedTable.create(); // Layer 3
     private final Table<Long, Long, ICardChangedType> changedCardTypesCharacterDefining = TreeBasedTable.create(); // Layer 4 CDA
     private final Table<Long, Long, ICardChangedType> changedCardTypes = TreeBasedTable.create(); // Layer 4
+    // false until something is put into changedCardTypes, so until then it is known to be empty without reading it
+    private boolean mayHaveChangedCardTypes = false;
 
     private final Table<Long, Long, CardChangedName> changedCardNames = TreeBasedTable.create(); // Layer 3
     private final Table<Long, Long, IKeywordsChange> changedCardKeywordsByText = TreeBasedTable.create(); // Layer 3 by Text Change
@@ -146,6 +148,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     // x=timestamp y=StaticAbility id
     private final Table<Long, Long, CardTraitChanges> changedCardTraitsByText = TreeBasedTable.create(); // Layer 3 by Text Change
     private final Table<Long, Long, ICardTraitChanges> changedCardTraits = TreeBasedTable.create(); // Layer 6
+    // false until something is put into either table above, so until then both are known to be empty without
+    // reading them: every trait rebuild asks, and most cards never get a changed trait
+    private boolean mayHaveChangedCardTraits = false;
 
     // stores the card traits created by static abilities
     private final Table<StaticAbility, String, SpellAbility> storedSpellAbility = TreeBasedTable.create();
@@ -3437,7 +3442,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public boolean hasRemoveIntrinsic() {
-        if (changedCardTypes.isEmpty()) {
+        if (!mayHaveChangedCardTypes || changedCardTypes.isEmpty()) {
             return false;
         }
         // CR 305.7 only Layer 4 are affected, and it's never intrinsic
@@ -3470,8 +3475,12 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public void updateSpellAbilities(List<SpellAbility> list, CardState state) {
-        for (final ICardTraitChanges ck : getChangedCardTraitsList(state)) {
-            ck.applySpellAbility(list);
+        if (hasChangedCardTraits()) {
+            for (final ICardTraitChanges ck : getChangedCardTraitsList(state)) {
+                ck.applySpellAbility(list);
+            }
+        } else {
+            state.getLandTraitChange().applySpellAbility(list);
         }
 
         // keywords should already been cleanup by layers
@@ -4150,6 +4159,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     public final void addChangedCardTypes(final CardType addType, final CardType removeType, final boolean addAllCreatureTypes,
             final Set<RemoveType> remove,
             final long timestamp, final long staticId, final boolean updateView, final boolean cda) {
+        if (!cda) {
+            mayHaveChangedCardTypes = true;
+        }
         (cda ? changedCardTypesCharacterDefining : changedCardTypes).put(timestamp, staticId, new CardChangedType(
                 addType, removeType, addAllCreatureTypes, remove));
         updateTypeCache();
@@ -5011,6 +5023,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return changedCardTraitsByText;
     }
     public final void setChangedCardTraitsByText(Table<Long, Long, CardTraitChanges> changes) {
+        if (!changes.isEmpty()) {
+            mayHaveChangedCardTraits = true;
+        }
         changedCardTraitsByText.clear();
         for (Table.Cell<Long, Long, CardTraitChanges> e : changes.cellSet()) {
             changedCardTraitsByText.put(e.getRowKey(), e.getColumnKey(), e.getValue().copy(this, true));
@@ -5018,6 +5033,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
     public final void addChangedCardTraitsByText(Collection<SpellAbility> spells,
             Collection<Trigger> trigger, Collection<ReplacementEffect> replacements, Collection<StaticAbility> statics, long timestamp, long staticId) {
+        mayHaveChangedCardTraits = true;
         changedCardTraitsByText.put(timestamp, staticId, new CardTraitChanges(
             spells, trigger, replacements, statics, e -> true
         ));
@@ -5042,6 +5058,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return addChangedCardTraits(result, timestamp, staticId, updateView);
     }
     public final ICardTraitChanges addChangedCardTraits(ICardTraitChanges changes, long timestamp, long staticId, boolean updateView) {
+        mayHaveChangedCardTraits = true;
         changedCardTraits.put(timestamp, staticId, changes);
         if (updateView) {
             updateAbilityTextForView();
@@ -5056,8 +5073,17 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return changedCardTraitsByText.remove(timestamp, staticId) != null;
     }
 
+    // when no changed card traits apply, the trait rebuilds call the state's own Layer 4 changes directly
+    // instead of iterating the one-element list getChangedCardTraitsList returns for them
+    private boolean hasChangedCardTraits() {
+        if (!mayHaveChangedCardTraits) {
+            return false;
+        }
+        return !changedCardTraitsByText.isEmpty() || !changedCardTraits.isEmpty();
+    }
+
     public Iterable<? extends ICardTraitChanges> getChangedCardTraitsList(CardState state) {
-        if (changedCardTraitsByText.isEmpty() && changedCardTraits.isEmpty()) {
+        if (!hasChangedCardTraits()) {
             return state.getLandTraitChanges();
         }
         return Iterables.<ICardTraitChanges>concat(
@@ -5072,6 +5098,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final void setChangedCardTraits(Table<Long, Long, ICardTraitChanges> changes) {
+        if (!changes.isEmpty()) {
+            mayHaveChangedCardTraits = true;
+        }
         changedCardTraits.clear();
         for (Table.Cell<Long, Long, ICardTraitChanges> e : changes.cellSet()) {
             changedCardTraits.put(e.getRowKey(), e.getColumnKey(), e.getValue().copy(this, true));
@@ -7093,8 +7122,12 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public void updateStaticAbilities(List<StaticAbility> list, CardState state) {
-        for (final ICardTraitChanges ck : getChangedCardTraitsList(state)) {
-            ck.applyStaticAbility(list);
+        if (hasChangedCardTraits()) {
+            for (final ICardTraitChanges ck : getChangedCardTraitsList(state)) {
+                ck.applyStaticAbility(list);
+            }
+        } else {
+            state.getLandTraitChange().applyStaticAbility(list);
         }
 
         // keywords are already sorted by Layer
@@ -7130,8 +7163,12 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public void updateTriggers(List<Trigger> list, CardState state) {
-        for (final ICardTraitChanges ck : getChangedCardTraitsList(state)) {
-            ck.applyTrigger(list);
+        if (hasChangedCardTraits()) {
+            for (final ICardTraitChanges ck : getChangedCardTraitsList(state)) {
+                ck.applyTrigger(list);
+            }
+        } else {
+            state.getLandTraitChange().applyTrigger(list);
         }
 
         // Keywords are already sorted by Layer
@@ -7148,8 +7185,12 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public void updateReplacementEffects(List<ReplacementEffect> list, CardState state, boolean rulesHost) {
-        for (final ICardTraitChanges ck : getChangedCardTraitsList(state)) {
-            ck.applyReplacementEffect(list);
+        if (hasChangedCardTraits()) {
+            for (final ICardTraitChanges ck : getChangedCardTraitsList(state)) {
+                ck.applyReplacementEffect(list);
+            }
+        } else {
+            state.getLandTraitChange().applyReplacementEffect(list);
         }
 
         // Keywords are already sorted by Layer
@@ -8257,6 +8298,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             hiddenExtrinsicKeywords.put(kw.getRowKey(), kw.getColumnKey(), kw.getValue());
         }
 
+        if (!in.changedCardTypes.isEmpty()) {
+            mayHaveChangedCardTypes = true;
+        }
         this.changedCardTypes.putAll(in.changedCardTypes);
         this.changedCardTypesCharacterDefining.putAll(in.changedCardTypesCharacterDefining);
         updateTypeCache();

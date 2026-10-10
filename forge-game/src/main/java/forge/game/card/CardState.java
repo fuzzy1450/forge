@@ -111,8 +111,9 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     private SpellAbility manifestUp;
     private SpellAbility cloakUp;
 
+    private final LandTraitChanges landTraitChange = new LandTraitChanges(this);
     // wrapped in a List so it can be reused directly
-    private List<LandTraitChanges> landTraitChanges = List.of(new LandTraitChanges(this));
+    private List<LandTraitChanges> landTraitChanges = List.of(landTraitChange);
 
     public CardState(Card card, CardStateName name) {
         this(card.getView().createAlternateState(name), card);
@@ -551,6 +552,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     }
 
     public List<LandTraitChanges> getLandTraitChanges() { return this.landTraitChanges; }
+    LandTraitChanges getLandTraitChange() { return this.landTraitChange; }
 
     record LandTraitChanges(CardState state) implements ICardTraitChanges, IKeywordsChange
     {
