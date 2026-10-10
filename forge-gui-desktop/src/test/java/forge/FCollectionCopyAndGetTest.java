@@ -89,7 +89,12 @@ public class FCollectionCopyAndGetTest {
         return sources;
     }
 
-    /** What a new, empty collection does on every later operation, checked on the one given. */
+    /**
+     * What a new, empty collection does on every later operation, checked on the one given: its answers while
+     * empty, then a walk past the hash threshold in which a repeat below it is refused by the list scan and one
+     * above it by the hash set that the add passing the threshold builds, then its answers after. Nothing before
+     * the walk may call asSet(), which would build the set early; assertHashedEarlyAsNewEmpty covers that case.
+     */
     private static void assertBehavesAsNewEmpty(final FCollection<Key> c) {
         final Key probe = new Key(1000);
         assertEquals(c.size(), 0);
@@ -101,7 +106,6 @@ public class FCollectionCopyAndGetTest {
         assertEquals(c.toArray().length, 0);
         assertEquals(c.hashCode(), new FCollection<Key>().hashCode());
         assertEquals(c.toString(), "[]");
-        assertTrue(c.asSet().isEmpty());
 
         // an iterator taken now still fails fast once the collection changes
         final Iterator<Key> before = c.iterator();
@@ -111,7 +115,8 @@ public class FCollectionCopyAndGetTest {
         assertTrue(c.remove(first));
         assertTrue(c.isEmpty());
 
-        // add past the hash threshold one at a time, refusing a repeat on each side of it
+        // add past the hash threshold one at a time: a repeat below it is refused by the list scan, one above it
+        // by the hash set built at the add that passes the threshold
         final List<Key> added = keys(0, Threshold.VALUE * 3);
         for (final Key k : added) {
             assertTrue(c.add(k), "adding " + k);
@@ -119,6 +124,8 @@ public class FCollectionCopyAndGetTest {
                 assertFalse(c.add(new Key(k.value)), "a repeat of " + k);
             }
         }
+
+        // the answers after the walk, the set's among them
         assertEquals(c.size(), added.size());
         assertEquals(new ArrayList<>(c), added);
         for (final Key k : added) {
@@ -129,6 +136,29 @@ public class FCollectionCopyAndGetTest {
         assertTrue(c.remove(new Key(5)));
         assertFalse(c.contains(new Key(5)));
         assertEquals(c.size(), added.size() - 1);
+        assertEquals(c.asSet().size(), added.size() - 1);
+    }
+
+    /**
+     * What a new, empty collection does when asked for its set before anything is added: an empty set, built at
+     * once, through which every add then goes, with the same answers.
+     */
+    private static void assertHashedEarlyAsNewEmpty(final FCollection<Key> c) {
+        assertTrue(c.asSet().isEmpty());
+        final List<Key> added = keys(0, Threshold.VALUE + 4);
+        for (final Key k : added) {
+            assertTrue(c.add(k), "adding " + k);
+            if (k.value == 3 || k.value == Threshold.VALUE + 3) {
+                assertFalse(c.add(new Key(k.value)), "a repeat of " + k);
+            }
+        }
+        assertEquals(new ArrayList<>(c), added);
+        assertEquals(c.asSet(), new LinkedHashSet<>(added));
+        for (final Key k : added) {
+            assertSame(c.get(new Key(k.value)), k);
+        }
+        assertTrue(c.remove(new Key(5)));
+        assertFalse(c.contains(new Key(5)));
     }
 
     @Test
@@ -136,13 +166,16 @@ public class FCollectionCopyAndGetTest {
         // the yardstick for the copies below, and the other way to start from nothing
         assertBehavesAsNewEmpty(new FCollection<>());
         assertBehavesAsNewEmpty(new FCollection<>(new ArrayList<Key>()));
+        assertHashedEarlyAsNewEmpty(new FCollection<>());
+        assertHashedEarlyAsNewEmpty(new FCollection<>(new ArrayList<Key>()));
     }
 
     @Test
     public void aCopyOfAnEmptyCollectionBehavesAsANewOne() {
         for (final FCollection<Key> source : emptySources()) {
-            final FCollection<Key> copy = new FCollection<>(source);
-            assertBehavesAsNewEmpty(copy);
+            // the walk past the threshold on one copy, the set asked for at once on another
+            assertBehavesAsNewEmpty(new FCollection<>(source));
+            assertHashedEarlyAsNewEmpty(new FCollection<>(source));
             assertTrue(source.isEmpty(), "the source is left as it was");
         }
     }
