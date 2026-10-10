@@ -5,6 +5,8 @@ import forge.ai.ComputerUtilAbility;
 import forge.card.CardStateName;
 import forge.card.MagicColor;
 import forge.game.Game;
+import forge.game.ability.AbilityFactory;
+import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.*;
 import forge.game.cost.Cost;
@@ -2630,6 +2632,77 @@ public class GameSimulationTest extends SimulationTest {
         // CR 305.7: as a Mountain it loses the abilities of its rules text, its pay-2-life replacement among them
         AssertJUnit.assertTrue(nonBasicForest.getType().hasSubtype("Mountain"));
         AssertJUnit.assertTrue(nonBasicForest.getReplacementEffects().isEmpty());
+    }
+
+    @Test
+    public void testBloodMoonedLandsLKICopyHasNoReplacementEither() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, p);
+
+        Card nonBasicForest = addCard("Breeding Pool", p);
+        addCard("Blood Moon", p);
+        game.getAction().checkStaticAbilities();
+        AssertJUnit.assertTrue(nonBasicForest.getReplacementEffects().isEmpty());
+
+        // the copy takes the type change over in Card.copyFrom, and with it the loss of the land's own text
+        Card lki = CardCopyService.getLKICopy(nonBasicForest);
+        AssertJUnit.assertTrue(lki.getType().hasSubtype("Mountain"));
+        AssertJUnit.assertTrue(lki.getReplacementEffects().isEmpty());
+    }
+
+    @Test
+    public void testVolrathsShapeshifterHasTheCopiedCardsActivatedAbility() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p);
+        final String ping = "{T}: CARDNAME deals 1 damage to any target.";
+
+        Card volrath = addCard("Volrath's Shapeshifter", p);
+        AssertJUnit.assertNull(findSAWithPrefix(volrath, ping));
+
+        // the text of the top creature card of the graveyard comes in as changed-by-text traits
+        addCardToZone("Prodigal Sorcerer", p, ZoneType.Graveyard);
+        game.getAction().checkStateEffects(true);
+
+        AssertJUnit.assertEquals("Prodigal Sorcerer", volrath.getName());
+        SpellAbility copied = findSAWithPrefix(volrath, ping);
+        AssertJUnit.assertTrue(copied != null && copied.getApi() == ApiType.DealDamage);
+    }
+
+    @Test
+    public void testExchangedTextBoxesSwapAbilitiesAndAnLKICopyKeepsTheSwap() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p);
+        final String ping = "{T}: CARDNAME deals 1 damage to any target.";
+        final String addG = "{T}: Add {G}.";
+
+        Card sorcerer = addCard("Prodigal Sorcerer", p);
+        Card elves = addCard("Llanowar Elves", p);
+        Card exchange = addCard("Exchange of Words", p);
+        game.getAction().checkStateEffects(true);
+        AssertJUnit.assertNotNull(findSAWithPrefix(sorcerer, ping));
+        AssertJUnit.assertNotNull(findSAWithPrefix(elves, addG));
+
+        // Exchange of Words' text box exchange, resolved with its two targets
+        SpellAbility swap = AbilityFactory.getAbility(exchange, "DBExchangeText");
+        swap.setActivatingPlayer(p);
+        swap.getTargets().add(sorcerer);
+        swap.getTargets().add(elves);
+        AbilityUtils.resolve(swap);
+        game.getAction().checkStateEffects(true);
+
+        // each creature has the other's text box, as changed-by-text traits
+        AssertJUnit.assertNotNull(findSAWithPrefix(sorcerer, addG));
+        AssertJUnit.assertNull(findSAWithPrefix(sorcerer, ping));
+        AssertJUnit.assertNotNull(findSAWithPrefix(elves, ping));
+        AssertJUnit.assertNull(findSAWithPrefix(elves, addG));
+
+        // and so has a copy of one: Card.copyFrom hands those traits to setChangedCardTraitsByText
+        Card sorcererLKI = CardCopyService.getLKICopy(sorcerer);
+        AssertJUnit.assertNotNull(findSAWithPrefix(sorcererLKI, addG));
+        AssertJUnit.assertNull(findSAWithPrefix(sorcererLKI, ping));
     }
 
     @Test
