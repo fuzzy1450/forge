@@ -13,6 +13,7 @@ import forge.game.cost.Cost;
 import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.replacement.ReplacementEffect;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
 import forge.util.StreamUtil;
@@ -25,6 +26,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -2719,6 +2721,87 @@ public class GameSimulationTest extends SimulationTest {
         // the copied name is one of the card's changed names, which Card.copyFrom hands to the copy
         Card lki = CardCopyService.getLKICopy(volrath);
         AssertJUnit.assertEquals("Prodigal Sorcerer", lki.getName());
+    }
+
+    private static List<String> validStackSas(CardState state) {
+        List<String> result = Lists.newArrayList();
+        for (ReplacementEffect re : state.getReplacementEffects()) {
+            result.add(re.getParam("ValidStackSa"));
+        }
+        return result;
+    }
+
+    @Test
+    public void testAdventureOmenAndSagaCardsGetTheirRulesReplacements() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p);
+
+        // an Adventure spell is exiled as it resolves, an Omen spell shuffled into its owner's library
+        Card giant = addCardToZone("Bonecrusher Giant", p, ZoneType.Hand);
+        Card dragon = addCardToZone("Dirgur Island Dragon", p, ZoneType.Hand);
+        AssertJUnit.assertTrue(giant.getState(CardStateName.Original).getReplacementEffects().isEmpty());
+        AssertJUnit.assertEquals(List.of("Spell.Adventure"), validStackSas(giant.getState(CardStateName.Secondary)));
+        AssertJUnit.assertTrue(dragon.getState(CardStateName.Original).getReplacementEffects().isEmpty());
+        AssertJUnit.assertEquals(List.of("Spell.Omen"), validStackSas(dragon.getState(CardStateName.Secondary)));
+
+        // a Saga enters with a lore counter
+        Card saga = addCardToZone("History of Benalia", p, ZoneType.Hand);
+        CardState sagaState = saga.getState(CardStateName.Original);
+        AssertJUnit.assertEquals(List.of(sagaState.getSagaRep()), Lists.newArrayList(sagaState.getReplacementEffects()));
+    }
+
+    @Test
+    public void testSplitCardsAndCardsGivenTheirStatesHaveBothHalves() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p);
+
+        Card fireIce = addCardToZone("Fire // Ice", p, ZoneType.Hand);
+        Card bears = addCardToZone("Grizzly Bears", p, ZoneType.Hand);
+        AssertJUnit.assertTrue(fireIce.hasState(CardStateName.LeftSplit));
+        AssertJUnit.assertTrue(fireIce.hasState(CardStateName.RightSplit));
+        AssertJUnit.assertFalse(bears.hasState(CardStateName.LeftSplit));
+        AssertJUnit.assertFalse(bears.hasState(CardStateName.RightSplit));
+        // the whole card offers both halves' spells
+        AssertJUnit.assertTrue(fireIce.getSpellAbilities().anyMatch(sa -> sa.getApi() == ApiType.DealDamage));
+        AssertJUnit.assertTrue(fireIce.getSpellAbilities().anyMatch(sa -> sa.getApi() == ApiType.Tap));
+        // and each of its states knows which one it is
+        for (CardStateName name : List.of(CardStateName.Original, CardStateName.LeftSplit, CardStateName.RightSplit)) {
+            CardState state = fireIce.getState(name);
+            AssertJUnit.assertEquals(name, state.getStateName());
+            AssertJUnit.assertEquals(state.getView().getState(), state.getStateName());
+        }
+
+        SpellAbility cause = fireIce.getFirstSpellAbility();
+        // a card given a split card's states as its own, as copies of spells and permanents are
+        Card copy = createCard("Grizzly Bears", p);
+        AssertJUnit.assertFalse(copy.hasState(CardStateName.LeftSplit));
+        copy.setStates(CardFactory.getCloneStates(fireIce, copy, cause));
+        AssertJUnit.assertTrue(copy.hasState(CardStateName.LeftSplit));
+        AssertJUnit.assertTrue(copy.hasState(CardStateName.RightSplit));
+
+        // a card cloning a split card
+        Card clone = addCard("Grizzly Bears", p);
+        AssertJUnit.assertFalse(clone.hasState(CardStateName.LeftSplit));
+        clone.addCloneState(CardFactory.getCloneStates(fireIce, clone, cause), game.getNextTimestamp());
+        AssertJUnit.assertTrue(clone.hasState(CardStateName.LeftSplit));
+        AssertJUnit.assertTrue(clone.hasState(CardStateName.RightSplit));
+
+        // and one given the clone states wholesale
+        Card cloned = addCard("Grizzly Bears", p);
+        Map<Long, CardCloneStates> cloneStates = new TreeMap<>();
+        cloneStates.put(game.getNextTimestamp(), CardFactory.getCloneStates(fireIce, cloned, cause));
+        cloned.setCloneStates(cloneStates);
+        AssertJUnit.assertTrue(cloned.hasState(CardStateName.LeftSplit));
+        AssertJUnit.assertTrue(cloned.hasState(CardStateName.RightSplit));
+
+        // a clone's states grow as they are asked for, so cloning any card can bring a split state
+        Card elves = addCard("Llanowar Elves", p);
+        elves.addCloneState(CardFactory.getCloneStates(bears, elves, bears.getFirstSpellAbility()), game.getNextTimestamp());
+        AssertJUnit.assertFalse(elves.hasState(CardStateName.LeftSplit));
+        elves.getState(CardStateName.LeftSplit);
+        AssertJUnit.assertTrue(elves.hasState(CardStateName.LeftSplit));
     }
 
     @Test
