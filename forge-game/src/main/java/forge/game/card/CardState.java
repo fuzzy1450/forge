@@ -94,6 +94,8 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     private String setCode = CardEdition.UNKNOWN_CODE;
 
     private final CardStateView view;
+    // the view's state name, which never changes; kept here because every trait rebuild asks for it
+    private final CardStateName stateName;
     private final Card card;
 
     private SpellAbility landAbility;
@@ -121,6 +123,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
 
     public CardState(CardStateView view0, Card card0) {
         view = view0;
+        stateName = view0.getState();
         card = card0;
         view.updateRarity(this);
         view.updateSetCode(this);
@@ -143,7 +146,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     }
 
     public CardStateName getStateName() {
-        return this.getView().getState();
+        return stateName;
     }
 
     @Override
@@ -754,13 +757,13 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         }
 
         // below are global rules
-        if (type.hasSubtype("Adventure")) {
+        if (type.isAdventure()) {
             if (this.adventureRep == null) {
                 adventureRep = CardFactoryUtil.setupAdventureAbility(this);
             }
             result.add(adventureRep);
         }
-        if (type.hasSubtype("Omen")) {
+        if (type.isOmen()) {
             if (this.omenRep == null) {
                 omenRep = CardFactoryUtil.setupOmenAbility(this);
             }

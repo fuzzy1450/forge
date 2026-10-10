@@ -153,6 +153,13 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
 
     private boolean incomplete = false;
     private transient String calculatedType = null;
+    // Whether subtypes holds "Saga", "Adventure" or "Omen": every replacement effect rebuild asks this of every card,
+    // so the three lookups are kept until subtypes next changes (0 = not looked up since)
+    private transient int ruleSubtypes = 0;
+    private static final int RULE_SUBTYPES_KNOWN = 1;
+    private static final int HAS_SAGA = 2;
+    private static final int HAS_ADVENTURE = 4;
+    private static final int HAS_OMEN = 8;
 
     public CardType(boolean incomplete) {
         this.incomplete = incomplete;
@@ -181,6 +188,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
                 changed = supertypes.add(st);
             } else {
                 // If not recognized by super- and core- this must be subtype
+                ruleSubtypes = 0;
                 changed = subtypes.add(t);
             }
         }
@@ -207,6 +215,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         boolean changed = false;
         if (coreTypes.addAll(type.coreTypes)) { changed = true; }
         if (supertypes.addAll(type.supertypes)) { changed = true; }
+        ruleSubtypes = 0;
         if (subtypes.addAll(type.subtypes)) { changed = true; }
         sanisfySubtypes();
         return changed;
@@ -215,6 +224,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         boolean changed = false;
         if (Iterables.addAll(coreTypes, type.getCoreTypes())) { changed = true; }
         if (Iterables.addAll(supertypes, type.getSupertypes())) { changed = true; }
+        ruleSubtypes = 0;
         if (Iterables.addAll(subtypes, type.getSubtypes())) { changed = true; }
         sanisfySubtypes();
         return changed;
@@ -224,6 +234,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         boolean changed = false;
         if (coreTypes.removeAll(type.getCoreTypes())) { changed = true; }
         if (supertypes.removeAll(type.getSupertypes())) { changed = true; }
+        ruleSubtypes = 0;
         if (subtypes.removeAll(type.getSubtypes())) { changed = true; }
         if (changed) {
             sanisfySubtypes();
@@ -237,6 +248,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         if (isEmpty()) { return; }
         coreTypes.clear();
         supertypes.clear();
+        ruleSubtypes = 0;
         subtypes.clear();
         calculatedType = null;
     }
@@ -253,6 +265,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         boolean changed = false;
 
         // try to remove sub type first if able
+        ruleSubtypes = 0;
         if (subtypes.remove(str)) {
             changed = true;
         } else {
@@ -278,6 +291,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         if (!isCreature() && !isKindred()) {
             return false;
         }
+        ruleSubtypes = 0;
         boolean changed = subtypes.removeIf(CardType::isACreatureType);
         // need to remove AllCreatureTypes too when setting Creature Type
         if (allCreatureTypes) {
@@ -582,7 +596,37 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
 
     @Override
     public boolean isSaga() {
-        return hasSubtype("Saga");
+        return hasRuleSubtype("Saga", HAS_SAGA);
+    }
+    public boolean isAdventure() {
+        return hasRuleSubtype("Adventure", HAS_ADVENTURE);
+    }
+    public boolean isOmen() {
+        return hasRuleSubtype("Omen", HAS_OMEN);
+    }
+
+    // hasSubtype for the three subtypes kept in ruleSubtypes, with the same answer
+    private boolean hasRuleSubtype(final String subtype, final int bit) {
+        int known = ruleSubtypes;
+        if (known == 0) {
+            known = RULE_SUBTYPES_KNOWN;
+            if (subtypes.contains("Saga")) {
+                known |= HAS_SAGA;
+            }
+            if (subtypes.contains("Adventure")) {
+                known |= HAS_ADVENTURE;
+            }
+            if (subtypes.contains("Omen")) {
+                known |= HAS_OMEN;
+            }
+            ruleSubtypes = known;
+        }
+        if ((known & bit) != 0) {
+            return true;
+        }
+        // not among the subtypes, so only hasCreatureType could still say yes, and only for a creature or kindred
+        // with all creature types (each of the three names is its own mixed case)
+        return allCreatureTypes && (isCreature() || isKindred()) && hasSubtype(subtype);
     }
 
     @Override
@@ -700,6 +744,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
             allowedTypes = allowedTypes.or(CardType::isAPlanarType);
         }
 
+        ruleSubtypes = 0;
         subtypes.removeIf(allowedTypes.negate());
     }
 

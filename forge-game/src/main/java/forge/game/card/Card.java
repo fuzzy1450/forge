@@ -97,6 +97,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     private final IPaperCard paperCard;
 
     private final Map<CardStateName, CardState> states = Maps.newEnumMap(CardStateName.class);
+    // false until a LeftSplit or RightSplit state could exist: one of them put into states, or a clone state, whose
+    // map can gain any state, added; until then hasState knows neither exists without reading either map
+    private boolean mayHaveSplitStates = false;
     private CardState currentState;
     private CardStateName currentStateName = CardStateName.Original;
     private GamePieceType gamePieceType = GamePieceType.CARD;
@@ -546,6 +549,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         if (state == CardStateName.FaceDown || state == CardStateName.EmptyRoom) {
             return true;
         }
+        if (!mayHaveSplitStates && (state == CardStateName.LeftSplit || state == CardStateName.RightSplit)) {
+            return false;
+        }
         CardCloneStates clStates = getLastClonedState();
         if (clStates == null) {
             return states.containsKey(state);
@@ -658,11 +664,17 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
     // use by CopyPermanent
     public void setStates(Map<CardStateName, CardState> map) {
+        if (map.containsKey(CardStateName.LeftSplit) || map.containsKey(CardStateName.RightSplit)) {
+            mayHaveSplitStates = true;
+        }
         states.clear();
         states.putAll(map);
     }
 
     public final void addAlternateState(final CardStateName state, final boolean updateView) {
+        if (state == CardStateName.LeftSplit || state == CardStateName.RightSplit) {
+            mayHaveSplitStates = true;
+        }
         states.put(state, new CardState(this, state));
         if (updateView) {
             updateStateForView();
@@ -4304,6 +4316,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final void addCloneState(CardCloneStates states, final long timestamp) {
+        mayHaveSplitStates = true;
         clonedStates.put(timestamp, states);
         updateCloneState(true);
         updateWorldTimestamp(timestamp);
@@ -4359,6 +4372,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final void setCloneStates(Map<Long, CardCloneStates> val) {
+        if (!val.isEmpty()) {
+            mayHaveSplitStates = true;
+        }
         clonedStates.clear();
         clonedStates.putAll(val);
         updateCloneState(true);
