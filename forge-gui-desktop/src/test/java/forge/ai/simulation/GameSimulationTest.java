@@ -2615,6 +2615,24 @@ public class GameSimulationTest extends SimulationTest {
     }
 
     @Test
+    public void testBloodMoonRemovesTheLandsOwnAbilities() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, p);
+
+        Card nonBasicForest = addCard("Breeding Pool", p);
+        game.getAction().checkStaticAbilities();
+        AssertJUnit.assertEquals(1, nonBasicForest.getReplacementEffects().size());
+
+        addCard("Blood Moon", p);
+        game.getAction().checkStaticAbilities();
+
+        // CR 305.7: as a Mountain it loses the abilities of its rules text, its pay-2-life replacement among them
+        AssertJUnit.assertTrue(nonBasicForest.getType().hasSubtype("Mountain"));
+        AssertJUnit.assertTrue(nonBasicForest.getReplacementEffects().isEmpty());
+    }
+
+    @Test
     public void testHenzie() {
         Game game = initAndCreateGame();
         Player p = game.getPlayers().get(0);
