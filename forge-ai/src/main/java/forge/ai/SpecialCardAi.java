@@ -130,6 +130,20 @@ public class SpecialCardAi {
         return res;
     }
 
+    // ComputerUtilMana.getAIPlayableMana as every row below was written and A/B-tested against: no
+    // ability with mana in its own cost. Upstream #12149 and #12179 (merged 2026-10-11) taught the
+    // AI's payment to activate "filter" mana abilities ({1},{T}: Add {W}{U} on a Signet or an Odyssey
+    // filter land), so getAIPlayableMana returns those too now. Counted here, a Signet would read as
+    // two free mana and a filter land as a source that pays for itself, and the RNG-free floors and
+    // lower bounds below, which promise to err low, would err high. The same members in the same
+    // order as before the merge: getAIPlayableMana appends a filter ability where it found it, and
+    // dropping it moves nothing else.
+    public static List<SpellAbility> aiPlayableManaNoManaCost(final Card c) {
+        final List<SpellAbility> res = ComputerUtilMana.getAIPlayableMana(c);
+        res.removeIf(ma -> ma.getPayCosts().hasManaCost());
+        return res;
+    }
+
     // Acorn Catapult (dead-card batch 2, row 100; precon:Counterpunch (CMD))
     // "{1}, {T}: Acorn Catapult deals 1 damage to any target. That permanent's controller or that
     // player creates a 1/1 green Squirrel creature token." AI:RemoveDeck:All kept it out of every
@@ -3285,7 +3299,7 @@ public class SpecialCardAi {
                 }
                 int best = 0;
                 int colors = 0;
-                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+                for (final SpellAbility ma : aiPlayableManaNoManaCost(src)) {
                     ma.setActivatingPlayer(ai);
                     final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
                     if (mp == null || !ma.canPlay() || !ma.checkRestrictions(ai) || !mp.meetsManaRestrictions(spell)
@@ -8576,8 +8590,8 @@ public class SpecialCardAi {
         }
 
         // Spare mana, RNG-free: floating mana, plus, per battlefield source not held (isHeld), its
-        // best ability among ComputerUtilMana.getAIPlayableMana (what the AI's payment uses: a filter
-        // land's {1},{T} ability is not one, so it counts 0) that canPlay() and whose cost is a
+        // best ability among aiPlayableManaNoManaCost (getAIPlayableMana without mana in its own cost:
+        // a filter land's or a Signet's {1},{T} ability counts 0) that canPlay() and whose cost is a
         // reusable resource (no Treasure; Fiery Islet's PayLife is undercounted by one, which
         // setMaxXValue's exact ceiling makes safe), worth one mana times Amount for a choice (Combo,
         // Any, Chosen, reflected or empty) and Amount times its symbols otherwise. Commune with
@@ -8590,7 +8604,7 @@ public class SpecialCardAi {
                     continue;
                 }
                 int best = 0;
-                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+                for (final SpellAbility ma : aiPlayableManaNoManaCost(src)) {
                     ma.setActivatingPlayer(ai);
                     if (!ma.canPlay() || !ma.getPayCosts().isReusuableResource()) {
                         continue;
@@ -8620,7 +8634,7 @@ public class SpecialCardAi {
                 if (isHeld(ai, src)) {
                     continue;
                 }
-                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+                for (final SpellAbility ma : aiPlayableManaNoManaCost(src)) {
                     final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
                     if (mp == null) {
                         continue;
@@ -17069,7 +17083,7 @@ public class SpecialCardAi {
             // Value floor: it is a mana source only if some land on the battlefield, on either side,
             // has a mana ability the AI would tap without paying mana; the copies keep the land's cost.
             for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
-                if (c.isLand() && !ComputerUtilMana.getAIPlayableMana(c).isEmpty()) {
+                if (c.isLand() && !aiPlayableManaNoManaCost(c).isEmpty()) {
                     return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
                 }
             }
@@ -24472,7 +24486,7 @@ public class SpecialCardAi {
         // An RNG-free LOWER bound on the mana we can make here: untapped battlefield sources not
         // held in an AiCardMemory mana reservation (at END_OF_TURN isManaSourceReserved refuses all
         // four sets), each counted once through an AI-playable ability
-        // (ComputerUtilMana.getAIPlayableMana: no mana in its own cost) that canPlay() and may be
+        // (aiPlayableManaNoManaCost: no mana in its own cost) that canPlay() and may be
         // spent on this spell, at least one of them a {B} maker. getAvailableManaEstimate counts the
         // words of Produced$ and ignores colour, so on the carriers it approved windows that
         // setMaxXValue then declined after its draws. Sol Ring's second mana is not counted: a
@@ -24485,7 +24499,7 @@ public class SpecialCardAi {
                     continue;
                 }
                 boolean counted = false;
-                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+                for (final SpellAbility ma : aiPlayableManaNoManaCost(src)) {
                     final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
                     if (mp == null) {
                         continue;
@@ -25646,7 +25660,7 @@ public class SpecialCardAi {
     // this: search" fetch (ChangeZoneAi.willPayCosts skips checkSacrificeCost
     // for Destination$ Battlefield) or "Sacrifice a creature: Add {B}{B}" would
     // spend our own creatures; a {1},{T} filter land is skipped by
-    // ComputerUtilMana.getAIPlayableMana and grants nothing. Greedy color
+    // aiPlayableManaNoManaCost and grants nothing. Greedy color
     // cover: after the first pick a land is added only for a color the chosen
     // lands do not make yet, so graveyard lands the deck spends (Loam, Multani,
     // delve) are not exiled for nothing. No RNG: stable sort, graveyard order.
@@ -25703,12 +25717,12 @@ public class SpecialCardAi {
                     }
                 }
             }
-            return !ComputerUtilMana.getAIPlayableMana(land).isEmpty();
+            return !aiPlayableManaNoManaCost(land).isEmpty();
         }
 
         private static int colorMask(final Card land) {
             int mask = 0;
-            for (SpellAbility ma : ComputerUtilMana.getAIPlayableMana(land)) {
+            for (SpellAbility ma : aiPlayableManaNoManaCost(land)) {
                 for (byte color : MagicColor.WUBRG) {
                     if (ma.canProduce(MagicColor.toShortString(color))) {
                         mask |= color;
@@ -28446,7 +28460,7 @@ public class SpecialCardAi {
         // "tapped for mana" needs a {T} mana ability; the rest is Steward's safe-land test
         private static boolean isSafeManaHost(final Card land) {
             boolean tapsForMana = false;
-            for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(land)) {
+            for (final SpellAbility ma : aiPlayableManaNoManaCost(land)) {
                 if (ma.getPayCosts() != null && ma.getPayCosts().hasTapCost()) {
                     tapsForMana = true;
                     break;
@@ -28463,7 +28477,7 @@ public class SpecialCardAi {
                 if (c.isTapped() || (c.isCreature() && c.isSick()) || HonestMana.isHeld(ai, c)) {
                     continue;
                 }
-                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(c)) {
+                for (final SpellAbility ma : aiPlayableManaNoManaCost(c)) {
                     ma.setActivatingPlayer(ai);
                     if (ma.canProduce("G")) {
                         g.add(c);
@@ -28481,7 +28495,7 @@ public class SpecialCardAi {
         private static boolean extraManaHasAUse(final Player ai, final Card self) {
             int supply = 0;
             for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
-                if (!ComputerUtilMana.getAIPlayableMana(c).isEmpty()) {
+                if (!aiPlayableManaNoManaCost(c).isEmpty()) {
                     supply++;
                 }
             }

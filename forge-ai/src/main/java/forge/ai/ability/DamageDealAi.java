@@ -170,7 +170,8 @@ public class DamageDealAi extends DamageAiBase {
 
     // What the AI payment could use now, as [total, W, U, B, R, G, any color]: the sources
     // ComputerUtilMana.getAvailableManaSources/groupSourcesByManaColor would offer, without the
-    // RNG roll in isManaSourceReserved. Errs low: a decline here is exactly stock's refusal.
+    // RNG roll in isManaSourceReserved, and without a filter ability that needs mana of its own
+    // (SpecialCardAi.aiPlayableManaNoManaCost). Errs low: a decline here is exactly stock's refusal.
     private static int[] explosionManaCapacity(final Player ai, final SpellAbility spell) {
         final int[] cap = new int[7];
         cap[0] = ai.getManaPool().totalMana();
@@ -188,7 +189,7 @@ public class DamageDealAi extends DamageAiBase {
             }
             int best = 0;
             int colors = 0;
-            for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+            for (final SpellAbility ma : SpecialCardAi.aiPlayableManaNoManaCost(src)) {
                 ma.setActivatingPlayer(ai);
                 final AbilityManaPart mp = ma.getManaPart();
                 if (mp == null || !ma.canPlay() || !ma.checkRestrictions(ai) || !mp.meetsManaRestrictions(spell)
