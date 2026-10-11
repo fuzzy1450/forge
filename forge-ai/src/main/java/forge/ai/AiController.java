@@ -1216,9 +1216,11 @@ public class AiController {
                 }
 
                 if (!discardedUnplayable) {
-                    // discard worst card; a connive keeps its engines (ConniveAi.chooseDiscard)
+                    // discard worst card; a connive keeps its engines (ConniveAi.chooseDiscard), and the AI keeps
+                    // its mana rocks and mana creatures while it is short of mana (keepManaSourcesWhileShort)
+                    final CardCollection worstOf = keepManaSourcesWhileShort(validCards);
                     Card worst = sa != null && sa.getApi() == ApiType.Connive
-                            ? ConniveAi.chooseDiscard(validCards) : ComputerUtilCard.getWorstAI(validCards);
+                            ? ConniveAi.chooseDiscard(worstOf) : ComputerUtilCard.getWorstAI(worstOf);
                     if (worst == null) {
                         // there were only instants and sorceries, and maybe cards that are not good to discard, so look
                         // for more discard options
@@ -1253,6 +1255,56 @@ public class AiController {
             }
         }
         return discardList;
+    }
+
+    /**
+     * The cards getCardsToDiscard's worst-card fallback picks from: validCards itself or, while the AI is
+     * short of mana, validCards without its nonland mana sources (a mana rock or a mana creature,
+     * isNonlandManaSource), as long as a nonland card is left to discard in their place.
+     * <p>
+     * The fallback is ComputerUtilCard.getWorstAI, which discards the cheapest artifact or enchantment
+     * before anything else, so a hand's Sol Ring, Talisman or Signet went first whenever no card counted
+     * as uncastable; a connive's ConniveAi.chooseDiscard takes the cheapest nonland card, as often a mana
+     * rock. Replays of 2.0.15+7a241d90134 show both (Arcane Signet, Mind Stone, a Talisman), and a wider
+     * uncastable window made it the price of every expensive card kept: Sol Ring for Time Wipe, a
+     * Talisman for Kang Prime, Everflowing Chalice for Memory Plunder (2.0.15+db062768f34).
+     * <p>
+     * Short of mana: the permanents the AI controls that make mana (manaPermanentsInPlay) are fewer than
+     * the mana value of the most expensive other nonland card in its hand, or than the profile's
+     * SCRY_NUM_LANDS_TO_NOT_NEED_MORE, the count of mana-producing lands at which it stops wanting more
+     * (Default 7). Past both, a mana source is one more cheap card and the stock choice stands.
+     * <p>
+     * With no mana source among validCards, with only lands beside them, or with mana enough, this returns
+     * validCards itself, and the fallback runs exactly as before. Draws no RNG and writes nothing. The later
+     * fallbacks (getCheapestSpellAI, which never takes a permanent; the first card; a duplicate;
+     * Aggregates.random) keep validCards.
+     */
+    private CardCollection keepManaSourcesWhileShort(final CardCollection validCards) {
+        final CardCollection others = CardLists.filter(validCards, c -> !isNonlandManaSource(c));
+        if (others.size() == validCards.size() || !others.anyMatch(c -> !c.isLand())) {
+            return validCards;
+        }
+        int need = getIntProperty(AiProps.SCRY_NUM_LANDS_TO_NOT_NEED_MORE);
+        for (final Card c : player.getCardsIn(ZoneType.Hand)) {
+            if (!c.isLand() && !isNonlandManaSource(c)) {
+                need = Math.max(need, c.getCMC());
+            }
+        }
+        return manaPermanentsInPlay() < need ? others : validCards;
+    }
+
+    // A nonland card that makes mana once it is in play: a mana rock or a mana creature (Sol Ring, a
+    // Talisman, Llanowar Elves). A spell that adds mana as it resolves (Dark Ritual) has no mana ability.
+    private static boolean isNonlandManaSource(final Card c) {
+        return !c.isLand() && !c.getManaAbilities().isEmpty();
+    }
+
+    // The permanents the AI controls that make mana: the lands that do (LANDS_PRODUCING_MANA) and every
+    // other permanent with a mana ability, each counted once, as a land is.
+    private int manaPermanentsInPlay() {
+        final CardCollectionView inPlay = player.getCardsIn(ZoneType.Battlefield);
+        return CardLists.count(inPlay, CardPredicates.LANDS_PRODUCING_MANA)
+                + CardLists.count(inPlay, AiController::isNonlandManaSource);
     }
 
     public boolean confirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, Map<String, Object> params) {
