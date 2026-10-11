@@ -47,7 +47,16 @@ public class MyRandomScopeTest {
         try {
             Random marker = new Random(99L);
             MyRandom.setRandom(marker);
-            Assert.assertSame(MyRandom.getRandom(), marker);
+            // unbound: the static is upstream's undo-counting wrapper around marker, its values draw for draw
+            Random unbound = MyRandom.getRandom();
+            List<Integer> expected = new ArrayList<>();
+            Random ref = new Random(99L);
+            for (int i = 0; i < 10; i++) {
+                expected.add(ref.nextInt(1000));
+            }
+            long calls = MyRandom.callCount();
+            Assert.assertEquals(next(10), expected, "unbound: setRandom replaced the static");
+            Assert.assertTrue(MyRandom.callCount() >= calls + 10, "unbound: undo counts the static's draws");
 
             SimScope s = new SimScope(1L);
             SimScope.enter(s);
@@ -56,7 +65,7 @@ public class MyRandomScopeTest {
             Assert.assertSame(MyRandom.getRandom(), reseed, "bound: setRandom replaced the scope's stream");
             Assert.assertSame(s.random(), reseed);
             SimScope.exit();
-            Assert.assertSame(MyRandom.getRandom(), marker, "the static was never touched while bound");
+            Assert.assertSame(MyRandom.getRandom(), unbound, "the static was never touched while bound");
         } finally {
             MyRandom.setRandom(before);
         }

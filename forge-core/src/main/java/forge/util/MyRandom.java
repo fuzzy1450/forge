@@ -19,6 +19,7 @@ package forge.util;
 
 import java.security.SecureRandom;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * <p>
@@ -31,7 +32,23 @@ import java.util.Random;
  */
 public class MyRandom {
     /** Constant <code>random</code>. */
-    private static Random random = new SecureRandom();
+    private static final AtomicLong calls = new AtomicLong();
+    private static Random random = new CountingRandom(new SecureRandom());
+
+    /** Every Random method (nextInt, nextBoolean, shuffle, ...) funnels through next(bits). */
+    private static final class CountingRandom extends Random {
+        private final Random delegate;
+        CountingRandom(Random delegate) { super(0); this.delegate = delegate; }
+        @Override protected int next(int bits) {
+            calls.incrementAndGet();
+            return delegate.nextInt() >>> (32 - bits);
+        }
+        @Override public void setSeed(long seed) {
+            if (delegate != null) delegate.setSeed(seed);   // null during super(0)
+        }
+    }
+    /** Number of random draws made so far. Used by undo to detect that randomness was consumed. */
+    public static long callCount() { return calls.get(); }
 
     /**
      * Randomness for picks that change how the game LOOKS and never what happens in it: which
@@ -43,15 +60,6 @@ public class MyRandom {
      */
     private static final Random cosmeticRandom = new Random();
 
-    /**
-     * <p>
-     * percentTrue.<br>
-     * If percent is like 30, then 30% of the time it will be true.
-     * </p>
-     * 
-     * @param percent an int.
-     * @return a boolean.
-     */
     public static boolean percentTrue(final int percent) {
         return percent > MyRandom.getRandom().nextInt(100);
     }
@@ -68,7 +76,9 @@ public class MyRandom {
 
     /**
      * Sets the random provider. Used for deterministic simulation: re-seeds the bound scope's
-     * stream when one is bound, else replaces the static.
+     * stream when one is bound, else replaces the static, wrapped in a {@code CountingRandom} so
+     * undo sees its draws (a java.util.Random delegate gives the same values, draw for draw). A
+     * scope's stream is not counted: undo is the GUI's and never runs in a scope-bound game.
      * @param random the random
      */
     public static void setRandom(Random random) {
@@ -77,7 +87,7 @@ public class MyRandom {
             s.setRandom(random);
         } else {
             SimScope.requireUnboundAllowed("MyRandom.setRandom");
-            MyRandom.random = random;
+            MyRandom.random = random instanceof CountingRandom ? random : new CountingRandom(random);
         }
     }
 
