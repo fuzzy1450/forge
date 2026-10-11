@@ -26,6 +26,7 @@ import org.apache.commons.lang3.EnumUtils;
 import org.apache.commons.lang3.StringUtils;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -154,12 +155,18 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
     private boolean incomplete = false;
     private transient String calculatedType = null;
     // Whether subtypes holds "Saga", "Adventure" or "Omen": every replacement effect rebuild asks this of every card,
-    // so the three lookups are kept until subtypes next changes (0 = not looked up since)
-    private transient int ruleSubtypes = 0;
+    // so the three lookups are kept until subtypes next changes. The bits above them count the changes: each change
+    // to subtypes is followed by resetRuleSubtypes(), which counts it and forgets the lookups, and a lookup is kept
+    // only by a compareAndSet against the count it read before reading subtypes. So a lookup made on another thread
+    // (an AI thread that outlived its timeout) from subtypes as they were before a change is never kept past it
+    private transient volatile int ruleSubtypes;
+    private static final AtomicIntegerFieldUpdater<CardType> RULE_SUBTYPES =
+            AtomicIntegerFieldUpdater.newUpdater(CardType.class, "ruleSubtypes");
     private static final int RULE_SUBTYPES_KNOWN = 1;
     private static final int HAS_SAGA = 2;
     private static final int HAS_ADVENTURE = 4;
     private static final int HAS_OMEN = 8;
+    private static final int RULE_SUBTYPES_CHANGE = 16;
 
     public CardType(boolean incomplete) {
         this.incomplete = incomplete;
@@ -188,8 +195,8 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
                 changed = supertypes.add(st);
             } else {
                 // If not recognized by super- and core- this must be subtype
-                ruleSubtypes = 0;
                 changed = subtypes.add(t);
+                resetRuleSubtypes();
             }
         }
         if (changed) {
@@ -215,8 +222,8 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         boolean changed = false;
         if (coreTypes.addAll(type.coreTypes)) { changed = true; }
         if (supertypes.addAll(type.supertypes)) { changed = true; }
-        ruleSubtypes = 0;
         if (subtypes.addAll(type.subtypes)) { changed = true; }
+        resetRuleSubtypes();
         sanisfySubtypes();
         return changed;
     }
@@ -224,8 +231,8 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         boolean changed = false;
         if (Iterables.addAll(coreTypes, type.getCoreTypes())) { changed = true; }
         if (Iterables.addAll(supertypes, type.getSupertypes())) { changed = true; }
-        ruleSubtypes = 0;
         if (Iterables.addAll(subtypes, type.getSubtypes())) { changed = true; }
+        resetRuleSubtypes();
         sanisfySubtypes();
         return changed;
     }
@@ -234,8 +241,8 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         boolean changed = false;
         if (coreTypes.removeAll(type.getCoreTypes())) { changed = true; }
         if (supertypes.removeAll(type.getSupertypes())) { changed = true; }
-        ruleSubtypes = 0;
         if (subtypes.removeAll(type.getSubtypes())) { changed = true; }
+        resetRuleSubtypes();
         if (changed) {
             sanisfySubtypes();
             calculatedType = null;
@@ -248,8 +255,8 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         if (isEmpty()) { return; }
         coreTypes.clear();
         supertypes.clear();
-        ruleSubtypes = 0;
         subtypes.clear();
+        resetRuleSubtypes();
         calculatedType = null;
     }
 
@@ -265,8 +272,8 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         boolean changed = false;
 
         // try to remove sub type first if able
-        ruleSubtypes = 0;
         if (subtypes.remove(str)) {
+            resetRuleSubtypes();
             changed = true;
         } else {
             Supertype st = Supertype.getEnum(str);
@@ -291,7 +298,6 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         if (!isCreature() && !isKindred()) {
             return false;
         }
-        ruleSubtypes = 0;
         boolean changed = subtypes.removeIf(CardType::isACreatureType);
         // need to remove AllCreatureTypes too when setting Creature Type
         if (allCreatureTypes) {
@@ -299,6 +305,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         }
         allCreatureTypes = false;
         subtypes.addAll(ctypes);
+        resetRuleSubtypes();
         return changed;
     }
 
@@ -605,11 +612,18 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         return hasRuleSubtype("Omen", HAS_OMEN);
     }
 
+    // right after every change to subtypes: counts the change and forgets the lookups. Only the thread changing
+    // subtypes calls it, so a lookup kept between the read and the write here is only overwritten, which forgets it
+    private void resetRuleSubtypes() {
+        ruleSubtypes = (ruleSubtypes | (RULE_SUBTYPES_CHANGE - 1)) + 1;
+    }
+
     // hasSubtype for the three subtypes kept in ruleSubtypes, with the same answer
     private boolean hasRuleSubtype(final String subtype, final int bit) {
         int known = ruleSubtypes;
-        if (known == 0) {
-            known = RULE_SUBTYPES_KNOWN;
+        if ((known & RULE_SUBTYPES_KNOWN) == 0) {
+            final int changes = known;
+            known |= RULE_SUBTYPES_KNOWN;
             if (subtypes.contains("Saga")) {
                 known |= HAS_SAGA;
             }
@@ -619,7 +633,8 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
             if (subtypes.contains("Omen")) {
                 known |= HAS_OMEN;
             }
-            ruleSubtypes = known;
+            // kept only if subtypes has not changed since; the answer below is this lookup's either way
+            RULE_SUBTYPES.compareAndSet(this, changes, known);
         }
         if ((known & bit) != 0) {
             return true;
@@ -696,6 +711,8 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         // we assume that changes are already correctly ordered (taken from TreeMap.values())
         for (final ICardChangedType ct : changedCardTypes) {
             newType = ct.applyChanges(newType);
+            // a change can write subtypes directly
+            newType.resetRuleSubtypes();
         }
         // sanisfy subtypes
         if (!newType.subtypes.isEmpty()) {
@@ -744,8 +761,8 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
             allowedTypes = allowedTypes.or(CardType::isAPlanarType);
         }
 
-        ruleSubtypes = 0;
         subtypes.removeIf(allowedTypes.negate());
+        resetRuleSubtypes();
     }
 
     @Override
@@ -899,6 +916,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         result.coreTypes.addAll(b.coreTypes);
         result.subtypes.addAll(a.subtypes);
         result.subtypes.addAll(b.subtypes);
+        result.resetRuleSubtypes();
         return result;
     }
 

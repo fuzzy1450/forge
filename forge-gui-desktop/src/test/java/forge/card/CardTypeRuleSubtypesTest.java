@@ -202,4 +202,39 @@ public class CardTypeRuleSubtypesTest {
         assertPresent(changed(base, new CardChangedType(null, null, false, EnumSet.of(RemoveType.SubTypes))));
         assertPresent(base, "Saga");
     }
+
+    @Test
+    public void aChangelingHasTheNamesThatAreCreatureTypes() {
+        // None of the three names is a creature type in the shipped lists, but an edition file can add creature types
+        // when it loads. Once the names are creature types, a creature or kindred with all creature types has each
+        // of them through hasCreatureType alone, which only the live lookup behind the kept answers can see
+        final List<String> registered = new ArrayList<>();
+        try {
+            for (final String name : NAMES) {
+                if (!CardType.isACreatureType(name)) {
+                    CardType.Helper.parseTypes("CreatureTypes", List.of(name));
+                    registered.add(name);
+                }
+            }
+            final CardType changeling = changed(CardType.parse("Creature Shapeshifter", false),
+                    new CardChangedType(null, null, true, EnumSet.noneOf(RemoveType.class)));
+            assertTrue(changeling.hasAllCreatureTypes());
+            assertPresent(changeling, NAMES);
+            // asked again, from the kept lookups
+            assertPresent(changeling, NAMES);
+
+            final CardType kindred = changed(CardType.parse("Kindred Enchantment", false),
+                    new CardChangedType(null, null, true, EnumSet.noneOf(RemoveType.class)));
+            assertTrue(kindred.hasAllCreatureTypes());
+            assertPresent(kindred, NAMES);
+
+            // a creature type the change takes out of all creature types is not had
+            final CardType allButOmen = changed(CardType.parse("Creature Shapeshifter", false),
+                    new CardChangedType(null, CardType.parse("Omen", true), true, EnumSet.noneOf(RemoveType.class)));
+            assertTrue(allButOmen.hasAllCreatureTypes());
+            assertPresent(allButOmen, "Saga", "Adventure");
+        } finally {
+            CardType.Constant.CREATURE_TYPES.removeAll(registered);
+        }
+    }
 }

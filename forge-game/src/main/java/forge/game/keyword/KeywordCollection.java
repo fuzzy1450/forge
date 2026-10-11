@@ -24,8 +24,10 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
     // keywords millions of times a game: an array is walked without allocating the multimap's iterators.
     // Built on demand, and dropped right before every change to map, so it never differs from map.values();
     // getValues(), getValues(Keyword) and iterator() hand out live views of map: change it only through the
-    // methods here, which drop the array
-    private KeywordInterface[] valueArray = null;
+    // methods here, which drop the array.
+    // Volatile because the AI can walk one card's keywords on several threads at once (its attack checks run on a
+    // common pool): a thread that reads an array another thread built also sees the keywords it was filled with
+    private volatile KeywordInterface[] valueArray;
 
     public KeywordCollection() {
         super();
@@ -62,7 +64,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
         Keyword keyword = inst.getKeyword();
         Collection<KeywordInterface> list = map.get(keyword);
         if (list.isEmpty() || !inst.redundant(list)) {
-            valueArray = null;
+            dropValueArray();
             list.add(inst);
             return true;
         }
@@ -92,7 +94,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
         while (it.hasNext()) {
             KeywordInterface k = it.next();
             if (k.getOriginal().startsWith(keyword)) {
-                valueArray = null;
+                dropValueArray();
                 it.remove();
                 result = true;
             }
@@ -102,12 +104,12 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
     }
 
     public boolean remove(KeywordInterface keyword) {
-        valueArray = null;
+        dropValueArray();
         return map.remove(keyword.getKeyword(), keyword);
     }
 
     public boolean removeAll(Keyword kenum) {
-        valueArray = null;
+        dropValueArray();
         return !map.removeAll(kenum).isEmpty();
     }
 
@@ -124,7 +126,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
     public boolean removeInstances(Iterable<KeywordInterface> keywords) {
         boolean result = false;
         for (KeywordInterface k : keywords) {
-            valueArray = null;
+            dropValueArray();
             if (map.remove(k.getKeyword(), k)) {
                 result = true;
             }
@@ -133,7 +135,7 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
     }
 
     public void clear() {
-        valueArray = null;
+        dropValueArray();
         map.clear();
     }
 
@@ -191,6 +193,14 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
 
         sb.append(map.values());
         return sb.toString();
+    }
+
+    // right before every change to map; only a collection that was walked holds an array, so the others skip the
+    // volatile write
+    private void dropValueArray() {
+        if (valueArray != null) {
+            valueArray = null;
+        }
     }
 
     // the keywords in map.values() order: valueArray, built first when there is none
