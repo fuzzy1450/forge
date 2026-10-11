@@ -100,6 +100,12 @@ public class Game {
     private final GameLog gameLog = new GameLog();
 
     private final Zone stackZone = new Zone(ZoneType.Stack, this);
+    // false until a card of this game is phased out, so until then the battlefields are known to hold no
+    // phased-out card without looking at each card on them
+    private boolean mayHavePhasedOutCards = false;
+    // the last snapshot getCardsIn made of the zones static abilities work from, and of each zone type
+    private ZoneSnapshot staticAbilitySourcesSnapshot;
+    private final ZoneSnapshot[] zoneSnapshots = new ZoneSnapshot[ZoneType.values().length];
     public int AI_TIMEOUT = 5;
     // Kept after upstream deleted it (#11961 line of work): the sim harness's
     // already-compiled bytecode writes this field -- Harness.playOne sets it false
@@ -521,6 +527,21 @@ public class Game {
         return stackZone;
     }
 
+    /**
+     * Whether a card of this game may be phased out: false while none has been, so that the battlefields need not
+     * be searched for one.
+     */
+    public final boolean mayHavePhasedOutCards() {
+        return mayHavePhasedOutCards;
+    }
+
+    /**
+     * Called before a card of this game is phased out, and when a phased-out card becomes a card of this game.
+     */
+    public final void notePhasedOutCard() {
+        mayHavePhasedOutCards = true;
+    }
+
     public CardCollectionView getCardsPlayerCanActivateInStack() {
         return CardLists.filter(stackZone.getCards(), c -> {
             for (final SpellAbility sa : c.getSpellAbilities()) {
@@ -625,7 +646,21 @@ public class Game {
         if (zone == ZoneType.Stack) {
             return getStackZone().getCards();
         }
-        return getPlayers().getCardsIn(zone);
+        if (zone == ZoneType.Flashback) {
+            // worked out from the cards' abilities on each call, so there is no snapshot to keep
+            return getPlayers().getCardsIn(zone);
+        }
+        final ZoneSnapshot last = zoneSnapshots[zone.ordinal()];
+        if (last != null && last.isStillOf(this, zone)) {
+            return last.newCollection();
+        }
+        final List<Card> cards = new ArrayList<>();
+        for (final Player p : getPlayers()) {
+            CardCollection.appendTo(cards, p.getCardsIn(zone));
+        }
+        final CardCollection result = CardCollection.copyOf(cards);
+        zoneSnapshots[zone.ordinal()] = new ZoneSnapshot(cards, result);
+        return result;
     }
 
     public CardCollectionView getCardsIncludePhasingIn(final ZoneType zone) {
@@ -641,28 +676,98 @@ public class Game {
     }
 
     public CardCollectionView getCardsIn(final Iterable<ZoneType> zones) {
+        // the static abilities ask for these zones over and over, so their last snapshot is kept
+        final boolean keep = zones == ZoneType.STATIC_ABILITIES_SOURCE_ZONES;
+        if (keep) {
+            final ZoneSnapshot last = staticAbilitySourcesSnapshot;
+            if (last != null && last.isStillOf(this, zones)) {
+                return last.newCollection();
+            }
+        }
         // the zones' cards are gathered as they are and checked for duplicates once, at the end
         final List<Card> cards = new ArrayList<>();
         for (final ZoneType z : zones) {
             if (z == ZoneType.Stack) {
-                addCards(cards, getStackZone().getCards());
+                CardCollection.appendTo(cards, getStackZone().getCards());
                 continue;
             }
             // adding each player's zone to the result directly avoids building a collection per zone
             for (final Player p : getPlayers()) {
-                addCards(cards, p.getCardsIn(z));
+                CardCollection.appendTo(cards, p.getCardsIn(z));
             }
         }
-        return CardCollection.copyOf(cards);
+        final CardCollection result = CardCollection.copyOf(cards);
+        if (keep) {
+            staticAbilitySourcesSnapshot = new ZoneSnapshot(cards, result);
+        }
+        return result;
     }
 
-    private static void addCards(final List<Card> cards, final CardCollectionView zoneCards) {
-        // a missing or empty zone adds nothing; iterating copies no array per zone, as ArrayList.addAll would
-        if (zoneCards == null || zoneCards.isEmpty()) {
-            return;
+    /**
+     * A snapshot getCardsIn made of some zones: the cards it gathered from them, in order, and the collection it
+     * returned. That collection is made from the sequence of cards alone (cards are equal by id and class, which
+     * never change), so while the zones give the same cards in the same order a new snapshot holds the same cards.
+     * Never changed once made, and kept by a single write, so a thread that reads one sees all of it.
+     */
+    private static final class ZoneSnapshot {
+        private final Card[] gathered;
+        private final CardCollection cards;
+
+        private ZoneSnapshot(final List<Card> gathered, final CardCollection result) {
+            this.gathered = gathered.toArray(new Card[0]);
+            // a copy of its own, as whoever asked may change the one returned
+            this.cards = new CardCollection(result);
         }
-        for (final Card c : zoneCards) {
-            cards.add(c);
+
+        /** A new collection of the snapshot's cards, which (as copyOf knows) have no repeats to look for. */
+        private CardCollection newCollection() {
+            return new CardCollection(cards);
+        }
+
+        /** Whether the zones give the gathered cards, fetched in the order getCardsIn fetches them. */
+        private boolean isStillOf(final Game game, final Iterable<ZoneType> zones) {
+            int n = 0;
+            for (final ZoneType z : zones) {
+                if (z == ZoneType.Stack) {
+                    n = match(n, game.getStackZone().getCards());
+                } else {
+                    final PlayerCollection players = game.getPlayers();
+                    for (int i = 0; i < players.size() && n >= 0; i++) {
+                        n = match(n, players.get(i).getCardsIn(z));
+                    }
+                }
+                if (n < 0) {
+                    return false;
+                }
+            }
+            return n == gathered.length;
+        }
+
+        /** Whether the players' zones of one type give the gathered cards, in player order. */
+        private boolean isStillOf(final Game game, final ZoneType zone) {
+            int n = 0;
+            final PlayerCollection players = game.getPlayers();
+            for (int i = 0; i < players.size() && n >= 0; i++) {
+                n = match(n, players.get(i).getCardsIn(zone));
+            }
+            return n == gathered.length;
+        }
+
+        /** The index after a zone's cards if they are the gathered cards from index n on, else -1. */
+        private int match(final int n, final CardCollectionView zoneCards) {
+            if (zoneCards == null) {
+                return n;
+            }
+            final int size = zoneCards.size();
+            if (size > gathered.length - n) {
+                return -1;
+            }
+            for (int i = 0; i < size; i++) {
+                if (zoneCards.get(i) != gathered[n + i]) {
+                    return -1;
+                }
+            }
+            return n + size;
         }
     }
 

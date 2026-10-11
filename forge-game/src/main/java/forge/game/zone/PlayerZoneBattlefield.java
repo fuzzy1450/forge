@@ -76,7 +76,8 @@ public class PlayerZoneBattlefield extends PlayerZone {
         // getCards(false) to get Phased Out cards
 
         CardCollectionView cards = super.getCards(false);
-        if (!filter) {
+        // while no card of this game has been phased out there is none to look for
+        if (!filter || !game.mayHavePhasedOutCards()) {
             return cards;
         }
 

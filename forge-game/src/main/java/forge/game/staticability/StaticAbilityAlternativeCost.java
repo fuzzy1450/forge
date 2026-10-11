@@ -20,7 +20,7 @@ public class StaticAbilityAlternativeCost {
         List<SpellAbility> result = Lists.newArrayList();
         // add source first in case it's LKI (alternate host)
         CardCollection list = new CardCollection(source);
-        list.addAll(source.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
+        list.addAllUnique(source.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
         for (final Card ca : list) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkMode(StaticAbilityMode.AlternativeCost)) {

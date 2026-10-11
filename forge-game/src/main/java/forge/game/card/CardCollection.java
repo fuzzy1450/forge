@@ -2,6 +2,7 @@ package forge.game.card;
 
 import forge.util.collect.FCollection;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
@@ -70,25 +71,58 @@ public class CardCollection extends FCollection<Card> implements CardCollectionV
             throw new NullPointerException("The 'views' parameter was null when CardCollection.combine was called");
         }
 
-        CardCollection newCol = null;
         CardCollectionView viewWithCards = null;
+        List<Card> cards = null; //if multiple views have cards, all of their cards, in order
+        int firstSize = 0;
         for (final CardCollectionView v : views) {
             if (!v.isEmpty()) {
                 if (viewWithCards == null) {
                     viewWithCards = v;
-                } else if (newCol == null) { //if multiple views have cards, we need to create a new collection
-                    newCol = new CardCollection(viewWithCards);
-                    newCol.addAll(v);
-                    viewWithCards = newCol;
                 } else {
-                    newCol.addAll(v);
+                    if (cards == null) {
+                        cards = new ArrayList<>();
+                        appendTo(cards, viewWithCards);
+                        firstSize = cards.size();
+                    }
+                    appendTo(cards, v);
                 }
             }
         }
         if (viewWithCards == null) {
-            viewWithCards = CardCollection.EMPTY;
+            return CardCollection.EMPTY;
         }
-        return viewWithCards;
+        if (cards == null) {
+            return viewWithCards;
+        }
+        if (cards.size() > HASH_THRESHOLD && haveDistinctIds(cards)) {
+            // no two of the cards share an id, so adding them one at a time would keep them all, in this order
+            final CardCollection newCol = new CardCollection();
+            newCol.addAllDistinct(cards);
+            return newCol;
+        }
+        // the first view's cards as they are, then the other views' cards added one at a time
+        final CardCollection newCol = new CardCollection(viewWithCards);
+        newCol.addAll(cards.subList(firstSize, cards.size()));
+        return newCol;
+    }
+
+    /**
+     * Append the cards of a collection to a list, in their order, without looking for repeats: for gathering
+     * several collections' cards for {@link #copyOf(List)}. A missing or empty collection appends nothing, and
+     * iterating copies no array, as ArrayList.addAll would.
+     *
+     * @param cards
+     *            the list to append to.
+     * @param from
+     *            a collection of cards, or {@code null}.
+     */
+    public static void appendTo(final List<Card> cards, final CardCollectionView from) {
+        if (from == null || from.isEmpty()) {
+            return;
+        }
+        for (final Card c : from) {
+            cards.add(c);
+        }
     }
 
     /**
@@ -148,6 +182,28 @@ public class CardCollection extends FCollection<Card> implements CardCollectionV
      */
     public CardCollection() {
         super();
+    }
+
+    /**
+     * Add the cards of a collection in which no two cards are equal, such as a zone snapshot, in their order,
+     * leaving out each one equal to a card this collection already holds. That is what {@link #addAll(Iterable)}
+     * adds; but as none of the cards can equal one added before it, each is looked for only among the cards this
+     * collection held before.
+     *
+     * @param unique
+     *            cards no two of which are equal.
+     */
+    public void addAllUnique(final CardCollectionView unique) {
+        if (unique == null || unique.isEmpty()) {
+            return;
+        }
+        final List<Card> added = new ArrayList<>(unique.size());
+        for (final Card c : unique) {
+            if (c != null && !contains(c)) {
+                added.add(c);
+            }
+        }
+        addAllDistinct(added);
     }
 
     /**

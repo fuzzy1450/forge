@@ -62,9 +62,12 @@ public class CostAdjustment {
             }
         }
 
-        CardCollection cardsOnBattlefield = new CardCollection(game.getCardsIn(ZoneType.Battlefield));
-        cardsOnBattlefield.addAll(game.getCardsIn(ZoneType.Stack));
-        cardsOnBattlefield.addAll(game.getCardsIn(ZoneType.Command));
+        // the zones' cards are gathered as they are and checked for duplicates once, at the end
+        final List<Card> cards = Lists.newArrayList();
+        CardCollection.appendTo(cards, game.getCardsIn(ZoneType.Battlefield));
+        CardCollection.appendTo(cards, game.getCardsIn(ZoneType.Stack));
+        CardCollection.appendTo(cards, game.getCardsIn(ZoneType.Command));
+        CardCollection cardsOnBattlefield = CardCollection.copyOf(cards);
         if (!cardsOnBattlefield.contains(host)) {
             cardsOnBattlefield.add(host);
         }
@@ -189,9 +192,12 @@ public class CostAdjustment {
             isStateChangeToFaceDown = true;
         }
 
-        CardCollection cardsOnBattlefield = new CardCollection(game.getCardsIn(ZoneType.Battlefield));
-        cardsOnBattlefield.addAll(game.getCardsIn(ZoneType.Stack));
-        cardsOnBattlefield.addAll(game.getCardsIn(ZoneType.Command));
+        // the zones' cards are gathered as they are and checked for duplicates once, at the end
+        final List<Card> cards = Lists.newArrayList();
+        CardCollection.appendTo(cards, game.getCardsIn(ZoneType.Battlefield));
+        CardCollection.appendTo(cards, game.getCardsIn(ZoneType.Stack));
+        CardCollection.appendTo(cards, game.getCardsIn(ZoneType.Command));
+        CardCollection cardsOnBattlefield = CardCollection.copyOf(cards);
         if (!cardsOnBattlefield.contains(host)) {
             cardsOnBattlefield.add(host);
         }

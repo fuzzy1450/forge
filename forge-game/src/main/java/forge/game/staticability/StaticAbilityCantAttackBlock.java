@@ -157,7 +157,7 @@ public class StaticAbilityCantAttackBlock {
         }
 
         CardCollection list = new CardCollection(blocker);
-        list.addAll(blocker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
+        list.addAllUnique(blocker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
         for (final Card ca : list) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.CantBlock)) {
@@ -210,7 +210,7 @@ public class StaticAbilityCantAttackBlock {
         if (blocker != null) {
             list.add(blocker);
         }
-        list.addAll(attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
+        list.addAllUnique(attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
         for (final Card ca : list) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.CantBlockBy)) {

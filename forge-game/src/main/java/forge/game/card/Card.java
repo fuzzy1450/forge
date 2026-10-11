@@ -5792,6 +5792,10 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
     public final void setPhasedOut(final Player phasedOut0) {
         if (phasedOut == phasedOut0) { return; }
+        if (phasedOut0 != null && getGame() != null) {
+            // before it is phased out: from then on the game's battlefields are searched for phased-out cards
+            getGame().notePhasedOutCard();
+        }
         phasedOut = phasedOut0;
         view.updatePhasedOut(this);
     }
@@ -7555,6 +7559,10 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public void dangerouslySetGame(Game newGame) {
+        if (isPhasedOut() && newGame != null) {
+            // a phased-out card joins the game, whose battlefields are searched for phased-out cards from now on
+            newGame.notePhasedOutCard();
+        }
         game = newGame;
     }
 

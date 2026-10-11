@@ -1,10 +1,13 @@
 package forge.game.player;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.List;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.zone.ZoneType;
 import forge.util.Aggregates;
@@ -28,27 +31,28 @@ public class PlayerCollection extends FCollection<Player> {
 
     // card collection functions
     public final CardCollection getCardsIn(ZoneType zone) {
-        CardCollection result = new CardCollection();
+        // the players' cards are gathered as they are and checked for duplicates once, at the end
+        final List<Card> cards = new ArrayList<>();
         for (Player p : this) {
-            result.addAll(p.getCardsIn(zone));
+            CardCollection.appendTo(cards, p.getCardsIn(zone));
         }
-        return result;
+        return CardCollection.copyOf(cards);
     }
 
     public final CardCollection getCardsIn(Iterable<ZoneType> zones) {
-        CardCollection result = new CardCollection();
+        final List<Card> cards = new ArrayList<>();
         for (Player p : this) {
-            result.addAll(p.getCardsIn(zones));
+            CardCollection.appendTo(cards, p.getCardsIn(zones));
         }
-        return result;
+        return CardCollection.copyOf(cards);
     }
     
     public final CardCollection getCreaturesInPlay() {
-        CardCollection result = new CardCollection();
+        final List<Card> cards = new ArrayList<>();
         for (Player p : this) {
-            result.addAll(p.getCreaturesInPlay());
+            CardCollection.appendTo(cards, p.getCreaturesInPlay());
         }
-        return result;
+        return CardCollection.copyOf(cards);
     }
     
     // filter functions with predicate
