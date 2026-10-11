@@ -4,6 +4,7 @@ import forge.ai.*;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
+import forge.game.card.CardCollectionView;
 import forge.game.card.CardLists;
 import forge.game.cost.Cost;
 import forge.game.cost.CostPart;
@@ -143,6 +144,57 @@ public class ConniveAi extends SpellAbilityAi {
             }
         }
         return lifeAfter - unblocked > AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD);
+    }
+
+    /**
+     * The card a connive discards from its conniver's hand where AiController.getCardsToDiscard
+     * would fall back to ComputerUtilCard.getWorstAI: after the stock steps found no DiscardMe card,
+     * no spare land and nothing priced above the lands in play. getWorstAI is getWorstPermanentAI,
+     * built to pick among permanents: it discards the cheapest artifact or enchantment before any
+     * creature, and any permanent before an instant or a sorcery, whatever they cost. A hand of
+     * spells lost its engines that way: stored 2.0.15+6490e34b08c game 938000 connives Necropotence
+     * away from Morbid Opportunist, Ophiomancer, Pitiless Plunderer and Sanguine Bond, then Sanguine
+     * Bond away from four creatures. Under that engine, oops-all-black's connives (M.O.D.O.K.,
+     * Lethal Scheme) gave up Necropotence, Phyrexian Arena and Exquisite Blood that way.
+     *
+     * Here the cheapest nonland card goes: the mirror of ComputerUtilCard.getBestAI, which takes the
+     * most expensive card of a mixed list, and which getCardsToDiscardFromOpponent uses to take the
+     * castable card an opponent can least spare. On a tie an instant or sorcery goes before a permanent, a
+     * creature (the weakest by evaluateCreature) before a noncreature permanent, and then hand order.
+     * A DoNotDiscardIfAble card is passed over; with no other nonland card, getWorstAI decides as
+     * before. Lands are left to the stock land step, which keeps the ones the AI still needs.
+     *
+     * Deterministic and RNG-free, like getWorstAI. Reached only for an ApiType.Connive discard (51
+     * scripts in cardsfolder: 6 AB/SP connives, M.O.D.O.K. among them, and 45 DB$ Connive triggers
+     * and sub-abilities, Lethal Scheme among them), so every other discard keeps the stock chooser.
+     */
+    public static Card chooseDiscard(final CardCollectionView hand) {
+        Card worst = null;
+        for (final Card c : hand) {
+            if (c.isLand() || c.hasSVar("DoNotDiscardIfAble")) {
+                continue;
+            }
+            if (worst == null || discardsBefore(c, worst)) {
+                worst = c;
+            }
+        }
+        return worst != null ? worst : ComputerUtilCard.getWorstAI(hand);
+    }
+
+    private static boolean discardsBefore(final Card a, final Card b) {
+        if (a.getCMC() != b.getCMC()) {
+            return a.getCMC() < b.getCMC();
+        }
+        if (a.isPermanent() != b.isPermanent()) {
+            return !a.isPermanent();
+        }
+        if (a.isCreature() != b.isCreature()) {
+            return a.isCreature();
+        }
+        if (a.isCreature()) {
+            return ComputerUtilCard.evaluateCreature(a) < ComputerUtilCard.evaluateCreature(b);
+        }
+        return false;
     }
 
     @Override
