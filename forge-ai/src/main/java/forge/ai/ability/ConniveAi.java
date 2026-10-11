@@ -91,13 +91,20 @@ public class ConniveAi extends SpellAbilityAi {
      * total divisible by 3 the last payment took it to 0 (45 of the 63 f969 games in which
      * oops-all-black cast M.O.D.O.K. ended that way).
      *
-     * A payment is refused when the life it leaves is under the floor or inside the opponents'
-     * next attack. The floor is the profile's price for buying card selection with life,
-     * SurveilAi's SURVEIL_LIFEPERC_AFTER_PAYING_LIFE of the starting life (Default 60%: 24 of
-     * Commander's 40), never under the stock 4. The attack is the opponents' creatures that can
-     * attack us next turn, unblocked, as SpecialCardAi.PromiseOfPower.drawSafe reads it: what
-     * is left after it must stay above AI_IN_DANGER_MAX_THRESHOLD. No can't-lose exemption
-     * (checkLifeCost has one): a payment made under Platinum Angel stays made when it leaves.
+     * A payment is refused when this M.O.D.O.K. already paid one this turn, or when the life it
+     * leaves is under the floor or inside the opponents' next attack. The pace: with the floor
+     * alone the AI paid down to it on the turn M.O.D.O.K. landed (up to nine payments) and again
+     * on every turn lifelink lifted it back over. Replaying the 64 stored games in which
+     * oops-all-black held M.O.D.O.K., one payment a turn won 41 to the floor alone's 34 (paired
+     * 10 to 3). The count is this object's activations this turn, so a M.O.D.O.K. that dies and
+     * returns is a new object with a fresh count.
+     *
+     * The floor is the profile's price for buying card selection with life, SurveilAi's
+     * SURVEIL_LIFEPERC_AFTER_PAYING_LIFE of the starting life (Default 60%: 24 of Commander's
+     * 40), never under the stock 4. The attack is the opponents' creatures that can attack us
+     * next turn, unblocked, as SpecialCardAi.PromiseOfPower.drawSafe reads it: what is left after
+     * it must stay above AI_IN_DANGER_MAX_THRESHOLD. No can't-lose exemption (checkLifeCost has
+     * one): a payment made under Platinum Angel stays made when the Angel leaves.
      *
      * Draws no RNG: no AI roll, damageIfUnblocked withoutAbilities (canPayCost's reservation
      * roll is never reached), canAttackNextTurn a rules check. A cost with no life part returns
@@ -117,6 +124,9 @@ public class ConniveAi extends SpellAbilityAi {
         }
         if (payment <= 0) {
             return true;
+        }
+        if (sa.getActivationsThisTurn() > 0) {
+            return false;
         }
         final int lifeAfter = ai.getLife() - payment;
         final int floor = Math.max(STOCK_LIFE_FLOOR, ai.getStartingLife()
