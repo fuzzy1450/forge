@@ -15679,6 +15679,45 @@ public class SpecialCardAi {
         }
     }
 
+    // K'rrik, Son of Yawgmoth
+    // "For each {B} in a cost, you may pay 2 life rather than pay that mana." (PayLifeInsteadOf:B,
+    // K'rrik's alone in cardsfolder). ComputerUtilMana.payManaCost pays it for a {B} that no mana
+    // source is left for, both in the test that prices a cast and in the payment itself, and refused
+    // it only at 2 life or less, so the AI paid down to 1: stored 2.0.15+6490e34b08c game 937159 casts
+    // Cruelclaw's Heist from 3 life to 1, and Bitterblossom's upkeep loss takes the AI to 0. A payment
+    // now has to leave at least the stock life-cost floor (the 4 SpellAbilityAi.willPayCosts asks of
+    // ComputerUtilCost.checkLifeCost for every PayLife cost) and more than AI_IN_DANGER_MAX_THRESHOLD
+    // above what the opponents' creatures that can attack the AI next turn would deal unblocked (the
+    // board reading ConniveAi.lifePaymentAcceptable makes for M.O.D.O.K.). lifeToPay is payManaCost's
+    // phyLifeToPay: in the test, the life this cost has asked for so far, this payment included; in
+    // the payment, 2, with the life already lowered by the payments before it. Life minus it is what
+    // the AI keeps either way, so the test prices a cast exactly as the payment will pay it.
+    //
+    // The AI only gives a payment up, so it can neither lose life nor a card by this; a cast the test
+    // refuses is a cast it no longer makes. No can't-lose exemption: a payment made under Platinum
+    // Angel stays made when the Angel leaves. A Phyrexian shard keeps the stock path, K'rrik or not.
+    // RNG-free: damageIfUnblocked withoutAbilities, canAttackNextTurn a rules check.
+    public static class KrrikSonOfYawgmoth {
+        /** SpellAbilityAi.willPayCosts' checkLifeCost floor: the least life a payment may leave. */
+        static final int LIFE_FLOOR = 4;
+
+        public static boolean lifeForBlackAcceptable(final Player ai, final int lifeToPay) {
+            final int lifeAfter = ai.getLife() - lifeToPay;
+            if (lifeAfter < LIFE_FLOOR) {
+                return false;
+            }
+            int unblocked = 0;
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCreaturesInPlay()) {
+                    if (ComputerUtilCombat.canAttackNextTurn(c, ai)) {
+                        unblocked += ComputerUtilCombat.damageIfUnblocked(c, ai, null, true);
+                    }
+                }
+            }
+            return lifeAfter - unblocked > AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD);
+        }
+    }
+
     // Last Night Together
     // "Choose two target creatures. Untap them, put two +1/+1 counters on each,
     // they gain vigilance, indestructible and haste until end of turn. After this

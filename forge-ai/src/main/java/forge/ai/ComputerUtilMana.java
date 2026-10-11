@@ -716,6 +716,10 @@ public class ComputerUtilMana {
                     // cannot pay
                     break;
                 }
+                if (!toPay.isPhyrexian() && !SpecialCardAi.KrrikSonOfYawgmoth.lifeForBlackAcceptable(ai, phyLifeToPay)) {
+                    // K'rrik's {B} for 2 life: never under the stock life-cost floor or into the opponents' next attack
+                    break;
+                }
                 if (test) {
                     phyLifeToPay += 2;
                 }
