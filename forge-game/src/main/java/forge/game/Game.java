@@ -646,8 +646,9 @@ public class Game {
         if (zone == ZoneType.Stack) {
             return getStackZone().getCards();
         }
-        if (zone == ZoneType.Flashback) {
-            // worked out from the cards' abilities on each call, so there is no snapshot to keep
+        if (zone == null || zone == ZoneType.Flashback) {
+            // no zone (as "All" parses) holds no card, and Flashback is worked out from the cards' abilities on each
+            // call, so there is no snapshot to keep for either
             return getPlayers().getCardsIn(zone);
         }
         final ZoneSnapshot last = zoneSnapshots[zone.ordinal()];

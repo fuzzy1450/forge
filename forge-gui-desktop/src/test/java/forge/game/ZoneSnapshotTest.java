@@ -279,6 +279,12 @@ public class ZoneSnapshotTest extends AITest {
     }
 
     @Test
+    public void testNoZoneHoldsNoCards() {
+        // ZoneType.smartValueOf gives null for "All": getCardsIn has always answered no zone with an empty collection
+        assertTrue(gameWithCardsInEveryZone().getCardsIn((ZoneType) null).isEmpty());
+    }
+
+    @Test
     public void testASnapshotSeesACardAddedToAZone() {
         Game game = gameWithCardsInEveryZone();
         Player p1 = game.getPlayers().get(1);
