@@ -3,9 +3,11 @@ package forge.card;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 
+import java.util.AbstractCollection;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
+import java.util.Iterator;
 import java.util.List;
 
 import org.testng.annotations.Test;
@@ -184,6 +186,40 @@ public class CardTypeRuleSubtypesTest {
     }
 
     @Test
+    public void setCreatureTypesDropsAnAnswerAskedWhileItWrites() {
+        final CardType t = new CardType(true);
+        t.add("Creature");
+        assertPresent(t);
+        // setCreatureTypes reads these names while it writes subtypes: an answer asked there, before "Saga" is added,
+        // must not be kept after it
+        final List<String> names = List.of("Saga");
+        t.setCreatureTypes(new AbstractCollection<String>() {
+            @Override
+            public Iterator<String> iterator() {
+                final Iterator<String> it = names.iterator();
+                return new Iterator<String>() {
+                    @Override
+                    public boolean hasNext() {
+                        return it.hasNext();
+                    }
+
+                    @Override
+                    public String next() {
+                        t.isSaga();
+                        return it.next();
+                    }
+                };
+            }
+
+            @Override
+            public int size() {
+                return names.size();
+            }
+        });
+        assertPresent(t, "Saga");
+    }
+
+    @Test
     public void sanisfySubtypesIsSeen() {
         for (final String name : NAMES) {
             // no core type allows any subtype, whatever the type lists say
@@ -201,6 +237,19 @@ public class CardTypeRuleSubtypesTest {
         assertPresent(base, "Saga");
         assertPresent(changed(base, new CardChangedType(null, null, false, EnumSet.of(RemoveType.SubTypes))));
         assertPresent(base, "Saga");
+    }
+
+    @Test
+    public void getTypeWithChangesDropsAnAnswerAskedInsideAChange() {
+        // a change can write subtypes directly and ask for the answers in between. Here the subtypes end empty, so no
+        // sanisfySubtypes runs after the changes to drop the answer asked while "Saga" was among them
+        final CardType result = changed(CardType.parse("Enchantment", false), t -> {
+            t.subtypes.add("Saga");
+            t.isSaga();
+            t.subtypes.remove("Saga");
+            return t;
+        });
+        assertPresent(result);
     }
 
     @Test
