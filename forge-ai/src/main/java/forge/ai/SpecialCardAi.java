@@ -20250,6 +20250,22 @@ public class SpecialCardAi {
     }
 
     // Necropotence
+    // "Pay 1 life: Exile the top card of your library face down. Put that card into your hand at the
+    // beginning of your next end step." The script's AILifeThreshold$ 1 sets the floor of both stock
+    // life checks the activation meets: AiController.checkAiSpecificRestrictions before this logic
+    // (life above 1) and ComputerUtilCost.checkLifeCost in ChangeZoneAi.willPayCosts after it (life
+    // after the payment at least 1, in place of the stock 4). So the AI paid down to 1 in its own
+    // main 2 to refill its hand, and the next self-inflicted loss (Bitterblossom, Phyrexian Arena,
+    // Black Market Connections, its own Reanimate) or the opponents' next attack killed it. Replaying
+    // the 123 own-turn deaths of oops-all-black under 2.0.15+6490e34b08c, 25 of its 208 Necropotence
+    // activations left it under 5 life, 9 of them at 1.
+    // Every payment now has to leave the AI on LifeFloor: at least the stock 4, and above the
+    // profile's AI_IN_DANGER_MAX_THRESHOLD. Not SURVEIL_LIFEPERC_AFTER_PAYING_LIFE, which prices card
+    // selection (M.O.D.O.K.'s connive), not the cards Necropotence draws; and not the opponents' next
+    // attack, since a refusal here is a turn without a card. The script keeps its threshold; the
+    // guard is the stricter of the two, so it decides every payment it refuses, and any payment it
+    // approves the stock path judges as before. The check is the logic's first after the library
+    // check and draws no RNG, like the rest of it.
     public static class Necropotence {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
             Game game = ai.getGame();
@@ -20258,6 +20274,10 @@ public class SpecialCardAi {
 
             if (ai.getCardsIn(ZoneType.Library).isEmpty()) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            if (!LifeFloor.keeps(ai, lifePayment(sa))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
             }
 
             if (ai.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.nameEquals("Yawgmoth's Bargain"))) {
@@ -20314,6 +20334,19 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the life this activation's cost pays (Pay 1 life)
+        private static int lifePayment(final SpellAbility sa) {
+            int payment = 0;
+            if (sa.getPayCosts() != null) {
+                for (final CostPart part : sa.getPayCosts().getCostParts()) {
+                    if (part instanceof forge.game.cost.CostPayLife) {
+                        payment += part.getAbilityAmount(sa);
+                    }
+                }
+            }
+            return payment;
         }
     }
 
