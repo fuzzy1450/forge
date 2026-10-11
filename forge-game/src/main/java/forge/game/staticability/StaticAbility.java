@@ -20,7 +20,6 @@ package forge.game.staticability;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 import com.google.common.collect.*;
@@ -74,7 +73,9 @@ public class StaticAbility extends CardTraitBase implements IIdentifiable, Clone
 
     @Override
     public int hashCode() {
-        return Objects.hash(StaticAbility.class, getId());
+        // Objects.hash(StaticAbility.class, getId()) without its array: same calls, same order, same value
+        final int id = getId();
+        return 31 * (31 + StaticAbility.class.hashCode()) + id;
     }
 
     @Override

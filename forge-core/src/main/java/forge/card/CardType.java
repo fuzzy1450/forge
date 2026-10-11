@@ -154,11 +154,13 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
 
     private boolean incomplete = false;
     private transient String calculatedType = null;
-    // Whether subtypes holds "Saga", "Adventure" or "Omen": every replacement effect rebuild asks this of every card,
-    // so the three lookups are kept until subtypes next changes. The bits above them count the changes: each change
-    // to subtypes is followed by resetRuleSubtypes(), which counts it and forgets the lookups, and a lookup is kept
-    // only by a compareAndSet against the count it read before reading subtypes. So a lookup made on another thread
-    // (an AI thread that outlived its timeout) from subtypes as they were before a change is never kept past it
+    // Whether subtypes holds "Saga", "Adventure" or "Omen", which every replacement effect rebuild asks of every card,
+    // and "Aura" and the five basic land types, which every spell ability rebuild asks: the nine lookups are kept, in
+    // the nine bits above the one saying they are known, until subtypes next changes. The bits above those count the
+    // changes: each change to subtypes is followed by resetRuleSubtypes(), which counts it and forgets the lookups,
+    // and a lookup is kept only by a compareAndSet against the count it read before reading subtypes. So a lookup
+    // made on another thread (an AI thread that outlived its timeout) from subtypes as they were before a change is
+    // never kept past it
     private transient volatile int ruleSubtypes;
     private static final AtomicIntegerFieldUpdater<CardType> RULE_SUBTYPES =
             AtomicIntegerFieldUpdater.newUpdater(CardType.class, "ruleSubtypes");
@@ -166,7 +168,13 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
     private static final int HAS_SAGA = 2;
     private static final int HAS_ADVENTURE = 4;
     private static final int HAS_OMEN = 8;
-    private static final int RULE_SUBTYPES_CHANGE = 16;
+    private static final int HAS_AURA = 16;
+    private static final int HAS_PLAINS = 32;
+    private static final int HAS_ISLAND = 64;
+    private static final int HAS_SWAMP = 128;
+    private static final int HAS_MOUNTAIN = 256;
+    private static final int HAS_FOREST = 512;
+    private static final int RULE_SUBTYPES_CHANGE = 1024;
 
     public CardType(boolean incomplete) {
         this.incomplete = incomplete;
@@ -585,7 +593,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
     @Override
     public boolean isAttachment() { return isAura() || isEquipment() || isFortification(); }
     @Override
-    public boolean isAura() { return hasSubtype("Aura"); }
+    public boolean isAura() { return hasRuleSubtype("Aura", HAS_AURA); }
     @Override
     public boolean isEquipment()  { return hasSubtype("Equipment"); }
     @Override
@@ -612,13 +620,25 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         return hasRuleSubtype("Omen", HAS_OMEN);
     }
 
+    @Override
+    public boolean hasBasicLandType(final MagicColor.Color color) {
+        return switch (color) {
+            case WHITE -> hasRuleSubtype("Plains", HAS_PLAINS);
+            case BLUE -> hasRuleSubtype("Island", HAS_ISLAND);
+            case BLACK -> hasRuleSubtype("Swamp", HAS_SWAMP);
+            case RED -> hasRuleSubtype("Mountain", HAS_MOUNTAIN);
+            case GREEN -> hasRuleSubtype("Forest", HAS_FOREST);
+            default -> hasSubtype(color.getBasicLandType());
+        };
+    }
+
     // right after every change to subtypes: counts the change and forgets the lookups. Only the thread changing
     // subtypes calls it, so a lookup kept between the read and the write here is only overwritten, which forgets it
     private void resetRuleSubtypes() {
         ruleSubtypes = (ruleSubtypes | (RULE_SUBTYPES_CHANGE - 1)) + 1;
     }
 
-    // hasSubtype for the three subtypes kept in ruleSubtypes, with the same answer
+    // hasSubtype for the nine subtypes kept in ruleSubtypes, with the same answer
     private boolean hasRuleSubtype(final String subtype, final int bit) {
         int known = ruleSubtypes;
         if ((known & RULE_SUBTYPES_KNOWN) == 0) {
@@ -633,6 +653,24 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
             if (subtypes.contains("Omen")) {
                 known |= HAS_OMEN;
             }
+            if (subtypes.contains("Aura")) {
+                known |= HAS_AURA;
+            }
+            if (subtypes.contains("Plains")) {
+                known |= HAS_PLAINS;
+            }
+            if (subtypes.contains("Island")) {
+                known |= HAS_ISLAND;
+            }
+            if (subtypes.contains("Swamp")) {
+                known |= HAS_SWAMP;
+            }
+            if (subtypes.contains("Mountain")) {
+                known |= HAS_MOUNTAIN;
+            }
+            if (subtypes.contains("Forest")) {
+                known |= HAS_FOREST;
+            }
             // kept only if subtypes has not changed since; the answer below is this lookup's either way
             RULE_SUBTYPES.compareAndSet(this, changes, known);
         }
@@ -640,7 +678,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
             return true;
         }
         // not among the subtypes, so only hasCreatureType could still say yes, and only for a creature or kindred
-        // with all creature types (each of the three names is its own mixed case)
+        // with all creature types (each of the nine names is its own mixed case)
         return allCreatureTypes && (isCreature() || isKindred()) && hasSubtype(subtype);
     }
 

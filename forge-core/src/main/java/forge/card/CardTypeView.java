@@ -28,6 +28,8 @@ public interface CardTypeView extends Serializable {
     boolean hasAllCreatureTypes();
     boolean hasABasicLandType();
     boolean hasANonBasicLandType();
+    /** Whether this has the basic land type of the given color: hasSubtype(color.getBasicLandType()). */
+    boolean hasBasicLandType(MagicColor.Color color);
 
     boolean sharesCreaturetypeWith(final CardTypeView ctOther);
     boolean sharesLandTypeWith(final CardTypeView ctOther);

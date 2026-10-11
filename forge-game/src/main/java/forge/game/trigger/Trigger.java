@@ -475,7 +475,9 @@ public abstract class Trigger extends TriggerReplacementBase {
     /** {@inheritDoc} */
     @Override
     public int hashCode() {
-        return Objects.hash(Trigger.class, getId());
+        // Objects.hash(Trigger.class, getId()) without its array: same calls, same order, same value
+        final int id = getId();
+        return 31 * (31 + Trigger.class.hashCode()) + id;
     }
 
     /**

@@ -3520,8 +3520,22 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     public final FCollectionView<SpellAbility> getAllSpellAbilities() {
         final FCollection<SpellAbility> res = new FCollection<>();
         for (final CardStateName key : states.keySet()) {
-            res.addAll(getState(key).getNonManaAbilities());
-            res.addAll(getState(key).getManaAbilities());
+            // the state's non-mana abilities, then its mana abilities, each in the order of its build: what
+            // getNonManaAbilities() and getManaAbilities() return, from one build instead of one each
+            List<SpellAbility> manaAbilities = null;
+            for (final SpellAbility sa : getState(key).getSpellAbilities()) {
+                if (sa.isManaAbility()) {
+                    if (manaAbilities == null) {
+                        manaAbilities = new ArrayList<>();
+                    }
+                    manaAbilities.add(sa);
+                } else {
+                    res.add(sa);
+                }
+            }
+            if (manaAbilities != null) {
+                res.addAll(manaAbilities);
+            }
         }
         return res;
     }
@@ -4478,6 +4492,11 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return Iterables.concat(this.newPTText.values(), this.newPTCharacterDefining.values(), this.newPT.values());
     }
 
+    // whether any of the three tables getPTIterable() walks sets a power or toughness
+    private boolean hasNewPT() {
+        return !newPTText.isEmpty() || !newPTCharacterDefining.isEmpty() || !newPT.isEmpty();
+    }
+
     public final boolean clearNewPT() {
         boolean changed = false;
         if (!newPTText.isEmpty()) {
@@ -4497,6 +4516,10 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
     public final int getCurrentPower() {
         int total = getBasePower();
+        // most cards have no power set: skip the iterator over three empty tables
+        if (!hasNewPT()) {
+            return total;
+        }
         for (Pair<Integer, Integer> p : getPTIterable()) {
             if (p.getLeft() != null) {
                 total = p.getLeft();
@@ -4540,6 +4563,10 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
     public final int getCurrentToughness() {
         int total = getBaseToughness();
+        // most cards have no toughness set: skip the iterator over three empty tables
+        if (!hasNewPT()) {
+            return total;
+        }
         for (Pair<Integer, Integer> p : getPTIterable()) {
             if (p.getRight() != null) {
                 total = p.getRight();
@@ -5399,11 +5426,8 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         state.setCachedKeywords(keywords);
     }
     private void visitUnhiddenKeywords(CardState state, Visitor<KeywordInterface> visitor) {
-        for (KeywordInterface kw : getUnhiddenKeywords(state)) {
-            if (!visitor.visit(kw)) {
-                return;
-            }
-        }
+        // the visitors here only read
+        getUnhiddenKeywords(state).visit(visitor);
     }
 
     public final KeywordInterface addIntrinsicKeyword(final String s) {
@@ -7199,6 +7223,10 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         FCollection<StaticAbility> result = new FCollection<>();
         if (this.isInPlay() && this.isSuspected()) {
             result.add(suspectedStatic);
+        }
+        // nearly every card has no keyword counter: skip the iterator that would find nothing
+        if (this.counterTypeKeywordStatic.isEmpty()) {
+            return result;
         }
         for (Map.Entry<CounterType, StaticAbility> e : this.counterTypeKeywordStatic.entrySet()) {
             if (this.getCounters(e.getKey()) > 0) {

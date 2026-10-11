@@ -553,10 +553,12 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         } else if (type.isAura()) {
             newCol.add(getAuraSpell());
         } else if (type.isPermanent()) {
-            if (abilities.anyMatch(s -> (
-                    s.isBasicSpell() && s.getSubAbility() == null && (ApiType.PermanentCreature.equals(s.getApi()) || ApiType.PermanentNoncreature.equals(s.getApi())))
-                )) {
-                return;
+            // a permanent spell of the card's own replaces the generic one (a loop: every rebuild asks this)
+            for (final SpellAbility s : abilities) {
+                if (s.isBasicSpell() && s.getSubAbility() == null && (ApiType.PermanentCreature.equals(s.getApi())
+                        || ApiType.PermanentNoncreature.equals(s.getApi()))) {
+                    return;
+                }
             }
 
             if (permanentAbility == null) {
@@ -581,6 +583,9 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
 
     record LandTraitChanges(CardState state) implements ICardTraitChanges, IKeywordsChange
     {
+        // MagicColor.Color.values() makes a new array on every call; this copy is only read
+        private static final MagicColor.Color[] COLORS = MagicColor.Color.values();
+
         public List<SpellAbility> applySpellAbility(List<SpellAbility> list) {
             if (state.getCard().hasRemoveIntrinsic()) {
                 list.clear();
@@ -589,11 +594,11 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
             if (!type.isLand()) {
                 return list;
             }
-            for (MagicColor.Color c : MagicColor.Color.values()) {
+            for (MagicColor.Color c : COLORS) {
                if (c.getBasicLandType() == null) {
                    continue;
                }
-               if (type.hasSubtype(c.getBasicLandType())) {
+               if (type.hasBasicLandType(c)) {
                    list.add(state.getLandManaForColor(c));
                }
             }

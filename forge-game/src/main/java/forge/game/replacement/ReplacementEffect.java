@@ -19,7 +19,6 @@ package forge.game.replacement;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 import com.google.common.collect.*;
 
@@ -311,7 +310,9 @@ public abstract class ReplacementEffect extends TriggerReplacementBase {
     /** {@inheritDoc} */
     @Override
     public int hashCode() {
-        return Objects.hash(ReplacementEffect.class, getId());
+        // Objects.hash(ReplacementEffect.class, getId()) without its array: same calls, same order, same value
+        final int id = getId();
+        return 31 * (31 + ReplacementEffect.class.hashCode()) + id;
     }
 
     public ReplacementType getMode() {

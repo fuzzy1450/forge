@@ -221,7 +221,9 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
     }
     @Override
     public int hashCode() {
-        return Objects.hash(SpellAbility.class, getId());
+        // Objects.hash(SpellAbility.class, getId()) without its array: same calls, same order, same value
+        final int id = getId();
+        return 31 * (31 + SpellAbility.class.hashCode()) + id;
     }
     @Override
     public boolean equals(final Object obj) {

@@ -12,6 +12,8 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
 
+import forge.util.IterableUtil;
+
 /**
  * Collection with unique elements ({@link Set}) that maintains the order in
  * which the elements are added to it ({@link List}).
@@ -642,7 +644,8 @@ public class FCollection<T> implements List<T>, /*Set<T>,*/ FCollectionView<T>, 
 
     @Override
     public boolean anyMatch(Predicate<? super T> test) {
-        return list.stream().anyMatch(test);
+        // list.stream().anyMatch(test): an ArrayList streams its own spliterator, as IterableUtil.any drives it
+        return IterableUtil.any(list, test);
     }
 
     @Override

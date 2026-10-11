@@ -15,6 +15,7 @@ import forge.game.replacement.ReplacementEffect;
 import forge.game.spellability.SpellAbility;
 import forge.game.staticability.StaticAbility;
 import forge.game.trigger.Trigger;
+import forge.util.Visitor;
 
 public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInterface> {
     // don't use enumKeys it causes a slow down
@@ -211,6 +212,19 @@ public class KeywordCollection implements ICardTraitChanges, Iterable<KeywordInt
             valueArray = result;
         }
         return result;
+    }
+
+    // a for-each over this collection, up to the keyword the visitor returns false for, walking the array the trait
+    // rebuilds walk instead of the multimap; the visitor must not change this collection
+    public void visit(final Visitor<KeywordInterface> visitor) {
+        if (map.isEmpty()) {
+            return;
+        }
+        for (KeywordInterface k : valueArray()) {
+            if (!visitor.visit(k)) {
+                return;
+            }
+        }
     }
 
     @Override
