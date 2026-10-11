@@ -22,6 +22,7 @@ import com.google.common.collect.Sets;
 
 import forge.ai.AiCardMemory.MemorySet;
 import forge.ai.ability.ChangeZoneAi;
+import forge.ai.ability.ConniveAi;
 import forge.ai.ability.LearnAi;
 import forge.ai.simulation.GameStateEvaluator;
 import forge.ai.simulation.OnePlaySafetyChecker;
@@ -1215,8 +1216,9 @@ public class AiController {
                 }
 
                 if (!discardedUnplayable) {
-                    // discard worst card
-                    Card worst = ComputerUtilCard.getWorstAI(validCards);
+                    // discard worst card; a connive keeps its engines (ConniveAi.chooseDiscard)
+                    Card worst = sa != null && sa.getApi() == ApiType.Connive
+                            ? ConniveAi.chooseDiscard(validCards) : ComputerUtilCard.getWorstAI(validCards);
                     if (worst == null) {
                         // there were only instants and sorceries, and maybe cards that are not good to discard, so look
                         // for more discard options
