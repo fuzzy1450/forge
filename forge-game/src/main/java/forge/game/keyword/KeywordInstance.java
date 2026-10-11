@@ -79,6 +79,7 @@ public abstract class KeywordInstance<T extends KeywordInstance<?>> implements K
         this.hostCard = host;
         this.intrinsic = intrinsic;
         if (clear) {
+            traitsChanged();
             triggers.clear();
             replacements.clear();
             abilities.clear();
@@ -124,6 +125,7 @@ public abstract class KeywordInstance<T extends KeywordInstance<?>> implements K
     @Override
     public void createTraits(Player player, boolean clear) {
         if (clear) {
+            traitsChanged();
             triggers.clear();
             replacements.clear();
             abilities.clear();
@@ -167,6 +169,7 @@ public abstract class KeywordInstance<T extends KeywordInstance<?>> implements K
      */
     public final void addTrigger(final Trigger trg) {
         trg.setKeyword(this);
+        traitsChanged();
         triggers.add(trg);
     }
 
@@ -176,6 +179,7 @@ public abstract class KeywordInstance<T extends KeywordInstance<?>> implements K
      */
     public final void addReplacement(final ReplacementEffect trg) {
         trg.setKeyword(this);
+        traitsChanged();
         replacements.add(trg);
     }
 
@@ -194,7 +198,16 @@ public abstract class KeywordInstance<T extends KeywordInstance<?>> implements K
      */
     public final void addStaticAbility(final StaticAbility st) {
         st.setKeyword(this);
+        traitsChanged();
         staticAbilities.add(st);
+    }
+
+    // right before every change to the trait lists the host's trait rebuilds read: a keyword can already sit among
+    // its host's installed keywords when its traits are made (CardFactoryUtil.setupKeywordedAbilities)
+    private void traitsChanged() {
+        if (hostCard != null) {
+            hostCard.traitsChanged();
+        }
     }
 
     public boolean hasTraits() {

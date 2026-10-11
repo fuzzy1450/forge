@@ -141,7 +141,11 @@ public class ReplacementHandler {
                 }
             }
 
-            // most cards have no replacement effect; skip allocating an iterator to discover that
+            // most cards have no replacement effect; skip the rebuild when that is already known, and allocating an
+            // iterator to discover it otherwise
+            if (c.knownToHaveNoReplacementEffects()) {
+                return true;
+            }
             final FCollectionView<ReplacementEffect> replacementEffects = c.getReplacementEffects();
             if (replacementEffects.isEmpty()) {
                 return true;

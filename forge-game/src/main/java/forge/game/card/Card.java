@@ -157,6 +157,17 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     // false until something is put into either table above, so until then both are known to be empty without
     // reading them: every trait rebuild asks, and most cards never get a changed trait
     private boolean mayHaveChangedCardTraits = false;
+    // moved on right before every write to anything a trait rebuild of one of this card's states reads (see
+    // traitsChanged), so what a rebuild found still holds while the version has not moved
+    private int traitVersion = 0;
+    // the state last found to have no replacement effects, static abilities or triggers, each with the trait version
+    // it was found at, or null: the getters below are asked millions of times a game, mostly of cards that have none
+    private CardState noReplacementEffectsState = null;
+    private int noReplacementEffectsVersion = 0;
+    private CardState noStaticAbilitiesState = null;
+    private int noStaticAbilitiesVersion = 0;
+    private CardState noTriggersState = null;
+    private int noTriggersVersion = 0;
 
     // stores the card traits created by static abilities
     private final Table<StaticAbility, String, SpellAbility> storedSpellAbility = TreeBasedTable.create();
@@ -4119,6 +4130,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
         if (!changedCardTypes.isEmpty())
             changed = true;
+        traitsChanged();
         changedCardTypes.clear();
 
         this.updateTypeCache();
@@ -4181,6 +4193,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         if (!cda) {
             mayHaveChangedCardTypes = true;
         }
+        traitsChanged();
         (cda ? changedCardTypesCharacterDefining : changedCardTypes).put(timestamp, staticId, new CardChangedType(
                 addType, removeType, addAllCreatureTypes, remove));
         updateTypeCache();
@@ -4194,6 +4207,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
     public final boolean removeChangedCardTypes(final long timestamp, final long staticId, final boolean updateView) {
         boolean removed = false;
+        traitsChanged();
         removed |= changedCardTypes.remove(timestamp, staticId) != null;
         removed |= changedCardTypesCharacterDefining.remove(timestamp, staticId) != null;
         if (removed) {
@@ -7128,8 +7142,28 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return !StaticAbilityCantExile.cantExile(this, source, effect);
     }
 
+    // right before every write to something a trait rebuild of one of this card's states reads, and again after a
+    // write that reads a caller's collection while it writes: a state's own trait lists, type, changed type and
+    // installed keywords, the trait lists of those keywords, and the card's Layer 4 type changes. Split and clone
+    // states, changed traits and counters move no version: the getters check them instead
+    public final void traitsChanged() {
+        traitVersion++;
+    }
+
     public final FCollectionView<StaticAbility> getStaticAbilities() {
-        return currentState.getStaticAbilities();
+        final CardState state = currentState;
+        if (noStaticAbilitiesState == state && noStaticAbilitiesVersion == traitVersion
+                && !mayHaveSplitStates && !mayHaveChangedCardTraits) {
+            // what the rebuild returns when it finds none
+            return new FCollection<>();
+        }
+        final int version = traitVersion;
+        final FCollectionView<StaticAbility> result = state.getStaticAbilities();
+        if (result.isEmpty() && version == traitVersion) {
+            noStaticAbilitiesState = state;
+            noStaticAbilitiesVersion = version;
+        }
+        return result;
     }
     public final StaticAbility addStaticAbility(final String s) {
         if (!s.trim().isEmpty()) {
@@ -7171,7 +7205,19 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final FCollectionView<Trigger> getTriggers() {
-        return currentState.getTriggers();
+        final CardState state = currentState;
+        if (noTriggersState == state && noTriggersVersion == traitVersion
+                && !mayHaveSplitStates && !mayHaveChangedCardTraits) {
+            // what the rebuild returns when it finds none
+            return new FCollection<>();
+        }
+        final int version = traitVersion;
+        final FCollectionView<Trigger> result = state.getTriggers();
+        if (result.isEmpty() && version == traitVersion) {
+            noTriggersState = state;
+            noTriggersVersion = version;
+        }
+        return result;
     }
     public final Trigger addTrigger(final Trigger t) {
         currentState.addTrigger(t);
@@ -7199,7 +7245,30 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public FCollectionView<ReplacementEffect> getReplacementEffects() {
-        return currentState.getReplacementEffects();
+        final CardState state = currentState;
+        if (knownToHaveNoReplacementEffects(state)) {
+            // what the rebuild returns when it finds none
+            return new FCollection<>();
+        }
+        final int version = traitVersion;
+        final FCollectionView<ReplacementEffect> result = state.getReplacementEffects();
+        // kept only when the rebuild read no type but the state's own (see CardState.hasOwnLiteralType)
+        if (result.isEmpty() && version == traitVersion && state.hasOwnLiteralType()) {
+            noReplacementEffectsState = state;
+            noReplacementEffectsVersion = version;
+        }
+        return result;
+    }
+
+    // whether getReplacementEffects() would find none without rebuilding them: none was found for the current state
+    // at the current trait version, the card has never had a split or clone state or a changed trait, which move no
+    // version, and it has no counters, among which shield, stun and finality counters bring replacement effects
+    public final boolean knownToHaveNoReplacementEffects() {
+        return knownToHaveNoReplacementEffects(currentState);
+    }
+    private boolean knownToHaveNoReplacementEffects(final CardState state) {
+        return noReplacementEffectsState == state && noReplacementEffectsVersion == traitVersion
+                && !mayHaveSplitStates && !mayHaveChangedCardTraits && getNumAllCounters() == 0;
     }
 
     public ReplacementEffect addReplacementEffect(final ReplacementEffect replacementEffect) {
@@ -8324,6 +8393,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         if (!in.changedCardTypes.isEmpty()) {
             mayHaveChangedCardTypes = true;
         }
+        traitsChanged();
         this.changedCardTypes.putAll(in.changedCardTypes);
         this.changedCardTypesCharacterDefining.putAll(in.changedCardTypesCharacterDefining);
         updateTypeCache();

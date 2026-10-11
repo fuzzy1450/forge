@@ -158,7 +158,15 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         return Objects.requireNonNullElse(this.changedType, getType());
     }
 
+    // whether a replacement effect rebuild reads no type but this state's own, which only this state's methods
+    // change: not one this state shares with another (copyFrom with last known information takes the source's), nor
+    // the creature type lists, which a type with all creature types reads
+    boolean hasOwnLiteralType() {
+        return (changedType == null || changedType == type) && !type.hasAllCreatureTypes();
+    }
+
     public void updateTypes() {
+        card.traitsChanged();
         this.changedType = getType().getTypeWithChanges(card.getChangedCardTypes());
     }
     public void updateTypesForView() {
@@ -169,13 +177,18 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         return type;
     }
     public final void addType(String type0) {
+        card.traitsChanged();
         if (type.add(type0)) {
             updateTypes();
             updateTypesForView();
         }
     }
     public final void addType(Iterable<String> type0) {
-        if (type.addAll(type0)) {
+        card.traitsChanged();
+        final boolean changed = type.addAll(type0);
+        // again after the call, which reads the caller's types while it writes
+        card.traitsChanged();
+        if (changed) {
             updateTypes();
             updateTypesForView();
         }
@@ -186,6 +199,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
             return;
         }
         if (type0.isEmpty() && type.isEmpty()) { return; }
+        card.traitsChanged();
         type.clear();
         type.addAll(type0);
         updateTypes();
@@ -193,6 +207,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     }
 
     public final void removeType(final CardType.Supertype st) {
+        card.traitsChanged();
         if (type.remove(st)) {
             updateTypes();
             updateTypesForView();
@@ -200,6 +215,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     }
 
     public final void removeCardTypes(boolean sanisfy) {
+        card.traitsChanged();
         type.removeCardTypes();
         if (sanisfy) {
             type.sanisfySubtypes();
@@ -210,7 +226,12 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     }
 
     public final void setCreatureTypes(Collection<String> ctypes) {
-        if (type.setCreatureTypes(ctypes)) {
+        // before the call, which can add subtypes and still report no change, so that updateTypes does not run
+        card.traitsChanged();
+        final boolean changed = type.setCreatureTypes(ctypes);
+        // and again after it, since it reads the caller's types while it writes
+        card.traitsChanged();
+        if (changed) {
             updateTypes();
             updateTypesForView();
         }
@@ -389,6 +410,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     }
 
     public final void setCachedKeywords(final KeywordCollection col) {
+        card.traitsChanged();
         cachedKeywords = col;
     }
 
@@ -716,6 +738,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     }
 
     public final boolean addTrigger(final Trigger t) {
+        card.traitsChanged();
         return triggers.add(t);
     }
 
@@ -731,9 +754,11 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         return result;
     }
     public final boolean addStaticAbility(StaticAbility stab) {
+        card.traitsChanged();
         return staticAbilities.add(stab);
     }
     public final boolean removeStaticAbility(StaticAbility stab) {
+        card.traitsChanged();
         return staticAbilities.remove(stab);
     }
 
@@ -773,6 +798,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         return result;
     }
     public boolean addReplacementEffect(final ReplacementEffect replacementEffect) {
+        card.traitsChanged();
         return replacementEffects.add(replacementEffect);
     }
 
@@ -904,13 +930,16 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
             }
         }
 
+        card.traitsChanged();
         triggers.clear();
         for (Trigger tr : source.triggers) {
             if (tr.equals(dontCopyTr)) {
                 continue;
             }
             if (tr.isIntrinsic()) {
-                triggers.add(tr.copy(card, lki, false, tr.hasParam("Execute") ? abilityForTrigger.get(tr.getParam("Execute")) : null));
+                Trigger trCopy = tr.copy(card, lki, false, tr.hasParam("Execute") ? abilityForTrigger.get(tr.getParam("Execute")) : null);
+                card.traitsChanged();
+                triggers.add(trCopy);
             }
         }
         ReplacementEffect runRE = null;
@@ -919,6 +948,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
             runRE = sp.getReplacementEffect();
         }
 
+        card.traitsChanged();
         replacementEffects.clear();
         for (ReplacementEffect re : source.replacementEffects) {
             if (re.isIntrinsic()) {
@@ -927,17 +957,22 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
                     // CR 208.2b prevent loop from card copying itself
                     reCopy.setHasRun(true);
                 }
+                card.traitsChanged();
                 replacementEffects.add(reCopy);
             }
         }
 
+        card.traitsChanged();
         staticAbilities.clear();
         for (StaticAbility sa : source.staticAbilities) {
             if (sa.isIntrinsic()) {
-                staticAbilities.add(sa.copy(card, lki));
+                StaticAbility saCopy = sa.copy(card, lki);
+                card.traitsChanged();
+                staticAbilities.add(saCopy);
             }
         }
         if (lki) {
+            card.traitsChanged();
             this.changedType = source.changedType;
             if (source.landAbility != null) {
                 landAbility = source.landAbility.copy(card, true);
@@ -983,19 +1018,25 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
 
         for (Trigger tr : source.triggers) {
             if (tr.isIntrinsic()) {
-                triggers.add(tr.copy(card, lki));
+                Trigger trCopy = tr.copy(card, lki);
+                card.traitsChanged();
+                triggers.add(trCopy);
             }
         }
 
         for (ReplacementEffect re : source.replacementEffects) {
             if (re.isIntrinsic()) {
-                replacementEffects.add(re.copy(card, lki));
+                ReplacementEffect reCopy = re.copy(card, lki);
+                card.traitsChanged();
+                replacementEffects.add(reCopy);
             }
         }
 
         for (StaticAbility sa : source.staticAbilities) {
             if (sa.isIntrinsic()) {
-                staticAbilities.add(sa.copy(card, lki));
+                StaticAbility saCopy = sa.copy(card, lki);
+                card.traitsChanged();
+                staticAbilities.add(saCopy);
             }
         }
     }
