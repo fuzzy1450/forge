@@ -1667,12 +1667,14 @@ public class ComputerUtilMana {
     // Steward of the Harvest grants every creature the exiled lands' mana abilities. Tapping those
     // creatures on our own turn (or on an opponent's turn before blocks) leaves them tapped through
     // the opponents' next combat. Refuse the grant while that combat reaches lethal range. No RNG:
-    // ComputerUtilCombat.lifeInDanger draws MyRandom, so it is deliberately not used.
-    private static boolean isStewardGrant(final SpellAbility m) {
+    // ComputerUtilCombat.lifeInDanger draws MyRandom, so it is deliberately not used. isStewardGrant and
+    // stewardGrantUnsafe are package-private for SpecialCardAi.availableManaSourceCountNoManaCost.
+    static boolean isStewardGrant(final SpellAbility m) {
         return m.getGrantorStatic() != null && m.getGrantorStatic().getHostCard() != null
                 && "Steward of the Harvest".equals(m.getGrantorStatic().getHostCard().getName());
     }
 
+    // A fork caller deliberately left on the post-#12149 list: a creature's own filter ability is real mana now.
     private static boolean isOnlyStewardGranted(final Card card) {
         final List<SpellAbility> abs = getAIPlayableMana(card);
         if (abs.isEmpty()) {
@@ -1686,7 +1688,7 @@ public class ComputerUtilMana {
         return true;
     }
 
-    private static boolean stewardGrantUnsafe(final Player ai) {
+    static boolean stewardGrantUnsafe(final Player ai) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         if (!ph.isPlayerTurn(ai) && !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS)) {
             return false; // this turn's blocks are declared; it untaps before the next opposing combat

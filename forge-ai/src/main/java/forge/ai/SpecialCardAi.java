@@ -144,6 +144,38 @@ public class SpecialCardAi {
         return res;
     }
 
+    // ComputerUtilMana.getAvailableManaSources(ai, true).size() as it counted before the merge, for
+    // DrawAi.castDisplacesManaSource: the stock list, each card kept only when one of its
+    // aiPlayableManaNoManaCost abilities can be played, with the stock Steward of the Harvest veto read
+    // on those abilities as it was. That is exactly the old set: the list's other exclusions (an
+    // attacker its attack taps, a tap trigger that would kill us) never read the ability list, and a
+    // card the new veto drops the old one dropped too. The order is the new list's, so only the count
+    // is offered. Draws nothing beyond the stock call: a filter ability has no sub-ability, so the
+    // list asks no extra chkDrawback, and the Steward check is RNG-free.
+    public static int availableManaSourceCountNoManaCost(final Player ai) {
+        int count = 0;
+        for (final Card c : ComputerUtilMana.getAvailableManaSources(ai, true)) {
+            final List<SpellAbility> abs = aiPlayableManaNoManaCost(c);
+            boolean playable = false;
+            for (final SpellAbility am : abs) {
+                am.setActivatingPlayer(ai);
+                if (am.canPlay() && am.checkRestrictions(ai)) {
+                    playable = true;
+                    break;
+                }
+            }
+            if (!playable) {
+                continue; // a filter-only source: a Signet, a filter land, Cabal Coffers past its cost
+            }
+            if (c.isCreature() && abs.stream().allMatch(ComputerUtilMana::isStewardGrant)
+                    && ComputerUtilMana.stewardGrantUnsafe(ai)) {
+                continue; // the Steward veto as the old list applied it
+            }
+            count++;
+        }
+        return count;
+    }
+
     // Acorn Catapult (dead-card batch 2, row 100; precon:Counterpunch (CMD))
     // "{1}, {T}: Acorn Catapult deals 1 damage to any target. That permanent's controller or that
     // player creates a 1/1 green Squirrel creature token." AI:RemoveDeck:All kept it out of every
@@ -3278,10 +3310,11 @@ public class SpecialCardAi {
         // A copy of DamageDealAi.explosionManaCapacity (copied, not shared: no accepted card's path
         // moves). What the AI payment could use now, as [total, W, U, B, R, G, any color]: the sources
         // ComputerUtilMana.getAvailableManaSources/groupSourcesByManaColor would offer, without the RNG
-        // roll in isManaSourceReserved. A Combo source counts once (getAvailableManaEstimate counts the
+        // roll in isManaSourceReserved and without a filter ability that needs mana of its own
+        // (aiPlayableManaNoManaCost). A Combo source counts once (getAvailableManaEstimate counts the
         // words of Produced$: a Combo dual 3, Command Tower 2); sources held in AiCardMemory for the next
         // spell or for blocks are skipped; mana restrictions are read against the target's own spell.
-        // Errs low.
+        // Errs low: stricter than stock where a filter source would pay.
         private static int[] capacity(final Player ai, final SpellAbility spell) {
             final int[] cap = new int[7];
             cap[0] = ai.getManaPool().totalMana();

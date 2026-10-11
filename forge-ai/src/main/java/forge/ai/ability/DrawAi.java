@@ -339,8 +339,11 @@ public class DrawAi extends SpellAbilityAi {
             return false;
         }
         // one per untapped source: getAvailableManaEstimate counts every token of Produced$
-        // ("Combo W B" = 3), so a dual land would read as 3 mana and the floor would never fire
-        final int available = ComputerUtilMana.getAvailableManaSources(ai, true).size();
+        // ("Combo W B" = 3), so a dual land would read as 3 mana and the floor would never fire.
+        // Counted as before the upstream merge of 2026-10-11, whose getAvailableManaSources also lists
+        // filter-only sources (Signets, filter lands, Cabal Coffers past its cost) that need another
+        // source's mana: SpecialCardAi.availableManaSourceCountNoManaCost is exactly the old count.
+        final int available = SpecialCardAi.availableManaSourceCountNoManaCost(ai);
         final int hostCmc = host.getCMC();
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
             if (c.getId() == host.getId() || c.isLand() || c.getManaAbilities().isEmpty()) {
