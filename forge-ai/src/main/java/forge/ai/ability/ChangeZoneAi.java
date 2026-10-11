@@ -1441,6 +1441,13 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 // (e.g. Karmic Guide returning itself under Elesh Norn, Grand Cenobite would loop)
                 // TODO If AI thinks it's about to lose it could try to force a Draw this way
                 list = CardLists.filter(list, c -> !ComputerUtilCard.wouldDieToStaticPT(c));
+                if (SpecialCardAi.Reanimate.handles(sa)) {
+                    // Reanimate's controller loses the target's mana value in life, which
+                    // LifeLoseAi.chkDrawback reads as 0 until the resolution remembers the card:
+                    // keep only the targets the AI can afford (SpecialCardAi.Reanimate). Every other
+                    // card keeps this list as it is.
+                    list = SpecialCardAi.Reanimate.affordableTargets(ai, list);
+                }
             }
             if (destination.equals(ZoneType.Exile) || destination.equals(ZoneType.Library)) {
                 // Don't use these abilities before main 2 if possible

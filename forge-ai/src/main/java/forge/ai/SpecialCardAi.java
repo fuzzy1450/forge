@@ -16169,6 +16169,31 @@ public class SpecialCardAi {
         }
     }
 
+    // Life floor for a loss of life the AI chooses for itself (Reanimate, Necropotence)
+    // The floor of the K'rrik guard (KrrikSonOfYawgmoth.lifeForBlackAcceptable) without its
+    // next-attack term: after the loss the AI keeps at least the stock life-cost floor (the 4
+    // SpellAbilityAi.willPayCosts asks of ComputerUtilCost.checkLifeCost for every PayLife cost) and
+    // more than the profile's AI_IN_DANGER_MAX_THRESHOLD (Default 4, so 5). The next-attack term is
+    // left out on the evidence: K'rrik's and M.O.D.O.K.'s payments buy mana and card selection, and
+    // refusing one costs little, while a refused Reanimate is often the blocker that attack called
+    // for and a refused Necropotence is a turn without a card (it skips the draw step). Counting
+    // every opposing creature as unblocked, the term refused Hornet Queen at 18 life and Sprouting
+    // Thrinax at 20 in paired replays the stock AI won. No can't-lose exemption: life lost under
+    // Platinum Angel stays lost when the Angel leaves. RNG-free and read-only.
+    public static class LifeFloor {
+        /** SpellAbilityAi.willPayCosts' checkLifeCost floor: the least life a payment may leave. */
+        public static final int STOCK = 4;
+
+        // the least life the AI may be left with: losing n is acceptable when life - n >= this
+        public static int lifeToKeep(final Player ai) {
+            return Math.max(STOCK, AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD) + 1);
+        }
+
+        public static boolean keeps(final Player ai, final int loss) {
+            return ai.getLife() - loss >= lifeToKeep(ai);
+        }
+    }
+
     // Life's Legacy
     // "As an additional cost to cast this spell, sacrifice a creature. Draw cards equal to the
     // sacrificed creature's power." Three generic gates keep it dead once AI:RemoveDeck is gone:
@@ -22691,6 +22716,35 @@ public class SpecialCardAi {
                 }
             }
             return fodder.isEmpty() ? null : ComputerUtilCard.getWorstAI(fodder);
+        }
+    }
+
+    // Reanimate
+    // "Put target creature card from a graveyard onto the battlefield under your control. You lose
+    // life equal to its mana value." ChangeZoneAi.isPreferredTarget aims it at the most expensive
+    // creature card in any graveyard (getMostExpensivePermanentAI), and nothing prices the life that
+    // costs: DBLoseLifeYou's X is RememberedLKI$CardManaCost, the card the resolution remembers, so
+    // when the cast is judged LifeLoseAi.chkDrawback reads 0 and approves. Replaying the 123 own-turn
+    // deaths of oops-all-black under 2.0.15+6490e34b08c, 24 of its 47 Reanimate casts killed it at
+    // resolution, each on a target whose mana value was at least its life (game 935740: Gray Merchant
+    // of Asphodel at 3 life, dead at -2 before the drain could resolve).
+    // isPreferredTarget now drops the targets whose mana value would take the AI under LifeFloor (life
+    // after the loss at least 4 and above AI_IN_DANGER_MAX_THRESHOLD); the stock pick runs on the rest,
+    // and with none left the targeting fails and the spell stays in hand.
+    // The AI only gives targets up, so a cast it still makes costs no more life than before. A list in
+    // which every target is affordable comes back whole, in order, so that cast takes the stock path.
+    public static class Reanimate {
+        public static final String NAME = "Reanimate";
+
+        // ChangeZoneAi.isPreferredTarget's name gate: the spell (a copy keeps the name), not its subs
+        public static boolean handles(final SpellAbility sa) {
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub);
+        }
+
+        // the creature cards whose mana value the AI can afford to lose in life
+        public static CardCollection affordableTargets(final Player ai, final CardCollection list) {
+            final int spare = ai.getLife() - LifeFloor.lifeToKeep(ai);
+            return CardLists.filter(list, c -> c.getCMC() <= spare);
         }
     }
 
