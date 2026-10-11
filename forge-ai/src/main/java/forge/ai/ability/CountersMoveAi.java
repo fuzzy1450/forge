@@ -428,9 +428,8 @@ public class CountersMoveAi extends SpellAbilityAi {
                         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
                     }
                 }
-                final boolean isMandatoryTrigger = (sa.isTrigger() && !sa.isOptionalTrigger())
-                        || (sa.getRootAbility().isTrigger() && !sa.getRootAbility().isOptionalTrigger());
-                if (!isMandatoryTrigger) {
+
+                if (!sa.isTrigger() || sa.getRootAbility().isOptionalTrigger()) {
                     // no good target
                     return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
                 }
