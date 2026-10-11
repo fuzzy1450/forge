@@ -30,4 +30,51 @@ public class MandatoryLoopTest extends AITest {
         AssertJUnit.assertTrue(game.isGameOver());
         AssertJUnit.assertEquals(GameEndReason.Draw, game.getOutcome().getWinCondition());
     }
+
+    // Bloodthirsty Conqueror and Marauding Blight-Priest drain a player who can't lose (Darksteel Angel) for ever:
+    // each mandatory trigger feeds the other, and every loss of life used to restart the repeat count
+    // (MTG_DeckMaker stored game 939583, engine 2.0.15+2a2cc6ebb77, 1200 s Timeout at turn 29)
+    @Test
+    public void endlessLifeDrainAgainstAPlayerWhoCantLoseDrawsTheGame() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        Player opp = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p);
+        addCard("Bloodthirsty Conqueror", p);
+        addCard("Marauding Blight-Priest", p);
+        addCard("Darksteel Angel", opp);
+        opp.setLife(3, null);
+        game.getAction().checkStateEffects(true);
+
+        opp.loseLife(1, false, false, null);
+        for (int i = 0; i < 5000 && !game.isGameOver(); i++) {
+            game.getPhaseHandler().mainLoopStep();
+        }
+
+        AssertJUnit.assertTrue(game.isGameOver());
+        AssertJUnit.assertEquals(GameEndReason.Draw, game.getOutcome().getWinCondition());
+        AssertJUnit.assertTrue(opp.getLife() <= 0);
+    }
+
+    // the same chain against a player who can lose runs past the repeat limit and still ends by that player's death
+    @Test
+    public void lifeDrainChainStillEndsByDeath() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        Player opp = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p);
+        addCard("Bloodthirsty Conqueror", p);
+        addCard("Marauding Blight-Priest", p);
+        opp.setLife(80, null);
+        game.getAction().checkStateEffects(true);
+
+        opp.loseLife(1, false, false, null);
+        for (int i = 0; i < 5000 && !game.isGameOver(); i++) {
+            game.getPhaseHandler().mainLoopStep();
+        }
+
+        AssertJUnit.assertTrue(game.isGameOver());
+        AssertJUnit.assertEquals(GameEndReason.AllOpponentsLost, game.getOutcome().getWinCondition());
+        AssertJUnit.assertTrue(opp.hasLost());
+    }
 }
