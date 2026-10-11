@@ -718,11 +718,15 @@ public class ComputerUtilMana {
 
             saList.removeAll(saExcludeList);
 
+            // the order is for the choice only: saList stays the view of sourcesForShards, so a source removed from it
+            // below after its payment failed stays removed (as #12119 had it); with saList the reordered copy, a source
+            // whose own cost the AI declines was chosen again on every pass and the payment never ended
+            Collection<SpellAbility> saOrdered = saList;
             if (toPay == ManaCostShard.GENERIC && !hasConverge && !sa.hasParam("AIManaPref") && !sa.getHostCard().hasSVar("AIManaPref")) {
-                saList = requiredSourcesFirst(saList, cost, sa);
+                saOrdered = requiredSourcesFirst(saList, cost, sa);
             }
 
-            SpellAbility saPayment = saList.isEmpty() ? null : chooseManaAbility(cost, sa, ai, toPay, saList, checkPlayable || !test);
+            SpellAbility saPayment = saList.isEmpty() ? null : chooseManaAbility(cost, sa, ai, toPay, saOrdered, checkPlayable || !test);
 
             if (saPayment != null && ComputerUtilCost.isSacrificeSelfCost(saPayment.getPayCosts()) && sa.isTargeting(saPayment.getHostCard())) {
                 // not a good idea to sac a card that you're targeting with the SA you're paying for
