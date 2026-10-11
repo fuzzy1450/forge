@@ -1192,9 +1192,14 @@ public class AiController {
                 validCards.remove(landsInHand.get(0));
             } else { // Discard other stuff
                 CardLists.sortByCmcDesc(validCards);
-                int numLandsAvailable = numLandsInPlay;
+                // Uncastable means out of reach beyond the near term: the permanents that make mana
+                // (manaPermanentsInPlay: lands as before, and mana rocks and creatures now too), a land drop
+                // from the hand, and one more mana -- the window ComputerUtil.getBestNearTermDiscardThreat
+                // gives an opponent's hand. A card kept inside it goes to the worst-card fallback, which keeps
+                // the mana sources while the AI is short (keepManaSourcesWhileShort).
+                int nearTermMana = manaPermanentsInPlay() + 1;
                 if (numLandsInHand > 0) {
-                    numLandsAvailable++;
+                    nearTermMana++;
                 }
 
                 // Discard unplayable card (checks by CMC)
@@ -1204,12 +1209,12 @@ public class AiController {
                 boolean freeCastAllowed = ComputerUtilCost.isFreeCastAllowedByPermanent(player, null);
 
                 for (int j = 0; j < validCards.size(); j++) {
-                    if ((validCards.get(j).getCMC() > numLandsAvailable || freeCastAllowed) && !validCards.get(j).hasSVar("DoNotDiscardIfAble")) {
+                    if ((validCards.get(j).getCMC() > nearTermMana || freeCastAllowed) && !validCards.get(j).hasSVar("DoNotDiscardIfAble")) {
                         discardList.add(validCards.get(j));
                         validCards.remove(validCards.get(j));
                         discardedUnplayable = true;
                         break;
-                    } else if (validCards.get(j).getCMC() <= numLandsAvailable) {
+                    } else if (validCards.get(j).getCMC() <= nearTermMana) {
                         // cut short to avoid looping over cards which are guaranteed not to fit the criteria
                         break;
                     }

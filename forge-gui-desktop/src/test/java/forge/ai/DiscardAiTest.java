@@ -17,7 +17,9 @@ import org.testng.annotations.Test;
  * AiController.getCardsToDiscard's worst-card fallback throws away the cheapest artifact first
  * (ComputerUtilCard.getWorstAI), a connive the cheapest nonland card (ConniveAi.chooseDiscard): a Sol
  * Ring before a spell either way. While the AI is short of mana it now keeps its mana sources
- * (AiController.keepManaSourcesWhileShort).
+ * (AiController.keepManaSourcesWhileShort). And a card is uncastable only beyond the near term (every
+ * permanent that makes mana, a land in hand, one more mana), so 5 Swamps keep Liliana, Dreadhorde
+ * General: a cheap spell pays for it, not the mana rock that brings her within reach.
  */
 public class DiscardAiTest extends AITest {
 
@@ -37,6 +39,31 @@ public class DiscardAiTest extends AITest {
         // 8 Swamps, past the profile's 7 and the hand's 4: Sol Ring is the cheapest artifact, as before
         AssertJUnit.assertEquals(List.of("Sol Ring"),
                 discards(setup(8, false, "Sol Ring", "Hill Giant", "Divination"), false));
+    }
+
+    @Test
+    public void keepsLilianaAtFiveLands() {
+        // 5 Swamps + 1 = 6: Liliana is one land drop away, so M.O.D.O.K.'s connive discards a cheap spell
+        List<String> out = discards(setup(5, false, "Liliana, Dreadhorde General", "Stitch Together", "Drain Life"), true);
+        AssertJUnit.assertEquals(1, out.size());
+        AssertJUnit.assertFalse(out.contains("Liliana, Dreadhorde General"));
+    }
+
+    @Test
+    public void keepsLilianaAndTheManaRockThatReachesHer() {
+        // 4 Swamps + Arcane Signet + 1 = 6 keeps Liliana; short of mana, the rock stays too: a cleanup would
+        // take Mind Stone as the cheapest artifact, a connive Sol Ring as the cheapest nonland card
+        AssertJUnit.assertEquals(List.of("Drain Life"),
+                discards(setup(4, true, "Liliana, Dreadhorde General", "Mind Stone", "Drain Life"), false));
+        AssertJUnit.assertEquals(List.of("Drain Life"),
+                discards(setup(4, true, "Liliana, Dreadhorde General", "Sol Ring", "Drain Life"), true));
+    }
+
+    @Test
+    public void stillDiscardsACardFarOutOfReach() {
+        // 4 Swamps + 1 = 5: Liliana (6) is out of reach, and goes first as before
+        AssertJUnit.assertEquals(List.of("Liliana, Dreadhorde General"),
+                discards(setup(4, false, "Liliana, Dreadhorde General", "Stitch Together", "Drain Life"), false));
     }
 
     protected Player setup(int swamps, boolean signet, String... hand) {
