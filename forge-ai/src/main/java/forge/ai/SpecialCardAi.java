@@ -23427,10 +23427,12 @@ public class SpecialCardAi {
     // MIN_LANDS_TO_SELL_ROCK lands are out - plus X + 2 mana, for an artifact of mana value
     // MIN_FETCH_CMC or more that we can use now; own Main 1 or Main 2 with an empty stack (batch 3,
     // amendment W), but in Main 1 not while a bigger permanent the AI holds for Main 2 is affordable
-    // (amendment G: biggerPermanentPending). reshape.txt's SVar:AIPriorityModifier:3 sorts the
-    // spell as the 5-mana cast it is at the least (amendment P). X is the pick's mana value. The
-    // resolution takes the most expensive artifact at or below X (getMostExpensivePermanentAI over
-    // a shuffled list), so EVERY library artifact of exactly that mana value must meet the floor.
+    // (amendment G: biggerPermanentPending), and in Main 2 not while an affordable commander of ours
+    // waits in the command zone (amendment G-2: commanderPending). reshape.txt's
+    // SVar:AIPriorityModifier:3 sorts the spell as the 5-mana cast it is at the least (amendment P).
+    // X is the pick's mana value. The resolution takes the most expensive artifact at or below X
+    // (getMostExpensivePermanentAI over a shuffled list), so EVERY library artifact of exactly that
+    // mana value must meet the floor.
     // Never fetched: an artifact whose activated ability reaches DestroyAll (isHarmful: Boompile,
     // whose won flip destroys every nonland permanent, ours included, and which FlipCoinAi taps at
     // once). chooseX leaves those out, and ChangeZoneAi.chooseCardToHiddenOriginChangeZone drops them
@@ -23520,6 +23522,16 @@ public class SpecialCardAi {
             if (main1 && biggerPermanentPending(ai, castableMana(ai, false))) {
                 return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
             }
+            // Amendment G-2 (the batch-3 retry), Main 2: an affordable commander of ours still goes
+            // first. getSpellAbilityPriority gives a hand card +max(0, hand - maxHandSize) and a
+            // command-zone commander nothing, so with 8+ cards in hand Reshape (SORT_KEY + that
+            // bonus) sorts level with or ahead of an Okaun or Zndrsplt recast (5 + 1) in Main 2 as
+            // well. AnotherTime, not WaitForMain2, which hasReasonToPlayCardThisTurn reads as yes.
+            // The hand clause stays Main 1 only: a hand permanent carries the same bonus, so in
+            // Main 2 it still sorts first.
+            if (!main1 && commanderPending(ai, castableMana(ai, false))) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
             sa.setXManaCostPaid(x); // calculateManaCost pays exactly this X; cmcLEX reads it at resolution
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
@@ -23533,18 +23545,33 @@ public class SpecialCardAi {
         // mirrors ComputerUtilAbility.getSpellAbilityPriority's card terms: mana value, +1 for a
         // creature, -10 for an AI:RemoveDeck:All card (the filter never offers one, Embercleave
         // in this deck, so it holds nothing), plus the card's own AIPriorityModifier. In Main 2
-        // that permanent sorts first and Reshape gets what is left; when the AI casts it in Main 1
-        // anyway (an unattached haste Equipment), it sorts first there too and this releases on
-        // the next pass. Constant reads of two zones: no random number, nothing held.
+        // a hand permanent sorts first and Reshape gets what is left (a commander does not, so
+        // consider keeps commanderPending in Main 2 too: amendment G-2); when the AI casts it in
+        // Main 1 anyway (an unattached haste Equipment), it sorts first there too and this
+        // releases on the next pass. Constant reads of two zones: no random number, nothing held.
         private static boolean biggerPermanentPending(final Player ai, final int castable) {
-            for (final Card cmdr : ai.getCommanders()) {
-                if (cmdr.isInZone(ZoneType.Command) && ai.equals(cmdr.getOwner()) && sortKey(cmdr) > SORT_KEY
-                        && cmdr.getCMC() + 2 * ai.getCommanderCast(cmdr) <= castable) {
-                    return true;
-                }
+            if (commanderPending(ai, castable)) {
+                return true;
             }
             for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
                 if (c.isPermanent() && !c.isLand() && sortKey(c) > SORT_KEY && c.getCMC() <= castable) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Amendment G's commander clause (the batch-3 retry): read the LIVE command-zone objects.
+        // ai.getCommanders() keeps each commander's original Card, whose zone reads Stack for good
+        // once it has been cast (953588: Okaun id 200 read Stack while the live object sat in the
+        // command zone at 5 + 2 x 2 <= castable), so the first attempt held only for a commander
+        // never cast. The command zone's "Commander Effect" card is not a commander (isCommander
+        // false) and drops out. Commander tax and Card.equals go by id, so getCommanderCast reads
+        // the live object right (CostAdjustment does the same). Zone reads only: no random number.
+        private static boolean commanderPending(final Player ai, final int castable) {
+            for (final Card cmdr : ai.getCardsIn(ZoneType.Command)) {
+                if (cmdr.isCommander() && ai.equals(cmdr.getOwner()) && sortKey(cmdr) > SORT_KEY
+                        && cmdr.getCMC() + 2 * ai.getCommanderCast(cmdr) <= castable) {
                     return true;
                 }
             }
