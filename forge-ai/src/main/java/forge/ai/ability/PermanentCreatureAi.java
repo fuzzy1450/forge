@@ -234,6 +234,12 @@ public class PermanentCreatureAi extends PermanentAi {
             // canPayCost's MyRandom mana probe; see the class comment.
             return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
         }
+        if (SpecialCardAi.TalionTheKindlyLord.NAME.equals(card.getName())
+                && !SpecialCardAi.TalionTheKindlyLord.castAffordable(ai, sa)) {
+            // RNG-free commander cast ceiling (G1 + Anikthea's Hall check): an unpayable window must
+            // not reach canPayCost's MyRandom mana probe; see the class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
         if (SpecialCardAi.GoblinArchaeologist.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
                 && !SpecialCardAi.GoblinArchaeologist.worthCasting(ai, card, sa)) {
             // Value floor: the body is a 1/2; its worth is the artifact-killing flip. Cast it only

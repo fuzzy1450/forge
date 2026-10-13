@@ -1985,6 +1985,11 @@ public class AiController {
             // only creatures with that power
             return SpecialCardAi.LocalizedDestruction.chooseEnergy(player, sa, min, max);
         }
+        if (SpecialCardAi.TalionTheKindlyLord.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dead-card batch 3, row 1: the AILogic only approves the pre-cast ETB probe; the stock
+            // fallthrough below answers Max (10), a number almost no opposing spell matches
+            return SpecialCardAi.TalionTheKindlyLord.chooseNumber(player, sa, min, max);
+        }
         final Card source = sa.getHostCard();
         final String logic = sa.getParamOrDefault("AILogic", "Max");
         if ("GainLife".equals(logic)) {

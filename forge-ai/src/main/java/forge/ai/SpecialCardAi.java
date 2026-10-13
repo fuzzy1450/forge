@@ -26983,6 +26983,85 @@ public class SpecialCardAi {
         }
     }
 
+    // Talion, the Kindly Lord (dead-card batch 3, row 1)
+    // "As Talion enters, choose a number between 1 and 10. Whenever an opponent casts a spell with mana
+    // value, power, or toughness equal to the chosen number, that player loses 2 life and you draw a
+    // card." No AI hint: the command-zone spell was offered in every own Main 2, approved by the
+    // creature handler and vetoed as BadEtbEffects (AiController.saSideEffects), because
+    // checkETBEffects test-runs the ETB replacement's DB$ ChooseNumber non-mandatorily and
+    // ChooseNumberAi answered MissingLogic without an AILogic. Anikthea's (batch 2 row 129) and
+    // Kardur's (batch 1 row 96) gate.
+    // - Probe: AILogic$ TalionTheKindlyLord on SVar:ChooseNumber approves it; the 3/4 flyer is the
+    //   cast's value, the number is chosen at resolution.
+    // - Number (AiController.chooseNumber, by the ability's source name, so a Clone or Spark Double
+    //   copy of Talion counts its own controller's opponents): the n in [min, max] that most opposing
+    //   spells still to come would trigger, read the way the trigger reads them (getCMC, getNetPower,
+    //   getNetToughness; a card counts once per n), over each opponent's nonland, nontoken library
+    //   cards (the deck-list knowledge stock already assumes: PermanentAi's Chalice of the Void,
+    //   ComputerUtilCard's MostProminentInHumanDeck) plus each opponent's commander in the command
+    //   zone, weighted COMMANDER_WEIGHT; ties to the lower n. Stock answered Max (10).
+    // - Cast ceiling (PermanentCreatureAi.checkApiLogic, after Anikthea's gate): CommanderCastCeiling
+    //   (G1), then AniktheaHandOfErebos.coloursOnSeparateMana (Hall's condition over the adjusted
+    //   cost's coloured pips: one Drowned Catacomb must not stand for both U and B), both called as
+    //   they are, before canPayCost's MyRandom probe (ComputerUtilMana.isManaSourceReserved). A
+    //   Play-effect cast skips it and stays stock.
+    // Draws nothing and holds nothing. Residual: "you draw a card" is mandatory, so a matching
+    // opposing spell with our library empty would deck us; stock checks this for no draw trigger.
+    public static class TalionTheKindlyLord {
+        public static final String NAME = "Talion, the Kindly Lord";
+        // opposing commanders are recast: 2.11 casts a game against ~0.18 for one nonland deck card
+        // (Control Fairy's 1,560 games under 2.0.15+55e709fa6ba: 13.26 opposing spells a game)
+        public static final int COMMANDER_WEIGHT = 10;
+
+        // The RNG-free cast ceiling, for our own paid cast only: true sends the cast on to the
+        // stock checks, false is the caller's CantAfford.
+        public static boolean castAffordable(final Player ai, final SpellAbility sa) {
+            if (!sa.isSpell() || sa.isCastFromPlayEffect()) {
+                return true;
+            }
+            return CommanderCastCeiling.affordable(ai, sa) && AniktheaHandOfErebos.coloursOnSeparateMana(ai, sa);
+        }
+
+        // The ChooseNumber at resolution: once per ETB, never per consult.
+        public static int chooseNumber(final Player ai, final SpellAbility sa, final int min, final int max) {
+            if (max <= min) {
+                return min;
+            }
+            final int[] weight = new int[max - min + 1];
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Library)) {
+                    count(c, 1, weight, min, max);
+                }
+                for (final Card c : opp.getCardsIn(ZoneType.Command)) {
+                    if (c.isCommander()) {
+                        count(c, COMMANDER_WEIGHT, weight, min, max);
+                    }
+                }
+            }
+            int best = min; // ties to the lower number: cheaper spells come earlier and more often
+            for (int n = min + 1; n <= max; n++) {
+                if (weight[n - min] > weight[best - min]) {
+                    best = n;
+                }
+            }
+            return best;
+        }
+
+        private static void count(final Card c, final int w, final int[] weight, final int min, final int max) {
+            if (c.isLand() || c.isToken()) {
+                return;
+            }
+            final int mv = c.getCMC();
+            final int pw = c.getNetPower();
+            final int th = c.getNetToughness();
+            for (int n = min; n <= max; n++) {
+                if (mv == n || pw == n || th == n) {
+                    weight[n - min] += w;
+                }
+            }
+        }
+    }
+
     // The Master, Formed Anew
     // Body Thief (a cast trigger) exiles a creature we control with a takeover
     // counter, and the Master may enter as a copy of a creature card in exile with
