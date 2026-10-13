@@ -23159,6 +23159,477 @@ public class SpecialCardAi {
         }
     }
 
+    // Reshape
+    // "As an additional cost to cast this spell, sacrifice an artifact. Search your library for an
+    // artifact card with mana value X or less, put it onto the battlefield, then shuffle." {X}{U}{U}.
+    // AI:RemoveDeck:All kept it out of every playable list (AiController.getSpellAbilityToPlay's
+    // filter). Behind the hint the stock path has no floor: setMaxXValue's largest X, whatever
+    // artifact is most expensive there (Great Furnace at X = 0), and a payment that sells the
+    // cheapest artifact (a land, Sol Ring), because ChangeZoneAi.willPayCosts ignores the sacrifice
+    // check's answer for a Battlefield destination.
+    // Value line: sell a nearly free artifact - a noncreature token, or a spare one-mana rock once
+    // MIN_LANDS_TO_SELL_ROCK lands are out - plus X + 2 mana, for an artifact of mana value
+    // MIN_FETCH_CMC or more that we can use now; own Main 1 or Main 2 with an empty stack (batch 3,
+    // amendment W), but in Main 1 not while a bigger permanent the AI holds for Main 2 is affordable
+    // (amendment G: biggerPermanentPending). reshape.txt's SVar:AIPriorityModifier:3 sorts the
+    // spell as the 5-mana cast it is at the least (amendment P). X is the pick's mana value. The
+    // resolution takes the most expensive artifact at or below X (getMostExpensivePermanentAI over
+    // a shuffled list), so EVERY library artifact of exactly that mana value must meet the floor.
+    // Never fetched: an artifact whose activated ability reaches DestroyAll (isHarmful: Boompile,
+    // whose won flip destroys every nonland permanent, ours included, and which FlipCoinAi taps at
+    // once). chooseX leaves those out, and ChangeZoneAi.chooseCardToHiddenOriginChangeZone drops them
+    // from the owner's resolution, so a Krark, the Thumbless copy's second search skips them too.
+    // RNG parity: A never evaluated the card, so nothing here draws: an RNG-free mana count (Combo
+    // sources counted once, unlike getAvailableManaEstimate) stands in for setMaxXValue, and
+    // canPlayAndPayForFace runs the real canPayCost only after a WillPlay. The count skips the
+    // sources ComputerUtilMana.isManaSourceReserved refuses in the phase at hand, Main-2 holds from
+    // Main 1 on included (heldElsewhere), so a Main-1 WillPlay is as payable as a Main-2 one. One
+    // chooser answers the decision, ChangeZoneAi.willPayCosts and the payment
+    // (ComputerUtil.getCardPreference's SacCost hook). Owner only.
+    public static class Reshape {
+        public static final String NAME = "Reshape";
+        public static final int MIN_FETCH_CMC = 3;
+        public static final int MIN_LANDS_TO_SELL_ROCK = 6;
+        // Reshape's own saEvaluator key: its cost's mana value with X unannounced ({U}{U}, 2) plus
+        // reshape.txt's SVar:AIPriorityModifier:3, i.e. its cheapest real cast (X = 3 plus {U}{U})
+        public static final int SORT_KEY = 5;
+
+        public static boolean handles(final Card source) {
+            return source != null && NAME.equals(source.getName());
+        }
+
+        // getAbilitySourceName reads "" for a card cast face down from exile (Gonti, Thief of
+        // Sanity): read the host's name or the card state's name too (DiabolicIntent.isIntent's
+        // idiom), so a face-down stolen copy still meets the owner check in consider.
+        public static boolean isReshape(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.setXManaCostPaid(null); // nothing held from an earlier evaluation
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner()) || !sa.costHasManaX()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // stolen, or a free cast
+            }
+            final Game game = ai.getGame();
+            // Own Main 1 or Main 2 with an empty stack (amendment W). Main 1 is the better window
+            // for every target that passes worthFetching: an Equipment can be equipped before
+            // combat (Sword of Vengeance grants haste), Embercleave attaches on entering and attacks
+            // with double strike; the stock hidden-origin path tutors to the battlefield in Main 1
+            // too (ChangeZoneAi.hiddenOriginCanPlayAI's Main-1 Battlefield allowance). Batch 2
+            // refused Main 1 because its count could not see HELD_MANA_SOURCES_FOR_MAIN2, which the
+            // payer honours in Main 1 (ComputerUtilMana.isManaSourceReserved); heldElsewhere now
+            // skips those sources, so a Main-1 WillPlay is as payable as a Main-2 one.
+            // canCastTiming already enforces sorcery speed; this is the cheap restatement.
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean main1 = ph.is(PhaseType.MAIN1, ai);
+            if (!(main1 || ph.is(PhaseType.MAIN2, ai)) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // cheapest bound first: is anything in the library worth it at all?
+            int topCmc = -1;
+            for (final Card c : ai.getCardsIn(ZoneType.Library)) {
+                if (c.isArtifact() && !c.isLand()) {
+                    topCmc = Math.max(topCmc, c.getCMC());
+                }
+            }
+            if (topCmc < MIN_FETCH_CMC || !ai.canSearchLibraryWith(sa, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            final Card sac = chooseSacrifice(ai, CardLists.filter(ai.getCardsIn(ZoneType.Battlefield),
+                    c -> c.isArtifact() && c.canBeSacrificedBy(sa, false)));
+            if (sac == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
+            }
+            // Selling a Treasure: count no sacrifice-for-mana source, so the payer (which spends
+            // those last) never needs the one the sacrifice was decided on.
+            final boolean skipSacMana = sacrificesForMana(sac);
+            // U U after cost changes, X still unannounced (it counts 0)
+            final ManaCostBeingPaid fixed = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int maxX = castableMana(ai, skipSacMana) - fixed.toManaCost().getCMC();
+            if (maxX < MIN_FETCH_CMC || !hasBlueSources(ai, sa,
+                    fixed.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE), skipSacMana)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+            final int x = chooseX(ai, Math.min(maxX, topCmc));
+            if (x < MIN_FETCH_CMC) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            // Amendment G, Main 1 only: last, so it only turns a would-be WillPlay into a wait
+            // (ComputerUtil.hasReasonToPlayCardThisTurn reads WaitForMain2 as a reason to play this
+            // turn, so an earlier wait would answer yes for a cast the floor refuses).
+            if (main1 && biggerPermanentPending(ai, castableMana(ai, false))) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            sa.setXManaCostPaid(x); // calculateManaCost pays exactly this X; cmcLEX reads it at resolution
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Amendment G. A permanent spell in Main 1 waits for Main 2 unless castPermanentInMain1
+        // (PermanentAi.checkPhaseRestrictions), and hasACardGivingHaste counts a haste Equipment
+        // only while it is unattached, so a commander recast or a big permanent usually waits; a
+        // Main-1 Reshape would spend the mana it needs. True while our command zone holds a
+        // commander we own, or our hand a nonland permanent card, whose saEvaluator key beats
+        // SORT_KEY and whose cost the mana we have covers (a commander with its tax). The key
+        // mirrors ComputerUtilAbility.getSpellAbilityPriority's card terms: mana value, +1 for a
+        // creature, -10 for an AI:RemoveDeck:All card (the filter never offers one, Embercleave
+        // in this deck, so it holds nothing), plus the card's own AIPriorityModifier. In Main 2
+        // that permanent sorts first and Reshape gets what is left; when the AI casts it in Main 1
+        // anyway (an unattached haste Equipment), it sorts first there too and this releases on
+        // the next pass. Constant reads of two zones: no random number, nothing held.
+        private static boolean biggerPermanentPending(final Player ai, final int castable) {
+            for (final Card cmdr : ai.getCommanders()) {
+                if (cmdr.isInZone(ZoneType.Command) && ai.equals(cmdr.getOwner()) && sortKey(cmdr) > SORT_KEY
+                        && cmdr.getCMC() + 2 * ai.getCommanderCast(cmdr) <= castable) {
+                    return true;
+                }
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.isPermanent() && !c.isLand() && sortKey(c) > SORT_KEY && c.getCMC() <= castable) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static int sortKey(final Card c) {
+            int key = c.getCMC() + (c.isCreature() ? 1 : 0);
+            if (ComputerUtilCard.isCardRemAIDeck(c)) {
+                key -= 10;
+            }
+            if (c.hasSVar("AIPriorityModifier")) {
+                key += Integer.parseInt(c.getSVar("AIPriorityModifier"));
+            }
+            return key;
+        }
+
+        // A function of the board alone, so consider, willPayCosts and the payment get the same
+        // artifact.
+        // Tier 0: a noncreature token with no mana ability (Land Mine, Clue, Food).
+        // Tier 1: a noncreature token that sacrifices itself for mana (Treasure, Gold).
+        // Tier 2: a spare rock (isSpareRock), only with MIN_LANDS_TO_SELL_ROCK lands in play.
+        // Never: a land (Great Furnace), a creature, an Equipment, the commander, or a nontoken that
+        // is not a spare rock (Sol Ring, Thought Vessel, a legendary).
+        public static Card chooseSacrifice(final Player ai, final Iterable<Card> options) {
+            final boolean rocksSpare = ai.getLandsInPlay().size() >= MIN_LANDS_TO_SELL_ROCK;
+            Card best = null;
+            int bestTier = 0;
+            for (final Card c : options) {
+                if (!c.isArtifact() || c.isCreature() || c.isLand() || c.isEquipment() || c.isCommander()
+                        || !ai.equals(c.getController())) {
+                    continue;
+                }
+                final int tier;
+                if (c.isToken()) {
+                    tier = sacrificesForMana(c) ? 1 : 0;
+                } else if (rocksSpare && isSpareRock(c)) {
+                    tier = 2;
+                } else {
+                    continue;
+                }
+                // lowest tier, then lowest mana value, then card id: no shuffle, no RNG
+                if (best == null || tier < bestTier || (tier == bestTier && (c.getCMC() < best.getCMC()
+                        || (c.getCMC() == best.getCMC() && c.getId() < best.getId())))) {
+                    best = c;
+                    bestTier = tier;
+                }
+            }
+            return best;
+        }
+
+        // An artifact with an activated (non-spell) ability whose chain - sub-abilities, additional
+        // abilities (FlipCoin's Win/Lose subs, Repeat's RepeatSubAbility) and ability lists - reaches
+        // DestroyAll. FlipCoinAi approves an untargeted flip with no look at its win branch, so the
+        // AI taps Boompile at its first priority. A pure read of the card's scripted abilities: no
+        // random number.
+        public static boolean isHarmful(final Card c) {
+            for (final SpellAbility a : c.getNonManaAbilities()) {
+                if (a.isSpell()) {
+                    continue;
+                }
+                for (final SpellAbility part : partsOf(a)) {
+                    if (part.getApi() == ApiType.DestroyAll) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // root and every ability part reachable from it, each once (identity, not SpellAbility.equals)
+        private static List<SpellAbility> partsOf(final SpellAbility root) {
+            final List<SpellAbility> parts = new ArrayList<>();
+            collectParts(root, parts);
+            return parts;
+        }
+
+        private static void collectParts(final SpellAbility part, final List<SpellAbility> parts) {
+            if (part == null) {
+                return;
+            }
+            for (final SpellAbility seen : parts) {
+                if (seen == part) {
+                    return;
+                }
+            }
+            parts.add(part);
+            collectParts(part.getSubAbility(), parts);
+            for (final SpellAbility add : part.getAdditionalAbilities().values()) {
+                collectParts(add, parts);
+            }
+            for (final List<AbilitySub> list : part.getAdditionalAbilityLists().values()) {
+                for (final AbilitySub sub : list) {
+                    collectParts(sub, parts);
+                }
+            }
+        }
+
+        // A nonlegendary rock of mana value <= 2 whose best activation nets exactly one mana
+        // (Signets, Talismans, Arcane Signet, Mind Stone; never Sol Ring), with no static ability
+        // (Thought Vessel stays) and no non-mana ability but its own spell or a self-sacrifice
+        // (Mind Stone's draw).
+        private static boolean isSpareRock(final Card c) {
+            if (c.getType().isLegendary() || c.getCMC() > 2 || c.getManaAbilities().isEmpty()
+                    || !c.getStaticAbilities().isEmpty()) {
+                return false;
+            }
+            for (final SpellAbility a : c.getNonManaAbilities()) {
+                if (!a.isSpell() && (a.getPayCosts() == null
+                        || !a.getPayCosts().hasSpecificCostType(CostSacrifice.class))) {
+                    return false;
+                }
+            }
+            int best = 0;
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final int cost = ma.getPayCosts() != null && ma.getPayCosts().getCostMana() != null
+                        ? ma.getPayCosts().getCostMana().convertAmount() : 0;
+                best = Math.max(best, producedPerActivation(c, ma) - cost);
+            }
+            return best == 1;
+        }
+
+        // Largest X (top down to MIN_FETCH_CMC) whose resolution pick is sure to meet the floor:
+        // the same candidates chooseCardToHiddenOriginChangeZone sees (our library's artifacts at or
+        // below X, harmful ones dropped by its Reshape guard), in the same order: a deck key card not
+        // already in hand or play first (scanned before the legendary filter, as there), then, with
+        // legendaries we already control dropped, the best creature when every candidate is a
+        // creature, else the most expensive (ties shuffled), so every card that can come back must
+        // pass worthFetching. X equals that mana value: no mana wasted on X.
+        private static int chooseX(final Player ai, final int top) {
+            final boolean haveCreature = !ai.getCreaturesInPlay().isEmpty();
+            final boolean haveOppTarget = ai.getOpponents().getCreaturesInPlay().anyMatch(c -> !c.isPhasedOut()
+                    && !c.hasKeyword(Keyword.SHROUD) && !c.hasKeyword(Keyword.HEXPROOF));
+            final CardCollection lib = CardLists.filter(ai.getCardsIn(ZoneType.Library),
+                    c -> c.isArtifact() && !isHarmful(c));
+            final List<String> keys = ai.getRegisteredPlayer() == null ? new ArrayList<>()
+                    : ai.getRegisteredPlayer().getDeck().getKeyCards(); // a copy (Deck.getKeyCards)
+            for (final Card c : ai.getCardsIn(ZoneType.Hand, ZoneType.Battlefield)) {
+                keys.remove(c.getName());
+            }
+            for (int x = top; x >= MIN_FETCH_CMC; x--) {
+                final int cap = x;
+                final CardCollection fetchable = CardLists.filter(lib, c -> c.getCMC() <= cap);
+                if (fetchable.isEmpty()) {
+                    return -1; // a lower X only shrinks the reach
+                }
+                Card key = null;
+                for (final String k : keys) {
+                    final CardCollection named = CardLists.filter(fetchable, CardPredicates.nameEquals(k));
+                    if (!named.isEmpty()) {
+                        key = named.getFirst();
+                        break;
+                    }
+                }
+                if (key != null) { // the resolution returns it before anything else
+                    return worthFetching(key, haveCreature, haveOppTarget)
+                            ? Math.max(key.getCMC(), MIN_FETCH_CMC) : -1;
+                }
+                final CardCollection reach = CardLists.filter(fetchable,
+                        c -> !(c.getType().isLegendary() && ai.isCardInPlay(c.getName())));
+                if (reach.isEmpty()) {
+                    return -1; // the resolution would take an unfiltered card at random
+                }
+                final CardCollection picks;
+                if (reach.allMatch(CardPredicates.CREATURES)) {
+                    final Card bestCreature = ComputerUtilCard.getBestCreatureAI(reach);
+                    picks = bestCreature == null ? new CardCollection() : new CardCollection(bestCreature);
+                } else {
+                    picks = CardLists.filter(reach, c -> c.getCMC() == cap);
+                }
+                if (picks.isEmpty()) {
+                    continue; // nothing costs exactly x: announce less
+                }
+                boolean all = true;
+                for (final Card p : picks) {
+                    if (!worthFetching(p, haveCreature, haveOppTarget)) {
+                        all = false;
+                        break;
+                    }
+                }
+                if (all) {
+                    return x;
+                }
+            }
+            return -1;
+        }
+
+        // Nonland, mana value >= MIN_FETCH_CMC, can enter, its own NeedsToPlay(Var) met (judged
+        // without an SA, so the WillAttack special case never runs combat code), an Equipment only
+        // with a creature to carry it, an activated ability aimed at our creature only with one
+        // (Crooked Scales' DBPump, an equip) and one aimed at an opponent's creature only with one
+        // there that is neither shroud nor hexproof (Crooked Scales' root: PumpAi refuses it with
+        // TargetingFailed otherwise), and no AI:RemoveDeck:All card the AI could not use - except an
+        // Equipment that attaches itself on entering (Embercleave: the AI never activates its equip,
+        // but the enters trigger puts it on a creature).
+        private static boolean worthFetching(final Card c, final boolean haveCreature, final boolean haveOppTarget) {
+            if (c.isLand() || c.getCMC() < MIN_FETCH_CMC || ComputerUtil.isETBprevented(c)
+                    || ComputerUtilCard.checkNeedsToPlayReqs(c, null) != AiPlayDecision.WillPlay) {
+                return false;
+            }
+            if (c.isEquipment() && !haveCreature) {
+                return false;
+            }
+            for (final SpellAbility a : c.getNonManaAbilities()) {
+                if (a.isSpell()) {
+                    continue;
+                }
+                for (final SpellAbility part : partsOf(a)) {
+                    final String tgts = part.getParam("ValidTgts");
+                    if (tgts == null) {
+                        continue;
+                    }
+                    for (final String t : tgts.split(",")) {
+                        if (("Creature.YouCtrl".equals(t.trim()) && !haveCreature)
+                                || ("Creature.OppCtrl".equals(t.trim()) && !haveOppTarget)) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return !ComputerUtilCard.isCardRemAIDeck(c) || (c.isEquipment() && attachesItselfOnEntry(c));
+        }
+
+        private static boolean attachesItselfOnEntry(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() == TriggerType.ChangesZone && "Battlefield".equals(t.getParam("Destination"))
+                        && "Card.Self".equals(t.getParam("ValidCard")) && t.hasParam("Execute")
+                        && c.getSVar(t.getParam("Execute")).startsWith("DB$ Attach")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean sacrificesForMana(final Card c) {
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                if (sacrificesForMana(ma)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean sacrificesForMana(final SpellAbility ma) {
+            return ma.getPayCosts() != null && ma.getPayCosts().hasSpecificCostType(CostSacrifice.class);
+        }
+
+        // One mana per produced symbol (a Signet's "U R" is two), but a Combo choice is ONE mana:
+        // ComputerUtilMana.getAvailableManaEstimate splits "Combo U R" into three, which would count
+        // Talisman of Creativity and Shivan Reef as three mana each and send X past what canPayCost
+        // can pay, every main 2, without ever falling back to a lower X.
+        private static int producedPerActivation(final Card src, final SpellAbility ma) {
+            final String produced = ma.getParamOrDefault("Produced", "");
+            final int symbols = produced.isEmpty() || produced.startsWith("Combo") ? 1 : produced.split(" ").length;
+            return symbols * AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+        }
+
+        // getAvailableManaEstimate(ai, true) copied (not refactored) with three changes:
+        // producedPerActivation above, sacrifice-for-mana abilities skipped on request, and sources
+        // the payer will refuse as held for another spell, a combat trick or (outside Main 2) a Main-2
+        // spell (ComputerUtilMana.isManaSourceReserved's memory checks) not counted. RNG-free: it reads the
+        // memory sets but never reaches isManaSourceReserved's percentTrue.
+        private static int castableMana(final Player ai, final boolean skipSacMana) {
+            int available = ai.getManaPool().totalMana();
+            int producedWithCost = 0;
+            boolean hasSourcesWithNoManaCost = false;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (src.getManaAbilities().isEmpty() || heldElsewhere(ai, src)) {
+                    continue;
+                }
+                int maxProduced = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || (skipSacMana && sacrificesForMana(ma))) {
+                        continue;
+                    }
+                    final int cost = ma.getPayCosts().getCostMana() != null
+                            ? ma.getPayCosts().getCostMana().convertAmount() : 0;
+                    final int total = producedPerActivation(src, ma) - cost;
+                    if (cost > 0) {
+                        producedWithCost += total;
+                    } else {
+                        hasSourcesWithNoManaCost = true;
+                    }
+                    maxProduced = Math.max(maxProduced, total);
+                }
+                available += maxProduced;
+            }
+            if (producedWithCost > 0 && !hasSourcesWithNoManaCost) {
+                available -= producedWithCost;
+            }
+            return available;
+        }
+
+        // the sources ComputerUtilMana.isManaSourceReserved refuses, in the phases it refuses them
+        // (HonestMana.isHeld, copied: G2 is frozen). Main-2 holds count from Main 1 on (amendment W).
+        private static boolean heldElsewhere(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+
+        // GhostlyFlicker.hasBlueSources copied with the pip count as a parameter, the same two skips
+        // as castableMana, and meetsManaRestrictions judged on THIS sa, not
+        // host.getFirstSpellAbility() (batch 1's row 77 lesson).
+        private static boolean hasBlueSources(final Player ai, final SpellAbility sa, final int needed,
+                final boolean skipSacMana) {
+            int blue = ai.getManaPool().getAmountOfColor(MagicColor.BLUE);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (blue >= needed) {
+                    break;
+                }
+                if (heldElsewhere(ai, src)) {
+                    continue;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getManaPart() == null || !ma.canPlay() || (skipSacMana && sacrificesForMana(ma))
+                            || !ma.getManaPart().meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final String produced = ma.getManaPart().getOrigProduced();
+                    if (produced.contains("U") || produced.contains("Any") || produced.contains("Chosen")
+                            || produced.startsWith("Combo")) {
+                        blue++;
+                        break;
+                    }
+                }
+            }
+            return blue >= needed;
+        }
+    }
+
     // Reverse the Sands
     //
     // LifeSetAi refuses every Redistribute SetLife outright; this is the cast
