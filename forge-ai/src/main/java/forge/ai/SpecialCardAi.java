@@ -18420,6 +18420,59 @@ public class SpecialCardAi {
         }
     }
 
+    // Marsh Flitter (dead-card batch 3, row 35)
+    // "Flying. When Marsh Flitter enters, create two 1/1 black Goblin Rogue creature tokens.
+    // Sacrifice a Goblin: Marsh Flitter has base power and toughness 3/3 until end of turn."
+    // ({3}{B} 1/1 Faerie Rogue: three bodies and three Rogues for four.) AI:RemoveDeck:All dropped
+    // the owner's creature spell in AiController.getSpellAbilityToPlay's removeIf before any
+    // handler ran, so in 466 holds on 2.0.15+55e709fa6ba its owner never cast it; its only casts
+    // were Play-effect thefts (Etali, Primal Storm; Plargg and Nassari), which never read the hint.
+    // What the hint guards is the Sac-a-Goblin Animate: AnimateAi.checkApiLogic approves any
+    // untapped, unsick creature whose new base P/T beats its current one at our own beginning of
+    // combat, so stock would trade a Goblin body for +2/+2 until end of turn every turn. The script
+    // KEEPS the hint, so the -10 sort (ComputerUtilAbility.saEvaluator) and every other
+    // isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) still refuse it, and
+    // the G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through: the owner's
+    // own creature spell from hand, never a Play-effect cast or a copy, in the owner's Main 2 with
+    // an empty stack, with no held mana (noManaHeld) and the engine-priced cost (test-mode
+    // calculateManaCost) within HonestMana (G2), held sources skipped, in total and in black.
+    // Gift of Doom's readmit (batch 2, row 104) is the shape, with PermanentCreature for Attach.
+    // Main 2 is Gift of Doom's window: the stock creature path waits for it anyway (a Main-1
+    // Flitter declines at PermanentAi.checkPhaseRestrictions' Main-2 wait, before any draw), and
+    // the readmit skips HonestMana's scan everywhere else. Readmitted, the Flitter stays at the
+    // sort's tail: sortCreatureSpells re-deals the creature slots by
+    // EvaluateCreatureSpellComparator, which carries the same -10, so it keeps the last creature
+    // slot, behind every positive-key spell ability, every other slot keeps its occupant, and the
+    // Flitter gets the Main-2 mana they leave. The stock PermanentCreatureAi path then judges the
+    // cast (the ETB check approves the untargeted tokens through TokenAi.doTriggerNoCost); its
+    // first draw is canPayCost's, in a window G2 judged payable. The Animate stays filtered:
+    // readmit answers false for any non-spell. Reads only: no random number, nothing held or
+    // remembered (its only writes are G2's setActivatingPlayer on the mana abilities it reads), so
+    // a refusal is the old filter.
+    public static class MarshFlitter {
+        public static final String NAME = "Marsh Flitter";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !ai.equals(host.getOwner()) || !host.isInZone(ZoneType.Hand)) {
+                return false; // the Animate, a thief's or a Play-effect cast keep the filter
+            }
+            final Game game = ai.getGame();
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLACK)
+                            >= Math.max(1, cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK));
+        }
+    }
+
     // Mass Diminish
     //
     // Until our next turn, creatures target player controls have base power and
@@ -23610,8 +23663,8 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 16, 17 and 21, keepOff for batch 2's row 68. A case must draw no random number and hold
-    // nothing, so that its false is exactly the old filter.
+    // 5, 16, 17, 21 and 35, keepOff for batch 2's row 68. A case must draw no random number and
+    // hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -23643,6 +23696,8 @@ public class SpecialCardAi {
                     return EdgeOfAutumn.readmit(ai, sa);
                 case DawnglareInvoker.NAME:
                     return DawnglareInvoker.readmit(ai, sa);
+                case MarshFlitter.NAME:
+                    return MarshFlitter.readmit(ai, sa);
                 default:
                     return false;
             }
