@@ -6731,6 +6731,72 @@ public class SpecialCardAi {
         }
     }
 
+    // Dawnglare Invoker (dead-card batch 3, row 21)
+    // "Flying. {8}: Tap all creatures target player controls." ({2}{W} creature, 2/1 Kor Wizard.)
+    // AI:RemoveDeck:All dropped the owner's creature spell (and the {8} ability) in
+    // AiController.getSpellAbilityToPlay's removeIf before any handler ran, so its owner never cast
+    // it on any engine (0 owner casts in 1,097 carrier rows on 2.0.15+55e709fa6ba; its casts were
+    // Play-effect thefts, which never read the hint). The script keeps the hint: stock TapAllAi
+    // would spend {8} in our upkeep, draw step or Main 1 to tap one opposing creature, or on the
+    // opponent's turn whenever they have one untapped, and the -10 sort
+    // (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck reader (steal, exchange,
+    // copy, clone and tutor pickers) still refuse it. The G3 dispatcher (RemoveDeckFilter.readmit)
+    // lets exactly one ability through AiController's filter: the owner's own creature spell from
+    // hand, not a Play-effect cast and not a copy, and only in a window the stock path would cast
+    // it in and real mana pays for, so every other pass is the stock pass:
+    // - our own main phase with an empty stack (canCastTiming's window for a sorcery-speed
+    //   creature; PermanentCreatureAi's flash branches are never entered);
+    // - Main 2, or Main 1 when the stock PermanentAi.checkPhaseRestrictions would cast it there
+    //   (ComputerUtil.castPermanentInMain1: a haste giver such as the carriers' Lightning Greaves);
+    // - no live mana reservation (RemoveDeckFilter.noManaHeld, the morph family's precondition);
+    // - G2 (HonestMana, held sources skipped) covers the engine's test-mode calculateManaCost in
+    //   total and in white (Gift of Doom's colour check), so a readmitted spell never reaches
+    //   ComputerUtilCost.canPayCost, whose test payment draws MyRandom per source it tries, in a
+    //   window that cannot pay for it.
+    // Value floor: the body. A 2/1 flier for 3 has no ETB, upkeep cost or drawback, so there is no
+    // worthless or self-harming moment the stock checks behind the filter miss (Patron of the
+    // Nezumi's reasoning); they judge the rest (zero toughness, curses, damage on the cast).
+    // Under-counts (a Signet's filter ability, mana multipliers) only lose a window. Draws nothing,
+    // holds nothing and remembers nothing; its only writes are setActivatingPlayer on a hand SA
+    // with no activator yet (as getOriginalAndAltCostAbilities does right after the filter) and on
+    // the mana abilities G2 reads. A thief's copy fails the owner and hand checks, and a
+    // Play-effect theft never reaches this filter (canPlayFromEffectAI).
+    public static class DawnglareInvoker {
+        public static final String NAME = "Dawnglare Invoker";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || sa.isCopied() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // the {8} ability, a theft, a Play-effect cast: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return false;
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ph.is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait, answered before the list sees the spell
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
+        }
+    }
+
     // Day of the Dragons - judged from its ETB exile trigger (ChangeZoneAllAi.doTriggerNoCost,
     // non-mandatory only): trade our creatures for the same number of 5/5 flying Dragons
     // only when that is a clear upgrade. Reads game state only: no token prototype (TokenDb
@@ -23544,7 +23610,7 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 16 and 17, keepOff for batch 2's row 68. A case must draw no random number and hold
+    // 5, 16, 17 and 21, keepOff for batch 2's row 68. A case must draw no random number and hold
     // nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
@@ -23575,6 +23641,8 @@ public class SpecialCardAi {
                     return EaterOfHope.readmit(ai, sa);
                 case EdgeOfAutumn.NAME:
                     return EdgeOfAutumn.readmit(ai, sa);
+                case DawnglareInvoker.NAME:
+                    return DawnglareInvoker.readmit(ai, sa);
                 default:
                     return false;
             }
