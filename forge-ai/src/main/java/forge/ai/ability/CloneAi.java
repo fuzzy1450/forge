@@ -292,6 +292,15 @@ public class CloneAi extends SpellAbilityAi {
      * @see forge.ai.SpellAbilityAi#checkPhaseRestrictions(forge.game.player.Player, forge.game.spellability.SpellAbility, forge.game.phase.PhaseHandler)
      */
     protected boolean checkPhaseRestrictions(final Player ai, final SpellAbility sa, final PhaseHandler ph) {
+        if (SpecialCardAi.Mirrorweave.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dead-card batch 3, row 77: the opponent's declare-attackers step (batch 1, judged as
+            // before) and, new, its declare-blockers step, judged on the declared blocks; both need
+            // attackers. In declare-attackers this is exactly the stock answer below (the first
+            // clause needs our own turn, the third MAIN2). SpecialCardAi.Mirrorweave.consider
+            // dispatches on the step. Draws nothing.
+            return !ph.isPlayerTurn(ai) && ph.getCombat() != null && !ph.getCombat().getAttackers().isEmpty()
+                    && (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS));
+        }
         // don't use instant speed clone abilities outside computers
         // Combat_Begin step
         if (!ph.is(PhaseType.COMBAT_BEGIN)

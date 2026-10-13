@@ -18628,7 +18628,7 @@ public class SpecialCardAi {
 
     // Mirrorweave
     // "Each other creature becomes a copy of target nonlegendary creature until end of turn."
-    // A fog by copy, cast only inside the one window CloneAi.checkPhaseRestrictions opens for a
+    // A fog by copy, judged first inside the window CloneAi.checkPhaseRestrictions opens for every
     // Clone spell: the opponent's declare-attackers step, stack empty. Necessity: the attack on us
     // is lethal even after each creature we can block with absorbs as many of the biggest attackers
     // as it may block (canBlockAny / canBlockAdditional; evasion ignored, which over-credits our
@@ -18644,7 +18644,12 @@ public class SpecialCardAi {
     // withoutAbilities (its pump scan pays through canPayCost, whose mana test can roll the main-2
     // reservation chance) and nothing else below reaches MyRandom, so a declined evaluation leaves
     // the game exactly where the stock path (cloneTgtAI -> CantPlayAi) left it.
+    // Dead-card batch 3, row 77: a second window, the opponent's declare-blockers step (the name
+    // gate in CloneAi.checkPhaseRestrictions opens both steps), judged in considerAfterBlocks on
+    // the declared blocks. Everything above describes the declare-attackers branch, unchanged.
     public static class Mirrorweave {
+        public static final String NAME = "Mirrorweave";
+        private static final int MANA_VALUE = 4;          // {2}{W/U}{W/U}
         // Keyword statics (Flying, Vigilance, Defender, Shroud, ...) cannot change what a
         // zero-block attack deals.
         private static final Set<StaticAbilityMode> KEYWORD_STATIC_MODES = EnumSet.of(
@@ -18654,6 +18659,9 @@ public class SpecialCardAi {
                 Keyword.INFECT, Keyword.TOXIC, Keyword.POISONOUS, Keyword.AFFLICT);
 
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (ai.getGame().getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS)) {
+                return considerAfterBlocks(ai, sa);          // batch 3, row 77
+            }
             final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             final Game game = ai.getGame();
             final PhaseHandler ph = game.getPhaseHandler();
@@ -18714,6 +18722,166 @@ public class SpecialCardAi {
             }
             sa.getTargets().add(best);
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Dead-card batch 3, row 77. The same fog by copy, judged after blocks. The judgment above
+        // credits each of our creatures against the biggest attackers whether it can block them
+        // or not (flying, menace, shadow), asks the copy to save us with no blocks at all, and
+        // tests life only; under the Commander variant (2.0.15+8e5de3bc7e8) 21 commander damage
+        // is a loss too. Here the blocks are declared, so only what gets through counts, on both
+        // sides. Necessity: the declared blocks leave a lethal hit -- life, net of what our
+        // lifelink blockers gain in the same damage step, 21 commander damage or poison
+        // (CombatShrinkAll.defuseLevel's "pre"). Sufficiency: under an upper bound some inert
+        // template leaves us alive on all three counts and kills none of ours by toughness.
+        // Draw-free like defuseLevel: getAttack, isCombatDamagePrevented, predictDamageTo(..,
+        // true), getDamageToKill, evaluateCreature, getValidCardsToTarget; no damageIfUnblocked
+        // pump scan, no lifeInDanger. The mana floor runs before any combat math.
+        private static AiAbilityDecision considerAfterBlocks(final Player ai, final SpellAbility sa) {
+            final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            final Game game = ai.getGame();
+            final Combat combat = game.getCombat();
+            if (combat == null || game.getPhaseHandler().isPlayerTurn(ai) || !game.getStack().isEmpty()
+                    || ai.cantLose() || game.getReplacementHandler().isPreventCombatDamageThisTurn()) {
+                return no;
+            }
+            final CardCollection attackers = combat.getAttackersOf(ai);
+            if (attackers.isEmpty()) {
+                return no;
+            }
+            // G2: never getAvailableManaEstimate (it counts the words of Produced$). Both hybrid
+            // pips need W or U, and HonestMana counts one multicolour source toward each colour it
+            // can make, so W + U would pass on a lone Command Tower; two of one colour pay both.
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < MANA_VALUE
+                    || Math.max(mana.colour(MagicColor.WHITE), mana.colour(MagicColor.BLUE)) < 2) {
+                return no;
+            }
+            final boolean lifeCounts = ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife();
+            final boolean poisonCounts = ai.canReceiveCounters(CounterEnumType.POISON);
+            final int poisonToLose = game.getRules().getPoisonCountersToLose();
+
+            // Necessity, on the declared blocks.
+            int pre = 0, poisonPre = 0;
+            boolean cmdrLethal = false;
+            for (final Card a : attackers) {
+                final int dealt = throughNow(ai, combat, a);
+                final boolean infect = a.isInfectDamage(ai);
+                pre += infect ? 0 : dealt;
+                poisonPre += CombatShrinkAll.poisonFrom(a, infect, a.hasKeyword(Keyword.TOXIC), dealt,
+                        a.hasDoubleStrike() ? 2 : 1);
+                cmdrLethal |= a.isCommander() && dealt > 0 && ai.getCommanderDamage(a) + dealt >= 21;
+            }
+            if (!((lifeCounts && ai.getLife() + lifelinkGain(ai, combat) - pre < 1) || cmdrLethal
+                    || (poisonCounts && ai.getPoisonCounters() + poisonPre >= poisonToLose))) {
+                return no;
+            }
+
+            sa.resetTargets();   // batch-1 A1: the SA is persistent
+            Card best = null;
+            int bestDmg = Integer.MAX_VALUE;
+            int bestEval = Integer.MAX_VALUE;
+            final Set<String> seen = new HashSet<>();
+            for (final Card t : CardUtil.getValidCardsToTarget(sa)) {
+                // A copy takes t's copiable values only, so one bound per (name, base P/T) off the
+                // combat; a combatant template keeps its own stats and is judged one by one.
+                if (!combat.isAttacking(t) && !combat.isBlocking(t)
+                        && !seen.add(t.getName() + "|" + t.getBasePower() + "|" + t.getBaseToughness())) {
+                    continue;
+                }
+                if (!inertTemplate(t) || killsOneOfOurs(ai, t)) {
+                    continue;
+                }
+                int post = 0, poisonPost = 0;
+                boolean cmdrLethalAfter = false;
+                for (final Card a : attackers) {
+                    final int d;
+                    if (a.equals(t)) {
+                        d = throughNow(ai, combat, a);                       // the template keeps its own stats
+                    } else if (!blockedNow(combat, a) || a.hasKeyword(Keyword.TRAMPLE) || t.hasKeyword(Keyword.TRAMPLE)) {
+                        d = boundAfterCopy(ai, a, t);                        // unblocked, or a possible trampler: all of it
+                    } else {
+                        d = 0;                                               // stays blocked, no trample
+                    }
+                    post += d;                                               // infect counted as life too (upper bound)
+                    poisonPost += CombatShrinkAll.poisonFrom(a, a.isInfectDamage(ai), a.hasKeyword(Keyword.TOXIC), d,
+                            a.hasDoubleStrike() ? 2 : 1);
+                    cmdrLethalAfter |= a.isCommander() && d > 0 && ai.getCommanderDamage(a) + d >= 21;
+                }
+                // Our blockers become copies too: their lifelink is not credited here.
+                if (cmdrLethalAfter || (lifeCounts && ai.getLife() - post < 1)
+                        || (poisonCounts && ai.getPoisonCounters() + poisonPost >= poisonToLose)) {
+                    continue;
+                }
+                final int eval = ComputerUtilCard.evaluateCreature(t);
+                if (post < bestDmg || (post == bestDmg && eval < bestEval)) {
+                    best = t;
+                    bestDmg = post;
+                    bestEval = eval;
+                }
+            }
+            if (best == null) {
+                return no;
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Blocked, and dealing its damage as a blocked creature (not "as though unblocked").
+        private static boolean blockedNow(final Combat combat, final Card a) {
+            return combat.isBlocked(a)
+                    && !forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(a);
+        }
+
+        // What a reaches us with now (CombatShrinkAll.defuseLevel's "before"): unblocked, its whole
+        // attack; blocked with trample, its excess over lethal damage to its blockers.
+        private static int throughNow(final Player ai, final Combat combat, final Card a) {
+            if (!blockedNow(combat, a)) {
+                return CombatShrinkAll.combatDamageTo(ai, a, ComputerUtilCombat.getAttack(a));
+            }
+            if (!a.hasKeyword(Keyword.TRAMPLE)) {
+                return 0;
+            }
+            int absorbed = 0;
+            for (final Card b : combat.getBlockers(a)) {
+                absorbed += a.hasKeyword(Keyword.DEATHTOUCH) ? 1 : ComputerUtilCombat.getDamageToKill(b, false);
+            }
+            return CombatShrinkAll.combatDamageTo(ai, a, ComputerUtilCombat.getAttack(a) - absorbed);
+        }
+
+        // What our lifelink blockers gain in this combat's damage (skeptic A2): combat damage and
+        // the lifelink gain happen together and state-based actions come after both, so a block by
+        // Atraxa can leave a hit that reads lethal survivable. A blocker facing a first or double
+        // striker may die before it deals damage and is not credited. Life test only.
+        private static int lifelinkGain(final Player ai, final Combat combat) {
+            if (!ai.canGainLife()) {
+                return 0;
+            }
+            int gain = 0;
+            for (final Card b : combat.getAllBlockers()) {
+                if (!ai.equals(b.getController()) || !b.hasKeyword(Keyword.LIFELINK)) {
+                    continue;
+                }
+                final CardCollection blocked = combat.getAttackersBlockedBy(b);
+                boolean struckFirst = false;
+                for (final Card a : blocked) {
+                    struckFirst |= a.hasFirstStrike() || a.hasDoubleStrike();
+                }
+                final int dmg = b.getNetCombatDamage();
+                if (struckFirst || blocked.isEmpty() || dmg <= 0) {
+                    continue;
+                }
+                gain += Math.max(0, ComputerUtilCombat.predictDamageTo(blocked.get(0), dmg, b, true));
+            }
+            return gain;
+        }
+
+        // damageAfterCopy's per-attacker bound (left untouched above): template base power, or the
+        // larger set-P/T, plus pumps and counters; prevention ignored; double strike assumed kept.
+        private static int boundAfterCopy(final Player ai, final Card a, final Card t) {
+            final int pow = Math.max(0, (a.getPTIterable().iterator().hasNext()
+                    ? Math.max(t.getBasePower(), a.getCurrentPower()) : t.getBasePower())
+                    + boostBound(a, true) + a.getPowerBonusFromCounters());
+            return Math.max(pow, ComputerUtilCombat.predictDamageTo(ai, pow, a, true)) * (a.hasDoubleStrike() ? 2 : 1);
         }
 
         private static boolean inertTemplate(final Card t) {
