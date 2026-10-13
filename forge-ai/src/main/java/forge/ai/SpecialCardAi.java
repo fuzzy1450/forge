@@ -9028,6 +9028,69 @@ public class SpecialCardAi {
         }
     }
 
+    // Eater of Hope (dead-card batch 3, row 16)
+    // "Flying. {B}, Sacrifice another creature: Regenerate Eater of Hope. {2}{B}, Sacrifice two
+    // other creatures: Destroy target creature." ({5}{B}{B} creature, 6/4.) AI:RemoveDeck:All
+    // dropped the owner's creature spell in AiController.getSpellAbilityToPlay's removeIf before
+    // any handler ran, so its owner never cast it on any engine (0 owner casts in 610 held games
+    // on 2.0.15+55e709fa6ba; its casts were Silent-Blade Oni and Nathan Drake thefts, which never
+    // read the hint). The script keeps the hint: both activated abilities stay off the list for
+    // every controller (a reanimated or stolen copy included), and the -10 sort
+    // (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck reader (steal, exchange,
+    // copy, clone and tutor pickers) still refuse it. The G3 dispatcher (RemoveDeckFilter.readmit)
+    // lets exactly one ability through AiController's filter: the owner's own creature spell from
+    // hand, not a Play-effect cast, and only in a window the stock path casts it in and G1 pays
+    // for, so every other pass is A's list (ComputerUtilAbility.sortCreatureSpells re-deals the
+    // creature slots once the spell is on it, which would move every other creature one slot
+    // later in a window where it then declines):
+    // - our own main phase with an empty stack (Player.canCastSorcery, canCastTiming's window for
+    //   a sorcery-speed creature; PermanentCreatureAi's flash branches are never entered);
+    // - Main 2, or Main 1 when the stock PermanentAi.checkPhaseRestrictions would cast it there
+    //   (ComputerUtil.castPermanentInMain1: Plunder the Graves' unattached Lightning Greaves);
+    // - G1 (CommanderCastCeiling.affordable, under G4's caller contract): the engine's test-mode
+    //   calculateManaCost (taxes, every RaiseCost and ReduceCost static) against HonestMana (G2,
+    //   held sources skipped), in total and per coloured shard ({B}{B}), so a readmitted spell
+    //   never reaches ComputerUtilCost.canPayCost, whose test payment draws MyRandom per source
+    //   it tries, in a window that cannot pay for it.
+    // Value floor: the body. A 6/4 flier for seven has no ETB, upkeep cost, additional cost, X or
+    // drawback in the cast (the sacrifice costs belong to the abilities, which stay filtered), so
+    // there is no worthless or self-harming moment the stock checks behind the filter miss
+    // (Patron of the Nezumi's reasoning); they judge the rest (zero toughness, curses, damage on
+    // the cast). Under-counts (Golgari Signet's filter ability, Exotic Orchard toward black) only
+    // lose a window. Draws nothing, holds nothing and remembers nothing; its only writes are
+    // setActivatingPlayer on a hand SA with no activator yet and on the mana abilities G2 reads.
+    // A thief's copy fails the owner and hand checks, and a Play-effect cast (Silent-Blade Oni,
+    // Nathan Drake) never reaches this filter (canPlayFromEffectAI).
+    public static class EaterOfHope {
+        public static final String NAME = "Eater of Hope";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // the abilities, a theft, a Play-effect cast: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (!ai.canCastSorcery()) {
+                return false; // canCastTiming's window for a sorcery-speed creature
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // CostAdjustment.adjust reads it (G1's precondition)
+            }
+            if (ai.getGame().getPhaseHandler().is(PhaseType.MAIN1)
+                    && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // PermanentAi's Main-2 wait (Lightning Greaves passes it)
+            }
+            // G1: {5}{B}{B} as the engine prices it vs HonestMana (held sources skipped), total + B
+            return CommanderCastCeiling.affordable(ai, sa);
+        }
+    }
+
     // Ecstatic Beauty (dead-card batch 2, row 59)
     // {2}{R} Sorcery. "Exile the top three cards of your library. You may play those cards until
     // end of turn. Put four time counters on each of those cards that has suspend. Suspend 4-{R}"
@@ -23409,9 +23472,9 @@ public class SpecialCardAi {
     // reads, and a face-down host's getName() is "". A card no case names answers false from both,
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
-    // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's row
-    // 5, keepOff for batch 2's row 68. A case must draw no random number and hold nothing, so that
-    // its false is exactly the old filter.
+    // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
+    // 5 and 16, keepOff for batch 2's row 68. A case must draw no random number and hold nothing,
+    // so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -23437,6 +23500,8 @@ public class SpecialCardAi {
                     return GiftOfDoom.readmit(ai, sa);
                 case BoshIronGolem.NAME:
                     return BoshIronGolem.readmit(ai, sa);
+                case EaterOfHope.NAME:
+                    return EaterOfHope.readmit(ai, sa);
                 default:
                     return false;
             }
