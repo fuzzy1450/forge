@@ -113,6 +113,16 @@ public class CloneAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player aiPlayer, SpellAbility sa, boolean mandatory) {
+        if (!mandatory && "Nanogene Conversion".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // A cast an effect offers (canPlayFromEffectAI), above all Suspend's
+            // last-counter free cast, judged whole in
+            // SpecialCardAi.NanogeneConversion.considerFree: cloneTgtAI below never
+            // picks a target without AILogic CloneBestCreature, so the cast was always
+            // declined and a suspended copy stayed in exile for good. A mandatory cast
+            // keeps the stock best-creature target, and every other Clone card takes
+            // exactly the path it took before this branch.
+            return SpecialCardAi.NanogeneConversion.considerFree(aiPlayer, sa);
+        }
         Card host = sa.getHostCard();
         boolean chance = true;
 

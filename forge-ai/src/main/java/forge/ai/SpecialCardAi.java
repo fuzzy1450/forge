@@ -19711,34 +19711,62 @@ public class SpecialCardAi {
     }
 
     // Nanogene Conversion
-    // One window: our precombat main phase with the stack empty. Every other
+    // Two windows. The hand cast (consider, from CloneAi.canPlay's name gate): our
+    // precombat main phase with the stack empty. A cast offered by an effect
+    // (considerFree, from CloneAi.doTriggerNoCost's name gate when the cast is not
+    // mandatory), above all Suspend's last-counter free cast - The Tenth Doctor's
+    // Allons-y!, The Parting of the Ways and The Eleventh Doctor exile it with time
+    // counters: our turn before attackers are declared (upkeep, draw, main 1,
+    // beginning of combat) with no opposing object on the stack. Every other
     // creature (both sides) becomes a nonlegendary copy of the target until end of
     // turn, so the spell converts creature COUNT into damage. Fire only when that
-    // turns an attack that cannot already kill some opponent (generous upper bound)
-    // into one that does (strict lower bound under AiAttackController.doAssault's
-    // own blocking model, so the attack AI then swings all in), with a template that
-    // hands nothing multiplicative to either side (triggers, activations,
-    // replacement effects, non-trivial statics, lifelink/infect/defender) and kills
-    // none of our creatures. Draw-free: nothing below reaches MyRandom or
+    // makes an attack that kills some opponent (strict lower bound under
+    // AiAttackController.doAssault's own blocking model, so the attack AI then
+    // swings all in), with a template that hands nothing multiplicative to either
+    // side (triggers, activations, replacement effects, non-trivial statics,
+    // lifelink/infect/defender) and kills none of our creatures. The hand cast also
+    // keeps the card while doAssault's model already counts the attack as it stands
+    // lethal (the same strict bound, before the copy); the effect cast has no such
+    // skip, since a declined suspend cast leaves the card in exile for good. An
+    // opponent behind a noncreature Attacks trigger (Revenge of Ravens, Marchesa's
+    // Decree) is never counted. Draw-free: nothing below reaches MyRandom or
     // ComputerUtilCost.canPayCost (whose mana test can roll the main-2 reservation
     // chance), so a declined evaluation leaves the game exactly where the stock
-    // path (CloneAi.checkPhaseRestrictions -> MissingPhaseRestrictions) left it.
+    // path (CloneAi.checkPhaseRestrictions -> MissingPhaseRestrictions; for the
+    // effect cast, cloneTgtAI -> CantPlayAi) left it.
     public static class NanogeneConversion {
         private static final Set<String> STATIC_KEYS = Set.of("Mode", "Affected", "AddPower",
                 "AddToughness", "AddKeyword", "Description", "EffectZone", "Secondary");
 
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            return decide(ai, sa, false);
+        }
+
+        public static AiAbilityDecision considerFree(final Player ai, final SpellAbility sa) {
+            return decide(ai, sa, true);
+        }
+
+        private static AiAbilityDecision decide(final Player ai, final SpellAbility sa, final boolean fromEffect) {
             final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             final Game game = ai.getGame();
             final PhaseHandler ph = game.getPhaseHandler();
 
-            // Routing through CloneAi.canPlay's name gate bypasses the base
-            // class's restriction check, so mirror it here.
-            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
-                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
-            }
-            if (!ph.is(PhaseType.MAIN1, ai) || !game.getStack().isEmpty() || ai.cantWin()) {
-                return no;
+            if (fromEffect) {
+                // The effect grants the cast: no timing restriction to mirror (a
+                // sorcery's would fail in upkeep), and the resolving trigger is still
+                // on the stack (MagicStack keeps it until finishResolving).
+                if (!effectWindow(ai, ph) || ai.cantWin()) {
+                    return no;
+                }
+            } else {
+                // Routing through CloneAi.canPlay's name gate bypasses the base
+                // class's restriction check, so mirror it here.
+                if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+                }
+                if (!ph.is(PhaseType.MAIN1, ai) || !game.getStack().isEmpty() || ai.cantWin()) {
+                    return no;
+                }
             }
             // Any attack cap on the board breaks the count model.
             final GlobalAttackRestrictions restrict =
@@ -19757,14 +19785,15 @@ public class SpecialCardAi {
             int bestMargin = -1;
             for (Player opp : ai.getOpponents()) {
                 if (opp.getLife() <= 0 || opp.cantLose() || opp.cantLoseForZeroOrLessLife()
-                        || !opp.canLoseLife() || visibleFog(opp, ai) || hasMultiBlocker(opp)) {
+                        || !opp.canLoseLife() || visibleFog(opp, ai) || hasMultiBlocker(opp)
+                        || punishesAttacks(opp)) {
                     continue;
                 }
                 final int life = opp.getLife();
-                if (attackUpperBoundNow(ai, opp) >= life) {
-                    continue; // may already be lethal without spending the card
-                }
                 final int blockers = blockersAfterCopy(opp);
+                if (!fromEffect && attackLowerBoundNow(ai, opp, blockers) >= life) {
+                    continue; // doAssault's own count already kills: keep the card
+                }
                 for (Card t : templates) {
                     final int margin = attackLowerBoundAfterCopy(ai, opp, t, blockers) - life;
                     if (margin >= 0 && margin > bestMargin) {
@@ -19779,6 +19808,23 @@ public class SpecialCardAi {
             sa.resetTargets();
             sa.getTargets().add(best);
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The effect cast's window: our turn, attackers not yet declared, and nothing
+        // an opponent put on the stack (a response may be waiting under it). Main 2,
+        // the opponent's turn and every other offer decline, as cloneTgtAI did.
+        private static boolean effectWindow(final Player ai, final PhaseHandler ph) {
+            if (!ph.isPlayerTurn(ai) || ph.getPhase() == null
+                    || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)) {
+                return false;
+            }
+            for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+                final Player activator = si.getActivatingPlayer();
+                if (activator != null && activator.isOpponentOf(ai)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         // Nothing on the template may scale with the number of copies, arm the
@@ -19897,6 +19943,28 @@ public class SpecialCardAi {
             return false;
         }
 
+        // A noncreature permanent of the opponent's with an Attacks trigger that an
+        // attack on that opponent fires (Revenge of Ravens, Marchesa's Decree: the
+        // cards AiAttackController.lifeLostPerAttacker scans for): the count ignores
+        // the life it swings per attacker, and doRevengeOfRavensAttackLogic can call
+        // the alpha off when our life is short. A creature's own trigger (Kazuul) goes
+        // with the copy. Decline whatever the trigger does; read-only, draw-free.
+        private static boolean punishesAttacks(final Player opp) {
+            for (Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isCreature()) {
+                    continue;
+                }
+                for (Trigger tr : c.getTriggers()) {
+                    if (TriggerType.Attacks.equals(tr.getMode()) && tr.hasParam("Attacked")
+                            && tr.zonesCheck(c.getGame().getZoneOf(c))
+                            && tr.matchesValidParam("Attacked", opp)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         // Every untapped opposing creature (a copy too: evasion shared, no death
         // credit), plus every untapped noncreature permanent that
         // AiAttackController.getOpponentCreatures may add as a blocker (a self-Animate
@@ -19954,28 +20022,34 @@ public class SpecialCardAi {
             return false;
         }
 
-        // Generous: every creature that can attack now; tramplers, menace and creatures
-        // the defender cannot block count in full; each opposing creature that can
-        // block at least one of the rest stops only the SMALLEST remaining one.
-        // withoutAbilities: the pump-ability scan pays through canPayCost, which can draw.
-        private static int attackUpperBoundNow(final Player ai, final Player opp) {
-            final CardCollection attackers = CardLists.filter(ai.getCreaturesInPlay(), c -> CombatUtil.canAttack(c, opp));
+        // Strict, on the board as it stands, in doAssault's model (the one
+        // attackLowerBoundAfterCopy mirrors after the copy): every creature of ours that
+        // can attack this opponent now (CombatUtil.canAttack, so haste counts, as it does
+        // for doAssault's attackers), free of attack taxes, at damageIfUnblocked without
+        // abilities (the pump-ability scan pays through canPayCost, which can draw);
+        // creatures no opposing creature can block count in full, and each of
+        // `blockers` stops the BIGGEST of the rest. Trample, menace and non-combat
+        // damage are not credited, so a board this calls short may still be lethal to
+        // doAssault: the card is then spent on a won attack, never on a lost one, since
+        // the cast still needs attackLowerBoundAfterCopy to reach the life total.
+        private static int attackLowerBoundNow(final Player ai, final Player opp, final int blockers) {
+            final Game game = ai.getGame();
             final CardCollection oppCreatures = opp.getCreaturesInPlay();
             int sum = 0;
             final List<Integer> rest = new ArrayList<>();
-            for (Card c : attackers) {
+            for (Card c : ai.getCreaturesInPlay()) {
+                if (!CombatUtil.canAttack(c, opp) || CombatUtil.getAttackCost(game, c, opp) != null) {
+                    continue;
+                }
                 final int d = ComputerUtilCombat.damageIfUnblocked(c, opp, null, true);
-                if (c.hasKeyword(Keyword.TRAMPLE) || c.hasKeyword(Keyword.MENACE)
-                        || !CombatUtil.canBeBlocked(c, oppCreatures, null)) {
+                if (!CombatUtil.canBeBlocked(c, oppCreatures, null)) {
                     sum += d;
                 } else {
                     rest.add(d);
                 }
             }
-            Collections.sort(rest);
-            final int blockers = CardLists.count(oppCreatures,
-                    b -> CombatUtil.canBlock(b) && CombatUtil.canBlockAtLeastOne(b, attackers));
-            for (int i = Math.min(blockers, rest.size()); i < rest.size(); i++) {
+            rest.sort(Collections.reverseOrder());
+            for (int i = blockers; i < rest.size(); i++) {
                 sum += rest.get(i);
             }
             return sum;
