@@ -2520,6 +2520,76 @@ public class SpecialCardAi {
         }
     }
 
+    // Bosh, Iron Golem (dead-card batch 3, row 5)
+    // "Trample. {3}{R}, Sacrifice an artifact: Bosh, Iron Golem deals damage equal to the
+    // sacrificed artifact's mana value to any target." ({8} legendary artifact creature, 6/7.)
+    // AI:RemoveDeck:All dropped the owner's creature spell in AiController.getSpellAbilityToPlay's
+    // removeIf before any handler ran, so its owner never cast it on any engine (0 owner casts in
+    // 1,402 carrier rows on 2.0.15+55e709fa6ba; its casts were Nathan Drake, Gonti, Jace and Henzie
+    // thefts, which never read the hint). The script keeps the hint: the activated ability stays
+    // off the list (stock DamageDealAi reads X = Sacrificed$CardManaCost as 0 before payment and
+    // refuses at dmg <= 0 anyway), and the -10 sort (ComputerUtilAbility.saEvaluator) and every
+    // other isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) still refuse
+    // it. The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through
+    // AiController's filter: the owner's own creature spell from hand, not a Play-effect cast, and
+    // only in a window the stock path would cast it in and real mana pays for, so every other
+    // pass is the stock pass:
+    // - our own main phase with an empty stack (canCastTiming's window for a sorcery-speed
+    //   creature; PermanentCreatureAi's flash branches are never entered);
+    // - Main 2, or Main 1 when the stock PermanentAi.checkPhaseRestrictions would cast it there
+    //   (ComputerUtil.castPermanentInMain1: a haste giver such as the carriers' Swiftfoot Boots);
+    // - no copy of it in play (PermanentAi.checkApiLogic's legend check, read early so the spell
+    //   does not sit on the list for a stock refusal);
+    // - no live mana reservation (RemoveDeckFilter.noManaHeld, the morph family's precondition);
+    // - G2 (HonestMana, held sources skipped) covers the engine's test-mode calculateManaCost
+    //   (Etherium Sculptor, Saheeli's +1 and every other RaiseCost and ReduceCost static), so a
+    //   readmitted spell never reaches ComputerUtilCost.canPayCost, whose test payment draws
+    //   MyRandom per source it tries, in a window that cannot pay for it.
+    // Value floor: the body. A 6/7 trampler for 8 has no ETB, upkeep cost or drawback, so there is
+    // no worthless or self-harming moment the stock checks behind the filter miss (Patron of the
+    // Nezumi's reasoning); they judge the rest (zero toughness, curses, damage on the cast).
+    // Under-counts (a Signet's filter ability, Caged Sun, mana multipliers) only lose a window.
+    // Draws nothing, holds nothing and remembers nothing; its only writes are setActivatingPlayer
+    // on a hand SA with no activator yet (as getOriginalAndAltCostAbilities does right after the
+    // filter) and on the mana abilities G2 reads. A thief's copy fails the owner and hand checks,
+    // and Nathan Drake's DB$ Play never reaches this filter (canPlayFromEffectAI).
+    public static class BoshIronGolem {
+        public static final String NAME = "Bosh, Iron Golem";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // the activated ability, a theft, a Play-effect cast: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return false;
+            }
+            if (!host.ignoreLegendRule() && ai.isCardInPlay(NAME)) {
+                return false; // the stock legend refusal, read early
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ph.is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait, answered before the list sees the spell
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            return HonestMana.of(ai, sa, true).total() >= cost.getConvertedManaCost();
+        }
+    }
+
     // Brain in a Jar
     public static class BrainInAJar {
         public static boolean consider(final Player ai, final SpellAbility sa) {
@@ -23339,8 +23409,9 @@ public class SpecialCardAi {
     // reads, and a face-down host's getName() is "". A card no case names answers false from both,
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
-    // to that class: readmit for rows 36, 41, 60, 63, 82, 89 and 104, keepOff for row 68. A case
-    // must draw no random number and hold nothing, so that its false is exactly the old filter.
+    // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's row
+    // 5, keepOff for batch 2's row 68. A case must draw no random number and hold nothing, so that
+    // its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -23364,6 +23435,8 @@ public class SpecialCardAi {
                     return ShaperParasite.readmit(ai, sa);
                 case GiftOfDoom.NAME:
                     return GiftOfDoom.readmit(ai, sa);
+                case BoshIronGolem.NAME:
+                    return BoshIronGolem.readmit(ai, sa);
                 default:
                     return false;
             }
