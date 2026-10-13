@@ -3,8 +3,8 @@ ManaCost:1 G
 Types:Enchantment Aura
 K:Enchant:Creature
 SVar:AttachAILogic:Curse
+SVar:AttachAITgts:Creature.IsCommander+basePowerGE3+YouDontOwn+withoutWard,Creature.IsCommander+counters_EQ0_P1P1+YouDontOwn+withoutWard,Creature.basePowerGE5+YouDontOwn+withoutWard
 T:Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ TrigDraw | TriggerDescription$ When CARDNAME enters, draw a card.
 SVar:TrigDraw:DB$ Draw | Defined$ You | NumCards$ 1
 S:Mode$ Continuous | AffectedDefined$ Enchanted | Affected$ Creature | SetPower$ 3 | SetToughness$ 3 | SetColor$ Green | RemoveAllAbilities$ True | AddType$ Creature & Elk | RemoveCardTypes$ True | RemoveCreatureTypes$ True | Description$ Enchanted creature loses all abilities and is a green Elk creature with base power and toughness 3/3. (It loses all other card types and creature types.)
-AI:RemoveDeck:All
 Oracle:Enchant creature\nWhen Kenrith's Transformation enters, draw a card.\nEnchanted creature loses all abilities and is a green Elk creature with base power and toughness 3/3. (It loses all other card types and creature types.)
