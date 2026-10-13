@@ -4544,10 +4544,16 @@ public class SpecialCardAi {
     // shards are checked through the total only; hand sources and mana multipliers are not
     // counted (HonestMana). RNG-free for a spell with no Announce$ NumTimes (calculateManaCost
     // test-pays it) and no cost feature whose adjustment asks a controller (Assist, Delve,
-    // Convoke, Improvise, Offering, Emerge, Waterbend); none of its callers has one. sa's
-    // activating player must be set, as it is on every checkApiLogic path. Called only from
-    // each commander row's own name gate; frozen once accepted (a row that needs other
-    // semantics keeps a private copy).
+    // Convoke, Improvise, Offering, Emerge, Waterbend); none of its callers has one. Called
+    // from a row's own name gate or G3 readmit case, commander or not, with the activator set:
+    // it is set on every checkApiLogic path, and Card.getAllPossibleAbilities sets it on every
+    // ability before either reader of G3's readmit (AiController.getSpellAbilityToPlay's
+    // removeIf, ManifoldKey.filteredOut) asks. Batch 2's callers are commander rows. Batch 3
+    // (G4 widened this contract, by comment only) adds, each in its own row's commit: Talion,
+    // the Kindly Lord (row 1, a commander name gate); Eater of Hope (16) and Vish Kal, Blood
+    // Arbiter (49), G3 readmit cases; Divine Reckoning (18), Praetor's Grasp (56), Single
+    // Combat (70) and Archon of Valor's Reach (44), name gates. Frozen once accepted (a row
+    // that needs other semantics keeps a private copy).
     public static class CommanderCastCeiling {
         // the five coloured shards, in MagicColor.WUBRG order
         private static final forge.card.mana.ManaCostShard[] SHARDS = {
