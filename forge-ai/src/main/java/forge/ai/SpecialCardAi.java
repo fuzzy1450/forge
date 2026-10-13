@@ -9161,6 +9161,77 @@ public class SpecialCardAi {
         }
     }
 
+    // Edge of Autumn (dead-card batch 3, row 17)
+    // {1}{G} Sorcery. "If you control four or fewer lands, search your library for a basic land
+    // card, put it onto the battlefield tapped, then shuffle. Cycling--Sacrifice a land." The
+    // spell is Rampant Growth with a land-count condition (ConditionPresent$ Land.YouCtrl,
+    // ConditionCompare$ LE4, checked again at resolution). AI:RemoveDeck:All dropped both
+    // abilities in AiController.getSpellAbilityToPlay's removeIf before any handler ran, so its
+    // owner never cast it on any engine (0 owner casts in 1,195 carrier rows on 2.0.15+55e709fa6ba;
+    // every cast was a theft, Silent-Blade Oni, Gonti, Etali or Nathan Drake, which never read the
+    // hint). The script keeps the hint because of the cycling: DrawAi lifts its Main-2 wait for any
+    // sacrifice cost and prices the land through ComputerUtil.getCardPreference(SacCost) at every
+    // priority (a SacMe shuffle, the land-rich rule), so a hint-free card would be judged, and
+    // could pay a land, at every consult while held. The -10 sort (ComputerUtilAbility.saEvaluator)
+    // and every other isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) still
+    // refuse it. The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through
+    // AiController's filter: the owner's own cast from hand, not a Play-effect cast or a copy,
+    // - in a sorcery window (Player.canCastSorcery: our turn, a main phase, an empty stack);
+    // - while the owner controls MAX_LANDS or fewer lands (the card's own condition, so the spell
+    //   always resolves into a land);
+    // - with no live mana reservation (RemoveDeckFilter.noManaHeld, the morph family's
+    //   precondition);
+    // - with a basic land in its library (nothing to fetch otherwise);
+    // - when {1}{G} as the engine prices it (test-mode calculateManaCost: taxes, every RaiseCost
+    //   and ReduceCost static) fits HonestMana (G2, held sources skipped) in total and in green.
+    // The stock hidden-origin path (ChangeZoneAi.hiddenOriginCanPlayAI, then checkConditions'
+    // LE4) decides from there, exactly as for Rampant Growth, and basicManaFixing picks the land.
+    // The land count is read from our own battlefield; the stock checkConditions re-checks the
+    // real condition without drawing, so a mismatch is at worst a decline that draws nothing.
+    // Value floor: the card's own effect. A basic land onto the battlefield at four or fewer lands
+    // is never wasted; there is deliberately no "needs the ramp" preference on top of it.
+    // The cycling AB, a thief's copy (Silent-Blade Oni, Gonti, Etali, Nathan Drake: Play effects
+    // that never reach this filter; a granted cast from exile fails the hand and owner checks) and
+    // every other isCardRemAIDeck reader stay as they were.
+    // Reads only: no random number, nothing held or remembered, so a refusal is the old filter.
+    // In a 2-seat game the first new draw is canPayCost's reservation roll in a window G2 judged
+    // payable; in a pod, hiddenOriginCanPlayAI's choosePreferredDefenderPlayer draws before it.
+    public static class EdgeOfAutumn {
+        public static final String NAME = "Edge of Autumn";
+        // the script's ConditionCompare$ LE4 over ConditionPresent$ Land.YouCtrl
+        public static final int MAX_LANDS = 4;
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand) || !ai.equals(host.getOwner())) {
+                return false; // the cycling AB, a theft, a Play-effect cast: the hint as it was
+            }
+            if (!ai.canCastSorcery()) {
+                return false; // cheapest: every opponent-turn and non-main priority ends here
+            }
+            if (CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS) > MAX_LANDS) {
+                return false; // the spell would resolve to nothing
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            if (!ai.getCardsIn(ZoneType.Library).anyMatch(CardPredicates.BASIC_LANDS)) {
+                return false; // nothing to fetch (the stock path declines too, without drawing)
+            }
+            // G2: {1}{G} as the engine prices it vs HonestMana (held sources skipped), total + G
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int total = cost.getConvertedManaCost();
+            final int green = cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+            if (total <= 0 && green <= 0) {
+                return true; // free: nothing to count
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= total && mana.colour(MagicColor.GREEN) >= green;
+        }
+    }
+
     // Electric Seaweed
     // "When this creature enters, until end of turn, whenever another creature
     // dies, this creature deals 1 damage to each non-Wall creature."
@@ -23473,8 +23544,8 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5 and 16, keepOff for batch 2's row 68. A case must draw no random number and hold nothing,
-    // so that its false is exactly the old filter.
+    // 5, 16 and 17, keepOff for batch 2's row 68. A case must draw no random number and hold
+    // nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -23502,6 +23573,8 @@ public class SpecialCardAi {
                     return BoshIronGolem.readmit(ai, sa);
                 case EaterOfHope.NAME:
                     return EaterOfHope.readmit(ai, sa);
+                case EdgeOfAutumn.NAME:
+                    return EdgeOfAutumn.readmit(ai, sa);
                 default:
                     return false;
             }
