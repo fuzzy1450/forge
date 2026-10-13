@@ -20045,13 +20045,27 @@ public class SpecialCardAi {
             return true;
         }
 
-        // Allowlist: a Continuous buff/keyword grant to itself or to its controller's
-        // team, numerically non-negative, granting nothing that changes who can attack
-        // or what damage does. Everything else (AttackRestrict, CantBlockBy,
-        // CanBlockAny/CanBlockAmount, lords with SVar X, ...) is out.
+        // Allowlist: the template's own keyword evasion and vigilance, and a Continuous
+        // buff/keyword grant to itself or to its controller's team, numerically
+        // non-negative, granting nothing that changes who can attack or what damage does.
+        // Everything else (AttackRestrict, any other CantBlockBy, CanBlockAny/CanBlockAmount,
+        // lords with SVar X, ...) is out.
         private static boolean harmlessStatic(final StaticAbility st) {
             final Set<ZoneType> zones = st.getActiveZone();
             if (zones != null && !zones.isEmpty() && !zones.contains(ZoneType.Battlefield)) {
+                return true;
+            }
+            // Keyword-born evasion and vigilance on the template (batch 3, row 66 retry):
+            // CardFactoryUtil makes Flying, Fear, Intimidate, Horsemanship, Skulk and
+            // Protection's block clause Secondary CantBlockBy statics on Creature.Self, and
+            // Vigilance a Secondary AttackVigilance on Card.Self. Every copy on both sides gets
+            // it until end of turn, and the count credits no evasion (each untapped opposing
+            // creature stops the biggest attacker), so nothing the floor relies on changes.
+            // Protection's CantTarget and CantAttach statics, Shadow's second static
+            // (ValidAttacker Creature.withoutShadow) and landwalk (not Secondary) stay out.
+            if (st.isSecondary()
+                    && ((st.checkMode(StaticAbilityMode.CantBlockBy) && "Creature.Self".equals(st.getParam("ValidAttacker")))
+                        || (st.checkMode(StaticAbilityMode.AttackVigilance) && "Card.Self".equals(st.getParam("ValidCard"))))) {
                 return true;
             }
             if (!st.checkMode(StaticAbilityMode.Continuous)) {
