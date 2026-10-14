@@ -79,10 +79,13 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
 
     private Card curResolvingCard = null;
     private final Map<Integer, Integer> triggerRepeats = new HashMap<>();
-    // every trigger's repeats, optional and targeted ones included, on triggerRepeats' resets and with its crowd rule
-    // (one already on the stack is not a repeat): what an optional loop's controller reads to stop it (CR 732.2a),
-    // where triggerRepeats draws only a mandatory loop (CR 104.4b)
+    // every trigger's repeats, optional and targeted ones included, on triggerRepeats' resets: what an optional loop's
+    // controller reads to stop it (CR 732.2a), where triggerRepeats draws only a mandatory loop (CR 104.4b)
     private final Map<Integer, Integer> anyTriggerRepeats = new HashMap<>();
+    // when each of those was last counted, in finished resolutions: one put on the stack again with nothing resolved
+    // since is one more of the same crowd, not a repeat
+    private final Map<Integer, Integer> anyTriggerCountedAt = new HashMap<>();
+    private int resolutions = 0;
 
     private final Game game;
 
@@ -112,6 +115,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
         curResolvingCard = null;
         triggerRepeats.clear();
         anyTriggerRepeats.clear();
+        anyTriggerCountedAt.clear();
         frozenStack.clear();
         clearUndoStack();
         game.updateStackForView();
@@ -509,8 +513,9 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
             // a player did something
             triggerRepeats.clear();
             anyTriggerRepeats.clear();
-        } else if (!isOnStack(sp.getSourceTrigger())) {
-            // a crowd of one trigger is one repeat, as below
+            anyTriggerCountedAt.clear();
+        } else if (!Integer.valueOf(resolutions).equals(anyTriggerCountedAt.put(sp.getSourceTrigger(), resolutions))) {
+            // a crowd of one trigger, put on the stack with nothing resolving in between, is one repeat
             anyTriggerRepeats.merge(sp.getSourceTrigger(), 1, Integer::sum);
         }
         if (!sp.isMandatory() || sp.usesTargeting()) {
@@ -525,23 +530,15 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
         return triggerRepeats.merge(id, 1, Integer::sum) > MAX_TRIGGER_REPEATS;
     }
 
-    private boolean isOnStack(final int sourceTriggerId) {
-        for (final SpellAbilityStackInstance si : stack) {
-            if (si.isStateTrigger(sourceTriggerId)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     public final void clearTriggerRepeats() {
         triggerRepeats.clear();
         anyTriggerRepeats.clear();
+        anyTriggerCountedAt.clear();
     }
 
     /**
      * How many times this trigger went on the stack since the last reset, optional and targeted ones included, not
-     * counting a time it went on beside an instance of it already there (a crowd is one repeat).
+     * counting a time it went on with nothing resolved since it was last counted (a crowd is one repeat).
      */
     public final int getTriggerRepeats(final int sourceTriggerId) {
         return anyTriggerRepeats.getOrDefault(sourceTriggerId, 0);
@@ -702,6 +699,8 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
     }
 
     private void finishResolving(final SpellAbility sa, final boolean fizzle) {
+        // the one place a stack item finishes resolving: a trigger put on the stack after it is a repeat, not a crowd
+        resolutions++;
         // SpellAbility is removed from the stack here
         // temporarily removed removing SA after resolution
         final SpellAbilityStackInstance si = getInstanceMatchingSpellAbilityID(sa);

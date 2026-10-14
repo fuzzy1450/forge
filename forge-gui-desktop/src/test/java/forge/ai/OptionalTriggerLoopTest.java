@@ -18,6 +18,9 @@ import forge.game.card.CounterEnumType;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
+import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.trigger.Trigger;
+import forge.game.trigger.WrappedAbility;
 import forge.game.zone.MagicStack;
 
 /**
@@ -42,24 +45,42 @@ public class OptionalTriggerLoopTest extends AITest {
         return card.getTriggers().iterator().next().getId();
     }
 
+    /** One -1/-1 counter on a creature, put the way a resolving effect puts it: Flourishing triggers on it. */
+    private static void putACounterOn(Game game, Player ai, Card creature) {
+        GameEntityCounterTable table = new GameEntityCounterTable();
+        creature.addCounter(CounterEnumType.M1M1, 1, ai, table);
+        table.replaceCounterEffect(game, null);
+    }
+
+    private Card[] startTheLoop(Game game, Player ai) {
+        return startTheLoop(game, ai, false);
+    }
+
     /**
      * Blowfly, Flourishing and two 1/1 Elf tokens for the AI, no creature for the opponent, and a -1/-1 counter on
      * the first Elf, put the way a resolving effect puts it: Flourishing triggers, and the Elf dies with the counter
-     * at the next priority, so Blowfly triggers with only the other Elf to target. Returns Blowfly and Flourishing.
+     * at the next priority, so Blowfly triggers with only the other Elf to target. With a waiting trigger, the AI's
+     * Grizzly Bears first takes a counter it survives, and the Flourishing trigger for it goes on the stack before the
+     * Elf's counter, to wait below the loop. Returns Blowfly and Flourishing.
      */
-    private Card[] startTheLoop(Game game, Player ai) {
+    private Card[] startTheLoop(Game game, Player ai, boolean aWaitingTrigger) {
         Player opponent = game.getPlayers().get(0);
         Card blowfly = addCard("Blowfly Infestation", ai);
         Card flourishing = addCard("Flourishing Defenses", ai);
         Card first = addToken("g_1_1_elf_warrior", ai);
         addToken("g_1_1_elf_warrior", ai);
+        Card bears = aWaitingTrigger ? addCard("Grizzly Bears", ai) : null;
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
         game.getAction().checkStateEffects(true);
         assertTrue("the opponent has no creature for Blowfly", opponent.getCreaturesInPlay().isEmpty());
 
-        GameEntityCounterTable table = new GameEntityCounterTable();
-        first.addCounter(CounterEnumType.M1M1, 1, ai, table);
-        table.replaceCounterEffect(game, null);
+        if (bears != null) {
+            putACounterOn(game, ai, bears);
+            game.getStack().addAllTriggeredAbilitiesToStack();
+            assertEquals("Flourishing's trigger for the Bears waits on the stack", 1, game.getStack().size());
+            assertEquals(triggerId(flourishing), game.getStack().peekAbility().getSourceTrigger());
+        }
+        putACounterOn(game, ai, first);
         // the board a dying creature's trigger looks back at, Blowfly and the counter on it (GameState copies it too)
         game.copyLastState();
         assertTrue("Flourishing triggers on the counter", game.getStack().hasSimultaneousStackEntries());
@@ -133,6 +154,143 @@ public class OptionalTriggerLoopTest extends AITest {
         assertEquals("the 51 triggers were on the stack together", crowd, together);
         assertEquals("the AI took every Elf", crowd, ai.getCreaturesInPlay().size());
         assertEquals("a crowd is one repeat", 1, most);
+    }
+
+    /**
+     * The loop can start above an earlier Flourishing trigger that then waits below it for as long as the loop goes
+     * on (here the one for a counter the AI's Grizzly Bears survived). Every round's Flourishing trigger still goes on
+     * the stack after something resolved, so each is a repeat and the AI stops the loop as it does with nothing
+     * waiting. Counting only a trigger with no instance already on the stack never stopped it: each round saw the
+     * waiting one, and the stack, three deep, never reaches the 999-item limit that would draw the game.
+     */
+    @Test(timeOut = 300_000)
+    public void aFlourishingTriggerWaitingBelowTheLoopDoesNotHideItsRepeats() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        int flourishing = triggerId(startTheLoop(game, ai, true)[1]);
+        MagicStack stack = game.getStack();
+        SpellAbilityStackInstance waiting = stack.peek();
+
+        Set<Integer> elves = new HashSet<>();
+        int deepest = 0;
+        boolean pastTheLimit = false;
+        boolean stillWaitingAtTheLimit = false;
+        int steps = 0;
+        do {
+            for (Card c : ai.getCreaturesInPlay()) {
+                if (c.isToken()) {
+                    elves.add(c.getId());
+                }
+            }
+            deepest = Math.max(deepest, stack.size());
+            if (!pastTheLimit && stack.getTriggerRepeats(flourishing) > MagicStack.MAX_TRIGGER_REPEATS) {
+                pastTheLimit = true;
+                for (SpellAbilityStackInstance si : stack) {
+                    stillWaitingAtTheLimit |= si == waiting;
+                }
+            }
+            if (!chainGoesOn(game) || steps == MAX_STEPS) {
+                break;
+            }
+            game.getPhaseHandler().mainLoopStep();
+            steps++;
+        } while (true);
+
+        assertFalse("the loop never ended: " + elves.size() + " Elves in " + steps + " steps, Flourishing counted "
+                + stack.getTriggerRepeats(flourishing) + " times", chainGoesOn(game));
+        assertFalse("an optional loop is no draw", game.isGameOver());
+        assertTrue("the Bears' Flourishing trigger still waited when the count passed the limit",
+                stillWaitingAtTheLimit);
+        assertEquals("the stack holds the waiting trigger and one round, no more", 3, deepest);
+        assertTrue("Blowfly killed every creature", ai.getCreaturesInPlay().isEmpty());
+        // The two Elves we started with, then one for each Flourishing trigger that resolved before the count passed
+        // 50: the first Elf's, which went on with nothing resolved since the waiting one and so shares its count of 1,
+        // and those for Blowfly's first 49 counters (2 to 50). The one for its 50th is declined, and so is the waiting
+        // one at the end, or its Elf would still be there.
+        assertEquals(MagicStack.MAX_TRIGGER_REPEATS + 2, elves.size());
+    }
+
+    /**
+     * The stop is for an optional trigger only: a mandatory one is never declined, however often it has repeated.
+     * Blowfly's targeted trigger is counted with Flourishing's, past the limit, and the AI still takes it, where the
+     * same trigger made optional is declined at that count.
+     */
+    @Test(timeOut = 300_000)
+    public void aMandatoryTriggerPastTheLimitIsNeverDeclined() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        Card blowfly = startTheLoop(game, ai)[0];
+        Trigger trigger = blowfly.getTriggers().iterator().next();
+        MagicStack stack = game.getStack();
+        int steps = 0;
+        while (chainGoesOn(game) && stack.getTriggerRepeats(trigger.getId()) <= MagicStack.MAX_TRIGGER_REPEATS
+                && steps++ < MAX_STEPS) {
+            game.getPhaseHandler().mainLoopStep();
+        }
+        assertEquals(MagicStack.MAX_TRIGGER_REPEATS + 1, stack.getTriggerRepeats(trigger.getId()));
+
+        WrappedAbility mandatory = wrap(trigger, blowfly, ai);
+        assertTrue(mandatory.isMandatory());
+        assertTrue("a mandatory trigger is never declined", ai.getController().confirmTrigger(mandatory));
+
+        WrappedAbility optional = wrap(trigger, blowfly, ai);
+        optional.setOptionalTrigger(true);
+        assertFalse(optional.isMandatory());
+        assertFalse("the same trigger, optional, is declined at this count",
+                ai.getController().confirmTrigger(optional));
+    }
+
+    /** The trigger's ability as TriggerHandler wraps it when it goes off, with the AI as the decider. */
+    private static WrappedAbility wrap(Trigger trigger, Card host, Player ai) {
+        return new WrappedAbility(trigger, trigger.ensureAbility().copy(host, ai, false, true), ai);
+    }
+
+    /**
+     * Each reset forgets when a trigger was last counted along with its count: nothing resolves here at all, so a
+     * Flourishing trigger put on the stack after a reset would otherwise pass for one more of the crowd before it.
+     */
+    @Test(timeOut = 300_000)
+    public void aResetForgetsWhenATriggerWasCountedToo() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        Player opponent = game.getPlayers().get(0);
+        Card forest = addCard("Forest", opponent);
+        int flourishing = triggerId(addCard("Flourishing Defenses", ai));
+        List<Card> bears = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            bears.add(addCard("Grizzly Bears", ai));
+        }
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        game.getAction().checkStateEffects(true);
+        MagicStack stack = game.getStack();
+
+        putACounterOn(game, ai, bears.get(0));
+        stack.addAllTriggeredAbilitiesToStack();
+        assertEquals(1, stack.getTriggerRepeats(flourishing));
+
+        // a loss of life (clearTriggerRepeats) ...
+        opponent.loseLife(1, false, false, null);
+        assertEquals(0, stack.getTriggerRepeats(flourishing));
+        putACounterOn(game, ai, bears.get(1));
+        stack.addAllTriggeredAbilitiesToStack();
+        assertEquals("counted again after a loss of life", 1, stack.getTriggerRepeats(flourishing));
+
+        // ... a player doing something ...
+        SpellAbility mana = forest.getManaAbilities().getFirst();
+        mana.setActivatingPlayer(opponent);
+        stack.add(mana);
+        assertEquals(0, stack.getTriggerRepeats(flourishing));
+        putACounterOn(game, ai, bears.get(2));
+        stack.addAllTriggeredAbilitiesToStack();
+        assertEquals("counted again after a mana ability", 1, stack.getTriggerRepeats(flourishing));
+        assertEquals("nothing resolved", 3, stack.size());
+
+        // ... and a reset of the whole stack
+        stack.reset();
+        assertEquals(0, stack.getTriggerRepeats(flourishing));
+        putACounterOn(game, ai, bears.get(3));
+        stack.addAllTriggeredAbilitiesToStack();
+        assertEquals("counted again after a reset", 1, stack.getTriggerRepeats(flourishing));
     }
 
     /** The count the AI reads: every trigger, optional and targeted alike, on the draw detector's own resets. */
