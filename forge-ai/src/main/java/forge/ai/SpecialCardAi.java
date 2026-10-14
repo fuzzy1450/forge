@@ -16666,6 +16666,330 @@ public class SpecialCardAi {
         }
     }
 
+    // Incite Rebellion (dead-card batch 3, row 32; carrier precon:Built from Scratch (C14), Daretti)
+    // "For each player, Incite Rebellion deals damage to that player and each creature that player
+    // controls equal to the number of creatures they control." ({4}{R}{R} sorcery.) For each player
+    // P, n_P is the creatures P controls at resolution: DamageMap$ True batches every player's damage
+    // and deals it once after the loop (RepeatEachEffect), so no player's damage moves another's
+    // count. P and each creature P controls are dealt n_P; the spell is symmetric, so we take n_ai,
+    // and so does each creature we control.
+    // AI:RemoveDeck:All dropped the owner's hand spell in AiController.getSpellAbilityToPlay's
+    // removeIf before any handler ran, so its owner never cast it on any engine (every cast was a
+    // Play-effect theft, which never reads the hint). Behind the hint RepeatEachAi.canPlay has no
+    // branch for the script and ends in an unconditional WillPlay, and RepeatSubAbility is an
+    // additional ability (no chkDrawback judges the damage), so dropping the hint would cast a
+    // six-mana symmetric sweeper on any board. The script keeps the hint and gains no AILogic: the
+    // -10 sort (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck reader (copy tests,
+    // MayPlay thieves, the RandomCopied pools, the own-zone free-cast pickers) still refuse it, and
+    // Memory Plunder's RepeatEach filter, which keys on a missing AILogic, still refuses it too. The
+    // G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through: the owner's own
+    // cast of the root RepeatEach spell from its own hand, face up, not a copy and not a Play-effect
+    // cast, in its own main phase on an empty stack (canCastSorcery), with no live mana reservation
+    // (RemoveDeckFilter.noManaHeld), and only when worthCasting accepts the sweep. Behind a true
+    // readmit RepeatEachAi.canPlay's stock WillPlay is the cast decision; RepeatEachAi is unchanged.
+    // worthCasting, cheapest first:
+    // 1. an opposing creature whose damage to kill (getDamageToKill) is within its controller's
+    //    count, or an opponent whose count reaches its life (the lethal branch's way in); else no;
+    // 2. G2 (HonestMana, held sources skipped) covers the engine's test-mode calculateManaCost in
+    //    total and in red (Dualcaster Mage's affordable, a private copy);
+    // 3. lethal (Deadly Tempest's branch): every opponent can lose and its own predicted n_opp
+    //    reaches its life, and we survive our own predicted n_ai (or cannot lose): yes. State-based
+    //    actions end the game before any death or damage trigger resolves, so no veto below applies;
+    // 4. our own life floor (RepeatEachAi's AllPlayerLoseLife rule): our predicted n_ai plus
+    //    SAFE_LIFE above our life declines;
+    // 5. the board (Sudden Demise's scan, each creature dealt its controller's count instead of one
+    //    X): a creature dies when it is not indestructible, has no shield counter and no usable
+    //    regeneration shield, and predictDamageTo(c, n, source) reaches getDamageToKill
+    //    (getEnoughDamageToKill's test at n, in one prediction). Declines:
+    //    - a commander we control or own dies;
+    //    - our own turn before Main 2 with anything of ours dying (our doomed creatures swing first;
+    //      Main 2 re-judges);
+    //    - an opposing death trigger sees a dying creature, either side, and is a watcher or its own
+    //      body's death hurts us (WaveOfReckoning.isDeathTrigger and deathTriggerHarmsUs, called);
+    //      a harmless own death only makes that body no kill;
+    //    - a death trigger of ours hands a dying opposing creature's controller anything (Fecundity;
+    //      Sudden Demise's paysDyingController, a private copy);
+    //    - an opposing noncombat damage-received trigger (DamageDone / DamageDoneOnce: Boros
+    //      Reckoner, Stuffy Doll, enrage, Repercussion) whose ValidSource matches this spell and
+    //      whose ValidTarget matches a creature or an opponent this spell deals damage to, dying or
+    //      not (Sudden Demise's punisher, widened to players: this spell hits them too);
+    //    and the kills (an opposing creature we do not own that dies, with no activated Regenerate,
+    //    no active undying or persist, no SacMe and no value-leaving own death) must be worth a card
+    //    (a nontoken of mana value 2+ or power 3+, or two cards' worth with tokens at half), never a
+    //    card down (kills, tokens half, >= our nontoken losses + this card), and creature value
+    //    killed, + COMMANDER_TAX per opposing commander killed, minus creature value lost must
+    //    exceed MARGIN. Opposing face damage earns no value credit: it counts only toward lethal.
+    // RNG parity: the hint kept A from ever judging the owner's copy, so a false is the old filter
+    // exactly. Nothing here draws MyRandom: getDamageToKill, predictDamageTo (static replacement and
+    // prevention reads), evaluateCreature, matchesValidParam, hasActiveUndyingOrPersist, the private
+    // regenerates (never ComputerUtil.canRegenerate, whose canPayCost probe draws), the test-mode
+    // calculateManaCost and HonestMana; never getAvailableManaEstimate, aiLifeInDanger or
+    // lifeInDanger. Nothing is held, remembered or targeted, and no X is set. Its writes are
+    // setActivatingPlayer on a hand SA with none yet (as getOriginalAndAltCostAbilities does right
+    // after the filter) and on the mana abilities G2 reads, and Trigger.ensureAbility's lazy build,
+    // only on a matched death trigger (Wave of Reckoning's and Sudden Demise's accepted residual).
+    // Cost: O(1) outside our own empty-stack main phases; there, one integer pass over the opposing
+    // creatures; the rest only when a creature is in range: one G2 scan, one prediction per
+    // creature and per player, one trigger scan per side once something of theirs dies, and
+    // evaluateCreature over the dying creatures only.
+    public static class InciteRebellion {
+        public static final String NAME = "Incite Rebellion";
+        static final int MARGIN = WaveOfReckoning.MARGIN; // 200, DestroyAllAi's creature margin
+        static final int SAFE_LIFE = 5;                   // RepeatEachAi AllPlayerLoseLife: lossYou + 5 > life declines
+        static final int COMMANDER_TAX = 100;             // Deadly Tempest's recast tax
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; a false is the old filter exactly
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.RepeatEach || sa.isCopied()
+                    || sa.isCastFromPlayEffect() || host.isFaceDown() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner()) || !ai.equals(host.getController())) {
+                return false; // thefts, copies and Play casts keep the hint, as in A
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (!ai.canCastSorcery() || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // our own main phase on an empty stack, no live reservation: a refusal only waits
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            return worthCasting(ai, sa);
+        }
+
+        static boolean worthCasting(final Player ai, final SpellAbility sa) {
+            final Card source = sa.getHostCard();
+            final PlayerCollection opps = ai.getOpponents();
+            if (opps.isEmpty()) {
+                return false;
+            }
+            // 1. cheapest: an opposing creature in range of its controller's count, or an opponent
+            //    whose count reaches its life (the lethal branch's way in)
+            boolean inRange = false;
+            for (final Player opp : opps) {
+                final CardCollection theirs = opp.getCreaturesInPlay();
+                final int n = theirs.size();
+                if (n > 0 && n >= opp.getLife()) {
+                    inRange = true;
+                    break;
+                }
+                for (final Card c : theirs) {
+                    if (ComputerUtilCombat.getDamageToKill(c, false) <= n) {
+                        inRange = true;
+                        break;
+                    }
+                }
+                if (inRange) {
+                    break;
+                }
+            }
+            if (!inRange) {
+                return false;
+            }
+            // 2. mana, RNG-free: G2 against the engine's adjusted cost, in total and in red
+            if (!affordable(ai, sa)) {
+                return false;
+            }
+            // 3. lethal: every opponent dies to its own count and we live (Deadly Tempest's branch)
+            final int nMine = ai.getCreaturesInPlay().size();
+            final boolean mortal = ai.canLoseLife() && !ai.cantLose() && !ai.cantLoseForZeroOrLessLife();
+            final int myDamage = mortal && nMine > 0 ? ComputerUtilCombat.predictDamageTo(ai, nMine, source, false) : 0;
+            final int[] oppDamage = new int[opps.size()];
+            boolean allDie = true;
+            for (int j = 0; j < opps.size(); j++) {
+                final Player opp = opps.get(j);
+                final int n = opp.getCreaturesInPlay().size();
+                oppDamage[j] = n > 0 ? ComputerUtilCombat.predictDamageTo(opp, n, source, false) : 0;
+                if (!opp.canLoseLife() || opp.cantLose() || opp.cantLoseForZeroOrLessLife()
+                        || oppDamage[j] < opp.getLife()) {
+                    allDie = false;
+                }
+            }
+            if (allDie && (!mortal || myDamage < ai.getLife())) {
+                return true;
+            }
+            // 4. our own life floor (no drain term: any opposing death watcher vetoes below)
+            if (mortal && myDamage > 0 && myDamage + SAFE_LIFE > ai.getLife()) {
+                return false;
+            }
+            // 5. the board
+            return boardWorthIt(ai, source, opps, oppDamage);
+        }
+
+        private static boolean boardWorthIt(final Player ai, final Card source, final PlayerCollection opps,
+                final int[] oppDamage) {
+            final CardCollection all = CardLists.filter(ai.getGame().getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES);
+            final int size = all.size();
+            // n_P per controller, the creatures Count$Valid Creature.RememberedPlayerCtrl counts
+            final Map<Player, Integer> count = new HashMap<>();
+            for (final Card c : all) {
+                count.merge(c.getController(), 1, Integer::sum);
+            }
+            final int[] dealt = new int[size];     // predicted damage this spell deals it
+            final boolean[] dies = new boolean[size];
+            final boolean[] loss = new boolean[size];     // we control or own it
+            final boolean[] opposing = new boolean[size]; // an opponent controls it and we do not own it
+            final boolean[] noValue = new boolean[size];  // its own death leaves value behind
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            final boolean oneSided = ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.MAIN2);
+            boolean anyOpposingDies = false;
+            for (int i = 0; i < size; i++) {
+                final Card c = all.get(i);
+                dealt[i] = ComputerUtilCombat.predictDamageTo(c, count.get(c.getController()), source, false);
+                dies[i] = dies(c, dealt[i]);
+                loss[i] = ai.equals(c.getController()) || ai.equals(c.getOwner());
+                opposing[i] = !loss[i] && ai.isOpponentOf(c.getController());
+                if (dies[i] && loss[i] && (c.isCommander() || oneSided)) {
+                    return false; // our commander, or our doomed creatures swing first (Main 2 re-judges)
+                }
+                anyOpposingDies |= dies[i] && opposing[i];
+            }
+            if (!anyOpposingDies) {
+                return false; // nothing of theirs dies: no kill
+            }
+            // Opponents' side: death watchers and harmful own deaths veto (Wave of Reckoning's scan,
+            // both sides' dying creatures); a harmless own death is not a kill; noncombat
+            // damage-received triggers on any creature or opponent this spell damages veto.
+            for (final Card h : opps.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (WaveOfReckoning.isDeathTrigger(t)) {
+                        for (int i = 0; i < size; i++) {
+                            final Card d = all.get(i);
+                            if (!dies[i] || !t.matchesValidParam("ValidCard", d) || !t.matchesValidParam("ValidCards", d)) {
+                                continue;
+                            }
+                            if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                                return false; // a watcher, or a body whose own death hurts us
+                            }
+                            noValue[i] = true;
+                        }
+                        continue;
+                    }
+                    final TriggerType mode = t.getMode();
+                    if ((mode != TriggerType.DamageDone && mode != TriggerType.DamageDoneOnce)
+                            || "True".equalsIgnoreCase(t.getParam("CombatDamage"))
+                            || !t.matchesValidParam("ValidSource", source)) {
+                        continue;
+                    }
+                    for (int i = 0; i < size; i++) {
+                        if (dealt[i] > 0 && t.matchesValidParam("ValidTarget", all.get(i))) {
+                            return false; // dealt damage at all, dying or not
+                        }
+                    }
+                    for (int j = 0; j < opps.size(); j++) {
+                        if (oppDamage[j] > 0 && t.matchesValidParam("ValidTarget", opps.get(j))) {
+                            return false; // this spell hits the players too
+                        }
+                    }
+                }
+            }
+            // Our side: a death trigger that pays a dying opposing creature's controller turns that
+            // kill into their card (Fecundity). Its ability is read only once it matches.
+            for (final Card h : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (!WaveOfReckoning.isDeathTrigger(t)) {
+                        continue;
+                    }
+                    for (int i = 0; i < size; i++) {
+                        final Card d = all.get(i);
+                        if (opposing[i] && dies[i] && t.matchesValidParam("ValidCard", d) && t.matchesValidParam("ValidCards", d)) {
+                            if (paysDyingController(t)) {
+                                return false;
+                            }
+                            break; // the answer is the trigger's, not the creature's
+                        }
+                    }
+                }
+            }
+            boolean anyKill = false;
+            boolean worthACard = false;
+            int killHalfCards = 0; // 2 per card, 1 per token
+            int ourCards = 0;      // 2 per nontoken lost
+            int net = 0;
+            for (int i = 0; i < size; i++) {
+                if (!dies[i]) {
+                    continue;
+                }
+                final Card c = all.get(i);
+                if (loss[i]) {
+                    net -= ComputerUtilCard.evaluateCreature(c); // no regeneration/undying credit for our own
+                    if (!c.isToken()) {
+                        ourCards += 2;
+                    }
+                } else if (opposing[i] && !noValue[i] && !regenerates(c)
+                        && !ComputerUtilCard.hasActiveUndyingOrPersist(c) && !c.hasSVar("SacMe")) {
+                    anyKill = true;
+                    net += ComputerUtilCard.evaluateCreature(c) + (c.isCommander() ? COMMANDER_TAX : 0);
+                    killHalfCards += c.isToken() ? 1 : 2;
+                    worthACard |= (!c.isToken() && c.getCMC() >= 2) || c.getNetPower() >= 3;
+                }
+            }
+            if (!anyKill) {
+                return false;
+            }
+            // worth a card: a real body, or a swarm of at least two cards' worth
+            if (!worthACard && killHalfCards < 4) {
+                return false;
+            }
+            // never a card down (tokens half a card): ours lost + this card <= theirs
+            if (killHalfCards < Math.max(2, ourCards + 2)) {
+                return false;
+            }
+            return net > MARGIN;
+        }
+
+        // getEnoughDamageToKill(c, n, source, false) <= n, in one prediction (it loops 1..n): no
+        // indestructible, no shield counter, no regeneration shield it can use, and the damage this
+        // spell deals reaches what kills it
+        private static boolean dies(final Card c, final int dealt) {
+            return dealt > 0 && !c.hasKeyword(Keyword.INDESTRUCTIBLE) && c.getCounters(CounterEnumType.SHIELD) <= 0
+                    && !(c.getShieldCount() > 0 && c.canBeShielded())
+                    && dealt >= ComputerUtilCombat.getDamageToKill(c, false);
+        }
+
+        // Sudden Demise's regenerates, a private copy: without ComputerUtil.canRegenerate, whose
+        // canPayCost probe draws MyRandom (ComputerUtilMana.isManaSourceReserved).
+        private static boolean regenerates(final Card c) {
+            for (final SpellAbility a : c.getSpellAbilities()) {
+                if (a.getApi() == ApiType.Regenerate) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean namesDyingController(final String s) {
+            return s != null && (s.contains("TriggeredCardController") || s.contains("TriggeredCardOwner"));
+        }
+
+        // Sudden Demise's paysDyingController, a private copy: a death trigger that hands the dying
+        // creature's controller (or owner) a choice, cards or tokens (Fecundity's OptionalDecider$ /
+        // Defined$ TriggeredCardController).
+        private static boolean paysDyingController(final Trigger t) {
+            if (namesDyingController(t.getParam("OptionalDecider"))) {
+                return true;
+            }
+            for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                if (namesDyingController(part.getParam("Defined")) || namesDyingController(part.getParam("TokenOwner"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Dualcaster Mage's affordable, a private copy: the engine's own test-mode cost
+        // (calculateManaCost: taxes and reductions applied) against G2 (HonestMana, held sources
+        // skipped), in total and in red pips.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+    }
+
     // Indulge // Excess (the Indulge half)
     // "Whenever a creature you control attacks this turn, create a 1/1 green and white Citizen
     // creature token that's tapped and attacking." ({2}{R} sorcery. The Excess half is Aftermath,
@@ -26418,7 +26742,8 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 5, 10, 16,
-    // 17, 19, 21, 27, 35, 36, 41, 49, 50, 57, 58, 60, 79, 83 and 84, keepOff for batch 2's row 68.
+    // 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 57, 58, 60, 79, 83 and 84, keepOff for batch 2's
+    // row 68.
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -26480,6 +26805,8 @@ public class SpecialCardAi {
                     return EdictForAll.readmit(ai, sa);
                 case EdictForAll.BARTER_IN_BLOOD:
                     return EdictForAll.readmit(ai, sa);
+                case InciteRebellion.NAME:
+                    return InciteRebellion.readmit(ai, sa);
                 default:
                     return false;
             }
