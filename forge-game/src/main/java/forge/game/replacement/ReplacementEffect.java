@@ -307,12 +307,17 @@ public abstract class ReplacementEffect extends TriggerReplacementBase {
         return this.getId() == ((ReplacementEffect) o).getId();
     }
 
+    private static final int CLASS_NAME_HASH = ReplacementEffect.class.getName().hashCode();
+
     /** {@inheritDoc} */
     @Override
     public int hashCode() {
-        // Objects.hash(ReplacementEffect.class, getId()) without its array: same calls, same order, same value
+        // Objects.hash(<class constant>, getId()) without its array. The constant is the class NAME's hash,
+        // which is the same in every JVM; ReplacementEffect.class.hashCode() is an identity hash that changes from one
+        // launch to the next, so every HashMap or HashSet of these iterated in a per-JVM order, and a seed
+        // could play a different game in another JVM (MTG_DeckMaker stored game 973410).
         final int id = getId();
-        return 31 * (31 + ReplacementEffect.class.hashCode()) + id;
+        return 31 * (31 + CLASS_NAME_HASH) + id;
     }
 
     public ReplacementType getMode() {

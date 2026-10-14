@@ -219,11 +219,16 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
     public final int getId() {
         return id;
     }
+    private static final int CLASS_NAME_HASH = SpellAbility.class.getName().hashCode();
+
     @Override
     public int hashCode() {
-        // Objects.hash(SpellAbility.class, getId()) without its array: same calls, same order, same value
+        // Objects.hash(<class constant>, getId()) without its array. The constant is the class NAME's hash,
+        // which is the same in every JVM; SpellAbility.class.hashCode() is an identity hash that changes from one
+        // launch to the next, so every HashMap or HashSet of these iterated in a per-JVM order, and a seed
+        // could play a different game in another JVM (MTG_DeckMaker stored game 973410).
         final int id = getId();
-        return 31 * (31 + SpellAbility.class.hashCode()) + id;
+        return 31 * (31 + CLASS_NAME_HASH) + id;
     }
     @Override
     public boolean equals(final Object obj) {
