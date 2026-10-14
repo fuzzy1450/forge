@@ -24595,6 +24595,247 @@ public class SpecialCardAi {
         }
     }
 
+    // Praetor's Grasp
+    // "Search target opponent's library for a card and exile it face down. Then that player
+    // shuffles. You may look at and play that card for as long as it remains exiled." The script
+    // grants no MayPlayIgnoreType, so the exiled card is paid with our own colours: a pick our mana
+    // cannot cast is worth only its denial. Behind the dropped AI:RemoveDeck:All stood two stock
+    // gates: ChangeZoneAi.hiddenOriginCanPlayAI approves any Main 2 with no mana floor, and the
+    // resolution pick takes the WORST card of the library (PlayerControllerAi passes the decider as
+    // "player", so the opponent-exile branch never runs), which through getWorstAI ->
+    // getWorstLand is their worst land in a Commander library.
+    // consider() is the cast floor (ChangeZoneAi.checkApiLogic's router, owner only): our own Main 2
+    // on an empty stack (creatures attack first, the stock tutor window); a target opponent we may
+    // target, whose library we may search and is not empty, chosen from public information alone
+    // (commander identity overlap with ours, then the larger library, then turn order); then G1
+    // (CommanderCastCeiling.affordable, a non-commander caller under G4's contract) on the targeted
+    // spell, so a targeting tax counts. choosePick() is the resolution pick (the hook in
+    // ChangeZoneAi.chooseCardToHiddenOriginChangeZone, after the stock shuffle, for every caster),
+    // where the search legitimately sees the library: a land of ours while we are short of lands,
+    // else the best card our colours can cast by our next turn (permanents first), else a land of
+    // ours below LAND_ENOUGH lands, else the best card our colours can cast at all, else denial of
+    // their best nonland card. A card with AI:RemoveDeck:All is never taken to be cast (the AI would
+    // never cast it), nor a second copy of a legend we control.
+    // RNG-free throughout: the target walk is turn order, never choosePreferredDefenderPlayer (whose
+    // pod branch ends in Aggregates.random, a draw A never made on a decline); every land pick is
+    // getBestLandToPlayAI (itemWithMax, first on a tie), never getBestLandAI (Aggregates.random over
+    // nonbasics); getBestAI is only asked for nonland lists (itemWithMax or the most expensive
+    // permanent); a Phyrexian shard of none of our colours is priced through LifeFloor, never
+    // aiLifeInDanger. A decline leaves the targets reset and nothing remembered or announced.
+    public static class PraetorsGrasp {
+        public static final String NAME = "Praetor's Grasp";
+        // below this many lands on our battlefield, with no land in hand, a land of ours is the first pick
+        static final int LAND_SHORT = 4;
+        // below this many, a land of ours still goes ahead of a card we cannot cast by our next turn
+        static final int LAND_ENOUGH = 7;
+        // {C} beside the five colour bits of produced()
+        static final int C_BIT = forge.card.mana.ManaAtom.COLORLESS;
+
+        // getAbilitySourceName reads "" for a card cast face down from exile (Gonti, Thief of
+        // Sanity): read the host's name or the card state's name too (DiabolicIntent.isIntent's
+        // idiom, row 106's isMeteor), so a face-down stolen copy still meets the router's owner check.
+        public static boolean isGrasp(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            sa.resetTargets();
+            // creatures attack first; the stock path's own tutor window (Exile is not Battlefield or
+            // Hand, so hiddenOriginCanPlayAI refuses before Main 2)
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            final Player opp = chooseTarget(ai, sa);
+            if (opp == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            // real mana for the engine's adjusted {1}{B}{B}, with the target set (a targeting tax
+            // counts), before AiController.canPlayAndPayForFace reaches canPayCost, which draws
+            sa.getTargets().add(opp);
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Deterministic, public information only: every opponent in turn order that the spell can
+        // target, whose library we may search and holds a card; the most commander-identity colours
+        // shared with ours wins, then the larger library, then the first in turn order. In a 2-seat
+        // game this is the stock path's target, the only opponent.
+        static Player chooseTarget(final Player ai, final SpellAbility sa) {
+            final byte ours = identity(ai);
+            Player best = null;
+            int bestOverlap = -1;
+            int bestLibrary = -1;
+            for (final Player p : ai.getOpponents()) {
+                if (!sa.canTarget(p) || !ai.canSearchLibraryWith(sa, p)) {
+                    continue;
+                }
+                final int library = p.getCardsIn(ZoneType.Library).size();
+                if (library == 0) {
+                    continue;
+                }
+                final ColorSet theirs = p.getCommanderColorID();
+                final int overlap = theirs == null ? 0
+                        : Integer.bitCount(theirs.getColor() & ours & MagicColor.ALL_COLORS);
+                if (overlap > bestOverlap || (overlap == bestOverlap && library > bestLibrary)) {
+                    best = p;
+                    bestOverlap = overlap;
+                    bestLibrary = library;
+                }
+            }
+            return best;
+        }
+
+        // The resolution pick, for the decider (the caster) over the searched list. RNG-free and
+        // O(list); null only when the list holds no card of ours and no nonland card (the hook then
+        // keeps the stock default).
+        public static Card choosePick(final Player ai, final SpellAbility sa, final CardCollectionView fetchList) {
+            final byte ours = identity(ai);
+            final boolean haveC = makesColourless(ai);
+            final CardCollectionView battlefield = ai.getCardsIn(ZoneType.Battlefield);
+            final int lands = CardLists.count(battlefield, CardPredicates.LANDS);
+            final boolean landInHand = ai.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.LANDS);
+            // castable by our next turn: our mana sources now plus one land drop
+            final int reach = CardLists.count(battlefield, c -> !c.getManaAbilities().isEmpty()) + 1;
+            final CardCollection now = new CardCollection();
+            final CardCollection later = new CardCollection();
+            final CardCollection ourLands = new CardCollection();
+            for (final Card c : fetchList) {
+                if (c.isLand()) {
+                    if ((produced(c, ours, ours) & (ours | C_BIT)) != 0) {
+                        ourLands.add(c);
+                    }
+                    continue;
+                }
+                if (!payable(ai, c, ours, haveC) || ComputerUtilCard.isCardRemAIDeck(c)
+                        || (c.getType().isLegendary() && ai.isCardInPlay(c.getName()))) {
+                    continue;
+                }
+                (c.getCMC() <= reach ? now : later).add(c);
+            }
+            if (lands < LAND_SHORT && !landInHand && !ourLands.isEmpty()) {
+                final Card land = ComputerUtilCard.getBestLandToPlayAI(ourLands);
+                if (land != null) {
+                    return land;
+                }
+            }
+            final CardCollection nowPermanents = CardLists.filter(now, CardPredicates.PERMANENTS);
+            if (!nowPermanents.isEmpty()) {
+                return ComputerUtilCard.getBestAI(nowPermanents);
+            }
+            if (!now.isEmpty()) {
+                return ComputerUtilCard.getBestAI(now);
+            }
+            if (lands < LAND_ENOUGH && !ourLands.isEmpty()) {
+                final Card land = ComputerUtilCard.getBestLandToPlayAI(ourLands);
+                if (land != null) {
+                    return land;
+                }
+            }
+            if (!later.isEmpty()) {
+                return ComputerUtilCard.getBestAI(later);
+            }
+            // nothing we can play: deny them their best card (the stock opponent-exile intent)
+            final CardCollection theirs = CardLists.filter(fetchList, CardPredicates.NON_LANDS);
+            return theirs.isEmpty() ? null : ComputerUtilCard.getBestAI(theirs);
+        }
+
+        // Our colours can pay the card's printed mana cost: a generic, X, snow or {2/c} shard always;
+        // a coloured or hybrid shard needs one of our colours; a Phyrexian shard of none of them is 2
+        // life, all of them together within LifeFloor; a {C} shard needs a colourless source of ours.
+        // A card with no mana cost is never cast for mana.
+        static boolean payable(final Player ai, final Card c, final byte ours, final boolean haveC) {
+            final ManaCost cost = c.getManaCost();
+            if (cost == null || cost.isNoCost()) {
+                return false;
+            }
+            int life = 0;
+            for (final forge.card.mana.ManaCostShard s : cost) {
+                if (s.isGeneric()) {
+                    continue;
+                }
+                final int colours = s.getShard() & MagicColor.ALL_COLORS;
+                if ((colours & ours) != 0) {
+                    continue;
+                }
+                if (s.isPhyrexian() && colours != 0) {
+                    life += 2;
+                } else if (!s.isColorless() || !haveC) {
+                    return false;
+                }
+            }
+            return life == 0 || LifeFloor.keeps(ai, life);
+        }
+
+        // Our colours: the commander identity; with no commander, the colours our lands on the
+        // battlefield and in hand make.
+        static byte identity(final Player ai) {
+            final ColorSet commander = ai.getCommanderColorID();
+            if (commander != null) {
+                return commander.getColor();
+            }
+            int mask = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield, ZoneType.Hand)) {
+                if (c.isLand()) {
+                    mask |= produced(c, MagicColor.ALL_COLORS, (byte) 0);
+                }
+            }
+            return (byte) (mask & MagicColor.ALL_COLORS);
+        }
+
+        static boolean makesColourless(final Player ai) {
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if ((produced(c, (byte) 0, (byte) 0) & C_BIT) != 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The mana a card's printed mana abilities make: the five colour bits, plus C_BIT for {C}.
+        // NantukoCultivator.producedColours' reading, privately copied (never shared with an
+        // accepted card), with three changes for a card in another player's library: it sets no
+        // activating player on the card's abilities (getComboColors reads one only for Paliano's
+        // noted colours, which then count as none); Any is `any` and Combo ColorIdentity (Command
+        // Tower, Arcane Signet) is `identity`, the colours it makes once we control it
+        // (getComboColors would read its current controller's); and {C} is counted. Reflected and
+        // Special production count as none.
+        private static int produced(final Card c, final byte any, final byte identity) {
+            int mask = 0;
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                if (mp == null) {
+                    continue;
+                }
+                if (mp.isAnyMana()) {
+                    mask |= any;
+                    continue;
+                }
+                final String orig = mp.getOrigProduced();
+                if (orig.contains("ColorIdentity")) {
+                    mask |= identity;
+                    continue;
+                }
+                final String letters = mp.isComboMana() ? mp.getComboColors(ma)
+                        : orig.replace("Chosen", mp.getChosenColor(ma));
+                for (final String t : letters.split(" ")) {
+                    if ("C".equals(t)) {
+                        mask |= C_BIT;
+                    } else if (t.length() == 1) {
+                        mask |= MagicColor.fromName(t.charAt(0));
+                    }
+                }
+            }
+            return mask;
+        }
+    }
+
     // Predators' Hour: until end of turn our creatures gain menace and
     // "whenever this creature deals combat damage to a player, exile the top
     // card of that player's library face down; you may look at and play it".

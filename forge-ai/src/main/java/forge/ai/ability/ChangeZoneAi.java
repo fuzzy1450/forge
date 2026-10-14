@@ -191,6 +191,24 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.NetherbornAltar.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.PraetorsGrasp.isGrasp(sa) && !(sa instanceof AbilitySub)) {
+            // Search target opponent's library, exile a card face down, and we may play it with our
+            // own mana. The stock hidden-origin path below approves any Main 2 with no mana floor,
+            // and its target pick (choosePreferredDefenderPlayer) ends in Aggregates.random with two
+            // or more opponents. AI:RemoveDeck:All stripped the card before any handler ran, so the
+            // stock path drew no random numbers for it; the evaluator is RNG-free. A non-owner (a
+            // static "you may cast it" theft: Gonti, Thief of Sanity) declines here, RNG-free, as A's
+            // filter refused it; Play-effect casts (Etali's attack trigger) and copies go through
+            // doTriggerNoCost and never reach checkApiLogic. Ahead of multipleCardsToChoose.clear(),
+            // as Long-Term Plans: in A the card never reached that clear either, so a decline leaves
+            // no state. Every other ChangeZone card takes exactly the path it took before this branch.
+            final Card host = sa.getHostCard();
+            if (host == null || !aiPlayer.equals(host.getOwner())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return SpecialCardAi.PraetorsGrasp.consider(aiPlayer, sa);
+        }
+
         cardsToChoose().clear();
 
         if ("Spelltwine".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
@@ -2061,6 +2079,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
         CardLists.shuffle(fetchList);
         // Save a card as a default, in case we can't find anything suitable
         Card first = fetchList.get(0);
+
+        if (ZoneType.Exile.equals(destination) && SpecialCardAi.PraetorsGrasp.isGrasp(sa)) {
+            // Praetor's Grasp exiles a card of the target opponent's library that its caster may
+            // then play with its own mana. The Exile branch below takes the WORST card (player is
+            // the decider here, never the library's owner, so its opponent test fails): in a
+            // Commander library, their worst land. Take the best card the decider can play, else
+            // deny the opponent their best nonland card (SpecialCardAi.PraetorsGrasp.choosePick).
+            // After the stock shuffle, so the draws are the stock path's; RNG-free and never null,
+            // so the search never asks confirmAction. Every caster's resolution, a thief's
+            // included; every other card's search takes the stock pick below unchanged.
+            final Card pick = SpecialCardAi.PraetorsGrasp.choosePick(decider, sa, fetchList);
+            return pick != null ? pick : first;
+        }
 
         if (ZoneType.Battlefield.equals(destination)) {
             fetchList = CardLists.filter(fetchList, c1 -> !c1.getType().isLegendary() || !decider.isCardInPlay(c1.getName()));
