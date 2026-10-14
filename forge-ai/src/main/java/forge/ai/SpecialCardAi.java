@@ -10098,26 +10098,29 @@ public class SpecialCardAi {
         }
     }
 
-    // Edict for all (dead-card batch 3, row 41; carrier precon:Elven Empire (KHC) b9b9f640, an implicit
-    // anchor)
-    // Tergrid's Shadow: "Each player sacrifices two creatures." ({3}{B}{B} instant; Foretell {2}{B}{B}.)
+    // Edict for all (dead-card batch 3, rows 41 and 79; carriers precon:Elven Empire (KHC) b9b9f640 and
+    // precon:Plunder the Graves (C15) bf6bc56a, both implicit anchors)
+    // Tergrid's Shadow (row 41): "Each player sacrifices two creatures." ({3}{B}{B} instant; Foretell
+    // {2}{B}{B}.) Barter in Blood (row 79): "Each player sacrifices two creatures." ({2}{B}{B} sorcery.)
     // We lose our own two worst as our chooser picks them, each opponent gives up its own two worst,
     // nothing is targeted (hexproof, ward, indestructible and regeneration do not matter), and a player
-    // with fewer gives up what it has: the edict's best case is a lone big threat. The script keeps
+    // with fewer gives up what it has: the edict's best case is a lone big threat. Both scripts keep
     // AI:RemoveDeck:All, so the -10 sort (ComputerUtilAbility.saEvaluator) and every other
     // isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers, MayPlay thieves) still
-    // refuse it, and the Foretell special action stays off the list (the AI never foretells it, so the
-    // foretold cast from exile never exists). Behind the hint, SacrificeAi.sacrificeTgtAI's
-    // Defined$ Player branch approves whenever the strongest opponent has two creatures, in any phase,
-    // never reading our board, our commander or what they would give up.
+    // refuse them, and Tergrid's Shadow's Foretell special action stays off the list (the AI never
+    // foretells it, so the foretold cast from exile never exists). Behind the hint,
+    // SacrificeAi.sacrificeTgtAI's Defined$ Player branch approves whenever the strongest opponent has
+    // two creatures, in any phase, never reading our board, our commander or what they would give up.
     // G3 (RemoveDeckFilter.readmit) lets exactly one ability through AiController's filter: the owner's
     // own cast from its own hand (handles: the paper name, a root spell, not a Play-effect cast or a
     // copy, its owner also its controller and activator), when consider() approves. SacrificeAi.canPlay
     // asks the same consider() behind the same key (rule B3-2), so a canPlaySa scan of that hand SA
-    // meets this plan, and every other cast (Silent-Blade Oni's and Nathan Drake's Play effects, a copy)
-    // keeps the stock branch. consider(), cheapest first:
+    // meets this plan, and every other cast (Silent-Blade Oni's, Nathan Drake's and Prismari
+    // Performance's Play effects, a copy) keeps the stock branch. consider(), cheapest first:
     // - window: an empty stack, in our own main phase or the end step right before our turn, and the
     //   spell's own timing (canCastTiming: a no-op for the instant; a sorcery joining by name meets it);
+    //   Barter in Blood only in its own sorcery window (Player.canCastSorcery: our turn, a main phase, an
+    //   empty stack), never at the end step, even under a flash grant;
     // - shape: an untargeted Defined$ Player sacrifice of SacValid$ Creature, not optional, not a
     //   destroy, not random (a drifted script never approves blind: picks models only that resolution);
     // - mana: the engine's test-mode calculateManaCost (taxes, every RaiseCost and ReduceCost static)
@@ -10134,7 +10137,11 @@ public class SpecialCardAi {
     // (noValueKills). A victim we own counts as our loss wherever it is (Slaughter the Strong's owner
     // rule), and no commander on our side, nor our own stolen one, is ever traded. Cast only when some
     // counted opposing victim is worth MIN_VICTIM_EVAL (a real threat) and their loss beats ours by
-    // NET_MARGIN. Veto (Slaughter the Strong's loop, a private copy; WaveOfReckoning's isDeathTrigger
+    // NET_MARGIN; Barter in Blood also on a clean trade (row 79, its name only): a counted victim worth
+    // a card by its printed shape (worthACard, Slaughter the Strong's and Wave of Reckoning's filter) and
+    // their loss beating ours by more than CLEAN_MARGIN (the batch's symmetric-removal margin), the
+    // two-for-one on a thin board of ours that the threat clause refuses (two 2/2s against no creature
+    // of ours). Veto (Slaughter the Strong's loop, a private copy; WaveOfReckoning's isDeathTrigger
     // and deathTriggerHarmsUs, called unchanged): an opposing Sacrificed/SacrificedOnce trigger whose
     // ValidCard and ValidPlayer match a victim (Korvold, Mazirek), an opposing death trigger on another
     // card (Blood Artist, Zulaport, Grave Pact), or a victim's own harmful one.
@@ -10143,10 +10150,12 @@ public class SpecialCardAi {
     // hand SA with none and on the mana abilities G2 reads, and Trigger.ensureAbility's lazy allocation
     // (Wave of Reckoning's and Slaughter the Strong's accepted residual). No ComputerUtil.canRegenerate:
     // regeneration cannot replace a sacrifice, and it test-pays through canPayCost, which draws. Nothing
-    // is held, remembered or targeted, so a false is the old filter. Keyed by a name set (isEdict), so
-    // that Barter in Blood (row 79) joins with its own name and readmit case.
+    // is held, remembered or targeted, so a false is the old filter. Keyed by a name set (isEdict), one
+    // readmit case per name; only Barter in Blood's sorcery window and its clean-trade clause are per
+    // name.
     public static class EdictForAll {
         public static final String TERGRIDS_SHADOW = "Tergrid's Shadow";
+        public static final String BARTER_IN_BLOOD = "Barter in Blood";
         // a real threat among the victims: a 4/4 for 4 (221); its own literal, not Grab the Reins'
         // MIN_REMOVE_EVAL, so an amendment there cannot move this floor
         public static final int MIN_VICTIM_EVAL = 200;
@@ -10154,10 +10163,13 @@ public class SpecialCardAi {
         public static final int NET_MARGIN = 100;
         // an opposing commander goes back to the command zone and is recast for two more
         public static final int COMMANDER_TAX = 100;
+        // Barter in Blood's clean trade (row 79): the symmetric-removal margin of Wave of Reckoning and
+        // Slaughter the Strong, about two 1/1 tokens; its own literal, not WaveOfReckoning.MARGIN
+        public static final int CLEAN_MARGIN = 200;
 
         // the paper names this class judges
         static boolean isEdict(final String name) {
-            return TERGRIDS_SHADOW.equals(name);
+            return TERGRIDS_SHADOW.equals(name) || BARTER_IN_BLOOD.equals(name);
         }
 
         // the readmit's key, shared by SacrificeAi.canPlay's gate: the owner's own cast from its own
@@ -10190,6 +10202,10 @@ public class SpecialCardAi {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
             final Game game = ai.getGame();
             final PhaseHandler ph = game.getPhaseHandler();
+            final Card host = sa.getHostCard();
+            // Barter in Blood's own clauses (row 79): its sorcery window and its clean trade
+            final boolean barter = host != null && host.getRules() != null
+                    && BARTER_IN_BLOOD.equals(host.getRules().getName());
             // 1. window, the cheapest test first (the readmit runs at every priority while the card is
             //    in hand): an empty stack, in our own main phase or the end step right before our turn
             if (!game.getStack().isEmpty()) {
@@ -10199,6 +10215,11 @@ public class SpecialCardAi {
             final boolean endBeforeOurs = ph.is(PhaseType.END_OF_TURN) && !ph.isPlayerTurn(ai)
                     && ai.equals(ph.getNextTurn());
             if (!ownMain && !endBeforeOurs) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (barter && !ai.canCastSorcery()) {
+                // Barter in Blood: our own turn, a main phase, an empty stack (Player.canCastSorcery),
+                // never the end step before our turn, even under a flash grant
                 return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
             }
             if (!sa.canCastTiming(ai)) {
@@ -10234,7 +10255,8 @@ public class SpecialCardAi {
             }
             final Map<Card, Integer> value = new HashMap<>(); // evaluateCreature, once per card
             // 5. their picks first: their counted total bounds the floor from above (our loss is never
-            //    negative, and the veto only takes credit away), so most boards stop here
+            //    negative, and the veto only takes credit away, from the total and from worthACard
+            //    alike), so most boards stop here
             final List<Card> theirPicks = Lists.newArrayList();
             for (final Player opp : ai.getOpponents()) {
                 theirPicks.addAll(picks(opp, sa, amount, value));
@@ -10242,6 +10264,7 @@ public class SpecialCardAi {
             int ourLoss = 0;
             int bound = 0;
             boolean threat = false;
+            boolean worthBound = false;
             for (final Card c : theirPicks) {
                 if (ai.equals(c.getOwner())) {
                     if (c.isCommander()) {
@@ -10253,8 +10276,9 @@ public class SpecialCardAi {
                 final int v = victimValue(c, value);
                 bound += v;
                 threat |= v >= MIN_VICTIM_EVAL;
+                worthBound |= worthACard(c);
             }
-            if (!threat || bound < NET_MARGIN) {
+            if (!(threat && bound >= NET_MARGIN) && !(barter && worthBound && bound > CLEAN_MARGIN)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             // 6. our picks: never a commander on our side
@@ -10297,9 +10321,11 @@ public class SpecialCardAi {
                     }
                 }
             }
-            // 8. the exact floor: a real threat among the counted victims, and a net of NET_MARGIN
+            // 8. the exact floor: a real threat among the counted victims, and a net of NET_MARGIN; or,
+            //    for Barter in Blood only, a counted victim worth a card and a net beyond CLEAN_MARGIN
             int theirLoss = 0;
             threat = false;
+            boolean worth = false;
             for (final Card c : theirPicks) {
                 if (ai.equals(c.getOwner()) || noValueKills.contains(c)) {
                     continue;
@@ -10307,8 +10333,12 @@ public class SpecialCardAi {
                 final int v = victimValue(c, value);
                 theirLoss += v;
                 threat |= v >= MIN_VICTIM_EVAL;
+                worth |= worthACard(c);
             }
-            if (!threat || theirLoss - ourLoss < NET_MARGIN) {
+            final int net = theirLoss - ourLoss;
+            final boolean bigThreat = threat && net >= NET_MARGIN;
+            final boolean cleanTrade = barter && worth && net > CLEAN_MARGIN;
+            if (!bigThreat && !cleanTrade) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
@@ -10374,6 +10404,14 @@ public class SpecialCardAi {
         // worth 0 to its controller: SacMe, or an active undying or persist creature (it comes back)
         private static boolean worth0(final Card c) {
             return c.hasSVar("SacMe") || ComputerUtilCard.hasActiveUndyingOrPersist(c);
+        }
+
+        // Barter in Blood's clean trade (row 79): an opposing victim worth a card by its printed shape,
+        // the Meteor Blast filter Slaughter the Strong and Wave of Reckoning read over their kills (a
+        // nontoken of mana value 2 or more, or power 3 or more), never fodder or a returner (their
+        // oppKills skip SacMe and active undying or persist too)
+        private static boolean worthACard(final Card c) {
+            return !worth0(c) && ((!c.isToken() && c.getCMC() >= 2) || c.getNetPower() >= 3);
         }
 
         // the SacMe priority chooseCardToSacrifice reads; 0 when absent or not a number
@@ -26239,9 +26277,9 @@ public class SpecialCardAi {
     // reads, and a face-down host's getName() is "". A card no case names answers false from both,
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
-    // EdictForAll's per-card name constant for batch 3's row 41), and delegates to that class:
-    // readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 5, 10, 16, 17,
-    // 19, 21, 27, 35, 36, 41, 49, 50, 57, 58, 60, 83 and 84, keepOff for batch 2's row 68.
+    // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
+    // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 5, 10, 16,
+    // 17, 19, 21, 27, 35, 36, 41, 49, 50, 57, 58, 60, 79, 83 and 84, keepOff for batch 2's row 68.
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -26300,6 +26338,8 @@ public class SpecialCardAi {
                 case GrimoireOfTheDead.NAME:
                     return GrimoireOfTheDead.readmit(ai, sa);
                 case EdictForAll.TERGRIDS_SHADOW:
+                    return EdictForAll.readmit(ai, sa);
+                case EdictForAll.BARTER_IN_BLOOD:
                     return EdictForAll.readmit(ai, sa);
                 default:
                     return false;
