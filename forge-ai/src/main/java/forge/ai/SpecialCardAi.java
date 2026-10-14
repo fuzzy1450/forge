@@ -27301,8 +27301,8 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 5, 10, 16,
-    // 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 79, 83 and 84, keepOff for batch 2's
-    // row 68.
+    // 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 79, 83 and 84, keepOff for batch
+    // 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -27368,6 +27368,8 @@ public class SpecialCardAi {
                     return InciteRebellion.readmit(ai, sa);
                 case EvolutionCharm.NAME:
                     return EvolutionCharm.readmit(ai, sa);
+                case SunbirdStandard.NAME:
+                    return SunbirdStandard.isOwnHandCast(ai, sa);
                 default:
                     return false;
             }
@@ -32229,6 +32231,67 @@ public class SpecialCardAi {
                 return false; // Treasure, Clue, Food
             }
             return c.isPlaneswalker() || c.getCMC() >= MIN_PERMANENT_CMC; // a planeswalker's X is 0 on the battlefield
+        }
+    }
+
+    // Sunbird Standard (dead-card batch 3, row 68)
+    // "{T}: Add one mana of any color. Craft with one or more {5} ({5}, Exile this artifact, Exile
+    // one or more other permanents you control and/or cards from your graveyard: Return this card
+    // transformed under its owner's control. Craft only as a sorcery.)" ({3} artifact; the front
+    // face is Manalith.) AI:RemoveDeck:All is KEPT (the Manascape Refractor shape, batch 2 row 60,
+    // as a private copy: accepted predicates are not shared). What the hint really suppresses is the
+    // Craft AB (CardFactoryUtil's keyword ChangeZone), which the stock ChangeZoneAi approves whenever
+    // it can pay (knownOriginCanPlayAI's craft branch) and pays with ComputerUtil
+    // .chooseExileFromList's colour-blind pick: a colourless pick makes a 0/0 Sunbird Effigy (P/T =
+    // colours among the exiled cards) that dies at once. G3 readmits exactly one ability through
+    // AiController's filter: this card's own permanent spell, cast by its owner from hand and not
+    // from a Play effect, judged by consider() from PermanentNoncreatureAi.checkApiLogic after the
+    // stock WillPlay (own Main 2, PermanentAi's checkPhaseRestrictions; Main 1 only where
+    // castPermanentInMain1 says so). The Craft and the Mana AB stay off the playable list; payment
+    // never read the hint, so on the battlefield it is a source ComputerUtilMana taps. The hint
+    // keeps the card off opposing steal, clone, copy and tutor lists and keeps its -10 sort, so it
+    // is tried only after nearly every other ability this pass declined.
+    // isOwnHandCast is also the handler gate's key (rule B3-2), with Springleaf Drum's owner test:
+    // the canPlaySa callers that skip the RemoveDeck filter (TapAi's hasReasonToPlayCardThisTurn,
+    // ManaAi's ritual look-ahead, targetPlayableSpellCard, the hand scanners) and readmit's second
+    // reader, ManifoldKey.filteredOut (the Key's untap scan), meet consider() only for the owner's
+    // own hand card; consider() draws nothing, and any other host keeps the stock answer.
+    public static class SunbirdStandard {
+        public static final String NAME = "Sunbird Standard";
+
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return sa.isSpell() && !sa.isCastFromPlayEffect() && host != null
+                    && NAME.equals(host.getName()) && host.isInZone(ZoneType.Hand)
+                    && ai.equals(host.getOwner());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // RNG parity: A never evaluated this spell on the cast path, and every check before
+            // this point is RNG-free. canPayCost (AiController.canPlayAndPayForFace) draws in
+            // ComputerUtilMana.isManaSourceReserved per source it tries, so a window that cannot
+            // pay must stop here, drawing nothing: the engine's test-mode cost (taxes, every
+            // RaiseCost and ReduceCost static, first static choice, no draw) against HonestMana
+            // (G2, held sources skipped), never getAvailableManaEstimate, which counts the words of
+            // Produced$ (Irrigated Farmland's Combo W U as 2).
+            // Residuals, G2's own (as in ManascapeRefractor): a mana ability G2 counts and the
+            // payer then drops (an instant-speed-restricted one, a Grell veto, a sub-ability
+            // drawback the payer refuses, a life cost at low life) re-rolls a window with no cast;
+            // the carrier holds none. G2 skips a filter land (Skycloud Expanse) the payer uses since
+            // upstream's filter-ability payment: an under-count, the safe side (a payable window
+            // waits, drawing nothing). A coloured shard an opposing RaiseCost adds is checked
+            // through the total only.
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (HonestMana.of(ai, sa, true).total() < cost.getConvertedManaCost()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // Value floor: a Manalith. Its {T}: Add one mana of any color costs only the tap and has
+            // no restriction; it enters untapped, with no ETB, upkeep or life text. The stock floors
+            // carry the rest (Main 2, the -10 sort: cast with mana nothing ranked above it wanted
+            // this pass), as for the hint-free rocks (Thran Dynamo, Worn Powerstone, Patriar's Seal,
+            // Manalith itself). No flood floor and no dead-rock floor (Null Rod, Stony Silence): the
+            // stock rocks share that gap.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
     }
 
