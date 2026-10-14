@@ -9479,6 +9479,115 @@ public class SpecialCardAi {
         }
     }
 
+    // Druid of Purification (dead-card batch 3, row 51)
+    // "When Druid of Purification enters, starting with you, each player may choose an artifact or
+    // enchantment you don't control. Destroy each permanent chosen this way." ({3}{G} 2/3.) The ETB
+    // veto was a timing artifact (DestroyAi's Defined$ ChosenCard is empty before resolution; the
+    // script's AILogic$ Always lifts it). This class is the value floor that replaces it, and the
+    // resolution chooser.
+    // AiController.checkETBEffects test-runs the enters trigger before the cast, and DestroyAi's
+    // Defined branch read the host's chosen cards, which the ChooseCard fills only when it resolves,
+    // so every cast was BadEtbEffects on every board (batch 1's Chaos Defiler shape, row 100). "You"
+    // is the Druid's controller (ChooseCardEffect reads Choices against the activator), so no choice
+    // can touch the controller's board, and every choice is optional: the card is a 2/3 body plus one
+    // Disenchant on an opponent's best artifact or enchantment.
+    // Cast (PermanentCreatureAi, never a Play-effect cast): an opponent controls a floor target
+    // (target(): an artifact or enchantment that dies, a nontoken noncreature, or a creature, token
+    // or not, worth at least our Druid), and real mana pays for it: the cost as the engine prices it
+    // (test-mode calculateManaCost: taxes and reductions) against HonestMana (G2, held sources
+    // skipped, mana restrictions read on the spell being judged), in total and in green, never
+    // getAvailableManaEstimate, which counts the words of Produced$. It judges the creature Spell it
+    // is passed, never host.getFirstSpellAbility() (row 77).
+    // Resolution (ChooseCardAi.chooseSingleCard; ChooseCardEffect asks each player in turn,
+    // optional): every chooser takes the most valuable permanent one of ITS opponents controls that
+    // dies, floor targets first, else declines (null). For the controller that is the best opposing
+    // target, always one the floor saw when one exists; an opponent never destroys its own permanent
+    // (stock getBestAI did: in 1v1 every option is its own, a free 2-for-1).
+    // RNG parity: the card is unhinted, so A evaluated it at every own Main 2 up to the ETB veto and
+    // drew nothing; the floor declines inside checkApiLogic, ahead of steps that draw nothing either,
+    // and only a WillPlay goes on to canPayCost's isManaSourceReserved roll. Every check here reads
+    // state only (battlefield scans, canBeDestroyed, counters, hasSVar, evaluateCreature,
+    // calculateManaCost in test mode, HonestMana): no random draw, no AiCache, no memory, nothing
+    // held.
+    public static class DruidOfPurification {
+        public static final String NAME = "Druid of Purification";
+
+        // Cast floor for the owner's cast. Cheapest first: one pass over the opponents' battlefield,
+        // stopping at the first target, then the mana walk. `spell` is the creature Spell being judged.
+        public static boolean worthCasting(final Player ai, final Card host, final SpellAbility spell) {
+            final int hostValue = ComputerUtilCard.evaluateCreature(host);
+            boolean found = false;
+            for (final Card c : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                if (target(ai, hostValue, c)) {
+                    found = true;
+                    break;
+                }
+            }
+            return found && affordable(ai, spell);
+        }
+
+        // The floor's targets: a permanent that dies (dies()) that is a nontoken noncreature (not a
+        // Treasure, Clue, Food, Blood, Map or Powerstone: one-shot, cracked in response), or a
+        // creature, token or not, worth at least our Druid.
+        static boolean target(final Player ai, final int hostValue, final Card c) {
+            if (!dies(ai, c)) {
+                return false;
+            }
+            return c.isCreature() ? ComputerUtilCard.evaluateCreature(c) >= hostValue : !c.isToken();
+        }
+
+        // An artifact or enchantment an opponent of `ai` controls that a destroy removes for good:
+        // canBeDestroyed (indestructible, phased out), no regeneration shield, no shield counter, not
+        // one its controller wants gone (SacMe), and for a creature no active undying/persist.
+        // ComputerUtil.canRegenerate and DestroyAi's sacrifice-in-response filter are left out on
+        // purpose: both call canPayCost, which draws MyRandom (Goblin Archaeologist's note).
+        static boolean dies(final Player ai, final Card c) {
+            return (c.isArtifact() || c.isEnchantment()) && c.getController().isOpponentOf(ai)
+                    && c.canBeDestroyed() && c.getShieldCount() == 0
+                    && c.getCounters(CounterEnumType.SHIELD) == 0 && !c.hasSVar("SacMe")
+                    && !(c.isCreature() && ComputerUtilCard.hasActiveUndyingOrPersist(c));
+        }
+
+        // Private copy of Goblin Archaeologist's ceiling (shared infrastructure is frozen; G2 itself
+        // is used as is): the cost as the engine prices it (tax, ReduceCost/RaiseCost) against
+        // HonestMana with held sources skipped, the whole cost and at least one green (the unpaid G
+        // shards, if more).
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.GREEN) >= Math.max(1, cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN));
+        }
+
+        // Resolution: the most valuable floor target one of the chooser's opponents controls, else
+        // the most valuable other permanent that dies (a small creature, a noncreature token), else
+        // decline (null). The controller's own permanents are never options (Choices$ ...YouDontCtrl),
+        // so for the controller this is the best opposing target, and an opponent never destroys its
+        // own permanent. No random draw.
+        public static Card chooseCard(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            final Card host = sa.getHostCard();
+            final int hostValue = host == null ? 0 : ComputerUtilCard.evaluateCreature(host);
+            Card best = null;
+            int bestValue = Integer.MIN_VALUE;
+            for (final Card c : options) {
+                if (!dies(ai, c)) {
+                    continue; // also requires c's controller to be an opponent of the chooser
+                }
+                final int v = (target(ai, hostValue, c) ? 1000 : 0) + value(c);
+                if (v > bestValue) { // the first in list order wins a tie
+                    bestValue = v;
+                    best = c;
+                }
+            }
+            return best;
+        }
+
+        // Goblin Archaeologist's ranking (no evaluateBoardPosition / AiCache).
+        private static int value(final Card c) {
+            return c.isCreature() ? ComputerUtilCard.evaluateCreature(c) : 50 + 30 * c.getCMC();
+        }
+    }
+
     // Dualcaster Mage (dead-card batch 2, row 19)
     // "Flash. When Dualcaster Mage enters, copy target instant or sorcery spell. You may choose
     // new targets for the copy." ({1}{R}{R} 2/2.) AI:RemoveDeck:All kept it off the playable list

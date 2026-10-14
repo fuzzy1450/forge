@@ -190,6 +190,11 @@ public class ChooseCardAi extends SpellAbilityAi {
      */
     @Override
     public Card chooseSingleCard(final Player ai, final SpellAbility sa, Iterable<Card> options, boolean isOptional, Player targetedPlayer, Map<String, Object> params) {
+        if (SpecialCardAi.DruidOfPurification.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dead-card batch 3, row 51: the best opposing artifact/enchantment that dies, or decline.
+            // Every other ChooseCard card takes exactly the path it took before.
+            return SpecialCardAi.DruidOfPurification.chooseCard(ai, sa, options);
+        }
         final Card host = sa.getHostCard();
         final Player ctrl = host.getController();
         String logic = sa.getParamOrDefault("AILogic", "");

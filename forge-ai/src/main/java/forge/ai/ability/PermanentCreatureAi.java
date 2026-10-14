@@ -262,6 +262,15 @@ public class PermanentCreatureAi extends PermanentAi {
             // A Play-effect cast (a thief) keeps the stock path. No random draw; see the class comment.
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
+        if (SpecialCardAi.DruidOfPurification.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
+                && !SpecialCardAi.DruidOfPurification.worthCasting(ai, card, sa)) {
+            // Dead-card batch 3, row 51. Value floor: the body is a 2/3 for four; its worth is the
+            // enters-trigger Disenchant. Cast it only while an opponent controls an artifact or
+            // enchantment the trigger would destroy for good, and only when real mana with green pays
+            // for it (canPayCost's test payment draws MyRandom). A Play-effect cast (a thief) keeps
+            // the stock path. No random draw; see the class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
 
         /*
          * Checks if the creature will have non-positive toughness after
