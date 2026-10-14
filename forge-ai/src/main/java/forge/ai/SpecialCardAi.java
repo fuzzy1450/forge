@@ -27866,6 +27866,70 @@ public class SpecialCardAi {
         }
     }
 
+    // Sunfall (dead-card batch 3, row 9)
+    // {3}{W}{W} Sorcery. "Exile all creatures. Incubate X, where X is the number of creatures
+    // exiled this way." The script is SP$ ChangeZoneAll (ChangeType$ Creature, Origin$ Battlefield,
+    // Destination$ Exile, RememberChanged$ True) -> SubAbility DB$ Incubate (Amount$ X, X =
+    // Remembered$Amount, no Defined: the caster incubates), with no AI hint. The stock
+    // ChangeZoneAllAi.canPlay judged the sweep and approved it, but canPlayWithSubs then asked the
+    // rider, IncubateAi.chkDrawback fell through to CannotPlayAi.chkDrawback, and that refuses
+    // unconditionally: no owner and no thief ever cast it, on any engine. IncubateAi's
+    // ChangeZoneAll-from-Battlefield branch (an Incubate that is ours) now asks considerIncubate,
+    // which is reached only after the root approved the sweep: on a cast from hand, the run-away
+    // roll (ChangeZoneAllAi :62), the BOUNCE_ALL_ELSEWHERE_CREAT_EVAL_DIFF floor (the opposing
+    // creatures outweigh ours by 200 on Default, Reckless and Cautious, 400 on Experimental), the
+    // Main-1 TimingRestrictions and the 80% coin (:256); on a Play-effect or free cast,
+    // doTriggerNoCost's margin-free floor. The rider is pure upside for the caster (an Incubator
+    // with X +1/+1 counters; X = 0 is an inert artifact SetStateAi never transforms), so it is
+    // credited at 0 and the stock floor is the value floor, the one Final Judgment passes.
+    // A hand cast approved here goes on to canPlayAndPayForFace's canPayCost, whose test payment
+    // draws MyRandom (ComputerUtilMana.isManaSourceReserved; RESERVE_MANA_FOR_MAIN2_CHANCE is 100
+    // on every profile) where A declined without a draw. So an unaffordable approval stays a
+    // decline that draws nothing: G2 (HonestMana, held sources skipped, restrictions read on the
+    // root) against the engine's test-mode calculateManaCost of the root (taxes, reductions), in
+    // total and per coloured shard. That is the comparison CommanderCastCeiling (G1) makes, kept
+    // as the reviewed design's private copy: judged on the root, never host.getFirstSpellAbility()
+    // (row 77), and skipped where no mana is paid at this point. A Play-effect cast
+    // (isCastFromPlayEffect), a copy and a WithoutManaCost cast skip it: SpellAbilityAi.doTrigger
+    // checks canPayCost itself before the subs, and a free cast pays nothing. Thieves take this
+    // branch too (Evan's ruling, 2026-10-13), as every stolen ChangeZoneAll sweeper's stock path
+    // already does. Residuals: the over-count for {W}{W} is a pain W source (the Talismans,
+    // Battlefield Forge, Caves of Koilos) at a life where canPayCost's filter refuses its coloured
+    // ability (DamageDealAi.damageChooseNontargeted), and a reflected source (Exotic Orchard,
+    // Fellwar Stone) counted toward the total when it makes nothing: rare, a held re-roll with no
+    // cast (batch 1's W12 shape). A dual cannot double-count, since every coloured pip is W. The
+    // under-count is the safe side (rule B3-6): Signets and filter lands (Fetid Heath, Mystic
+    // Gate, Sunken Ruins), which canPayCost can pay with since upstream's filter-ability change and
+    // G2 skips, miss a window and draw nothing. RNG-free: calculateManaCost in test mode for a
+    // plain {3}{W}{W} (no Announce, no X, no cost feature that asks a controller) and HonestMana,
+    // which reads only. Holds nothing, remembers nothing, sets no target and no X.
+    public static class Sunfall {
+        // the five coloured shards, in MagicColor.WUBRG order
+        private static final forge.card.mana.ManaCostShard[] SHARDS = {
+                forge.card.mana.ManaCostShard.WHITE, forge.card.mana.ManaCostShard.BLUE,
+                forge.card.mana.ManaCostShard.BLACK, forge.card.mana.ManaCostShard.RED,
+                forge.card.mana.ManaCostShard.GREEN };
+
+        // IncubateAi.chkDrawback's ChangeZoneAll-from-Battlefield branch, after the root approved the sweep
+        public static AiAbilityDecision considerIncubate(final Player ai, final SpellAbility sub) {
+            final SpellAbility root = sub.getRootAbility();
+            if (root.isSpell() && !root.isCastFromPlayEffect() && !root.isCopied() && !root.isTrigger()
+                    && !root.hasParam("WithoutManaCost") && root.getPayCosts() != null) {
+                final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+                final HonestMana mana = HonestMana.of(ai, root, true);
+                if (mana.total() < cost.getConvertedManaCost()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+                for (int i = 0; i < SHARDS.length; i++) {
+                    if (mana.colour(MagicColor.WUBRG[i]) < cost.getUnpaidShards(SHARDS[i])) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                    }
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Sword of the Paruns (dead-card batch 3, row 57)
     // "As long as equipped creature is tapped, tapped creatures you control get +2/+0. As long as
     // equipped creature is untapped, untapped creatures you control get +0/+2. {3}: You may tap or
