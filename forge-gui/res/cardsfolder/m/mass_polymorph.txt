@@ -6,5 +6,4 @@ SVar:DBMassReveal:DB$ DigUntil | Amount$ MassX | Valid$ Creature.YouOwn | ValidD
 SVar:DBMassCleanup:DB$ Cleanup | ClearRemembered$ True | SubAbility$ DBMassShuffle
 SVar:DBMassShuffle:DB$ Shuffle
 SVar:MassX:Remembered$Amount
-AI:RemoveDeck:All
 Oracle:Exile all creatures you control, then reveal cards from the top of your library until you reveal that many creature cards. Put all creature cards revealed this way onto the battlefield, then shuffle the rest of the revealed cards into your library.

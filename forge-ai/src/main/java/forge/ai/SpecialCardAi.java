@@ -19497,6 +19497,240 @@ public class SpecialCardAi {
         }
     }
 
+    // Mass Polymorph (Dead-card batch 3, row 13)
+    // "Exile all creatures you control, then reveal cards from the top of your library until you
+    // reveal that many creature cards. Put all creature cards revealed this way onto the
+    // battlefield, then shuffle the rest of the revealed cards into your library." ({5}{U} sorcery.)
+    // AI:RemoveDeck:All dropped it from the playable list (AiController.getSpellAbilityToPlay's
+    // removeIf) before any handler ran, so its owner never cast it on any engine; the script drops
+    // the hint. Behind it, ChangeZoneAllAi's Battlefield branch filters the opponents' list by
+    // Creature.YouCtrl too, so it compares ours + 200 with an empty list and can only decline (the
+    // gate Day of the Dragons and Synthetic Destiny replaced). ChangeZoneAllAi.canPlay routes the
+    // name here ahead of its run-away roll. Proactive, like Day of the Dragons; the first failure
+    // declines, cheapest first:
+    // - the base restriction check (ChangeZoneAllAi overrides canPlay); the owner only (A's
+    //   RemoveDeck filter kept a thief's MayPlay cast out, and this keeps it out); our own Main 2
+    //   only (the exiled creatures have had their attack, the replacements are summoning sick);
+    // - at least MIN_EXILED creatures exiled: exactly the ChangeType list the spell reads;
+    // - real mana covers the engine's test-mode price (taxes, reductions; rule B3-5): G2
+    //   HonestMana, held sources skipped, in total and in blue;
+    // - none of them is a land (an animated Restless land is a mana source), face down (a morphed
+    //   Akroma scores as a vanilla 2/2), a commander, or a creature holding cards it exiled
+    //   (Banisher Priest would hand them back);
+    // - the library holds a creature card the DigUntil sub finds (Valid$ Creature.YouOwn) for every
+    //   creature exiled, and LIBRARY_MARGIN cards after them;
+    // - n times the mean CreatureEvaluator value of those library cards (the composition, never the
+    //   order) beats the exiled board's value by BOUNCE_ALL_ELSEWHERE_CREAT_EVAL_DIFF (200, Day of
+    //   the Dragons' margin). A card whose own enters trigger hands control of something away counts
+    //   0 in the mean (Dack Fayden, Helping Hand gives each opponent one of the creatures it reveals,
+    //   goaded at us): any GainControl link in the chain of its Self enters trigger;
+    // - last, the arrival screen: no such library card is kept off the battlefield (Grafdigger's
+    //   Cage, ComputerUtil.isETBprevented) or sent elsewhere as it arrives (Containment Priest: a
+    //   Moved replacement whose ability is a ChangeZone, WakeTheDead.arrivalReplacement's test), or
+    //   the board would be exiled for nothing.
+    // The replacements' ETB value is not counted, so the floor errs low. Reads the board, the library
+    // and the scripts: no random draw, nothing held or remembered, and no ability is built (a chain
+    // not built yet is read from its SVar text, as EspersToMagicite does: building one allocates a
+    // SpellAbility id). Its only write is HonestMana's setActivatingPlayer on the mana abilities it
+    // reads.
+    public static class MassPolymorph {
+        public static final String NAME = "Mass Polymorph";
+        public static final int MIN_EXILED = 2;
+        public static final int LIBRARY_MARGIN = 5;
+        // the chain links an SVar-text read follows (EspersToMagicite's list)
+        private static final String[] BRANCHES = {"SubAbility", "Execute", "TrueSubAbility", "FalseSubAbility",
+                "WinSubAbility", "LoseSubAbility", "RepeatSubAbility"};
+        private static final int MAX_DEPTH = 12;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // ChangeZoneAllAi overrides canPlay, so mirror the base restriction check.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            if (!ai.equals(host.getOwner())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // A's filter, kept for thieves
+            }
+            final Game game = ai.getGame();
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TimingRestrictions);
+            }
+            // Exactly what the spell will exile.
+            final CardCollectionView ours = AbilityUtils.filterListByType(
+                    ai.getCardsIn(ZoneType.Battlefield), sa.getParam("ChangeType"), sa);
+            final int n = ours.size();
+            if (n < MIN_EXILED) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // RNG-free, before any scan: a WillPlay goes on to canPayCost's reservation rolls.
+            if (!fits(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            for (final Card c : ours) {
+                if (c.isLand() || c.isFaceDown() || c.isCommander() || c.hasExiledCard()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // What the DigUntil sub will find, and a library that survives giving them up.
+            final SpellAbility dig = sa.findSubAbilityByType(ApiType.DigUntil);
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            final CardCollectionView pool = dig != null && dig.hasParam("Valid")
+                    ? CardLists.getValidCards(library, dig.getParam("Valid"), ai, host, dig)
+                    : CardLists.filter(library, CardPredicates.CREATURES);
+            if (pool.size() < n || library.size() - n < LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            long value = 0;
+            for (final Card p : pool) {
+                if (!givesControlAway(p)) {
+                    value += ComputerUtilCard.evaluateCreature(p);
+                }
+            }
+            final long expected = n * value / pool.size();
+            final int margin = AiProfileUtil.getIntProperty(ai, AiProps.BOUNCE_ALL_ELSEWHERE_CREAT_EVAL_DIFF);
+            if (expected - ComputerUtilCard.evaluateCreatureList(ours) < margin) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // The arrival screen, last: only a cast that would otherwise go ahead pays for it.
+            for (final Card p : pool) {
+                if (ComputerUtil.isETBprevented(p) || redirectedOnArrival(game, p)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the cost as the engine prices it (test mode: CostAdjustment only), within G2 (HonestMana,
+        // held sources skipped) in total and in blue
+        private static boolean fits(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int total = cost.getConvertedManaCost();
+            final int blue = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+            if (total <= 0 && blue <= 0) {
+                return true; // free: nothing to count
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= total && mana.colour(MagicColor.BLUE) >= blue;
+        }
+
+        // A Self enters trigger whose chain has a GainControl link: Dack Fayden, Helping Hand hands
+        // each opponent one of the creatures it reveals. A steal of our own on entry counts 0 too,
+        // which only declines more.
+        private static boolean givesControlAway(final Card c) {
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone
+                        || !tr.getParamOrDefault("Destination", "").contains(ZoneType.Battlefield.toString())
+                        || !tr.getParamOrDefault("ValidCard", "").contains("Self")) {
+                    continue;
+                }
+                final SpellAbility built = tr.getOverridingAbility();
+                if (built != null ? builtHasControl(built, 0) : textHasControl(tr)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean builtHasControl(final SpellAbility sa, final int depth) {
+            if (sa == null || depth > MAX_DEPTH) {
+                return false;
+            }
+            if (sa.getApi() == ApiType.GainControl || builtHasControl(sa.getSubAbility(), depth + 1)) {
+                return true;
+            }
+            for (final SpellAbility extra : sa.getAdditionalAbilities().values()) {
+                if (builtHasControl(extra, depth + 1)) {
+                    return true;
+                }
+            }
+            for (final List<AbilitySub> choices : sa.getAdditionalAbilityLists().values()) {
+                for (final AbilitySub choice : choices) {
+                    if (builtHasControl(choice, depth + 1)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // the chain read from its SVar text, never built
+        private static boolean textHasControl(final Trigger tr) {
+            final Deque<String> todo = new ArrayDeque<>();
+            final Set<String> seen = new HashSet<>();
+            if (tr.hasParam("Execute")) {
+                todo.add(tr.getParam("Execute"));
+            }
+            while (!todo.isEmpty()) {
+                final String svar = todo.poll();
+                if (!seen.add(svar)) {
+                    continue;
+                }
+                final String text = tr.getSVar(svar);
+                if (text.isEmpty()) {
+                    continue;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                if (ApiType.GainControl.name().equalsIgnoreCase(apiOf(params))) {
+                    return true;
+                }
+                for (final String key : BRANCHES) {
+                    if (params.containsKey(key)) {
+                        todo.add(params.get(key));
+                    }
+                }
+                if (params.containsKey("Choices")) {
+                    for (final String choice : params.get("Choices").split(",")) {
+                        todo.add(choice.trim());
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static String apiOf(final Map<String, String> params) {
+            final String api = params.get("DB");
+            if (api != null) {
+                return api;
+            }
+            return params.containsKey("AB") ? params.get("AB") : params.get("SP");
+        }
+
+        // WakeTheDead.arrivalReplacement's redirect test (private there), for a card coming from
+        // our library: a Moved replacement of layer Other whose ability is a ChangeZone sends it
+        // elsewhere instead (Containment Priest exiles it). Its ability is read as parsed, never
+        // built here.
+        private static boolean redirectedOnArrival(final Game game, final Card c) {
+            final Map<forge.game.ability.AbilityKey, Object> repParams = forge.game.ability.AbilityKey.mapFromAffected(c);
+            repParams.put(forge.game.ability.AbilityKey.CardLKI, c);
+            repParams.put(forge.game.ability.AbilityKey.Origin, ZoneType.Library);
+            repParams.put(forge.game.ability.AbilityKey.Destination, ZoneType.Battlefield);
+            // add Params for AddCounter Replacements
+            final GameEntityCounterTable table = new GameEntityCounterTable();
+            repParams.put(forge.game.ability.AbilityKey.EffectOnly, true);
+            repParams.put(forge.game.ability.AbilityKey.CounterTable, table);
+            repParams.put(forge.game.ability.AbilityKey.CounterMap, table.column(c));
+            for (ReplacementEffect re : game.getReplacementHandler().getReplacementList(ReplacementType.Moved, repParams, ReplacementLayer.Other)) {
+                final SpellAbility with = re.getOverridingAbility();
+                final String api;
+                if (with != null) {
+                    api = with.getApi() == null ? null : with.getApi().name();
+                } else if (re.hasParam("ReplaceWith")) {
+                    final String text = re.getSVar(re.getParam("ReplaceWith"));
+                    api = text.isEmpty() ? null : apiOf(FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR));
+                } else {
+                    api = null;
+                }
+                if (ApiType.ChangeZone.name().equalsIgnoreCase(api)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Master Warcraft
     //
     // "You choose which creatures attack this turn. You choose which creatures block
