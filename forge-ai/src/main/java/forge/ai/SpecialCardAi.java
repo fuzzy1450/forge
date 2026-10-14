@@ -11851,7 +11851,9 @@ public class SpecialCardAi {
     // any WillPlay:
     // - our own Main 2 only (canCastTiming already kept us to our main phases, stack empty): the
     //   exiled cards stay playable through our next turn, so Main 2 costs the impulse nothing and
-    //   leaves Main 1's mana to the hand (Truth or Consequences' window);
+    //   leaves Main 1's mana to the hand (Truth or Consequences' window), and the script's
+    //   AIActivateLast$ True sorts the spell behind every other play, so the floor spends only the
+    //   mana the AI chose not to spend;
     // - affordability: the cost as the engine prices it (test-mode calculateManaCost: taxes and
     //   reductions) against HonestMana (G2, held sources skipped, restrictions read on the root sa)
     //   in total and in red, never getAvailableManaEstimate (it counts the words of Produced$);
