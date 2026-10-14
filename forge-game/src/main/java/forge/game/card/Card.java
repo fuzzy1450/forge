@@ -8327,7 +8327,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public Set<CardStateName> getLockedRooms() {
-        Set<CardStateName> result = Sets.newHashSet(CardStateName.LeftSplit, CardStateName.RightSplit);
+        // an EnumSet, left door first: a HashSet's order followed the enum constants' identity hashes, which change
+        // from one JVM launch to the next, and the AI takes the first locked door it is offered
+        Set<CardStateName> result = EnumSet.of(CardStateName.LeftSplit, CardStateName.RightSplit);
         result.removeAll(this.unlockedRooms);
         return result;
     }
