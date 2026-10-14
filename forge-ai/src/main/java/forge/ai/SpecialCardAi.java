@@ -32877,14 +32877,25 @@ public class SpecialCardAi {
     //   (ComputerUtilMana's chkDrawbackWithSubs checks), and DamageDealAi.damageChooseNontargeted
     //   refuses a pain source's 1-damage sub at restDamage + 3 >= life (the carrier's Battlefield
     //   Forge, Caves of Koilos and Talisman of Progress), which G2 does not read.
+    // Amendment D (the W5 retry) opens one earlier shape, tested before the window: the opponent's
+    // declare-attackers step, for our own hand copy only (Play-effect casts, copies and thefts keep
+    // the path above), with nothing on the stack but the attacking player's triggers, when the
+    // attackers our creatures cannot legally block (CombatUtil.canBlock / canBeBlocked) are LETHAL on
+    // their own. Blocks cannot change those, and the stock AI may spend its mana in that very
+    // priority (1024014: Secure the Wastes X=13 with all 15 lands, one step before the
+    // declare-blockers window). Worship / Elderscale Wurm, the residual (every attacker at us read
+    // unblocked, since none is blocked yet) and the mana check are the window's own; there is no
+    // crack-back guard, since only LETHAL opens it. Any other declare-attackers consult falls
+    // through to the window test, which declines it as before.
     // Then the attacking player is targeted and Tempo at 100, as Gambit.
     // RNG parity: the stock path drew the randomReturn roll and refused; this gate sits after that
     // roll, and every decline here draws nothing: no lifeInDanger, lifeThatWouldRemain or
     // resultingPoison (they roll or test-pay), damageIfUnblocked(..., true) returns before the pump
     // scan's canPayCost, the poison and shield counts are private copies of Gambit's RNG-free ones
     // (accepted helpers stay private), and StaticAbilityCantPhase, canAttackNextTurn,
-    // calculateManaCost (test) and HonestMana draw nothing. Nothing is held, remembered or targeted
-    // on a decline. Draws come only after the approval, in canPayCost.
+    // CombatUtil.canBlock / canBeBlocked (D's rules reads), calculateManaCost (test) and HonestMana
+    // draw nothing. Nothing is held, remembered or targeted on a decline. Draws come only after the
+    // approval, in canPayCost.
     public static class TeferisReproach {
         public static final String NAME = "Teferi's Reproach";
         // DamageDealAi.damageChooseNontargeted refuses a 1-damage pain sub on its controller at
@@ -32899,7 +32910,60 @@ public class SpecialCardAi {
             final Game game = ai.getGame();
             final PhaseHandler ph = game.getPhaseHandler();
             final Combat combat = game.getCombat();
-            // the window first: field reads only, before any loop
+            // Amendment D (the W5 retry): the opponent's declare-attackers step, when the attackers our
+            // creatures cannot legally block are lethal on their own. Blocks cannot change them, and the
+            // stock AI may spend its mana in this very priority (1024014: Secure the Wastes X=13 with all
+            // 15 lands, before the declare-blockers window). Only our own hand copy (Play-effect casts,
+            // copies and thefts keep the old path), and the stack may hold only the attacking player's
+            // triggers (its attack triggers). RNG-free: CombatUtil.canBlock / canBeBlocked are rules
+            // reads, Worship / Elderscale Wurm, danger() and the mana check as below. Any other
+            // declare-attackers consult falls through to the window test, which declines it as before.
+            if (combat != null && !ph.isPlayerTurn(ai) && ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                    && !ai.cantLose() && !game.getReplacementHandler().isPreventCombatDamageThisTurn()
+                    && sa.getHostCard() != null && sa.getHostCard().isInZone(ZoneType.Hand)
+                    && ai.equals(sa.getHostCard().getOwner())) {
+                final Player att = combat.getAttackingPlayer();
+                boolean stackOk = att != null;
+                if (stackOk) {
+                    for (final SpellAbilityStackInstance si : game.getStack()) {
+                        if (!si.isTrigger() || !att.equals(si.getActivatingPlayer())) {
+                            stackOk = false;
+                            break;
+                        }
+                    }
+                }
+                final CardCollection atUsNow = combat.getAttackersOf(ai);
+                if (stackOk && att.isOpponentOf(ai) && !atUsNow.isEmpty() && sa.canTarget(att)) {
+                    final CardCollection blockers = CardLists.filter(ai.getCreaturesInPlay(), b -> CombatUtil.canBlock(b));
+                    final CardCollection evasive = CardLists.filter(atUsNow, c -> !CombatUtil.canBeBlocked(c, blockers, combat));
+                    if (!evasive.isEmpty() && danger(ai, combat, evasive) == LETHAL) {
+                        // lifeInDanger's own special cases, as in the window below
+                        final CardCollectionView otbNow = ai.getCardsIn(ZoneType.Battlefield);
+                        if ((otbNow.anyMatch(CardPredicates.nameEquals("Worship")) && !ai.getCreaturesInPlay().isEmpty())
+                                || (otbNow.anyMatch(CardPredicates.nameEquals("Elderscale Wurm")) && ai.getLife() >= 7)) {
+                            return no;
+                        }
+                        // no blockers are declared yet, so danger() reads every attacker as unblocked (conservative)
+                        final CardCollection staysNow = CardLists.filter(atUsNow, c -> c.isLand()
+                                || !att.equals(c.getController()) || StaticAbilityCantPhase.cantPhaseOut(c));
+                        if (!staysNow.isEmpty() && danger(ai, combat, staysNow) == LETHAL) {
+                            return no; // the residual still kills us
+                        }
+                        final ManaCostBeingPaid costNow = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+                        final HonestMana manaNow = HonestMana.of(ai, sa, true);
+                        final int whiteNow = ai.canLoseLife() && ai.getLife() <= PAIN_LIFE
+                                ? painlessWhite(ai, sa) : manaNow.colour(MagicColor.WHITE);
+                        if (manaNow.total() < costNow.getConvertedManaCost()
+                                || whiteNow < costNow.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)) {
+                            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                        }
+                        sa.resetTargets();
+                        sa.getTargets().add(att);
+                        return new AiAbilityDecision(100, AiPlayDecision.Tempo);
+                    }
+                }
+            }
+            // the declare-blockers window: field reads only, before any loop
             if (combat == null || ph.isPlayerTurn(ai) || !ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
                     || !game.getStack().isEmpty() || ai.cantLose()
                     || game.getReplacementHandler().isPreventCombatDamageThisTurn()) {
