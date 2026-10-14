@@ -54,6 +54,13 @@ public class TokenAi extends SpellAbilityAi {
             // (which takes a card id) and before X (Sacrificed$CardPower) reads 0 ahead of the payment.
             return SpecialCardAi.GhoulcallerGisa.inWindow(ai);
         }
+        // Phyrexian Processor: a Processor that entered paying nothing makes a 0/0 Minion, which the
+        // toughness check below refuses only after spawnToken has taken a card id. Declined here
+        // first, the same answer with no id (the Sacred Mesa / Gisa routing).
+        if (SpecialCardAi.PhyrexianProcessor.isActivation(sa) && AbilityUtils.calculateAmount(sa.getHostCard(),
+                sa.getParamOrDefault("TokenToughness", "LifePaidOnETB"), sa) < 1) {
+            return false;
+        }
         final Card source = sa.getHostCard();
         // Planeswalker-related flags
         boolean pwMinus = false;

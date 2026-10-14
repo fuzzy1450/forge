@@ -25946,6 +25946,80 @@ public class SpecialCardAi {
         }
     }
 
+    // Phyrexian Processor (dead-card batch 3, row 67; precon:Hatsune Miku (SLD), Trostani)
+    // "As Phyrexian Processor enters, pay any amount of life. {4}, {T}: Create an X/X black
+    // Phyrexian Minion creature token, where X is the life paid as Phyrexian Processor entered."
+    // ({4} artifact.) Dead behind AI:RemoveDeck:All (the script drops it), and behind that the ETB
+    // replacement's Mandatory PayLife<X> is paid by ComputerUtil.playNoStack with no X announced,
+    // so Count$xPaid reads 0 (AbilityUtils' xPaid fallback): 0 life, LifePaidOnETB 0, and TokenAi
+    // refuses the 0/0 Minion for good. Every hook is keyed on this name:
+    //  - lifeToPay: the life to pay, a function of the board alone: min(MAX_X, life - keep), where
+    //    keep = max(MIN_LIFE_AFTER, starting life / 2, the opponents' unblocked next-turn damage +
+    //    AI_IN_DANGER_MAX_THRESHOLD + 1). Promise of Power's floor plus a half-starting-life
+    //    cushion, because the payment is permanent and slow to pay back. 0 when below 1 or when
+    //    canPayLife refuses.
+    //  - considerCast: PermanentNoncreatureAi.checkApiLogic, paid casts only, after the stock
+    //    approval. An O(1) life prefilter, then real mana for the cost as the engine prices it
+    //    (test-mode calculateManaCost against G2, held sources skipped), then lifeToPay >= MIN_X:
+    //    the board scan last (Moonlight Bargain's order). In Commander never below 24 life.
+    //  - StoreSVarAi.doTriggerNoCost: the mandatory replacement payment, whoever controls it, sets
+    //    X = lifeToPay on the replacement's own SA at resolution, as the human announce does.
+    //  - isActivation: TokenAi.checkPhaseRestrictions declines the {4},{T} ability of a Processor
+    //    that entered paying nothing before spawnToken takes a card id.
+    // The activation is otherwise stock TokenAi. RNG: canPayLife, sumDamageIfUnblocked,
+    // canAttackNextTurn, test-mode calculateManaCost and HonestMana draw nothing; a decline returns
+    // before canPlaySa's canPayCost test payment. Nothing is held or remembered.
+    public static class PhyrexianProcessor {
+        public static final String NAME = "Phyrexian Processor";
+        public static final int MIN_X = 4;           // a 4/4 per {4}: Promise of Power's MIN_DEMON
+        public static final int MAX_X = 10;          // a 10/10 outsizes the boards it meets; the rest stays life
+        public static final int MIN_LIFE_AFTER = 10; // Promise of Power's
+
+        static int cushion(final Player ai) {
+            return Math.max(MIN_LIFE_AFTER, ai.getStartingLife() / 2);
+        }
+
+        // the life the ETB pays, on the board as it is now; 0 = pay nothing
+        public static int lifeToPay(final Player ai, final SpellAbility sa) {
+            final int life = ai.getLife();
+            if (life - cushion(ai) < 1) {
+                return 0; // O(1) before the board scan
+            }
+            int unblocked = 0; // our blockers ignored: it only ever holds the payment back
+            for (final Player opp : ai.getOpponents()) {
+                unblocked += ComputerUtilCombat.sumDamageIfUnblocked(CardLists.filter(opp.getCreaturesInPlay(),
+                        c -> ComputerUtilCombat.canAttackNextTurn(c, ai)), ai);
+            }
+            final int keep = Math.max(cushion(ai),
+                    unblocked + AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD) + 1);
+            final int x = Math.min(MAX_X, life - keep);
+            return x >= 1 && ai.canPayLife(x, true, sa) ? x : 0;
+        }
+
+        // PermanentNoncreatureAi.checkApiLogic's name gate, after the stock approval, paid casts
+        // only (the caller leaves Play-effect casts stock). Returns only a decline or a WillPlay.
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (ai.getLife() - MIN_X < cushion(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // O(1): no 4/4 above the cushion
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (HonestMana.of(ai, sa, true).total() < cost.getConvertedManaCost()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (lifeToPay(ai, sa) < MIN_X) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the {4},{T} Minion ability, keyed on the host's paper name (rule B3-3: an ability granted
+        // to another host keeps the stock path)
+        public static boolean isActivation(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && !sa.isSpell() && sa.getApi() == ApiType.Token && NAME.equals(host.getName());
+        }
+    }
+
     // Phyrexian Revoker
     // As it enters, the AI names a card; activated abilities of sources with that
     // name can't be activated. The lock is symmetric and, unlike Pithing Needle's,

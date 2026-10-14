@@ -216,6 +216,18 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.IonStorm.considerCast(ai, sa);
         }
 
+        // Phyrexian Processor dropped AI:RemoveDeck:All. Behind the stock approval it would be cast
+        // in any Main 2 as a 4-mana blank (its ETB paid 0 life; StoreSVarAi now chooses that X): a
+        // paid cast (from hand, or a MayPlay thief's) only when the life its ETB will pay makes at
+        // least a 4/4 Minion above the floor, from real mana (G2). Every decline draws no random
+        // numbers and returns before canPlaySa's canPayCost test payment. A Play-effect cast (Nathan
+        // Drake's attack trigger; PermanentAi.doTriggerNoCost ends in this checkApiLogic) keeps the
+        // stock answer it had while the hint was on the card: the hint never applied there.
+        if (sa.isSpell() && !sa.isCastFromPlayEffect()
+                && SpecialCardAi.PhyrexianProcessor.NAME.equals(sourceName)) {
+            return SpecialCardAi.PhyrexianProcessor.considerCast(ai, sa);
+        }
+
         // Check for valid targets before casting
         if (host.hasSVar("OblivionRing")) {
             // TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?
