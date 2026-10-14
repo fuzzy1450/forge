@@ -23738,8 +23738,8 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 16, 17, 21, 35, 49, 50 and 57, keepOff for batch 2's row 68. A case must draw no random
-    // number and hold nothing, so that its false is exactly the old filter.
+    // 5, 10, 16, 17, 21, 35, 49, 50 and 57, keepOff for batch 2's row 68. A case must draw no
+    // random number and hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -23779,6 +23779,8 @@ public class SpecialCardAi {
                     return DulcetSirens.readmit(ai, sa);
                 case SwordOfTheParuns.NAME:
                     return SwordOfTheParuns.readmit(ai, sa);
+                case SlobadGoblinTinkerer.NAME:
+                    return SlobadGoblinTinkerer.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -26238,6 +26240,114 @@ public class SpecialCardAi {
                 }
             }
             return white >= needed;
+        }
+    }
+
+    // Slobad, Goblin Tinkerer (dead-card batch 3, row 10)
+    // {1}{R} Legendary Creature - Goblin Artificer 1/2, "Sacrifice an artifact: Target artifact gains
+    // indestructible until end of turn." The script keeps AI:RemoveDeck:All, so the -10 sort and every
+    // other isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) stay as they were,
+    // and G3 (RemoveDeckFilter.readmit) lets exactly two abilities through AiController's filter, for
+    // the player who both owns and controls Slobad (a Nathan Drake theft keeps the filter, as in A):
+    // - the creature spell from our own hand, only in our own Main 2 with an empty stack, with no mana
+    //   held, while we control MIN_ARTIFACTS artifacts (one to save, one to sell: below that the card
+    //   is a vanilla 1/2), and only when the cost as the engine prices it (test-mode calculateManaCost)
+    //   fits HonestMana (G2, held sources skipped) in total and in red. The stock PermanentCreatureAi
+    //   chain then judges it (legend rule, zero toughness, saSideEffects). The -10 sorts it behind
+    //   every positive-key spell ability; sortCreatureSpells then re-deals the creature slots by
+    //   EvaluateCreatureSpellComparator (compareEvaluator with the creature term), which adds the
+    //   same -10 before that term (typically about 2 for the 1/2 against 10 or more for a 0/2 or a
+    //   1/1 Myr), so it keeps the last creature slot and can trade places only with a creature
+    //   spell that sorts as low (another hinted one, a negative AIPriorityModifier); every other SA
+    //   keeps its order;
+    // - the Pump ability, only when an opponent's Destroy or DestroyAll (in the top item or its subs,
+    //   a trigger unwrapped by WrappedAbility's delegation) is on top of the stack and we control
+    //   MIN_ARTIFACTS artifacts. It has no mana cost, so saEvaluator's 0-cmc rule sorts it ahead of
+    //   every costed SA: readmitted, it is evaluated first. PumpAi.checkApiLogic then clears its
+    //   targets (below) and takes the stock stack branch: canPumpAgainstRemoval targets only an
+    //   artifact of ours that the top would destroy (RNG-free), and checkSacrificeCost's SacCost
+    //   preference pays only with a SacMe card, a doomed artifact, a land-rich artifact land or, in
+    //   serious combat danger, the worst noncreature; else CostNotAcceptable. On an empty stack it
+    //   stays filtered: ValidTgts$ Artifact is not a creature target, so pumpTgtAI would aim at the
+    //   best artifact on the battlefield, an opponent's included, and sacrifice one of ours for it.
+    // The reset: canPumpAgainstRemoval adds targets without clearing old ones, so a consult that
+    // declined at willPayCosts (no fodder: the last odd artifact of a DestroyAll answer, a targeted
+    // Destroy with nothing to sell) left its target on the ability, and the next readmitted consult
+    // kept it (canAddMoreTarget false, isTargetNumberValid true), paying an artifact to pump a card in
+    // the graveyard or one nothing threatens. PumpAi clears the targets just before its stack branch,
+    // for isOwnHostInPlay only (the readmit's own key, rule B3-2), so every consult chooses on live
+    // state and every other Pump card, and every other host of this ability, keeps the stock path.
+    // readmit reads only: no random number, no held mana, no memory write (HonestMana's
+    // setActivatingPlayer on the mana abilities it reads, as the estimate does), so a refusal is the
+    // old filter; the reset draws nothing either.
+    public static class SlobadGoblinTinkerer {
+        public static final String NAME = "Slobad, Goblin Tinkerer";
+        static final int MIN_ARTIFACTS = 2;
+
+        // the paper card, as RemoveDeckFilter.paperName and isCardRemAIDeck read it: a Clone copying
+        // Slobad or a Mairsil grant carries other rules and keeps the stock path
+        public static boolean isHost(final Card c) {
+            return c != null && c.getRules() != null && NAME.equals(c.getRules().getName());
+        }
+
+        // the readmitted ability's key, shared with PumpAi's target reset (rule B3-2): our own Slobad on
+        // the battlefield, asked by the player who owns and controls it
+        public static boolean isOwnHostInPlay(final Player ai, final Card c) {
+            return isHost(c) && c.isInPlay() && ai.equals(c.getController()) && ai.equals(c.getOwner());
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getController()) || !ai.equals(host.getOwner())) {
+                return false; // a thief's Slobad keeps the filter
+            }
+            return sa.isSpell() ? readmitCast(ai, sa, host) : readmitSave(ai, sa, host);
+        }
+
+        // the creature spell from our own hand, in our own Main 2 only
+        private static boolean readmitCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (sa.getApi() != ApiType.PermanentCreature || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false;
+            }
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            if (CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.ARTIFACTS) < MIN_ARTIFACTS) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // the Pump, only against an opponent's Destroy or DestroyAll on top of the stack
+        private static boolean readmitSave(final Player ai, final SpellAbility sa, final Card host) {
+            if (!sa.isActivatedAbility() || sa.getApi() != ApiType.Pump || !host.isInPlay()) {
+                return false;
+            }
+            if (ai.getGame().getStack().isEmpty()) {
+                return false; // the empty-stack pumpTgtAI path stays filtered
+            }
+            final SpellAbility top = ai.getGame().getStack().peekAbility();
+            if (top == null || ai.equals(top.getActivatingPlayer()) || !destroys(top)) {
+                return false;
+            }
+            return CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.ARTIFACTS) >= MIN_ARTIFACTS;
+        }
+
+        // the top item, or one of its subs, destroys (Destroy / DestroyAll): the only threats
+        // predictThreatenedObjects lets a sacrifice-cost Indestructible saviour answer
+        private static boolean destroys(final SpellAbility top) {
+            for (SpellAbility s = top; s != null; s = s.getSubAbility()) {
+                if (s.getApi() == ApiType.Destroy || s.getApi() == ApiType.DestroyAll) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 

@@ -365,6 +365,20 @@ public class PumpAi extends PumpAiBase {
             }
         }
 
+        if (SpecialCardAi.SlobadGoblinTinkerer.isOwnHostInPlay(ai, source) && !(sa instanceof AbilitySub)
+                && !game.getStack().isEmpty()) {
+            // Dead-card batch 3, row 10. canPumpAgainstRemoval adds a target without clearing the
+            // old one: a consult that declined at willPayCosts (no fodder: the last odd artifact of
+            // every DestroyAll answer, or a targeted Destroy with nothing to sell) left its target on
+            // the ability, and the next readmitted consult kept it (canAddMoreTarget false,
+            // isTargetNumberValid true), paying an artifact to pump a card in the graveyard or one
+            // nothing threatens. Clearing first makes every consult choose on live state. Keyed as
+            // the G3 readmit is (the paper card, on the battlefield, asked by its owner-controller),
+            // so a canPlaySa caller that skips the RemoveDeck filter meets it only for that host. No
+            // random number; every other Pump card takes exactly the path it took before.
+            sa.resetTargets();
+        }
+
         if (!game.getStack().isEmpty() && !sa.isCurse() && !isFight) {
             return ComputerUtilCard.canPumpAgainstRemoval(ai, sa);
         }
