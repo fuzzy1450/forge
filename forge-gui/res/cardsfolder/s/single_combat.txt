@@ -5,6 +5,5 @@ A:SP$ ChooseCard | Defined$ Player | Choices$ Creature,Planeswalker | Controlled
 SVar:SacAllOthers:DB$ SacrificeAll | ValidCards$ Creature.nonChosenCard,Planeswalker.nonChosenCard | SubAbility$ DBEffect
 SVar:DBEffect:DB$ Effect | StaticAbilities$ STCantBeCast | Duration$ UntilTheEndOfYourNextTurn
 SVar:STCantBeCast:Mode$ CantBeCast | ValidCard$ Creature,Planeswalker | Description$ Players can't cast creature or planeswalker spells.
-AI:RemoveDeck:All
 DeckHas:Ability$Sacrifice
 Oracle:Each player chooses a creature or planeswalker they control, then sacrifices the rest. Players can't cast creature or planeswalker spells until the end of your next turn.

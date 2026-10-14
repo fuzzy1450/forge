@@ -28142,6 +28142,170 @@ public class SpecialCardAi {
         }
     }
 
+    // Single Combat (dead-card batch 3, row 70)
+    // {3}{W}{W} Sorcery, "Each player chooses a creature or planeswalker they control, then
+    // sacrifices the rest. Players can't cast creature or planeswalker spells until the end of your
+    // next turn." AI:RemoveDeck:All hid it, and behind the hint nothing judged it:
+    // ChooseCardAi.checkApiLogic answers WillPlay on any board, SacrificeAllAi.chkDrawback approves
+    // the sacrifice and the base chkDrawback the CantBeCast Effect. The script drops the hint, so the
+    // whole spell is judged here, on the root sa the caller passes (never
+    // host.getFirstSpellAbility(): row 77).
+    // Mirror the resolution: every sim seat is an AI, and ChooseCardAi.chooseSingleCard with no
+    // AILogic keeps getBestAI of the chooser's own creatures and planeswalkers (getBestCreatureAI on
+    // an all-creature list, getMostExpensivePermanentAI on a mixed one), over the same pool in the
+    // same order as ChooseCardEffect builds it; every other one that can be sacrificed is. Sacrifice
+    // ignores indestructible, shields and regeneration, so none of the destroy filters apply. Cast
+    // only when the opponents lose clearly more creature value than we do (Wave of Reckoning's flat
+    // margin), one kill is worth a card, nothing on their side profits from the deaths or the
+    // sacrifices (Slaughter the Strong's scan, copied, with Wave of Reckoning's private
+    // isDeathTrigger / deathTriggerHarmsUs called unchanged), and no planeswalker of ours dies.
+    // The lock binds every player for one of its own turns and is not priced. Payable window: G1
+    // (CommanderCastCeiling.affordable, called unchanged under G4's widened contract) for every cast
+    // we pay for (the hand, an Armory Paladin or Junk exile, a thief's static cast permission); a
+    // Play-effect cast is paid, or not, by PlayEffect itself. No Main-2 wait (Slaughter the
+    // Strong's A1). RNG-free on every decline; nothing is held or remembered. isSingleCombat reads
+    // the source, host and card-state names (Slaughter's idiom: a card cast face down from exile
+    // reads "" from getAbilitySourceName).
+    public static class SingleCombat {
+        public static final String NAME = "Single Combat";
+        public static final int MARGIN = WaveOfReckoning.MARGIN; // 200
+
+        public static boolean isSingleCombat(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card source = sa.getHostCard();
+            final Game game = ai.getGame();
+            final AbilitySub sac = sa.getSubAbility();
+            // 1. Shape bound: a reshaped or renamed script never approves blind.
+            if (sa.getApi() != ApiType.ChooseCard || !"Player".equals(sa.getParam("Defined"))
+                    || !"Chooser".equals(sa.getParam("ControlledByPlayer"))
+                    || !"Creature,Planeswalker".equals(sa.getParam("Choices"))
+                    || !"1".equals(sa.getParamOrDefault("Amount", "1")) || !sa.hasParam("Mandatory")
+                    || sa.hasParam("WithTotalPower") || sa.hasParam("AtRandom") || sa.hasParam("AILogic")
+                    || sac == null || sac.getApi() != ApiType.SacrificeAll
+                    || !"Creature.nonChosenCard,Planeswalker.nonChosenCard".equals(sac.getParam("ValidCards"))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 2. A copy over a Single Combat already on the stack keeps the same cards: worthless
+            // (CopySpellAbilityAi now reaches the card).
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility other = si.getSpellAbility();
+                if (other != sa && other.getHostCard() != null && NAME.equals(other.getHostCard().getName())) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // 3. Cheap bound before any scan: each player keeps one, so some opponent needs 2+.
+            // The pool is ChooseCardEffect.resolve's own, as is.
+            final CardCollectionView all = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield),
+                    sa.getParam("Choices"), ai, source, sa);
+            boolean oppSpare = false;
+            for (final Player o : ai.getOpponents()) {
+                if (CardLists.filterControlledBy(all, o).size() >= 2) {
+                    oppSpare = true;
+                    break;
+                }
+            }
+            if (!oppSpare) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 4. Payable window for every cast we pay for (hand, Armory Paladin's or a Junk token's
+            // exile permission, a thief's static cast permission): canPayCost's test payment draws
+            // MyRandom (ComputerUtilMana.isManaSourceReserved), so only a window G1 calls payable
+            // may pass. G1 prices the engine's test-mode calculateManaCost (taxes, reductions,
+            // {3}{W}{W}) against HonestMana (G2, held sources skipped), in total and in white. A
+            // Play-effect cast is paid, or not, by PlayEffect itself.
+            if (!sa.isCastFromPlayEffect() && !CommanderCastCeiling.affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // 5. The exact keep (ControlledByPlayer$ Chooser, then chooseCardsForEffect ->
+            // ChooseCardAi.chooseSingleCard -> getBestAI), then every other one that can be
+            // sacrificed dies, all players (Defined$ Player).
+            final CardCollection dying = new CardCollection();
+            for (final Player p : game.getPlayers()) {
+                final CardCollection mine = new CardCollection(CardLists.filterControlledBy(all, p));
+                final Card kept = mine.isEmpty() ? null : ComputerUtilCard.getBestAI(mine);
+                for (final Card c : mine) {
+                    if (c != kept && c.canBeSacrificedBy(sac, true)) {
+                        dying.add(c);
+                    }
+                }
+            }
+            // 6. Opponents' payoffs veto (Slaughter the Strong's scan, copied): a death watcher
+            // (Blood Artist, Zulaport, Grave Pact) or a harmful own-death trigger (Wave of
+            // Reckoning's scan, reused), or a sacrifice payoff (Korvold, Mazirek: Sacrificed /
+            // SacrificedOnce whose ValidCard and ValidPlayer match). The dying list holds
+            // planeswalkers too, which only adds vetoes. An opposing creature whose own death leaves
+            // value behind is not a kill.
+            final CardCollection noValueKills = new CardCollection();
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    final boolean sacTrig = t.getMode() == TriggerType.Sacrificed
+                            || t.getMode() == TriggerType.SacrificedOnce;
+                    final boolean deathTrig = WaveOfReckoning.isDeathTrigger(t);
+                    if (!sacTrig && !deathTrig) {
+                        continue;
+                    }
+                    for (final Card d : dying) {
+                        if (!t.matchesValidParam("ValidCard", d)) {
+                            continue;
+                        }
+                        if (sacTrig) {
+                            if (t.matchesValidParam("ValidPlayer", d.getController())) {
+                                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                            }
+                            continue;
+                        }
+                        if (!t.matchesValidParam("ValidCards", d)) {
+                            continue;
+                        }
+                        if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                        }
+                        noValueKills.add(d);
+                    }
+                }
+            }
+            // 7. Losses at full value (owned counts too: a creature an opponent borrowed comes back
+            // to us; no credit for our own undying or persist: we pass priority on our own spell). A
+            // planeswalker of ours dying vetoes: no evaluator prices it. Kills are opposing
+            // creatures only (an opposing planeswalker is never credited), minus own-death value,
+            // undying/persist and SacMe.
+            final CardCollection aiLosses = new CardCollection();
+            final CardCollection oppKills = new CardCollection();
+            for (final Card d : dying) {
+                final Player controller = d.getController();
+                if (ai.equals(controller) || ai.equals(d.getOwner())) {
+                    if (!d.isCreature()) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                    aiLosses.add(d);
+                } else if (d.isCreature() && ai.isOpponentOf(controller) && !noValueKills.contains(d)
+                        && !ComputerUtilCard.hasActiveUndyingOrPersist(d) && !d.hasSVar("SacMe")) {
+                    oppKills.add(d);
+                }
+            }
+            // 8. Worth a card (the Meteor Blast filter) and the flat wrath margin.
+            boolean worthACard = false;
+            for (final Card k : oppKills) {
+                if ((!k.isToken() && k.getCMC() >= 2) || k.getNetPower() >= 3) {
+                    worthACard = true;
+                    break;
+                }
+            }
+            if (!worthACard || ComputerUtilCard.evaluateCreatureList(oppKills)
+                    <= ComputerUtilCard.evaluateCreatureList(aiLosses) + MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 9. No Main-2 wait (above).
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Sinister Waltz
     // Two of the three targets return to the battlefield at random and the third goes to the bottom
     // of the library. The script uses Pump as a targeting shell, and PumpAi's generic targeting only

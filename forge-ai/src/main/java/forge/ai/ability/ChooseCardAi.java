@@ -56,6 +56,15 @@ public class ChooseCardAi extends SpellAbilityAi {
             // path it took before.
             return SpecialCardAi.DivineReckoning.consider(ai, sa);
         }
+        if (SpecialCardAi.SingleCombat.isSingleCombat(sa)) {
+            // Judges the whole spell: the generic answer below is WillPlay on any
+            // board, its SacrificeAll sub is approved unconditionally
+            // (SacrificeAllAi.chkDrawback) and its CantBeCast Effect sub by the base
+            // chkDrawback. AI:RemoveDeck:All kept the card out of every hand
+            // evaluation until now. Every other ChooseCard card takes exactly the
+            // path it took before.
+            return SpecialCardAi.SingleCombat.consider(ai, sa);
+        }
         if (sa.usesTargeting()) {
             if ("Last Night Together".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
                 // Its targets are creatures: the opponent-only search below can
