@@ -153,6 +153,18 @@ public class EffectAi extends SpellAbilityAi {
             return SpecialCardAi.Indulge.consider(ai, sa);
         }
 
+        if (SpecialCardAi.TeferisReproach.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // "Choose target opponent. Until that player's next turn, they gain protection from
+            // everything and their life total can't change. All nonland permanents they control
+            // phase out." The no-AILogic fallthrough below refused it every time. Routed after the
+            // randomReturn roll: the card has no RemoveDeck hint, so the stock engine evaluated it
+            // and drew here before refusing, and every refusal in the evaluator draws no RNG. A name
+            // gate, not AILogic$ Fog: FogAi's lifeInDanger rolls at every opponent declare-blockers
+            // consult, and the Fog branch and the tail below target the first opponent, not the
+            // attacker. Every other Effect card takes exactly the path it took before this branch.
+            return SpecialCardAi.TeferisReproach.consider(ai, sa);
+        }
+
         if (sa.hasParam("AILogic")) {
             logic = sa.getParam("AILogic");
             if (logic.equals("BeginningOfOppTurn")) {

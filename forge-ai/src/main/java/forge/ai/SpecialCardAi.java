@@ -73,6 +73,7 @@ import forge.game.spellability.TargetChoices;
 import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityAttackRestrict;
 import forge.game.staticability.StaticAbilityCantDraw;
+import forge.game.staticability.StaticAbilityCantPhase;
 import forge.game.staticability.StaticAbilityFlipCoinMod;
 import forge.game.staticability.StaticAbilityMode;
 import forge.game.trigger.Trigger;
@@ -32209,6 +32210,293 @@ public class SpecialCardAi {
                     weight[n - min] += w;
                 }
             }
+        }
+    }
+
+    // Teferi's Reproach (dead-card batch 3, row 45; precon:Multiverse Reforged (FRC))
+    // "Choose target opponent. Until that player's next turn, they gain protection from everything
+    // and their life total can't change. All nonland permanents they control phase out. (They phase
+    // in before that player untaps during their next untap step.) Exile Teferi's Reproach." ({2}{W}
+    // Instant.) Its root SP$ Effect carries no AILogic$ and no RememberObjects$, so
+    // EffectAi.checkApiLogic refused it at the no-AILogic fallthrough at every consult: never cast,
+    // by anyone, on any engine. Cast as a defensive fog aimed at the attacking player: in their
+    // declare-blockers step every attacking nonland permanent of theirs phases out
+    // (Card.switchPhaseState removes it from combat), so that combat deals us nothing, commander
+    // damage and poison included, and their board stays out through our next turn. The price is that
+    // next turn: the target has protection from everything and its life total can't change until its
+    // own next turn, so our attack is wasted against it. Routed by name from EffectAi.checkApiLogic,
+    // after its randomReturn roll. In order, every decline before any approval:
+    // - window: an opponent's declare-blockers step after blocks, an empty stack, we can lose, and
+    //   combat damage not already prevented this turn (FogAi's window); the attacking player is our
+    //   opponent, attacks us and is a legal target of this spell. Worship and Elderscale Wurm
+    //   refuse, as in lifeInDanger;
+    // - danger: lifeInDanger's rule with its random threshold taken at AI_IN_DANGER_MAX_THRESHOLD
+    //   (Default 4 = 4, the stock rule under the carrier's Default seats), read on the declared
+    //   attack after blocks with IllusionistsGambit's replica (withoutAbilities; a private copy):
+    //   LETHAL (a live commander reaching 21, poison reaching the loss count, no life left), else
+    //   DANGER (life below min(threshold, life), poison over max(7, current), an unblocked
+    //   MustBeBlocked attacker), else none: keep the card;
+    // - the cast must save us: the attackers it leaves in combat (land creatures, since only
+    //   nonland permanents phase out; CantPhaseOut; anything the target does not control) must not
+    //   be lethal on their own;
+    // - a crack-back we would win (skeptic R2; DANGER only, never LETHAL, where not casting loses
+    //   now): when the target has no untapped creature left to block with and our creatures that
+    //   did not block already deal its life on our next turn, keep the card. The cast would make
+    //   the target immune exactly when our attack wins, and the card stays in hand for the next
+    //   swing;
+    // - mana, else CantAfford: the engine's test-mode cost (calculateManaCost: taxes and
+    //   reductions) against G2's count with held sources skipped, in total and in white shards
+    //   (skeptic R3, DomineeringWill.affordable's shape; G2 is called, not changed). At life
+    //   PAIN_LIFE or less (skeptic R1) white comes only from the pool and from white mana abilities
+    //   with no sub-ability: the real payment drops a mana ability whose sub its AI refuses
+    //   (ComputerUtilMana's chkDrawbackWithSubs checks), and DamageDealAi.damageChooseNontargeted
+    //   refuses a pain source's 1-damage sub at restDamage + 3 >= life (the carrier's Battlefield
+    //   Forge, Caves of Koilos and Talisman of Progress), which G2 does not read.
+    // Then the attacking player is targeted and Tempo at 100, as Gambit.
+    // RNG parity: the stock path drew the randomReturn roll and refused; this gate sits after that
+    // roll, and every decline here draws nothing: no lifeInDanger, lifeThatWouldRemain or
+    // resultingPoison (they roll or test-pay), damageIfUnblocked(..., true) returns before the pump
+    // scan's canPayCost, the poison and shield counts are private copies of Gambit's RNG-free ones
+    // (accepted helpers stay private), and StaticAbilityCantPhase, canAttackNextTurn,
+    // calculateManaCost (test) and HonestMana draw nothing. Nothing is held, remembered or targeted
+    // on a decline. Draws come only after the approval, in canPayCost.
+    public static class TeferisReproach {
+        public static final String NAME = "Teferi's Reproach";
+        // DamageDealAi.damageChooseNontargeted refuses a 1-damage pain sub on its controller at
+        // restDamage + 3 >= life, i.e. at life 4 or less
+        static final int PAIN_LIFE = 4;
+        private static final int NONE = 0;
+        private static final int DANGER = 1;
+        private static final int LETHAL = 2;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            // the window first: field reads only, before any loop
+            if (combat == null || ph.isPlayerTurn(ai) || !ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || !game.getStack().isEmpty() || ai.cantLose()
+                    || game.getReplacementHandler().isPreventCombatDamageThisTurn()) {
+                return no;
+            }
+            final Player attacker = combat.getAttackingPlayer();
+            final CardCollection atUs = combat.getAttackersOf(ai);
+            if (attacker == null || !attacker.isOpponentOf(ai) || atUs.isEmpty() || !sa.canTarget(attacker)) {
+                return no;
+            }
+            // lifeInDanger's own special cases
+            final CardCollectionView otb = ai.getCardsIn(ZoneType.Battlefield);
+            if ((otb.anyMatch(CardPredicates.nameEquals("Worship")) && !ai.getCreaturesInPlay().isEmpty())
+                    || (otb.anyMatch(CardPredicates.nameEquals("Elderscale Wurm")) && ai.getLife() >= 7)) {
+                return no;
+            }
+            final int danger = danger(ai, combat, atUs);
+            if (danger == NONE) {
+                return no; // not in danger: keep the card
+            }
+            // what the cast leaves in combat: land creatures, CantPhaseOut, anything not the target's
+            final CardCollection stays = CardLists.filter(atUs, c -> c.isLand()
+                    || !attacker.equals(c.getController()) || StaticAbilityCantPhase.cantPhaseOut(c));
+            if (!stays.isEmpty() && danger(ai, combat, stays) == LETHAL) {
+                return no; // the residual still kills us: the card would not save the game
+            }
+            if (danger != LETHAL && crackBackWins(ai, combat, attacker)) {
+                return no; // we survive this combat and our attack kills them next turn
+            }
+            // G2's honest count, held sources skipped, against the engine's adjusted cost
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int white = ai.canLoseLife() && ai.getLife() <= PAIN_LIFE
+                    ? painlessWhite(ai, sa) : mana.colour(MagicColor.WHITE);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || white < cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            sa.resetTargets();
+            sa.getTargets().add(attacker);
+            return new AiAbilityDecision(100, AiPlayDecision.Tempo);
+        }
+
+        // IllusionistsGambit.consider's danger block, a private copy (accepted code stays frozen and
+        // unshared), over the given attackers: what they do to us after blocks, read as
+        // lifeThatWouldRemain's and resultingPoison's rules, with live commanders and MustBeBlocked as
+        // lifeInDanger reads them, and its random threshold taken at AI_IN_DANGER_MAX_THRESHOLD.
+        private static int danger(final Player ai, final Combat combat, final List<Card> attackers) {
+            final Game game = ai.getGame();
+            final boolean lifeCounts = ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife();
+            final boolean poisonable = ai.canReceiveCounters(CounterEnumType.POISON);
+            int lifeDamage = 0;
+            int poison = ai.getPoisonCounters();
+            boolean liveCommander = false;
+            boolean mustBeBlocked = false;
+            for (final Card c : attackers) {
+                final CardCollection blockers = combat.getBlockers(c);
+                int dealt = 0;
+                if (blockers.isEmpty() || forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked
+                        .assignCombatDamageAsUnblocked(c)) {
+                    dealt = ComputerUtilCombat.damageIfUnblocked(c, ai, combat, true);
+                    lifeDamage += dealt;
+                    if (poisonable) {
+                        poison += poisonIfUnblocked(c, ai);
+                    }
+                } else if (c.hasKeyword(Keyword.TRAMPLE)) {
+                    dealt = Math.max(0, ComputerUtilCombat.getAttack(c) - shield(blockers));
+                    if (dealt > 0) {
+                        if (!c.hasKeyword(Keyword.INFECT)) {
+                            lifeDamage += dealt;
+                        }
+                        if (poisonable) {
+                            poison += (c.isInfectDamage(ai) ? dealt : 0)
+                                    + ComputerUtilCombat.predictExtraPoisonWithDamage(c, ai, dealt);
+                        }
+                    }
+                }
+                if (c.isCommander() && dealt > 0 && dealt + ai.getCommanderDamage(c) >= 21) {
+                    liveCommander = true;
+                }
+                if (blockers.isEmpty() && !c.getSVar("MustBeBlocked").isEmpty()) {
+                    final String v = c.getSVar("MustBeBlocked");
+                    final boolean atPlayer = combat.getDefenderByAttacker(c) instanceof Player;
+                    if ("true".equalsIgnoreCase(v) || ("attackingplayer".equalsIgnoreCase(v) && atPlayer)
+                            || ("attackingplayerconservative".equalsIgnoreCase(v) && atPlayer
+                                && ai.getCreaturesInPlay().size() >= 3
+                                && ai.getCreaturesInPlay().size() > c.getController().getCreaturesInPlay().size())) {
+                        mustBeBlocked = true;
+                    }
+                }
+            }
+            final int remain = ai.getLife() - lifeDamage;
+            if (liveCommander || poison >= game.getRules().getPoisonCountersToLose() || (lifeCounts && remain < 1)) {
+                return LETHAL;
+            }
+            final int maxThreshold = AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD);
+            if (mustBeBlocked || poison > Math.max(7, ai.getPoisonCounters())
+                    || (lifeCounts && remain < Math.min(maxThreshold, ai.getLife()))) {
+                return DANGER;
+            }
+            return NONE;
+        }
+
+        // Skeptic R2. Not casting keeps us alive this combat (DANGER, not LETHAL). When the attacking
+        // player has no untapped creature to block with and our creatures that did not block already
+        // deal its life next turn, the cast would give it a turn of immunity exactly when our attack
+        // wins. RNG-free: damageIfUnblocked withoutAbilities and canAttackNextTurn draw nothing. It
+        // errs toward casting: our blockers are left out (they may die), any untapped enemy creature
+        // (a vigilant attacker, one held back) turns it off, and activated pumps are not counted.
+        private static boolean crackBackWins(final Player ai, final Combat combat, final Player target) {
+            if (!target.canLoseLife() || target.cantLoseForZeroOrLessLife() || target.cantLose()
+                    || target.getCreaturesInPlay().anyMatch(Card::isUntapped)) {
+                return false;
+            }
+            int dmg = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!combat.isBlocking(c) && ComputerUtilCombat.canAttackNextTurn(c, target)) {
+                    dmg += ComputerUtilCombat.damageIfUnblocked(c, target, null, true);
+                }
+            }
+            return dmg >= target.getLife();
+        }
+
+        // Skeptic R1. G2's white count (HonestMana.of, held sources skipped) restricted to the pool
+        // and to mana abilities with no sub-ability: a private copy of its per-source reading (G2 is
+        // frozen). Read only at life PAIN_LIFE or less, where the real payment refuses a pain source's
+        // coloured ability; leaving out every sub-carrying ability only under-counts, the safe side.
+        // The total needs no recount: the carrier's three white pain sources each have a painless {C}
+        // ability that makes as much.
+        private static int painlessWhite(final Player ai, final SpellAbility sa) {
+            int white = ai.getManaPool().getAmountOfColor(MagicColor.WHITE);
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null || ma.getSubAbility() != null
+                            || ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana()) {
+                        continue; // a sub the payment may refuse, or no colour G2 counts
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean choice = produced.isEmpty() || mp.isComboMana() || mp.isAnyMana()
+                            || produced.contains("Chosen");
+                    final String letters;
+                    if (mp.isComboMana()) {
+                        letters = mp.getComboColors(ma);
+                    } else if (mp.isAnyMana()) {
+                        letters = "W U B R G";
+                    } else if (produced.contains("Chosen")) {
+                        letters = produced.replace("Chosen", mp.getChosenColor(ma));
+                    } else {
+                        letters = produced;
+                    }
+                    int symbols = 0;
+                    for (final String t : letters.split(" ")) {
+                        if (t.length() == 1 && MagicColor.fromName(t.charAt(0)) == MagicColor.WHITE) {
+                            symbols++;
+                        }
+                    }
+                    final int each = produced.contains("AnyDifferent") ? Math.min(1, amount) : amount;
+                    best = Math.max(best, choice ? (symbols > 0 ? each : 0) : symbols * amount);
+                }
+                white += best;
+            }
+            return white;
+        }
+
+        // HonestMana.isHeld, a private copy: the sources ComputerUtilMana.isManaSourceReserved
+        // refuses, in the phases it refuses them
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+
+        // IllusionistsGambit.poisonIfUnblocked, a private copy: ComputerUtilCombat.poisonIfUnblocked
+        // with the attacker's activated pumps left out.
+        private static int poisonIfUnblocked(final Card attacker, final Player ai) {
+            final int damage = attacker.getNetCombatDamage()
+                    + ComputerUtilCombat.predictPowerBonusOfAttacker(attacker, null, null, true);
+            int poison = 0;
+            if (attacker.isInfectDamage(ai)) {
+                final int pd = ComputerUtilCombat.predictDamageTo(ai, damage, attacker, true);
+                if (pd > 1 || !attacker.getController().getOpponents().getCardsIn(ZoneType.Battlefield)
+                        .anyMatch(CardPredicates.nameEquals("Vorinclex, Monstrous Raider"))) {
+                    poison = attacker.hasDoubleStrike() ? pd * 2 : pd;
+                }
+            }
+            if (damage > 0) {
+                poison += ComputerUtilCombat.predictExtraPoisonWithDamage(attacker, ai, damage);
+            }
+            return poison;
+        }
+
+        // IllusionistsGambit.shield, a private copy: ComputerUtilCombat.totalShieldDamage without its
+        // destroy-before-damage predictor (which can test-pay a blocker's pump or regeneration) and
+        // without flanking. Both overstate the shield, so trample damage reaching us is understated.
+        private static int shield(final List<Card> blockers) {
+            int total = 0;
+            for (final Card b : blockers) {
+                total += b.getLethalDamage() + b.getKeywordMagnitude(Keyword.BUSHIDO);
+            }
+            return total;
         }
     }
 
