@@ -38,6 +38,13 @@ public class VoteAi extends SpellAbilityAi {
         if (SpecialCardAi.FatefulTempest.handles(sa)) {
             return SpecialCardAi.FatefulTempest.consider(aiPlayer, sa);
         }
+        // Travel Through Caradhras has no AILogic either (held 274 times on 2.0.15+55e709fa6ba, never
+        // cast by its owner on any engine). Its evaluator draws no random number before any decline;
+        // vote choice stays stock (ComputerUtil.vote with no AILogic; the script's AIActivateLast$ True
+        // is read only by the sort), and Play-effect casts keep doTriggerNoCost.
+        if (SpecialCardAi.TravelThroughCaradhras.handles(sa)) {
+            return SpecialCardAi.TravelThroughCaradhras.consider(aiPlayer, sa);
+        }
         // TODO: add ailogic
         String logic = sa.getParam("AILogic");
         final Card host = sa.getHostCard();

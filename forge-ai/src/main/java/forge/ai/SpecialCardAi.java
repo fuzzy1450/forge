@@ -34881,6 +34881,158 @@ public class SpecialCardAi {
         }
     }
 
+    // Travel Through Caradhras (dead-card batch 3, row 65)
+    // {5}{G} Sorcery. "Council's dilemma - Starting with you, each player votes for Redhorn Pass or
+    // Mines of Moria. For each Redhorn Pass vote, search your library for a basic land card and put it
+    // onto the battlefield tapped. If you search your library this way, shuffle. For each Mines of
+    // Moria vote, return a card from your graveyard to your hand. Exile Travel Through Caradhras."
+    // The script has no AILogic, so VoteAi.canPlay fell through to CantPlayAi at every priority (held
+    // 274 times on 2.0.15+55e709fa6ba, never cast by its owner on any engine); VoteAi now routes the
+    // spell here by name. No AILogic is added: the votes stay stock and random for every voter (ours
+    // included), so the floor is set on what EITHER outcome gives us: a Redhorn Pass vote is one
+    // tapped basic out of our library, a Mines of Moria vote one card from our graveyard to our hand.
+    // No vote harms us; the harms are outside the card. The script's AIActivateLast$ True sorts the
+    // spell behind every other playable one (ComputerUtilAbility.saComparator), so it spends only
+    // mana every other play declined. Every decline before any WillPlay:
+    // - our own Main 2 on an empty stack (the lands arrive tapped; Main 1's mana stays the hand's);
+    // - every vote at the table (optional extra votes too: an upper bound, 2 in 1v1) could be Mines:
+    //   at least that many nonland cards the AI casts (not AI:RemoveDeck:All) in our graveyard;
+    // - every vote could be Redhorn: the search is ours (canSearchLibraryWith, no
+    //   LimitSearchLibrary), at least that many basic lands in our library, and nobody punishes the
+    //   search or our shuffle (Long-Term Plans' searchPunished, a private copy);
+    // - each Redhorn vote takes a card off our library, which must keep LIBRARY_MARGIN more, unless
+    //   milling cannot make us lose (Truth or Consequences' margin);
+    // - no opposing cast trigger that damages or drains for this spell (Kaervek the Merciless, Ruric
+    //   Thar): saSideEffects counts only Defined$ TriggeredActivator damage, and only when lethal;
+    // - affordability: the cost as the engine prices it (test-mode calculateManaCost: taxes and
+    //   reductions) against HonestMana (G2, held sources skipped, restrictions read on the root sa)
+    //   in total and in green, never getAvailableManaEstimate (it counts the words of Produced$).
+    // The stock fallthrough drew no random number and no decline here does either: the phase and
+    // stack, vote counts, zone scans, isCardRemAIDeck, canSearchLibraryWith and hasKeyword, trigger
+    // and static parameter reads and SVar text (never ensureAbility: a built ability takes an id),
+    // cantLoseCheck, calculateManaCost(test) and HonestMana (its one write is setActivatingPlayer on
+    // the mana abilities it reads). Nothing is held past a decline: no target, no X, no memory set,
+    // no vote chosen.
+    public static class TravelThroughCaradhras {
+        public static final String NAME = "Travel Through Caradhras";
+        public static final int LIBRARY_MARGIN = 3; // DrawAi's own-deck margin, as Truth or Consequences
+
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && sa.isSpell() && !(sa instanceof AbilitySub)
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            // cheapest first: our Main 2 on an empty stack (canCastTiming already kept us to our
+            // main phases)
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // every vote at the table; optional extra votes count too (an upper bound)
+            int maxVotes = 0;
+            for (final Player p : game.getPlayers()) {
+                maxVotes += 1 + p.getAdditionalVotesAmount() + p.getAdditionalOptionalVotesAmount();
+            }
+            // each Mines of Moria vote must return a nonland card the AI casts
+            int worthy = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                if (!c.isLand() && !ComputerUtilCard.isCardRemAIDeck(c) && ++worthy >= maxVotes) {
+                    break;
+                }
+            }
+            if (worthy < maxVotes) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            // each Redhorn Pass vote must find a basic, in a search nobody limits or punishes
+            if (!ai.canSearchLibraryWith(sa, ai) || ai.hasKeyword("LimitSearchLibrary")
+                    || CardLists.count(ai.getCardsIn(ZoneType.Library), CardPredicates.BASIC_LANDS) < maxVotes
+                    || searchPunished(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // ... and takes a card off our library, which must keep LIBRARY_MARGIN more
+            if (!ai.cantLoseCheck(forge.game.player.GameLossReason.Milled)
+                    && ai.getCardsIn(ZoneType.Library).size() < maxVotes + LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // casting it must not hurt us
+            if (castPunished(ai, host)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // a WillPlay goes on to canPayCost, whose test payment can draw MyRandom
+            // (ComputerUtilMana.isManaSourceReserved), so an unpayable window is refused first,
+            // judged on the root sa (never host.getFirstSpellAbility(): row 77)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.GREEN) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Long-Term Plans' searchPunished, a private copy (accepted predicates are not shared): an
+        // opposing permanent that triggers on our search or takes it over, or a permanent on any
+        // battlefield whose Shuffled trigger our own shuffle fires (an absent ValidPlayer matches: a
+        // conservative decline). Parameter reads only.
+        private static boolean searchPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.SearchedLibrary) {
+                            return true;
+                        }
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (st.hasParam("ControlOpponentsSearchingLibrary")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Shuffled && t.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // A permanent an opponent controls whose cast trigger fires on this spell of ours and whose
+        // Execute deals damage or makes a player lose life: Kaervek the Merciless (its mana value to
+        // any target, our face or our commander) and Ruric Thar (6 to the caster). saSideEffects'
+        // getDamageForPlaying counts only Defined$ TriggeredActivator damage and declines only when
+        // it is lethal. Parameter reads and SVar text only, never ensureAbility or a built
+        // overriding ability (a new ability takes an id, and ids feed SpellAbility.hashCode). Cost
+        // taxes (Rhystic Study, Esper Sentinel) stay stock.
+        private static boolean castPunished(final Player ai, final Card host) {
+            final Game game = ai.getGame();
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if ((t.getMode() == TriggerType.SpellCast || t.getMode() == TriggerType.SpellCastOrCopy)
+                                && t.zonesCheck(game.getZoneOf(c))
+                                && t.matchesValidParam("ValidActivatingPlayer", ai)
+                                && t.matchesValidParam("ValidCard", host)
+                                && t.hasParam("Execute")) {
+                            final String exec = c.getSVar(t.getParam("Execute"));
+                            if (exec != null && (exec.contains("DealDamage") || exec.contains("LoseLife"))) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Trench Gorger (dead-card batch 2, row 68)
     // {6}{U}{U} 6/6 trample. "When this creature enters, you may search your library for any number
     // of land cards, exile them, then shuffle. If you do, this creature has base power and base
