@@ -76,6 +76,12 @@ public class ScryAi extends SpellAbilityAi {
     protected boolean checkPhaseRestrictions(final Player ai, final SpellAbility sa, final PhaseHandler ph) {
         String logic = sa.getParamOrDefault("AILogic", "");
 
+        // Viscera Seer (dead-card batch 3, row 3): its windows are SpecialCardAi.VisceraSeer's own,
+        // keyed on the readmit's key (its own AB, on the battlefield, asked by its controller)
+        if (SpecialCardAi.VisceraSeer.isOwnAbility(ai, sa)) {
+            return true;
+        }
+
         // For Brain in a Jar, avoid competing against the other ability in the opponent's EOT.
         if ("BrainJar".equals(logic)) {
             return ph.getPhase().isAfter(PhaseType.MAIN2);
@@ -146,6 +152,12 @@ public class ScryAi extends SpellAbilityAi {
         // does Scry make sense with no Library cards?
         if (ai.getCardsIn(ZoneType.Library).isEmpty()) {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // Viscera Seer (dead-card batch 3, row 3): only a creature that is leaving anyway, decided
+        // before the roll below draws
+        if (SpecialCardAi.VisceraSeer.isOwnAbility(ai, sa)) {
+            return SpecialCardAi.VisceraSeer.considerActivation(ai, sa);
         }
 
         double chance = .4; // 40 percent chance of milling with instant speed stuff

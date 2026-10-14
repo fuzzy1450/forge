@@ -358,6 +358,12 @@ public class ComputerUtil {
                 // stolen copy (Nathan Drake's attack trigger) keeps the stock path.
                 return SpecialCardAi.Reshape.chooseSacrifice(ai, typeList);
             }
+            if (SpecialCardAi.VisceraSeer.handles(activate) && SpecialCardAi.VisceraSeer.isOwnAbility(ai, sa)) {
+                // the creature VisceraSeer.considerActivation priced, one that is leaving anyway: serves
+                // ComputerUtilCost.checkSacrificeCost and the payment's chooseSacrificeType alike, ahead of
+                // the SacMe shuffle, for whoever controls the Seer
+                return SpecialCardAi.VisceraSeer.chooseSacrifice(ai, sa, typeList);
+            }
             // search for permanents with SacMe. priority 1 is the lowest, priority 5 the highest
             for (int ip = 0; ip < 6; ip++) {
                 final int priority = 6 - ip;

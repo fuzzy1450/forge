@@ -27302,9 +27302,9 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
-    // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 5, 10, 16,
-    // 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 79, 83 and 84, keepOff for batch
-    // 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
+    // 16, 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 79, 83 and 84, keepOff for
+    // batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -27372,6 +27372,8 @@ public class SpecialCardAi {
                     return EvolutionCharm.readmit(ai, sa);
                 case SunbirdStandard.NAME:
                     return SunbirdStandard.isOwnHandCast(ai, sa);
+                case VisceraSeer.NAME:
+                    return VisceraSeer.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -36543,6 +36545,300 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+    }
+
+    // Viscera Seer (dead-card batch 3, row 3)
+    // "Sacrifice a creature: Scry 1." ({B} 1/1 Vampire Wizard.) AI:RemoveDeck:All dropped both of its
+    // abilities - the creature spell in hand and the sacrifice outlet on the battlefield - in
+    // AiController.getSpellAbilityToPlay's removeIf before any handler ran, so its owner never cast it
+    // (0 owner casts in 1,777 carrier rows on 2.0.15+55e709fa6ba; every cast there was a theft through
+    // a Play effect, which never reads the hint). The hint is KEPT, so the -10 sort
+    // (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck reader (steal, exchange, copy,
+    // clone and tutor pickers) still refuse it; behind it the stock activation is unusable (ScryAi
+    // allows an instant-speed scry on our own turn only in upkeep and rolls a 40% coin on an
+    // opponent's; the stock SacCost chooser, with the Scry as saviour, cannot see a Destroy or Exile on
+    // the stack and shuffles SacMe bodies). The G3 dispatcher (RemoveDeckFilter.readmit) lets through:
+    // - the owner's own creature spell from hand, never a Play-effect cast, a copy or a face-down cast,
+    //   in our own Main 2 on an empty stack (where PermanentAi's Main-2 wait casts it), with no mana
+    //   held (RemoveDeckFilter.noManaHeld) and the engine's test-mode cost (taxes and reductions)
+    //   within HonestMana (G2, held sources skipped) in total and in black; the stock
+    //   PermanentCreatureAi path then judges it;
+    // - the sacrifice-outlet activation, for whoever controls the Seer, only while chooseSacrifice
+    //   finds a creature of that player's that is leaving anyway (Evolutionary Leap's and Ghoulcaller
+    //   Gisa's tier 0, nothing else): a stack object destroys, exiles or steals it for good, its evoke
+    //   sacrifice trigger is on the stack, it dies in this combat without trading and with no trampler
+    //   behind it (declare blockers only), or it is a blitzed body or an end-of-turn-leaving token in
+    //   our own Main 2. The trade: it dies now instead of later, we scry 1 and our death triggers fire
+    //   (an exile or a steal becomes a death). Never a body that is not leaving.
+    // Not leaving, whatever the predictor reads (notLeaving): Momentous Fall's ignores (an
+    // until-end-of-turn steal, divided damage), an Aura that is not a steal (Pacifism, Arrest), an
+    // exile that comes back (Ephemerate, Cloudshift, Flickerwisp), and removal that pays its
+    // controller back (Swords to Plowshares, Path to Exile, Beast Within, Fateful Absence).
+    // With two or more of our creatures leaving (a wipe), a death-relevant leaver (deathRelevant: a
+    // dies trigger, an active undying or persist - Blood Artist, Zulaport Cutthroat, Martyr of Dusk) is
+    // never sacrificed: it dies with the rest and sees every death before it, and its own tokens or
+    // return come after the wipe instead of into it. Then the outlet itself last, the least valuable
+    // body first, card id.
+    // ScryAi routes the Seer's own ability here (checkPhaseRestrictions: always; checkApiLogic:
+    // considerActivation, after the empty-library return and before the MyRandom roll), and
+    // ComputerUtil.getCardPreference's SacCost hook pays with the same chooser, so the creature priced
+    // is the creature paid, ahead of the SacMe shuffle. Both carry the readmit's own key (isOwnAbility:
+    // the AB with AILogic VisceraSeer, its host named Viscera Seer, on the battlefield, asked by its
+    // controller), so a Mairsil cage grant or a graveyard probe of the card keeps the stock path
+    // (rules B3-2 and B3-3). RNG-free: no MyRandom, no AiBlockController, nothing held or remembered;
+    // a readmit refusal is the old filter.
+    public static class VisceraSeer {
+        public static final String NAME = "Viscera Seer";
+        public static final String LOGIC = "VisceraSeer";
+        // the subs of a removal spell that cost its target's controller: a sacrifice in response saves that
+        private static final Set<ApiType> PUNISHING = EnumSet.of(ApiType.LoseLife, ApiType.DealDamage,
+                ApiType.Discard, ApiType.Mill, ApiType.Sacrifice, ApiType.Poison, ApiType.LosesGame);
+        private static final String[] PLAYER_KEYS = {"Defined", "DefinedPlayer", "TokenOwner"};
+
+        // the host's own name: a Clone or Spark Double copy of the Seer answers to it and carries the
+        // AILogic; the host of a Mairsil cage grant does not (rule B3-3)
+        public static boolean handles(final Card source) {
+            return source != null && NAME.equals(source.getName());
+        }
+
+        // The readmit's own key, which ScryAi's route and the SacCost hook carry too (rule B3-2): the
+        // Seer's own AB, on the battlefield, asked by the player who controls it
+        public static boolean isOwnAbility(final Player ai, final SpellAbility sa) {
+            if (sa == null || !sa.isActivatedAbility() || !LOGIC.equals(sa.getParam("AILogic"))) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return handles(host) && host.isInPlay() && ai.equals(host.getController());
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return false;
+            }
+            if (sa.isSpell()) {
+                return readmitCast(ai, sa, host);
+            }
+            // the activator is already set (Card.getAllPossibleAbilities), so this is the pick
+            // considerActivation makes
+            return isOwnAbility(ai, sa) && chooseSacrifice(ai, sa, ai.getCreaturesInPlay()) != null;
+        }
+
+        private static boolean readmitCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (sa.getApi() != ApiType.PermanentCreature || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || sa.isCastFaceDown() || !host.isInZone(ZoneType.Hand) || !ai.equals(host.getOwner())) {
+                return false; // a thief's, a Play-effect or a face-down cast keeps the filter
+            }
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai) || !ai.canCastSorcery()
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // outside our own Main 2 the list stays exactly A's
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int total = cost.getConvertedManaCost();
+            final int black = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK);
+            if (total <= 0 && black <= 0) {
+                return true; // a reduction ate the {B}
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= total && mana.colour(MagicColor.BLACK) >= black;
+        }
+
+        // ScryAi.checkApiLogic's route (isOwnAbility): the creature this activation would pay with
+        public static AiAbilityDecision considerActivation(final Player ai, final SpellAbility sa) {
+            final CostSacrifice sac = sa.getPayCosts() == null ? null
+                    : sa.getPayCosts().getCostPartByType(CostSacrifice.class);
+            if (sac == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection options = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                    sac.getType().split(";"), ai, sa.getHostCard(), sa);
+            return chooseSacrifice(ai, sa, options) == null
+                    ? new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable)
+                    : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Called by readmit, considerActivation, checkSacrificeCost and the payment's
+        // chooseSacrificeType (both through getCardPreference's SacCost hook): a function of the board
+        // and the stack alone. Costs are decided before anything is paid and the ability is not yet on
+        // the stack, so each call returns the same creature. sa null (getCardPreference's four-argument
+        // overload; no caller here passes it) compares the outlet by name.
+        public static Card chooseSacrifice(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean stackLive = !game.getStack().isEmpty();
+            final boolean combatWindow = game.getCombat() != null && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS);
+            final boolean ownMain2 = ph.is(PhaseType.MAIN2, ai);
+            if (!stackLive && !combatWindow && !ownMain2) {
+                return null; // O(1), before any loop
+            }
+            // first pass: every creature of ours that is leaving anyway, over the whole board, so the
+            // count is the same whatever option list the caller passes
+            final Set<Card> leaving = leavers(ai, stackLive, combatWindow, ownMain2);
+            if (leaving.isEmpty()) {
+                return null;
+            }
+            // two or more leaving: a death-relevant one stays to see the others go
+            final boolean several = leaving.size() >= 2;
+            final Card host = sa == null ? null : sa.getHostCard();
+            Card best = null;
+            int bestEval = 0;
+            boolean bestIsHost = false;
+            for (final Card c : options) {
+                if (!leaving.contains(c) || (sa != null && !CardPredicates.canBeSacrificedBy(sa, false).test(c))
+                        || (several && deathRelevant(c))) {
+                    continue; // a body that is not leaving is never cashed in for a scry
+                }
+                // the outlet itself last, then the least valuable body, then card id
+                final boolean isHost = host != null ? c.equals(host) : NAME.equals(c.getName());
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                if (best == null || (bestIsHost && !isHost) || (bestIsHost == isHost
+                        && (eval < bestEval || (eval == bestEval && c.getId() < best.getId())))) {
+                    best = c;
+                    bestEval = eval;
+                    bestIsHost = isHost;
+                }
+            }
+            return best;
+        }
+
+        // Evolutionary Leap's tier 0 over every creature ai controls: a stack verdict (stackLeavers),
+        // its evoke sacrifice trigger on the stack (Gisa's test), a combat death without a trade or a
+        // trampler behind it (declare blockers only: at first-strike damage the stock predictors count
+        // marked damage twice), or, in our own Main 2, a blitzed body or a token with an end-of-turn
+        // leave. Membership and size are all a caller reads.
+        private static Set<Card> leavers(final Player ai, final boolean stackLive, final boolean combatWindow,
+                final boolean ownMain2) {
+            final Game game = ai.getGame();
+            final Combat combat = game.getCombat();
+            final Set<Card> threatened = stackLive ? stackLeavers(ai) : Collections.<Card>emptySet();
+            final Set<Card> out = new HashSet<>();
+            for (final Card c : ai.getCreaturesInPlay()) {
+                final boolean dying = threatened.contains(c)
+                        || (stackLive && GhoulcallerGisa.evokeSacrificePending(game, c))
+                        || (combatWindow && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                                && !ComputerUtilCombat.willOpposingCreatureDieInCombat(ai, c, combat)
+                                && !ComputerUtilCombat.isDangerousToSacInCombat(ai, c, combat));
+                // blitz sacrifices it at the end step; a token with any end-of-turn leave ceases to exist
+                final boolean leavingEot = ownMain2 && ("Blitz".equals(c.getSVar("EndOfTurnLeavePlay"))
+                        || (c.isToken() && c.hasSVar("EndOfTurnLeavePlay")));
+                if (dying || leavingEot) {
+                    out.add(c);
+                }
+            }
+            return out;
+        }
+
+        // One predictThreatenedObjects scan per call (predictCreatureWillDieThisTurn(ai, c, null, true)
+        // runs the same scan once per creature), saviour null so its Destroy / Exile / GainControl
+        // branches stay live, under that method's own DONT_EVAL_KILLSPELLS_ON_STACK_WITH_PERMISSION
+        // guard, minus the verdicts that are no creature leaving for good
+        private static Set<Card> stackLeavers(final Player ai) {
+            final Game game = ai.getGame();
+            if (AiProfileUtil.getBoolProperty(ai, AiProps.DONT_EVAL_KILLSPELLS_ON_STACK_WITH_PERMISSION)) {
+                for (final SpellAbilityStackInstance si : game.getStack()) {
+                    if (si.getSpellAbility().getApi() == ApiType.Counter) {
+                        return Collections.emptySet();
+                    }
+                }
+            }
+            final Set<Card> out = new HashSet<>();
+            for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, null)) {
+                if (o instanceof Card c && c.isCreature()) {
+                    out.add(c);
+                }
+            }
+            if (!out.isEmpty()) {
+                out.removeAll(notLeaving(game));
+            }
+            return out;
+        }
+
+        // Stack verdicts that are no creature leaving for good: Momentous Fall's (the targets of an
+        // until-end-of-turn steal or of divided damage), and
+        // - the targets of an Attach that is not a steal: the predictor's curse-Aura branch, live under
+        //   Default.ai's ACTIVELY_DESTROY_IMMEDIATELY_UNBLOCKABLE, reads a Pacifism or an Arrest as a
+        //   threat, but the body stays with its statics and triggers and stays fodder for a real
+        //   leaving moment later; Control Magic (AILogic GainControl) stays a leaver;
+        // - the nontoken targets of an exile in a chain that brings it back (a ChangeZone to the
+        //   battlefield from Exile or All, or any DelayedTrigger: Ephemerate, Cloudshift, Flickerwisp's
+        //   enters trigger); Banisher Priest's until-it-leaves exile has neither and stays a leaver, and
+        //   an exiled token ceases to exist;
+        // - every target of removal that pays its controller back: a sub naming TargetedController or
+        //   TargetedOwner in Defined, DefinedPlayer or TokenOwner whose API is not a punishing one
+        //   (Swords to Plowshares, Path to Exile, Beast Within, Fateful Absence's Clue, Reality Shift's
+        //   manifest, Excise the Imperfect's Incubator); a sacrifice in response would fizzle it and
+        //   forfeit that for a scry. A sub that punishes (a life loss) is no reason to stay: the
+        //   sacrifice saves that loss.
+        // Param and target reads only (WrappedAbility delegates getApi, getSubAbility and getTargets):
+        // RNG-free.
+        private static Set<Card> notLeaving(final Game game) {
+            final Set<Card> out = new HashSet<>(MomentousFall.stackThreatsToIgnore(game));
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility root = si.getSpellAbility();
+                boolean returns = false;
+                boolean pays = false;
+                for (SpellAbility p = root; p != null; p = p.getSubAbility()) {
+                    final ApiType api = p.getApi();
+                    if (api == ApiType.DelayedTrigger || (api == ApiType.ChangeZone
+                            && "Battlefield".equals(p.getParam("Destination"))
+                            && (zoneListed(p.getParam("Origin"), "Exile") || zoneListed(p.getParam("Origin"), "All")))) {
+                        returns = true;
+                    }
+                    if (p != root && api != null && !PUNISHING.contains(api) && namesTargetedController(p)) {
+                        pays = true;
+                    }
+                }
+                for (SpellAbility p = root; p != null; p = p.getSubAbility()) {
+                    final ApiType api = p.getApi();
+                    if (pays || (api == ApiType.Attach && !"GainControl".equals(p.getParam("AILogic")))) {
+                        p.getTargets().getTargetCards().forEach(out::add);
+                    } else if (returns && api == ApiType.ChangeZone && "Exile".equals(p.getParam("Destination"))) {
+                        for (final Card c : p.getTargets().getTargetCards()) {
+                            if (!c.isToken()) {
+                                out.add(c);
+                            }
+                        }
+                    }
+                }
+            }
+            return out;
+        }
+
+        private static boolean namesTargetedController(final SpellAbility p) {
+            for (final String key : PLAYER_KEYS) {
+                final String v = p.getParam(key);
+                if (v != null && (v.contains("TargetedController") || v.contains("TargetedOwner"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A leaver whose death matters beyond its own body: a ChangesZone or ChangesZoneAll trigger from
+        // the battlefield (or Any) to the graveyard (or Any) - a watcher of other deaths, or its own
+        // dies trigger - or an active undying or persist. A missing zone is Any, as TriggerChangesZone
+        // reads it. The leaver's own triggers and keywords only: RNG-free.
+        private static boolean deathRelevant(final Card c) {
+            if (ComputerUtilCard.hasActiveUndyingOrPersist(c)) {
+                return true;
+            }
+            for (final Trigger t : c.getTriggers()) {
+                if ((t.getMode() == TriggerType.ChangesZone || t.getMode() == TriggerType.ChangesZoneAll)
+                        && (t.getParam("Origin") == null || zoneListed(t.getParam("Origin"), "Any")
+                                || zoneListed(t.getParam("Origin"), "Battlefield"))
+                        && (t.getParam("Destination") == null || zoneListed(t.getParam("Destination"), "Any")
+                                || zoneListed(t.getParam("Destination"), "Graveyard"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // a zone parameter is a comma-separated list
+        private static boolean zoneListed(final String zones, final String zone) {
+            return zones != null && Arrays.asList(zones.split(",")).contains(zone);
         }
     }
 
