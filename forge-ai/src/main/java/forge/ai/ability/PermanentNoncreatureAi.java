@@ -72,6 +72,14 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.ManascapeRefractor.consider(ai, sa);
         }
 
+        // Springleaf Drum keeps AI:RemoveDeck:All; G3 lets only its owner's hand cast through, and
+        // that cast is judged here (own Main 2 in practice, PermanentAi:54). The gate is the
+        // readmit's own key (rule B3-2): a Play-effect cast, a thief's and every other host keep
+        // the stock answer.
+        if (SpecialCardAi.SpringleafDrum.isOwnHandCast(ai, sa)) {
+            return SpecialCardAi.SpringleafDrum.consider(ai, sa);
+        }
+
         // Lavabrink Floodgates dropped AI:RemoveDeck:All. Its own cast is judged here, after the
         // stock approval (own Main 2 in practice, PermanentAi.checkPhaseRestrictions); a Play-effect
         // cast (Etali's free cast, Nathan Drake's attack trigger) keeps the stock answer, as in A.

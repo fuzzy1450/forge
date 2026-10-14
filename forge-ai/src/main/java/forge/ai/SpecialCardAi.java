@@ -23904,8 +23904,8 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 10, 16, 17, 21, 35, 49, 50 and 57, keepOff for batch 2's row 68. A case must draw no
-    // random number and hold nothing, so that its false is exactly the old filter.
+    // 5, 10, 16, 17, 19, 21, 35, 49, 50 and 57, keepOff for batch 2's row 68. A case must draw
+    // no random number and hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -23947,6 +23947,8 @@ public class SpecialCardAi {
                     return SwordOfTheParuns.readmit(ai, sa);
                 case SlobadGoblinTinkerer.NAME:
                     return SlobadGoblinTinkerer.readmit(ai, sa);
+                case SpringleafDrum.NAME:
+                    return SpringleafDrum.isOwnHandCast(ai, sa);
                 default:
                     return false;
             }
@@ -27049,6 +27051,69 @@ public class SpecialCardAi {
                 }
             }
             return best;
+        }
+    }
+
+    // Springleaf Drum (dead-card batch 3, row 19)
+    // "{T}, Tap an untapped creature you control: Add one mana of any color." ({1} artifact.)
+    // AI:RemoveDeck:All is KEPT (the Manascape Refractor shape, batch 2 row 60): G3 readmits
+    // exactly one ability through AiController's filter, this card's own permanent spell cast
+    // from its owner's hand and not from a Play effect, judged by consider() from
+    // PermanentNoncreatureAi.checkApiLogic after the stock WillPlay (own Main 2, PermanentAi's
+    // checkPhaseRestrictions; Main 1 only where castPermanentInMain1 says so). The hint keeps the
+    // card off opposing steal, tutor and copy lists and keeps its -10 sort, so it is tried only
+    // after nearly every other ability this pass declined. Its mana ability never went through
+    // the filter: ComputerUtilMana pays with it as it pays with the hint-free Jaspera Sentinel,
+    // Survivors' Encampment and Dragonbroods' Relic (checkTapTypeCost, the lowest-power untapped
+    // creature; summoning sickness does not matter for a tap-a-creature cost).
+    // isOwnHandCast is also the handler gate's key (rule B3-2), so the canPlaySa callers that skip
+    // the RemoveDeck filter (TapAi's hasReasonToPlayCardThisTurn, ManaAi's ritual look-ahead,
+    // targetPlayableSpellCard, the hand scanners) meet consider() only for the owner's own hand
+    // card; consider() draws nothing, and any other host keeps the stock answer.
+    public static class SpringleafDrum {
+        public static final String NAME = "Springleaf Drum";
+
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return sa.isSpell() && !sa.isCastFromPlayEffect() && host != null
+                    && NAME.equals(host.getName()) && host.isInZone(ZoneType.Hand)
+                    && ai.equals(host.getOwner());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // RNG parity: A never evaluated this spell on the cast path, and everything before
+            // this point is RNG-free. canPayCost draws per source it tries (isManaSourceReserved),
+            // so a window that cannot pay stops here, drawing nothing: the engine's test-mode cost
+            // (taxes, RaiseCost/ReduceCost) against G2 with held sources skipped, as
+            // ManascapeRefractor.
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (HonestMana.of(ai, sa, true).total() < cost.getConvertedManaCost()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // Value floor: it makes mana only by tapping a creature of ours. A creature on our
+            // battlefield (tapped ones untap, summoning-sick ones may be tapped), a creature card in
+            // hand, or our creature commander in the command zone is fodder now or soon.
+            if (hasFodder(ai, sa.getHostCard())) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+        }
+
+        static boolean hasFodder(final Player ai, final Card self) {
+            if (!ai.getCreaturesInPlay().isEmpty()) {
+                return true;
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c != self && c.isCreature()) {
+                    return true;
+                }
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Command)) {
+                if (c.isCommander() && c.isCreature() && ai.equals(c.getOwner())) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
