@@ -58,7 +58,7 @@ import java.util.stream.Collectors;
  * @version $Id$
  */
 public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbilityStackInstance> {
-    private static final int MAX_TRIGGER_REPEATS = 50;
+    public static final int MAX_TRIGGER_REPEATS = 50;
 
     private final List<SpellAbility> simultaneousStackEntryList = Lists.newArrayList();
     private final List<SpellAbility> activePlayerSAs = Lists.newArrayList();
@@ -79,6 +79,9 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
 
     private Card curResolvingCard = null;
     private final Map<Integer, Integer> triggerRepeats = new HashMap<>();
+    // every trigger's repeats, optional and targeted ones included, on triggerRepeats' resets: what an optional
+    // loop's controller reads to stop it (CR 732.2a), where triggerRepeats draws only a mandatory loop (CR 104.4b)
+    private final Map<Integer, Integer> anyTriggerRepeats = new HashMap<>();
 
     private final Game game;
 
@@ -107,6 +110,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
         thisTurnActivated.clear();
         curResolvingCard = null;
         triggerRepeats.clear();
+        anyTriggerRepeats.clear();
         frozenStack.clear();
         clearUndoStack();
         game.updateStackForView();
@@ -503,6 +507,9 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
         if (!sp.isTrigger()) {
             // a player did something
             triggerRepeats.clear();
+            anyTriggerRepeats.clear();
+        } else {
+            anyTriggerRepeats.merge(sp.getSourceTrigger(), 1, Integer::sum);
         }
         if (!sp.isMandatory() || sp.usesTargeting()) {
             return false;
@@ -518,6 +525,12 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
 
     public final void clearTriggerRepeats() {
         triggerRepeats.clear();
+        anyTriggerRepeats.clear();
+    }
+
+    /** How many times this trigger went on the stack since the last reset, optional and targeted ones included. */
+    public final int getTriggerRepeats(final int sourceTriggerId) {
+        return anyTriggerRepeats.getOrDefault(sourceTriggerId, 0);
     }
 
     private void recordUndoableActions(SpellAbility sa) {

@@ -36,6 +36,7 @@ import forge.game.staticability.StaticAbility;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
 import forge.game.trigger.WrappedAbility;
+import forge.game.zone.MagicStack;
 import forge.game.zone.PlayerZone;
 import forge.game.zone.ZoneType;
 import forge.item.PaperCard;
@@ -412,6 +413,12 @@ public class PlayerControllerAi extends PlayerController {
         //final Trigger regtrig = wrapper.getTrigger();
         if (wrapper.isMandatory()) {
             return true;
+        }
+        // CR 732.2a: the controller of an optional loop names a number of iterations and then stops. The draw
+        // detector counts only mandatory, untargeted triggers, so an optional one that keeps coming back (e.g.
+        // Flourishing Defenses fed by Blowfly Infestation) is stopped here once it repeats past the same limit.
+        if (getGame().getStack().getTriggerRepeats(wrapper.getSourceTrigger()) > MagicStack.MAX_TRIGGER_REPEATS) {
+            return false;
         }
         // Store/replace target choices more properly to get this SA cleared.
         TargetChoices tc = null;
