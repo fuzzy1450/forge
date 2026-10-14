@@ -36,6 +36,12 @@ public class SacrificeAi extends SpellAbilityAi {
             // the one resolution will sacrifice. Draws nothing.
             return SpecialCardAi.DarettiScrapSavant.considerReanimate(ai, sa);
         }
+        if (SpecialCardAi.EdictForAll.handles(ai, sa)) {
+            // Tergrid's Shadow (dead-card batch 3, row 41): the owner's own cast from its own hand, the
+            // one cast G3's readmit puts back on the list, judged by the same RNG-free plan (rule B3-2:
+            // the readmit's own key). A Play-effect cast, a copy or a thief's cast keeps the stock branch.
+            return SpecialCardAi.EdictForAll.consider(ai, sa);
+        }
         return sacrificeTgtAI(ai, sa, false);
     }
 

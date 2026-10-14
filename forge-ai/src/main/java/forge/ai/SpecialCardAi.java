@@ -9989,6 +9989,297 @@ public class SpecialCardAi {
         }
     }
 
+    // Edict for all (dead-card batch 3, row 41; carrier precon:Elven Empire (KHC) b9b9f640, an implicit
+    // anchor)
+    // Tergrid's Shadow: "Each player sacrifices two creatures." ({3}{B}{B} instant; Foretell {2}{B}{B}.)
+    // We lose our own two worst as our chooser picks them, each opponent gives up its own two worst,
+    // nothing is targeted (hexproof, ward, indestructible and regeneration do not matter), and a player
+    // with fewer gives up what it has: the edict's best case is a lone big threat. The script keeps
+    // AI:RemoveDeck:All, so the -10 sort (ComputerUtilAbility.saEvaluator) and every other
+    // isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers, MayPlay thieves) still
+    // refuse it, and the Foretell special action stays off the list (the AI never foretells it, so the
+    // foretold cast from exile never exists). Behind the hint, SacrificeAi.sacrificeTgtAI's
+    // Defined$ Player branch approves whenever the strongest opponent has two creatures, in any phase,
+    // never reading our board, our commander or what they would give up.
+    // G3 (RemoveDeckFilter.readmit) lets exactly one ability through AiController's filter: the owner's
+    // own cast from its own hand (handles: the paper name, a root spell, not a Play-effect cast or a
+    // copy, its owner also its controller and activator), when consider() approves. SacrificeAi.canPlay
+    // asks the same consider() behind the same key (rule B3-2), so a canPlaySa scan of that hand SA
+    // meets this plan, and every other cast (Silent-Blade Oni's and Nathan Drake's Play effects, a copy)
+    // keeps the stock branch. consider(), cheapest first:
+    // - window: an empty stack, in our own main phase or the end step right before our turn, and the
+    //   spell's own timing (canCastTiming: a no-op for the instant; a sorcery joining by name meets it);
+    // - shape: an untargeted Defined$ Player sacrifice of SacValid$ Creature, not optional, not a
+    //   destroy, not random (a drifted script never approves blind: picks models only that resolution);
+    // - mana: the engine's test-mode calculateManaCost (taxes, every RaiseCost and ReduceCost static)
+    //   within HonestMana (G2, held sources skipped), in total and in black (rule B3-5);
+    // - a cheap bound: some opposing creature is worth a card by its printed shape (Wave of
+    //   Reckoning's filter: nontoken mana value 2 or more, or power 3 or more);
+    // - their picks (picks: the AI chooser's own order), whose total is an upper bound of the exact
+    //   floor, so most boards exit before our side is evaluated; then our picks; then the opposing
+    //   payoff veto; then the exact floor.
+    // Value (evaluateCreature's scale: a 1/1 token is 106, a 4/4 for 4 about 220): an opposing victim
+    // is worth evaluateCreature, plus COMMANDER_TAX for a commander (it is recast for two more: Black
+    // Sun's Zenith, Deadly Tempest, Localized Destruction, Toxic Deluge), and 0 as fodder (SacMe), as a
+    // returner (active undying or persist) or when its own harmless death trigger leaves value behind
+    // (noValueKills). A victim we own counts as our loss wherever it is (Slaughter the Strong's owner
+    // rule), and no commander on our side, nor our own stolen one, is ever traded. Cast only when some
+    // counted opposing victim is worth MIN_VICTIM_EVAL (a real threat) and their loss beats ours by
+    // NET_MARGIN. Veto (Slaughter the Strong's loop, a private copy; WaveOfReckoning's isDeathTrigger
+    // and deathTriggerHarmsUs, called unchanged): an opposing Sacrificed/SacrificedOnce trigger whose
+    // ValidCard and ValidPlayer match a victim (Korvold, Mazirek), an opposing death trigger on another
+    // card (Blood Artist, Zulaport, Grave Pact), or a victim's own harmful one.
+    // RNG-free: reads only (phase, stack, the test-mode cost, HonestMana, filterListByType,
+    // canBeSacrificedBy, evaluateCreature, matchesValidParam). Its writes are setActivatingPlayer on a
+    // hand SA with none and on the mana abilities G2 reads, and Trigger.ensureAbility's lazy allocation
+    // (Wave of Reckoning's and Slaughter the Strong's accepted residual). No ComputerUtil.canRegenerate:
+    // regeneration cannot replace a sacrifice, and it test-pays through canPayCost, which draws. Nothing
+    // is held, remembered or targeted, so a false is the old filter. Keyed by a name set (isEdict), so
+    // that Barter in Blood (row 79) joins with its own name and readmit case.
+    public static class EdictForAll {
+        public static final String TERGRIDS_SHADOW = "Tergrid's Shadow";
+        // a real threat among the victims: a 4/4 for 4 (221); its own literal, not Grab the Reins'
+        // MIN_REMOVE_EVAL, so an amendment there cannot move this floor
+        public static final int MIN_VICTIM_EVAL = 200;
+        // the trade must still net about a 1/1 token (106) once our own losses are paid
+        public static final int NET_MARGIN = 100;
+        // an opposing commander goes back to the command zone and is recast for two more
+        public static final int COMMANDER_TAX = 100;
+
+        // the paper names this class judges
+        static boolean isEdict(final String name) {
+            return TERGRIDS_SHADOW.equals(name);
+        }
+
+        // the readmit's key, shared by SacrificeAi.canPlay's gate: the owner's own cast from its own
+        // hand; never a Play-effect cast, a copy, a sub-ability or another player's cast
+        public static boolean handles(final Player ai, final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || !sa.isSpell() || sa.isCastFromPlayEffect()
+                    || sa.isCopied()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !isEdict(host.getRules().getName())) {
+                return false; // the paper name, as isCardRemAIDeck reads it (rule B3-3)
+            }
+            final Player activator = sa.getActivatingPlayer();
+            return host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner()) && ai.equals(host.getController())
+                    && (activator == null || ai.equals(activator));
+        }
+
+        // RemoveDeckFilter.readmit's case: draws nothing, holds nothing, sets no target
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!handles(ai, sa)) {
+                return false;
+            }
+            if (sa.getActivatingPlayer() == null) {
+                sa.setActivatingPlayer(ai); // canBeSacrificedBy reads it (Grab the Reins' amendment 6)
+            }
+            return consider(ai, sa).willingToPlay();
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // 1. window, the cheapest test first (the readmit runs at every priority while the card is
+            //    in hand): an empty stack, in our own main phase or the end step right before our turn
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.StackNotEmpty);
+            }
+            final boolean ownMain = ph.isPlayerTurn(ai) && ph.getPhase() != null && ph.getPhase().isMain();
+            final boolean endBeforeOurs = ph.is(PhaseType.END_OF_TURN) && !ph.isPlayerTurn(ai)
+                    && ai.equals(ph.getNextTurn());
+            if (!ownMain && !endBeforeOurs) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!sa.canCastTiming(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TimingRestrictions);
+            }
+            // 2. shape: the resolution picks() models, else script drift
+            if (sa.getApi() != ApiType.Sacrifice || !"Player".equals(sa.getParam("Defined"))
+                    || !"Creature".equals(sa.getParam("SacValid")) || sa.usesTargeting()
+                    || sa.hasParam("Optional") || sa.hasParam("Destroy") || sa.hasParam("Random")) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 3. mana, RNG-free: G2 against the engine's adjusted cost, in total and in black
+            final ManaCostBeingPaid need = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < need.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLACK) < need.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // 4. cheap bound before any evaluateCreature: an opposing creature worth a card by its shape
+            boolean anyWorth = false;
+            for (final Card c : ai.getOpponents().getCreaturesInPlay()) {
+                if ((!c.isToken() && c.getCMC() >= 2) || c.getNetPower() >= 3) {
+                    anyWorth = true;
+                    break;
+                }
+            }
+            if (!anyWorth) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int amount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParamOrDefault("Amount", "1"), sa);
+            if (amount <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Map<Card, Integer> value = new HashMap<>(); // evaluateCreature, once per card
+            // 5. their picks first: their counted total bounds the floor from above (our loss is never
+            //    negative, and the veto only takes credit away), so most boards stop here
+            final List<Card> theirPicks = Lists.newArrayList();
+            for (final Player opp : ai.getOpponents()) {
+                theirPicks.addAll(picks(opp, sa, amount, value));
+            }
+            int ourLoss = 0;
+            int bound = 0;
+            boolean threat = false;
+            for (final Card c : theirPicks) {
+                if (ai.equals(c.getOwner())) {
+                    if (c.isCommander()) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // our own, stolen
+                    }
+                    ourLoss += loss(c, value); // our card, theirs only for now: our loss, not a kill
+                    continue;
+                }
+                final int v = victimValue(c, value);
+                bound += v;
+                threat |= v >= MIN_VICTIM_EVAL;
+            }
+            if (!threat || bound < NET_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 6. our picks: never a commander on our side
+            final List<Card> ourPicks = picks(ai, sa, amount, value);
+            for (final Card c : ourPicks) {
+                if (c.isCommander()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                ourLoss += loss(c, value);
+            }
+            // 7. the opposing payoff veto over every victim (Slaughter the Strong's loop, a private copy)
+            final CardCollection dying = new CardCollection(ourPicks);
+            dying.addAll(theirPicks);
+            final CardCollection noValueKills = new CardCollection();
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    final boolean sacTrig = t.getMode() == TriggerType.Sacrificed
+                            || t.getMode() == TriggerType.SacrificedOnce;
+                    final boolean deathTrig = WaveOfReckoning.isDeathTrigger(t);
+                    if (!sacTrig && !deathTrig) {
+                        continue;
+                    }
+                    for (final Card d : dying) {
+                        if (!t.matchesValidParam("ValidCard", d)) {
+                            continue;
+                        }
+                        if (sacTrig) {
+                            if (t.matchesValidParam("ValidPlayer", d.getController())) {
+                                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                            }
+                            continue;
+                        }
+                        if (!t.matchesValidParam("ValidCards", d)) {
+                            continue;
+                        }
+                        if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                        }
+                        noValueKills.add(d);
+                    }
+                }
+            }
+            // 8. the exact floor: a real threat among the counted victims, and a net of NET_MARGIN
+            int theirLoss = 0;
+            threat = false;
+            for (final Card c : theirPicks) {
+                if (ai.equals(c.getOwner()) || noValueKills.contains(c)) {
+                    continue;
+                }
+                final int v = victimValue(c, value);
+                theirLoss += v;
+                threat |= v >= MIN_VICTIM_EVAL;
+            }
+            if (!threat || theirLoss - ourLoss < NET_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // p's first `amount` sacrifices, in the order ComputerUtil.choosePermanentsToSacrifice takes them
+        // for an AI player (PlayerControllerAi.choosePermanentsToSacrifice, isOptional false; every sim seat
+        // is an AI). The pool is SacrificeEffect's own: the battlefield through SacValid
+        // (AbilityUtils.filterListByType), then canBeSacrificedBy(sa, true). chooseCardToSacrifice takes
+        // SacMe from priority 6 down to 1 in pool order, then the worst creature (getWorstCreatureAI:
+        // Aggregates.itemWithMin over evaluateCreature, the first of equals). A private copy of
+        // DoomsdayConfluence.sacrificeOrder, which takes an AbilitySub and returns values: this root SA is
+        // a Spell, and the veto needs the cards. The pool is a new list (CardLists.filter), never a
+        // memoized getCardsIn snapshot, and only that copy is sorted.
+        private static List<Card> picks(final Player p, final SpellAbility sa, final int amount,
+                                        final Map<Card, Integer> value) {
+            final CardCollection pool = CardLists.filter(AbilityUtils.filterListByType(
+                    p.getCardsIn(ZoneType.Battlefield), sa.getParam("SacValid"), sa),
+                    CardPredicates.canBeSacrificedBy(sa, true));
+            final List<Card> order = Lists.newArrayList();
+            for (int prio = 6; prio > 0 && order.size() < amount; prio--) {
+                for (final Card c : pool) {
+                    if (order.size() < amount && sacMePriority(c) == prio) {
+                        order.add(c);
+                    }
+                }
+            }
+            if (order.size() < amount) {
+                final List<Card> rest = Lists.newArrayList();
+                for (final Card c : pool) {
+                    final int prio = sacMePriority(c);
+                    if (prio < 1 || prio > 6) {
+                        rest.add(c);
+                        eval(c, value);
+                    }
+                }
+                rest.sort(Comparator.comparingInt(value::get)); // stable: the first of equals goes first
+                for (final Card c : rest) {
+                    if (order.size() >= amount) {
+                        break;
+                    }
+                    order.add(c);
+                }
+            }
+            return order;
+        }
+
+        // an opposing victim's worth: 0 as fodder or a returner, else evaluateCreature, plus the tax
+        // for a commander
+        private static int victimValue(final Card c, final Map<Card, Integer> value) {
+            return worth0(c) ? 0 : eval(c, value) + (c.isCommander() ? COMMANDER_TAX : 0);
+        }
+
+        // what a card of ours costs us: 0 as fodder or a returner, else evaluateCreature
+        private static int loss(final Card c, final Map<Card, Integer> value) {
+            return worth0(c) ? 0 : eval(c, value);
+        }
+
+        private static int eval(final Card c, final Map<Card, Integer> value) {
+            return value.computeIfAbsent(c, k -> ComputerUtilCard.evaluateCreature(k));
+        }
+
+        // worth 0 to its controller: SacMe, or an active undying or persist creature (it comes back)
+        private static boolean worth0(final Card c) {
+            return c.hasSVar("SacMe") || ComputerUtilCard.hasActiveUndyingOrPersist(c);
+        }
+
+        // the SacMe priority chooseCardToSacrifice reads; 0 when absent or not a number
+        private static int sacMePriority(final Card c) {
+            if (!c.hasSVar("SacMe")) {
+                return 0;
+            }
+            try {
+                return Integer.parseInt(c.getSVar("SacMe").trim());
+            } catch (final NumberFormatException e) {
+                return 0;
+            }
+        }
+    }
+
     // Electric Seaweed
     // "When this creature enters, until end of turn, whenever another creature
     // dies, this creature deals 1 damage to each non-Wall creature."
@@ -25239,9 +25530,10 @@ public class SpecialCardAi {
     // Both switch on the paper name, host.getRules().getName(): it is the rules isCardRemAIDeck
     // reads, and a face-down host's getName() is "". A card no case names answers false from both,
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
-    // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
-    // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 10, 16, 17, 19, 21, 27, 35, 36, 49, 50, 57, 58, 60, 83 and 84, keepOff for batch 2's row 68.
+    // added by its own row's commit, labelled with that row's class's NAME constant (the shared
+    // EdictForAll's per-card name constant for batch 3's row 41), and delegates to that class:
+    // readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 5, 10, 16, 17,
+    // 19, 21, 27, 35, 36, 41, 49, 50, 57, 58, 60, 83 and 84, keepOff for batch 2's row 68.
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -25299,6 +25591,8 @@ public class SpecialCardAi {
                     return CopyEnchantment.isOwnHandCast(ai, sa);
                 case GrimoireOfTheDead.NAME:
                     return GrimoireOfTheDead.readmit(ai, sa);
+                case EdictForAll.TERGRIDS_SHADOW:
+                    return EdictForAll.readmit(ai, sa);
                 default:
                     return false;
             }
