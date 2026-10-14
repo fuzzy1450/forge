@@ -23738,8 +23738,8 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 16, 17, 21, 35, 49 and 50, keepOff for batch 2's row 68. A case must draw no random number
-    // and hold nothing, so that its false is exactly the old filter.
+    // 5, 16, 17, 21, 35, 49, 50 and 57, keepOff for batch 2's row 68. A case must draw no random
+    // number and hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -23777,6 +23777,8 @@ public class SpecialCardAi {
                     return VishKalBloodArbiter.readmit(ai, sa);
                 case DulcetSirens.NAME:
                     return DulcetSirens.readmit(ai, sa);
+                case SwordOfTheParuns.NAME:
+                    return SwordOfTheParuns.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -27861,6 +27863,112 @@ public class SpecialCardAi {
                 return false; // Treasure, Clue, Food
             }
             return c.isPlaneswalker() || c.getCMC() >= MIN_PERMANENT_CMC; // a planeswalker's X is 0 on the battlefield
+        }
+    }
+
+    // Sword of the Paruns (dead-card batch 3, row 57)
+    // "As long as equipped creature is tapped, tapped creatures you control get +2/+0. As long as
+    // equipped creature is untapped, untapped creatures you control get +0/+2. {3}: You may tap or
+    // untap equipped creature. Equip {3}." ({4} artifact Equipment.) AI:RemoveDeck:All dropped all
+    // three of its abilities in AiController.getSpellAbilityToPlay's removeIf before any handler
+    // ran: the cast, the Equip and the {3} tap-or-untap. So its owner never cast it from hand on any
+    // engine (every recorded cast on 2.0.15+55e709fa6ba is a Play effect - Nathan Drake's attack
+    // trigger, Skyway Robber's free cast, one owner cast from exile - and none of them reads the
+    // hint). The script keeps the hint:
+    // - the {3} tap-or-untap: stock TapOrUntapAi approves it whenever the equipped creature is
+    //   untapped, at any priority, and PlayerControllerAi.chooseBinary(TapOrUntap) always taps, so
+    //   it would pay {3} to tap our own best creature (a blocker lost, the +0/+2 switched off);
+    // - the -10 sort (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck reader
+    //   (steal, exchange, copy, clone and tutor pickers) still refuse it.
+    // The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly two abilities through
+    // AiController's filter, both its owner's, so every other pass is the stock pass:
+    // - the cast from the owner's own hand (not a Play-effect cast, not a copy), in our own main
+    //   phase with an empty stack and no mana reservation live (RemoveDeckFilter.noManaHeld), when
+    //   at least MIN_BODIES useful creatures of ours are out and one of them is a carrier stock
+    //   AttachAi would equip (power > 0, can attack next turn, can wear it: the filter of
+    //   AttachAi.attachAIPumpPreference's !grantingAbilities branch). G2 (HonestMana, held sources
+    //   skipped) must cover the engine's test-mode calculateManaCost in Main 2, and that plus the
+    //   Equip's {3} in Main 1, so a Main-1 cast is worn in this combat; otherwise it waits for
+    //   Main 2, which the stock phase rule (PermanentAi.checkPhaseRestrictions through
+    //   ComputerUtil.castPermanentInMain1, RNG-free here) prefers anyway;
+    // - the Equip of a Sword its owner controls on the battlefield: stock AttachAi (AILogic$ Pump)
+    //   judges it and picks our best attacker.
+    // Value floor: a carrier plus one more body. A worn Sword gives every tapped creature of ours
+    // +2/+0 while a non-vigilant carrier attacks (+4 power or more with two attackers), and every
+    // untapped creature of ours +0/+2 on the opponents' turns; with no carrier it is a blank
+    // artifact. A thief's MayPlay cast and a thief's Equip fail the owner checks (a Play-effect
+    // theft never reaches this filter: canPlayFromEffectAI). Draws nothing, holds nothing and
+    // remembers nothing; its only writes are setActivatingPlayer on a hand SA with no activator yet
+    // (as getOriginalAndAltCostAbilities does right after the filter) and on the mana abilities G2
+    // reads. The first draw on an approved cast is canPayCost's isManaSourceReserved, which G2 plus
+    // noManaHeld keep from failing after it draws.
+    public static class SwordOfTheParuns {
+        public static final String NAME = "Sword of the Paruns";
+        // the carrier and at least one other: an attack with the carrier adds +2 power to each
+        // tapped attacker (+4 or more with two), and at home every untapped creature gets +0/+2
+        public static final int MIN_BODIES = 2;
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner()) || !ai.equals(host.getController())) {
+                return false; // a thief's cast or Equip keeps the filter
+            }
+            if (sa.isEquip()) {
+                return host.isInZone(ZoneType.Battlefield); // stock AttachAi Equip (AILogic$ Pump)
+            }
+            if (!sa.isSpell() || sa.getApi() != ApiType.PermanentNoncreature || sa.isCastFromPlayEffect()
+                    || sa.isCopied() || !host.isInZone(ZoneType.Hand)) {
+                return false; // the {3} TapOrUntap, a Play-effect cast, a copy: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            // O(1) window first: our own main phase, an empty stack, nothing held
+            if (!ai.canCastSorcery() || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            // value floor, O(our creatures), RNG-free
+            int bodies = 0;
+            boolean carrier = false;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (ComputerUtilCard.isUselessCreature(ai, c)) {
+                    continue;
+                }
+                bodies++;
+                if (!carrier && c.getNetPower() > 0 && ComputerUtilCombat.canAttackNextTurn(c)
+                        && c.canBeAttached(host, null)) {
+                    carrier = true;
+                }
+            }
+            if (!carrier || bodies < MIN_BODIES) {
+                return false;
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            // mana: G2 against the engine's own test-mode price (taxes, reductions), judged on sa
+            int need = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false)
+                    .getConvertedManaCost();
+            if (ai.getGame().getPhaseHandler().is(PhaseType.MAIN1)) {
+                final SpellAbility equip = equipAbility(host);
+                if (equip == null) {
+                    return false;
+                }
+                need += equip.getPayCosts().getTotalMana().getCMC(); // {3}: worn before this combat
+            }
+            return HonestMana.of(ai, sa, true).total() >= need;
+        }
+
+        // the Equip keyword's Attach ability, read for its printed cost
+        private static SpellAbility equipAbility(final Card host) {
+            for (final SpellAbility ab : host.getSpellAbilities()) {
+                if (ab.isEquip()) {
+                    return ab;
+                }
+            }
+            return null;
         }
     }
 
