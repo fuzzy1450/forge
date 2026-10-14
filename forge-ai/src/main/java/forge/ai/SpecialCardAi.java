@@ -474,6 +474,183 @@ public class SpecialCardAi {
         }
     }
 
+    // Ad Nauseam (dead-card batch 3, row 71; carrier sauron-s-pile-o-nuts, a default_anchor deck)
+    // "Reveal the top card of your library and put that card into your hand. You lose life equal to
+    // its mana value. You may repeat this process any number of times." ({3}{B}{B} instant.)
+    // AI:RemoveDeck:All kept it off AiController.getSpellAbilityToPlay's list, so its owner never
+    // considered it. Behind the hint RepeatAi.canPlay answers WillPlay at any phase and any life,
+    // and RepeatAi.confirmAction answered false, so a cast revealed exactly one card. The hint is
+    // KEPT (rule B3-1): every other isCardRemAIDeck reader (the copy, steal and clone pickers, the
+    // -10 sort) still refuses it, so nobody copies it into a forced reveal its floor never priced.
+    // - readmit(), G3's case, puts back only our own cast from hand (not a copy, not a Play-effect
+    //   cast) at an opponent's end step right before our turn, on an empty stack: Moonlight
+    //   Bargain's window, never our own end step before an extra turn (Last Chance), whose cleanup
+    //   would discard what it bought. Then a library of LIBRARY_MARGIN + MIN_REVEALS cards or more,
+    //   room in hand for MIN_REVEALS cards (this card leaves it; HAND_SLACK for the turn that
+    //   follows), no held mana (G3's noManaHeld), real mana for the adjusted cost with black for
+    //   each black pip (G2, held sources skipped), and expectedReveals() of MIN_REVEALS or more.
+    //   RepeatAi.canPlay is untouched: its stock WillPlay follows a true readmit only.
+    // - revealAnother(), from RepeatAi.confirmAction (AILogic AdNauseam), after every reveal: the
+    //   owner reveals another only while the library keeps more than LIBRARY_MARGIN cards, the hand
+    //   has room (HAND_SLACK at an opponent's end step, none in our own turn, where a cascade cast
+    //   meets our cleanup before any draw or land drop), and life minus the library's highest mana
+    //   value, once for this reveal and once for every other Ad Nauseam of ours still on the stack
+    //   (each forces one reveal), stays at or above the floor. A thief keeps the stock answer, one
+    //   reveal.
+    // - floor(): max(MIN_LIFE_AFTER, AI_IN_DANGER_MAX_THRESHOLD + 1 + the opponents' unblocked
+    //   damage next turn), our blockers ignored, plus the burden counters on every The One Ring we
+    //   control (lost at our next upkeep, before that attack). The damage is damageIfUnblocked
+    //   without abilities: sumDamageIfUnblocked (Moonlight Bargain's affordable) prices the
+    //   attackers' pump abilities through ComputerUtilCost.canPayCost, whose test payment draws
+    //   MyRandom (isManaSourceReserved), so it is not called here.
+    // Safety is the worst case, value the mean: the first reveal is forced, so the cast needs life
+    // minus the library's highest mana value at or above the floor, and expectedReveals counts
+    // that reveal plus the spare life over the library's mean mana value (lands 0).
+    // RNG parity: A never evaluated the card for its owner (gate 1), so A drew nothing for it.
+    // readmit's checks (params, zones, phase, zone sizes, AiCardMemory, calculateManaCost in test
+    // mode, HonestMana, canAttackNextTurn, damageIfUnblocked without abilities, counters) draw
+    // nothing and hold nothing, and the O(1) tests come first, so its false is the old filter
+    // exactly; canPayCost's isManaSourceReserved draws follow only a true readmit. The stock
+    // resolution drew nothing either, so at resolution only the number of reveals differs.
+    public static class AdNauseam {
+        public static final String NAME = "Ad Nauseam";
+        public static final String AI_LOGIC = "AdNauseam";
+        public static final int MIN_REVEALS = 3;     // Moonlight Bargain's MIN_KEEPS: five mana must buy three cards
+        public static final int MIN_LIFE_AFTER = 10; // Moonlight Bargain's and Promise of Power's floor
+        public static final int LIBRARY_MARGIN = 5;  // never reveal the library down past this
+        public static final int HAND_SLACK = 1;      // at an opponent's end step: our draw, land drop and one spell
+
+        // RemoveDeckFilter.readmit's case, the O(1) tests first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()
+                    || !AI_LOGIC.equals(sa.getParam("AILogic"))
+                    || !ai.equals(host.getOwner()) || !host.isInZone(ZoneType.Hand)) {
+                return false; // a theft, a copy, a Play-effect or another zone's cast: the filter as it was
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // an opponent's end step right before our turn, empty stack (never our own, before an extra turn)
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai) || !ai.equals(ph.getNextTurn())
+                    || !game.getStack().isEmpty()) {
+                return false;
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (library.size() < LIBRARY_MARGIN + MIN_REVEALS) {
+                return false;
+            }
+            // this card leaves the hand
+            if (handRoom(ai, ai.getCardsIn(ZoneType.Hand).size() - 1, HAND_SLACK) < MIN_REVEALS) {
+                return false;
+            }
+            // canPayCost draws only after G2 calls the window payable with nothing held
+            if (!RemoveDeckFilter.noManaHeld(ai, false) || !manaPays(ai, sa)) {
+                return false;
+            }
+            return expectedReveals(ai, library) >= MIN_REVEALS;
+        }
+
+        // RepeatAi.confirmAction: reveal another card? Asked of the activator after each reveal.
+        public static boolean revealAnother(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner())) {
+                return false; // a thief keeps the stock single reveal (a copy's host is its copier's)
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (library.size() <= LIBRARY_MARGIN) {
+                return false;
+            }
+            // in our own turn (a cascade cast) the cleanup comes before any draw or land drop
+            final int slack = ai.getGame().getPhaseHandler().isPlayerTurn(ai) ? 0 : HAND_SLACK;
+            if (handRoom(ai, ai.getCardsIn(ZoneType.Hand).size(), slack) <= 0) {
+                return false;
+            }
+            // every other Ad Nauseam of ours still on the stack forces one reveal before it can stop
+            final int forced = 1 + otherPending(ai);
+            return ai.getLife() - forced * worstLoss(ai, library) >= floor(ai);
+        }
+
+        // The first reveal is forced, so it must keep the floor at the library's highest mana value;
+        // after it, each reveal costs the library's mean mana value (lands 0) until revealAnother's
+        // worst case stops. A rough count, used only as the cast's value floor.
+        static double expectedReveals(final Player ai, final CardCollectionView library) {
+            final int worst = worstLoss(ai, library);
+            final int spare = ai.getLife() - worst - floor(ai);
+            if (spare < 0) {
+                return 0;
+            }
+            if (worst == 0) {
+                return Double.MAX_VALUE; // nothing can cost life: the hand room and the library bound it
+            }
+            final double mean = Aggregates.sum(library, Card::getCMC) / (double) library.size();
+            return 1 + spare / Math.max(1.0, mean);
+        }
+
+        // the most one reveal can cost: the library's highest mana value (a split card's combined,
+        // as Remembered$CardManaCost reads it in hand); nothing when we cannot lose life
+        static int worstLoss(final Player ai, final CardCollectionView library) {
+            if (!ai.canLoseLife()) {
+                return 0;
+            }
+            int max = 0;
+            for (final Card c : library) {
+                max = Math.max(max, c.getCMC());
+            }
+            return max;
+        }
+
+        // Moonlight Bargain's floor without its draw: each opposing creature that can attack next
+        // turn priced by damageIfUnblocked without abilities (no canPayCost test payment), our
+        // blockers ignored; plus The One Ring's burden, lost at our next upkeep before that attack
+        static int floor(final Player ai) {
+            int unblocked = 0;
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCreaturesInPlay()) {
+                    if (ComputerUtilCombat.canAttackNextTurn(c, ai)) {
+                        unblocked += ComputerUtilCombat.damageIfUnblocked(c, ai, null, true);
+                    }
+                }
+            }
+            int burden = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if ("The One Ring".equals(c.getName())) {
+                    burden += c.getCounters(CounterType.getType("BURDEN"));
+                }
+            }
+            return Math.max(MIN_LIFE_AFTER,
+                    AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD) + 1 + unblocked) + burden;
+        }
+
+        // the cards the hand takes before the next cleanup discards one; slack counts what leaves
+        // it first (our draw adds one, a land drop and a spell take two)
+        static int handRoom(final Player ai, final int hand, final int slack) {
+            return ai.isUnlimitedHandSize() ? Integer.MAX_VALUE : ai.getMaxHandSize() + slack - hand;
+        }
+
+        // the other Ad Nauseams of ours on the stack: the resolving one stays there until it
+        // finishes (MagicStack.resolveStack), so it is not counted
+        static int otherPending(final Player ai) {
+            int n = 0;
+            for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+                final SpellAbility s = si.getSpellAbility();
+                if (s != null && AI_LOGIC.equals(s.getParam("AILogic")) && ai.equals(s.getActivatingPlayer())) {
+                    n++;
+                }
+            }
+            return Math.max(0, n - 1);
+        }
+
+        // A private copy of MoonlightBargain.manaPays (frozen): the cost after CostAdjustment
+        // (calculateManaCost in test mode: Jet Medallion, taxes; nothing drawn or written to the SA)
+        // against G2's total and black, held sources skipped.
+        private static boolean manaPays(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLACK) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK);
+        }
+    }
+
     // Aethersnatch
     // Commandeer's window (an opponent's spell on top, no chosen targets anywhere
     // in its chain, no "...All" api, CMC >= 5 counting announced X), which the card
@@ -27770,8 +27947,8 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 16, 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 79, 83 and 84, keepOff for
-    // batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // 16, 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 79, 83 and 84, keepOff
+    // for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -27841,6 +28018,8 @@ public class SpecialCardAi {
                     return SunbirdStandard.isOwnHandCast(ai, sa);
                 case VisceraSeer.NAME:
                     return VisceraSeer.readmit(ai, sa);
+                case AdNauseam.NAME:
+                    return AdNauseam.readmit(ai, sa);
                 default:
                     return false;
             }

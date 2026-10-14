@@ -51,6 +51,10 @@ public class RepeatAi extends SpellAbilityAi {
             // Fiery Gambit: flip again only while the stopping rule says it pays (dead-card batch 2, row 84)
             return SpecialCardAi.FieryGambit.flipAgain(player, sa);
         }
+        if ("AdNauseam".equals(sa.getParam("AILogic"))) {
+            // Ad Nauseam: reveal another only while the worst card left keeps us on the floor (dead-card batch 3, row 71)
+            return SpecialCardAi.AdNauseam.revealAnother(player, sa);
+        }
       //TODO add logic to have computer make better choice (ArsenalNut)
         return false;
     }
