@@ -42,6 +42,23 @@ public class DestroyAllAi extends SpellAbilityAi {
             // a Play-effect cast: cascade, Jeleva, Nathan Drake) takes the stock path unchanged.
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
+        final SpellAbility root = sa.getRootAbility();
+        if (SpecialCardAi.HarshMercy.isHarshMercy(root)) {
+            // Dead-card batch 3, row 53. ValidCards$ Creature.!IsRemembered is read before the
+            // RepeatEach has remembered anyone's survivors, so doMassRemovalLogic below would judge a
+            // wrath of every creature (and run its Main-2 block simulation, which draws MyRandom).
+            // A copy over a Harsh Mercy already on the stack declines first, whoever cast it (A's
+            // CopySpellAbilityAi refused the hinted card). Play-effect casts (Nathan Drake,
+            // Silent-Blade Oni, Etali) keep the stock judge, as in A; every other consult is judged
+            // by SpecialCardAi.HarshMercy, which predicts each player's type pick as the resolution
+            // makes it and prices the real one-sided kill.
+            if (SpecialCardAi.HarshMercy.otherOnStack(aiPlayer, root)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!root.isCastFromPlayEffect()) {
+                return SpecialCardAi.HarshMercy.consider(aiPlayer, root);
+            }
+        }
         return doMassRemovalLogic(aiPlayer, sa);
     }
 

@@ -15208,6 +15208,212 @@ public class SpecialCardAi {
         }
     }
 
+    // Harsh Mercy (dead-card batch 3, row 53)
+    // {2}{W} Sorcery, "Each player chooses a creature type. Destroy all creatures that aren't of a
+    // type chosen this way. They can't be regenerated." AI:RemoveDeck:All kept the spell off
+    // AiController's playable list, so its owner never cast it (every recorded cast is a theft
+    // through a Play effect: Nathan Drake, Silent-Blade Oni, Etali). Behind the hint nothing judged
+    // it: RepeatEachAi.canPlay answers WillPlay for a root with no AILogic, and the DestroyAll sub,
+    // judged by DestroyAllAi.doMassRemovalLogic before the RepeatEach has remembered anyone's
+    // survivors, read Creature.!IsRemembered as a wrath of every creature: a veto whenever our board
+    // was worth the opponents' minus 200 (the normal state of a tribal deck that keeps its whole
+    // board through this card), WaitForMain2 before Main 2, and in Main 2 the block simulation with
+    // its MyRandom draws. The script drops the hint, and DestroyAllAi.chkDrawback routes the sub here
+    // by name: a copy over a Harsh Mercy already on the stack declines (otherOnStack, asked first, so
+    // a copy of a stolen one declines too, as CopySpellAbilityAi's hint test refused it in A), a
+    // Play-effect cast keeps the stock judge (as in A), and every other consult is judged by consider
+    // on the root sa (never host.getFirstSpellAbility(): row 77).
+    // consider mirrors the resolution exactly. ChooseTypeEffect asks each player's controller with a
+    // fresh list of every creature type; every sim seat is a PlayerControllerAi, which calls
+    // ComputerUtil.chooseSomeType with the sub (AILogic$ MostProminentComputerControls: the most
+    // prominent type on that player's battlefield, else in its card pool; no MyRandom) and turns a
+    // blank pick into the first valid type. PumpAll then remembers every creature of a picked type,
+    // whoever controls it (Creature.ChosenType is CardType.hasStringType, changelings included; no
+    // creature type starts with "Non"), and DestroyAll destroys every other creature that
+    // canBeDestroyed (indestructible and phased-out creatures survive). NoRegen: a regeneration
+    // shield (getShieldCount) saves nothing (skeptic A1); a SHIELD counter or an attached Umbra
+    // armor Aura does. Cast only when, in order:
+    //  1. the script has the shape the mirror reads (a reshaped script never approves blind);
+    //  2. some opponent controls a creature;
+    //  3. the engine's adjusted cost (test-mode calculateManaCost: taxes, reductions) fits G2
+    //     (HonestMana, held sources skipped) in total and in white: canPayCost's test payment draws
+    //     MyRandom (ComputerUtilMana.isManaSourceReserved), so only a window G2 calls payable may
+    //     pass, and G2 reads mana restrictions, so Pillar of Origins' creature-only mana is not
+    //     counted (skeptic A2, rule B3-5);
+    //  4. no opposing death watcher (Blood Artist, Grave Pact) sees a dying creature and no opposing
+    //     body's own death hurts us (Wave of Reckoning's scan, called unchanged, as Slaughter the
+    //     Strong and Divine Reckoning call it); an opposing body whose own death leaves value behind
+    //     is not a kill;
+    //  5. no commander we own dies;
+    //  6. a kill is worth a card (a nontoken of mana value 2+ or power 3+, the Meteor Blast filter),
+    //     and the opposing kills (no active undying or persist, no SacMe) are worth more than our
+    //     losses (every dying creature we control or own, at full value) plus 200, summed over every
+    //     opponent (Wave of Reckoning's flat margin).
+    // No Main-2 wait (Slaughter the Strong's A1): our creatures of the picked type survive, our
+    // creature spells are held for Main 2 anyway, and in Main 1 the sweep clears blockers before we
+    // attack. Every decline is RNG-free (the picks, the type tests, counters, trigger matching and
+    // the creature evaluator read state; HonestMana's only write is setActivatingPlayer on the mana
+    // abilities it reads, as the estimate does); nothing is held or remembered.
+    public static class HarshMercy {
+        public static final String NAME = "Harsh Mercy";
+        public static final int MARGIN = WaveOfReckoning.MARGIN; // 200
+
+        // ChooseTypeEffect params that would change the valid list, the pick or where it is stored
+        private static final String[] CHOOSER_CHANGES = {"ValidTypes", "InvalidTypes", "TypesFromDefined",
+                "MostPrevalentInDefinedZone", "AtRandom", "Note", "ChooseType2"};
+
+        // Slaughter the Strong's idiom: a card cast face down from exile reads "" from
+        // getAbilitySourceName, so the host's and the card state's names are read too.
+        public static boolean isHarshMercy(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        // A copy over a Harsh Mercy already on the stack adds nothing: it resolves first with the
+        // same picks, and the original then finds only the survivors.
+        public static boolean otherOnStack(final Player ai, final SpellAbility root) {
+            for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+                final SpellAbility other = si.getSpellAbility();
+                if (other != root && other.getHostCard() != null && NAME.equals(other.getHostCard().getName())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility root) {
+            final Game game = ai.getGame();
+            final SpellAbility choose = root.getAdditionalAbility("RepeatSubAbility");
+            final AbilitySub remember = choose == null ? null : choose.getSubAbility();
+            final AbilitySub destroy = root.getSubAbility();
+            // 1. Shape bound: each player picks for itself from every creature type, PumpAll keeps
+            // the picked types, and DestroyAll takes the rest with no regeneration.
+            if (root.getApi() != ApiType.RepeatEach || !"Player".equals(root.getParam("RepeatPlayers"))
+                    || choose == null || choose.getApi() != ApiType.ChooseType
+                    || !"Creature".equals(choose.getParam("Type"))
+                    || !"Player.IsRemembered".equals(choose.getParam("Defined"))
+                    || remember == null || remember.getApi() != ApiType.PumpAll
+                    || !"Creature.ChosenType".equals(remember.getParam("ValidCards"))
+                    || !remember.hasParam("RememberPumped")
+                    || destroy == null || destroy.getApi() != ApiType.DestroyAll
+                    || !"Creature.!IsRemembered".equals(destroy.getParam("ValidCards"))
+                    || !destroy.hasParam("NoRegen")) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final String param : CHOOSER_CHANGES) {
+                if (choose.hasParam(param)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // 2. Cheap bound before any scan: some opponent has a creature at all.
+            if (ai.getOpponents().getCreaturesInPlay().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 3. Payable window (every consult that reaches here pays: Play-effect casts never do).
+            if (root.getPayCosts() != null) {
+                final ManaCostBeingPaid need = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+                final HonestMana mana = HonestMana.of(ai, root, true);
+                if (mana.total() < need.getConvertedManaCost()
+                        || mana.colour(MagicColor.WHITE) < need.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            // The picks, as ChooseTypeEffect.resolve and PlayerControllerAi.chooseSomeType make them
+            // (RepeatPlayers$ Player: every player in the game).
+            final List<String> valid = new ArrayList<>(CardType.getAllCreatureTypes());
+            final Set<String> picks = new HashSet<>();
+            for (final Player p : game.getPlayers()) {
+                String pick = ComputerUtil.chooseSomeType(p, "Creature", choose, valid);
+                if (org.apache.commons.lang3.StringUtils.isBlank(pick) && !valid.isEmpty()) {
+                    pick = valid.iterator().next();
+                }
+                picks.add(pick);
+            }
+            // Every creature DestroyAll destroys: of no picked type, destroyable, and not saved by a
+            // SHIELD counter or an Umbra armor Aura (no regeneration shield: NoRegen).
+            final CardCollection dying = new CardCollection();
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isCreature() || !c.canBeDestroyed() || c.getCounters(CounterEnumType.SHIELD) > 0
+                        || umbraArmored(c)) {
+                    continue;
+                }
+                boolean kept = false;
+                for (final String pick : picks) {
+                    if (c.getType().hasStringType(pick)) {
+                        kept = true;
+                        break;
+                    }
+                }
+                if (!kept) {
+                    dying.add(c);
+                }
+            }
+            // 4. Opponents' death payoffs veto (Wave of Reckoning's scan); an opposing creature whose
+            // own death leaves value behind is not a kill.
+            final CardCollection noValueKills = new CardCollection();
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (!WaveOfReckoning.isDeathTrigger(t)) {
+                        continue;
+                    }
+                    for (final Card d : dying) {
+                        if (!t.matchesValidParam("ValidCard", d) || !t.matchesValidParam("ValidCards", d)) {
+                            continue;
+                        }
+                        if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                        }
+                        noValueKills.add(d);
+                    }
+                }
+            }
+            // Losses at full value (owned counts too: a creature an opponent borrowed comes back to
+            // us; no credit for our own undying or persist). Kills exclude own-death value,
+            // undying/persist and SacMe; regeneration is no escape here.
+            final CardCollection aiLosses = new CardCollection();
+            final CardCollection oppKills = new CardCollection();
+            for (final Card d : dying) {
+                final Player controller = d.getController();
+                if (ai.equals(controller) || ai.equals(d.getOwner())) {
+                    // 5. Never our commander.
+                    if (d.isCommander() && ai.equals(d.getOwner())) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                    aiLosses.add(d);
+                } else if (ai.isOpponentOf(controller) && !noValueKills.contains(d)
+                        && !ComputerUtilCard.hasActiveUndyingOrPersist(d) && !d.hasSVar("SacMe")) {
+                    oppKills.add(d);
+                }
+            }
+            // 6. Worth a card (the Meteor Blast filter) and the flat wrath margin.
+            boolean worthACard = false;
+            for (final Card k : oppKills) {
+                if ((!k.isToken() && k.getCMC() >= 2) || k.getNetPower() >= 3) {
+                    worthACard = true;
+                    break;
+                }
+            }
+            if (!worthACard || ComputerUtilCard.evaluateCreatureList(oppKills)
+                    <= ComputerUtilCard.evaluateCreatureList(aiLosses) + MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // An attached Aura with Umbra armor destroys itself instead (Keyword.UMBRA_ARMOR, as
+        // AiController's Destroy replacement order reads it).
+        private static boolean umbraArmored(final Card c) {
+            for (final Card aura : c.getEnchantedBy()) {
+                if (aura.hasKeyword(Keyword.UMBRA_ARMOR)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Hellish Rebuke
     // "Until end of turn, permanents your opponents control gain 'When this
     // permanent deals damage to the player who cast Hellish Rebuke, sacrifice
