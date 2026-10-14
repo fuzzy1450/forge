@@ -234,6 +234,14 @@ public class CloneAi extends SpellAbilityAi {
         }
         final Card host = sa.getHostCard();
         final String name = host.getName();
+        if (SpecialCardAi.CopyEnchantment.NAME.equals(name)) {
+            // Copy Enchantment (dead-card batch 3, row 84): the copy-safe enchantment with the
+            // highest mana value, or null = enter as itself (CloneEffect returns on a null pick).
+            // The stock pick below would take the most expensive enchantment, Auras (Confiscate),
+            // World and legend-rule clashes included. Every Copy Enchantment that resolves comes
+            // here, a hand cast, a cascade and a thief's alike; doTriggerNoCost stays stock.
+            return SpecialCardAi.CopyEnchantment.bestCopy(ai, host, options);
+        }
         final Player ctrl = host.getController();
 
         final Card cloneTarget = getCloneTarget(sa);

@@ -5345,6 +5345,201 @@ public class SpecialCardAi {
         }
     }
 
+    // Copy Enchantment (dead-card batch 3, row 84)
+    // "You may have Copy Enchantment enter as a copy of any enchantment on the battlefield." ({2}{U}
+    // enchantment; K:ETBReplacement:Copy:DBCopy:Optional over DB$ Clone | Choices$ Enchantment.Other.)
+    // AI:RemoveDeck:All is KEPT (the Manascape Refractor shape, batch 2 row 60): G3 readmits exactly
+    // one ability through AiController's filter, this card's own permanent spell cast from its
+    // owner's hand and not from a Play effect, judged by considerCast() from
+    // PermanentNoncreatureAi.checkApiLogic after the stock WillPlay (own Main 2, PermanentAi's
+    // checkPhaseRestrictions; Main 1 only where castPermanentInMain1 says so). The hint keeps the
+    // card off opposing steal, tutor and copy lists and keeps its -10 sort, so it is tried only
+    // after nearly every other ability this pass declined.
+    // CloneAi.chooseSingleCard asks bestCopy() by name for every Copy Enchantment that resolves (a
+    // hand cast, a cascade, a thief's): the copy-safe enchantment with the highest mana value (the
+    // stock proxy, getMostExpensivePermanentAI), or null, which CloneEffect reads as "enter as
+    // itself". The stock pick took the most expensive enchantment whatever it was: an Aura
+    // (Confiscate, attached by an unreviewed indirect choice, GameAction's attachAuraOnIndirectETB),
+    // a World enchantment, a legend-rule clash, a symmetric hoser. CloneAi.doTriggerNoCost stays
+    // stock on purpose: it answers both canPlaySa's checkETBEffects probe and the resolution
+    // confirm and cannot tell them apart, so a Play-effect cast decides exactly as in A.
+    // isOwnHandCast is also the handler gate's key (rule B3-2), so the canPlaySa callers that skip
+    // the RemoveDeck filter (ManaAi's ritual look-ahead, hasReasonToPlayCardThisTurn,
+    // targetPlayableSpellCard, the hand scanners) meet considerCast() only for the owner's own hand
+    // card; considerCast() draws nothing, and any other host keeps the stock answer.
+    // The trigger readers are EspersToMagicite's (batch 2), called unchanged: they read params and
+    // SVar text and never build an ability, which would allocate a SpellAbility id.
+    public static class CopyEnchantment {
+        public static final String NAME = "Copy Enchantment";
+        static final int MIN_MV = 3; // the copy must be worth the card's own {2}{U}
+
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return sa.isSpell() && !sa.isCastFromPlayEffect() && host != null
+                    && NAME.equals(host.getName()) && host.isInZone(ZoneType.Hand)
+                    && ai.equals(host.getOwner());
+        }
+
+        // After the stock approval: own Main 2 (PermanentAi:54), stack empty (sorcery timing).
+        // RNG parity: A never evaluated this spell on the cast path, and everything before this
+        // point is RNG-free. Every check here reads the board and trigger params and draws
+        // nothing; a decline returns before canPlaySa's checkETBEffects and before
+        // canPlayAndPayForFace's canPayCost (AiController:865), whose test payment draws MyRandom
+        // per source it tries. Nothing is held or remembered.
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // the cheap precondition first: a non-Aura enchantment of mana value MIN_MV or more
+            // other than the host
+            final CardCollection big = new CardCollection();
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (c != host && c.isEnchantment() && !c.isAura() && c.getCMC() >= MIN_MV) {
+                    big.add(c);
+                }
+            }
+            if (big.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            if (bestCopy(ai, host, big) == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards); // nothing big is copy-safe
+            }
+            // rule B3-5: the engine's adjusted cost against G2, in total and in blue pips
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The enchantment the copy takes at resolution: the stock proxy (highest mana value,
+        // getMostExpensivePermanentAI, the pick CloneAi made) among the copy-safe ones; null when
+        // none. No MV floor here: once on the stack any safe copy beats entering blank (a cascade
+        // cast too). On an unchanged board it is the card considerCast judged.
+        public static Card bestCopy(final Player ai, final Card host, final Iterable<Card> options) {
+            final CardCollection ok = new CardCollection();
+            for (final Card c : options) {
+                if (c != host && c.isEnchantment() && copySafe(ai, c)) {
+                    ok.add(c);
+                }
+            }
+            return ok.isEmpty() ? null : ComputerUtilCard.getMostExpensivePermanentAI(ok);
+        }
+
+        static boolean copySafe(final Player ai, final Card c) {
+            if (c.isSaga()) {
+                // chapter abilities are keyword triggers, which the read below skips, and the copy
+                // still gets its lore counter (Phyrexian Scriptures' chapter II is a DestroyAll)
+                return false;
+            }
+            if (c.isAura()) {
+                return false; // an Aura copy attaches by an unreviewed indirect choice (GameAction:381-397, :2835)
+            }
+            if (c.getType().hasSupertype(CardType.Supertype.World)) {
+                return false; // the World rule bins one of them (PermanentAi refuses a second World)
+            }
+            if (ComputerUtilCard.isCardRemAIDeck(c) || c.hasSVar("EndOfTurnLeavePlay")) {
+                return false; // Anikthea's rules: the AI cannot run it; Underworld Breach leaves at end step
+            }
+            if (c.getType().isLegendary() && ai.isCardInPlay(c.getName())) {
+                return false; // the legend rule
+            }
+            if ("True".equals(c.getSVar("NonStackingEffect")) && ComputerUtilCard.isNonDisabledCardInPlay(ai, c.getName())) {
+                return false; // saSideEffects' own duplicate rule (AiController:1010)
+            }
+            if (c.hasKeyword(Keyword.CUMULATIVE_UPKEEP) || c.hasKeyword(Keyword.ECHO)
+                    || c.hasKeyword(Keyword.FADING) || c.hasKeyword(Keyword.VANISHING)) {
+                return false; // a copy that taxes or leaves at our upkeep
+            }
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getKeyword() != null || t.isSecondary()) {
+                    continue; // keyword triggers are judged by the keyword and Saga checks above
+                }
+                final Map<String, String> p = EspersToMagicite.rootParams(t); // read, never built
+                if (p == null) {
+                    continue;
+                }
+                final String api = EspersToMagicite.apiOf(p);
+                if (t.getMode() == TriggerType.ChangesZone && "Battlefield".equals(t.getParam("Destination"))
+                        && t.getParamOrDefault("ValidCard", "").contains("Self") && !t.hasParam("OptionalDecider")) {
+                    // the copy's own enters trigger fires
+                    if (api != null && (api.endsWith("All") || is(api, ApiType.Sacrifice))) {
+                        return false; // Anikthea's sweeper rule
+                    }
+                    if (p.containsKey("ValidTgts") && !"0".equals(p.get("TargetMin"))
+                            && !EspersToMagicite.hasLiveTarget(ai, c, p)) {
+                        return false; // O-Ring with no opposing nonland permanent: the forced exile lands on us
+                    }
+                }
+                if (rootHurtsUsOrFeedsThem(t, api, p)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // The ROOT of each trigger only: Phyrexian Arena (Draw, then LoseLife as a sub) stays in, as
+        // the AI casts it itself. The api is the script's own DB$/AB$/SP$ token, compared
+        // case-insensitively, as EspersToMagicite.isHarmfulPart does.
+        private static boolean rootHurtsUsOrFeedsThem(final Trigger t, final String api, final Map<String, String> p) {
+            if (api == null) {
+                return false;
+            }
+            if (is(api, ApiType.Sacrifice) || is(api, ApiType.LosesGame) || is(api, ApiType.SkipTurn)
+                    || is(api, ApiType.DestroyAll) || is(api, ApiType.DamageAll) || is(api, ApiType.SacrificeAll)) {
+                return true;
+            }
+            final String defined = p.get("Defined");
+            final boolean oppOnly = names(t, "Opponent") || names(t, "OppCtrl");
+            final boolean youOnly = "You".equals(t.getParam("ValidPlayer")) || "You".equals(t.getParam("ValidActivatingPlayer"));
+            if (is(api, ApiType.LoseLife) || is(api, ApiType.DealDamage) || is(api, ApiType.Discard)
+                    || is(api, ApiType.Mill) || is(api, ApiType.Poison)) {
+                if (defined == null) {
+                    // untargeted life loss, discard, mill and poison fall on the controller
+                    return p.get("ValidTgts") == null && !is(api, ApiType.DealDamage);
+                }
+                return defined.contains("You") || "Player".equals(defined)
+                        || (defined.startsWith("Triggered") && !oppOnly); // Sulfuric Vortex, Spiteful Visions
+            }
+            if (is(api, ApiType.Draw) || is(api, ApiType.GainLife) || is(api, ApiType.PutCounter)) {
+                return defined != null && (defined.contains("Opponent") || "Player".equals(defined)
+                        || (defined.startsWith("Triggered") && !youOnly)); // symmetric group hug
+            }
+            if (is(api, ApiType.Token)) {
+                final String owner = p.get("TokenOwner");
+                return owner != null && !"You".equals(owner);
+            }
+            if (is(api, ApiType.GainControl)) {
+                final String nc = p.get("NewController");
+                return nc != null && !"You".equals(nc);
+            }
+            return false;
+        }
+
+        private static boolean is(final String api, final ApiType type) {
+            return type.name().equalsIgnoreCase(api);
+        }
+
+        // whether any of the trigger's player/card selectors names the word
+        private static boolean names(final Trigger t, final String word) {
+            for (final String key : new String[] {"ValidPlayer", "ValidActivatingPlayer", "ValidTarget", "ValidCard"}) {
+                if (t.getParamOrDefault(key, "").contains(word)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The engine's own test-mode cost (calculateManaCost: taxes and reductions applied, castFrom
+        // restored) against G2 (HonestMana, held sources skipped), in total and in blue pips (the
+        // skeptic's amendment 1: a Main 2 with three honest mana and no blue source would otherwise
+        // pass and reach canPayCost's draws). A private helper in Dispatch's shape; G1, G2 and
+        // getAvailableManaEstimate are unchanged.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLUE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+    }
+
     // Cosmic Intervention
     // "If a permanent you control would be put into a graveyard from the battlefield this
     // turn, exile it instead. Return it to the battlefield under its owner's control at the
@@ -24390,8 +24585,8 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 10, 16, 17, 19, 21, 35, 36, 49, 50, 57, 58, 60 and 83, keepOff for batch 2's row 68. A case
-    // must draw no random number and hold nothing, so that its false is exactly the old filter.
+    // 5, 10, 16, 17, 19, 21, 35, 36, 49, 50, 57, 58, 60, 83 and 84, keepOff for batch 2's row 68. A
+    // case must draw no random number and hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -24443,6 +24638,8 @@ public class SpecialCardAi {
                     return Squallmonger.readmit(ai, sa);
                 case CurseOfChaos.NAME:
                     return CurseOfChaos.readmit(ai, sa);
+                case CopyEnchantment.NAME:
+                    return CopyEnchantment.isOwnHandCast(ai, sa);
                 default:
                     return false;
             }
