@@ -116,8 +116,8 @@ public class UnlockDoorAi extends SpellAbilityAi {
      *
      * The last case is the reason this is ranked rather than a boolean. Derelict Attic's trigger
      * draws two cards and loses 2 life, which is lethal at 2 life, so that door has to lose to the
-     * Widow's Walk half rather than merely fail to win. Note that Card.getLockedRooms returns a
-     * HashSet, so relying on iteration order to break ties is not reproducible between runs.
+     * Widow's Walk half rather than merely fail to win. Card.getLockedRooms returns an EnumSet, so a
+     * tie goes to the left door, the same in every run.
      */
     private static int rankDoor(Card room, CardStateName stateName, Player ai) {
         if (!room.hasState(stateName)) {

@@ -42,7 +42,9 @@ public final class CardRules implements ICardCharacteristics {
     private CardSplitType splitType;
     private ICardFace mainPart;
     private ICardFace otherPart;
-    private Map<CardStateName, ICardFace> specializedParts = Maps.newHashMap();
+    // an EnumMap, read in color order: a HashMap's order followed the enum constants' identity hashes, which change
+    // from one JVM launch to the next, and CardFactory builds the faces (and numbers their traits) in this order
+    private Map<CardStateName, ICardFace> specializedParts = Maps.newEnumMap(CardStateName.class);
     private List<ICardFace> allFaces;
 
     private CardAiHints aiHints;
@@ -89,7 +91,8 @@ public final class CardRules implements ICardCharacteristics {
         splitType = newRules.splitType;
         mainPart = newRules.mainPart;
         otherPart = newRules.otherPart;
-        specializedParts = Maps.newHashMap(newRules.specializedParts);
+        specializedParts = Maps.newEnumMap(CardStateName.class);
+        specializedParts.putAll(newRules.specializedParts);
         allFaces = newRules.allFaces;
         aiHints = newRules.aiHints;
         colorIdentity = newRules.colorIdentity;
