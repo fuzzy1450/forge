@@ -144,6 +144,17 @@ public class CountersPutAi extends CountersAi {
             // before this branch.
             return SpecialCardAi.LocalizedDestruction.consider(ai, sa);
         }
+        if (SpecialCardAi.JoltedAwake.NAME.equals(sourceName) && sa.isSpell()) {
+            // Dead-card batch 3, row 14. The root targets an artifact or creature card in our
+            // graveyard (TgtZone$ Graveyard), but the targeting branch below lists battlefield
+            // cards only, none of them a legal target, and answers TargetingFailed on every
+            // consult; past it, the WaitForMain2 for a non-P1P1 counter would hand the window to
+            // the Cycling ability, which sorts first from Main 2 on. Only a regular cast comes
+            // here: effect casts (Aetherworks Marvel, Amped Raptor, Play-effect thefts) go through
+            // doTriggerNoCost and keep their stock, targetless path. Every other PutCounter card
+            // takes exactly the path it took before this branch.
+            return SpecialCardAi.JoltedAwake.consider(ai, sa);
+        }
         final String[] types;
         if (sa.hasParam("CounterType")) {
             // TODO some cards let you choose types, should check each

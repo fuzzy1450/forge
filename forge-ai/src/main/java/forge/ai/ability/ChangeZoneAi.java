@@ -2620,9 +2620,17 @@ public class ChangeZoneAi extends SpellAbilityAi {
             lifeLoss = lifeCost.getAbilityAmount(sa);
         }
 
+        // Jolted Awake (dead-card batch 3, row 14): its {E} return is paid for an artifact card as
+        // for a creature card. The creature rule below is for the life and damage "unless" costs
+        // (lifeLoss is 0 for energy), and it refused every noncreature pick. Every other unless
+        // payment takes exactly the path it took before.
+        final boolean energyReturn = SpecialCardAi.JoltedAwake.isEnergyReturn(sa, cost);
         for (Card c : AbilityUtils.getDefinedCards(host, sa.getParam("Defined"), sa)) {
             if (c.isToken()) {
                 return false;
+            }
+            if (energyReturn) {
+                continue;
             }
             if (!c.isCreature() || c.getBasePower() < lifeLoss || payer.getLife() < lifeLoss * 2) { // costs use either pay 3 life or deal 3 damage
                 return false;

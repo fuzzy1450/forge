@@ -47,6 +47,7 @@ import forge.game.cost.CostDiscard;
 import forge.game.cost.CostExile;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostPartMana;
+import forge.game.cost.CostPayEnergy;
 import forge.game.cost.CostRemoveAnyCounter;
 import forge.game.cost.CostRemoveCounter;
 import forge.game.cost.CostReveal;
@@ -16463,6 +16464,236 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
+    // Jolted Awake (dead-card batch 3, row 14)
+    // "Choose up to one target artifact or creature card in your graveyard. You get {E}{E}. Then
+    // you may pay an amount of {E} equal to that card's mana value. If you do, return it from
+    // your graveyard to the battlefield." ({W} sorcery, Cycling {2}.) Unhinted. The root is
+    // SP$ PutCounter | Defined$ You with graveyard targets (TgtZone$ Graveyard, TargetMin$ 0):
+    // CountersPutAi.checkApiLogic's targeting branch lists battlefield cards only, none of them a
+    // legal target, and answers TargetingFailed on every consult, so its owner never cast it from
+    // hand on any engine. Routed from there by name, the root spell only; effect casts
+    // (Aetherworks Marvel, Amped Raptor, Play-effect thefts such as Nathan Drake's) go through
+    // doTriggerNoCost and keep its stock targetless path, and a face-down exiled host reads no
+    // name and stays stock. A face-up static theft's cast comes here for the thief, who picks
+    // from its own graveyard (YouOwn is the activator). The cast is always a return. In order,
+    // the first failure declines:
+    // - a pick (bestPick): a card in our graveyard this spell can target, artifact or creature, of
+    //   mana value MIN_MV or more (the return beats the {W} spent and Cycling's card) and at most
+    //   the {E} we will have (ours now plus the root's GAIN, granted before the payment), with no
+    //   AI:RemoveDeck:All hint, not a legend we already control (the legend rule bins it), not
+    //   ETB-prevented (Grafdigger's Cage); highest mana value first, then the better creature
+    //   (CreatureEvaluator, on ties only), then graveyard order; the first of those that survives
+    //   arrival (ComputerUtilCard.wouldDieToStaticPT: a 0/0 X creature such as Hydroid Krasis, or
+    //   a creature under an opposing Elesh Norn) and whose own enters trigger neither loses us
+    //   the game nor skips our turns (Phage the Untouchable, Eater of Days; a static read of the
+    //   chain, never checkETBEffects, which reaches doTrigger and draws MyRandom). Else
+    //   TargetingFailed, the stock answer;
+    // - a pick that needs every {E} while an untapped source of ours can make mana for {E}
+    //   (Aether Hub) is picked again within one {E} less: paying {W} with it would leave the
+    //   return one short. No such pick: TargetingFailed;
+    // - real mana covers the engine's test-mode price with the pick targeted (taxes and
+    //   reductions; rule B3-5) within G2 (HonestMana, held sources skipped), in total and in
+    //   white, else CantAfford: an unaffordable WillPlay would reach canPayCost's
+    //   isManaSourceReserved rolls and re-roll the game with no cast (row 159);
+    // - else WillPlay (100), the pick targeted.
+    // Approved in Main 1 as well (the Cycling ability is phase-blocked there). The {E} is spent at
+    // the printed rate, mana value for mana value; Satya's token upkeep and Lightning Runner's
+    // attack can want it (an accepted blind spot, as Localized Destruction's).
+    // ChangeZoneAi.willPayUnlessCost pays the return for an artifact card as for a creature card
+    // (isEnergyReturn). RNG-free on every path: counters, the graveyard, canTarget, hints,
+    // replacement and static P/T reads (an LKI copy that keeps the card's id), CreatureEvaluator,
+    // trigger params and SVar text (no ability is built: building one allocates a SpellAbility
+    // id), the test-mode price, HonestMana and the mana abilities' canPlay. A decline leaves no
+    // target, and nothing is held or remembered; the only other write is setActivatingPlayer on
+    // the mana abilities it reads, as the estimate does.
+    public static class JoltedAwake {
+        public static final String NAME = "Jolted Awake";
+        static final int GAIN = 2;   // the root's printed {E}{E}, ours before the return is paid
+        static final int MIN_MV = 2; // a return worth more than the {W} spent, and Cycling's card
+        // the chain links an SVar-text read follows (EspersToMagicite's list, a private copy)
+        private static final String[] BRANCHES = {"SubAbility", "Execute", "TrueSubAbility", "FalseSubAbility",
+                "WinSubAbility", "LoseSubAbility", "RepeatSubAbility"};
+        private static final int MAX_DEPTH = 12;
+
+        // CountersPutAi.checkApiLogic's name branch (the root spell only)
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            // cheap precondition first: the best pick the {E} we will have pays for (no mana scan yet)
+            final int budget = ai.getCounters(CounterEnumType.ENERGY) + GAIN;
+            Card pick = bestPick(ai, sa, budget);
+            if (pick == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed); // the stock answer
+            }
+            if (pick.getCMC() == budget && energyManaReady(ai)) {
+                pick = bestPick(ai, sa, budget - 1); // Aether Hub could pay the {W} with an {E}
+                if (pick == null) {
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+            }
+            sa.getTargets().add(pick);
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.WHITE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // our graveyard's artifact and creature cards this spell can target, of mana value MIN_MV to
+        // budget, with no AI:RemoveDeck:All hint, not a legend we control, not ETB-prevented;
+        // highest mana value first, then the better creature (on ties only), then graveyard order;
+        // the first that survives arrival and whose own enters trigger does not harm us, else null
+        static Card bestPick(final Player ai, final SpellAbility sa, final int budget) {
+            final List<Card> picks = new ArrayList<>();
+            for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                final int mv = c.getCMC();
+                if (mv < MIN_MV || mv > budget || !(c.isArtifact() || c.isCreature())) {
+                    continue;
+                }
+                if (!sa.canTarget(c) || ComputerUtilCard.isCardRemAIDeck(c)) {
+                    continue;
+                }
+                if (!c.ignoreLegendRule() && ai.isCardInPlay(c.getName())) {
+                    continue; // the legend rule would bin it on arrival
+                }
+                if (ComputerUtil.isETBprevented(c)) {
+                    continue; // Grafdigger's Cage
+                }
+                picks.add(c);
+            }
+            if (picks.isEmpty()) {
+                return null;
+            }
+            final Map<Card, Integer> values = new IdentityHashMap<>();
+            // List.sort is stable, so graveyard order breaks the ties left
+            picks.sort((a, b) -> a.getCMC() != b.getCMC() ? Integer.compare(b.getCMC(), a.getCMC())
+                    : Integer.compare(values.computeIfAbsent(b, JoltedAwake::creatureValue),
+                            values.computeIfAbsent(a, JoltedAwake::creatureValue)));
+            for (final Card c : picks) {
+                if (!ComputerUtilCard.wouldDieToStaticPT(c) && !harmsUsOnArrival(c)) {
+                    return c;
+                }
+            }
+            return null;
+        }
+
+        private static int creatureValue(final Card c) {
+            return c.isCreature() ? ComputerUtilCard.evaluateCreature(c) : 0;
+        }
+
+        // an untapped source of ours with a mana ability that costs {E} and can be activated now
+        // (Aether Hub's needs an {E} to spend, so it never trips with none)
+        private static boolean energyManaReady(final Player ai) {
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.getPayCosts() != null && ma.getPayCosts().hasSpecificCostType(CostPayEnergy.class)
+                            && ma.canPlay()) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // A Self enters trigger whose chain makes us lose the game or skip our turns (Phage the
+        // Untouchable, Eater of Days), read as built when it is, else from its SVar text.
+        private static boolean harmsUsOnArrival(final Card c) {
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone
+                        || !tr.getParamOrDefault("Destination", "").contains(ZoneType.Battlefield.toString())
+                        || !tr.getParamOrDefault("ValidCard", "").contains("Self")) {
+                    continue;
+                }
+                final SpellAbility built = tr.getOverridingAbility();
+                if (built != null ? builtHarms(built, 0) : textHarms(tr)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // LosesGame or SkipTurn for us (Defined$ You, or no Defined: both default to the activator)
+        private static boolean harms(final String api, final String defined) {
+            return (ApiType.LosesGame.name().equalsIgnoreCase(api) || ApiType.SkipTurn.name().equalsIgnoreCase(api))
+                    && (defined == null || "You".equals(defined));
+        }
+
+        private static boolean builtHarms(final SpellAbility sa, final int depth) {
+            if (sa == null || depth > MAX_DEPTH) {
+                return false;
+            }
+            if (harms(sa.getApi() == null ? null : sa.getApi().name(), sa.getParam("Defined"))
+                    || builtHarms(sa.getSubAbility(), depth + 1)) {
+                return true;
+            }
+            for (final SpellAbility extra : sa.getAdditionalAbilities().values()) {
+                if (builtHarms(extra, depth + 1)) {
+                    return true;
+                }
+            }
+            for (final List<AbilitySub> choices : sa.getAdditionalAbilityLists().values()) {
+                for (final AbilitySub choice : choices) {
+                    if (builtHarms(choice, depth + 1)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // the chain read from its SVar text, never built
+        private static boolean textHarms(final Trigger tr) {
+            final Deque<String> todo = new ArrayDeque<>();
+            final Set<String> seen = new HashSet<>();
+            if (tr.hasParam("Execute")) {
+                todo.add(tr.getParam("Execute"));
+            }
+            while (!todo.isEmpty()) {
+                final String svar = todo.poll();
+                if (!seen.add(svar)) {
+                    continue;
+                }
+                final String text = tr.getSVar(svar);
+                if (text.isEmpty()) {
+                    continue;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                if (harms(apiOf(params), params.get("Defined"))) {
+                    return true;
+                }
+                for (final String key : BRANCHES) {
+                    if (params.containsKey(key)) {
+                        todo.add(params.get(key));
+                    }
+                }
+                if (params.containsKey("Choices")) {
+                    for (final String choice : params.get("Choices").split(",")) {
+                        todo.add(choice.trim());
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static String apiOf(final Map<String, String> params) {
+            final String api = params.get("DB");
+            if (api != null) {
+                return api;
+            }
+            return params.containsKey("AB") ? params.get("AB") : params.get("SP");
+        }
+
+        // ChangeZoneAi.willPayUnlessCost: this card's own {E} return (UnlessCost$ PayEnergy<X>)
+        public static boolean isEnergyReturn(final SpellAbility sa, final Cost cost) {
+            return cost != null && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    && cost.hasSpecificCostType(CostPayEnergy.class)
+                    && cost.hasOnlySpecificCostType(CostPayEnergy.class);
         }
     }
 
