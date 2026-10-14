@@ -11341,6 +11341,280 @@ public class SpecialCardAi {
         }
     }
 
+    // Evolution Charm (dead-card batch 3, row 52)
+    // "Choose one - Search your library for a basic land card, reveal it, put it into your hand,
+    // then shuffle; or return target creature card from your graveyard to your hand; or target
+    // creature gains flying until end of turn." ({1}{G} instant.) AI:RemoveDeck:All dropped the
+    // owner's hand spell in AiController.getSpellAbilityToPlay before any handler ran, so its owner
+    // never cast it from hand (its credited casts were thefts and one Goblin Dark-Dwellers
+    // Play-effect cast). Behind the hint the stock CharmAi shuffled the modes and took the first one
+    // its handler approved, with no floor: a basic fetched in nearly every Main 2
+    // (hiddenOriginCanPlayAI), any creature card regrown, a flying pump through PumpAi's random
+    // combat logic. The hint is KEPT, so the -10 sort (ComputerUtilAbility.saEvaluator) and every
+    // other isCardRemAIDeck reader (steal, copy, clone and tutor pickers) still refuse it.
+    // - readmit() is G3's case: the owner's own hand spell joins the list only while the RNG-free
+    //   plan has a line.
+    // - routes() is CharmAi's gate: the readmit's own key (the owner's hand cast of this card, by
+    //   the host's paper name as the readmit switch reads it) inside the plan's window, never the
+    //   plan itself, so a plan that a higher-sorted spell's mana hold breaks between the filter and
+    //   the handler declines with no draw (skeptic amendment 3). Every other evaluation (any other
+    //   cast, a hand scan that ignores the hint outside the window) keeps CharmAi's stock shuffle
+    //   and chooser, draw for draw.
+    // Plan, on an empty stack, the land first:
+    // - LAND, at the end step of the opponent whose next turn is ours, or in our own Main 2 with a
+    //   land drop left: no land card in hand, and fewer than LAND_FLOOR lands or a nonland card in
+    //   hand whose mana value exceeds our land count; the search ours to make and unpunished
+    //   (canSearchLibraryWith, no LimitSearchLibrary, no opposing SearchedLibrary trigger or
+    //   ControlOpponentsSearchingLibrary static, no Shuffled trigger that matches us: Long-Term
+    //   Plans' searchPunished, a private copy, skeptic amendment 1), and a library of MIN_LIBRARY
+    //   or more cards holding a basic (skeptic amendment 2: never fetch the draw that decks us);
+    // - RETURN, at that end step only: our best creature card (evaluateCreature) of mana value
+    //   MIN_RETURN_MV or more that the mode can target, never a legend we already control, with
+    //   the hand not over its maximum afterwards (the charm leaves, the creature arrives): Song of
+    //   Inspiration's window and hand check. The mana is idle there and untaps before we cast it;
+    // - never the flying mode: a turn of flying is not worth a card outside a lethal line.
+    // Mana, checked last: G2 (HonestMana, held sources skipped) covers {1}{G} plus any raise the
+    // test-mode calculateManaCost reads above the printed cost (Grab the Reins' costRaise, a
+    // private copy), and one green source's worth.
+    // Copies never match (handles() refuses them). Kalamax's copy, Djinn Illuminatus's replicate
+    // and Wort's conspire copies re-choose through the stock CharmAi path when the copy can be
+    // paid, or keep the original's mode and target when it cannot (a Return copy resolving first
+    // leaves the original to fizzle): stock behaviour, as for every instant of the carrier. A
+    // replicated search fetches more basics, and Wort taps two green creatures in our Main 2.
+    // RNG parity: nothing here draws (HonestMana, the test-mode calculateManaCost, getValidCards,
+    // canTarget, canSearchLibraryWith, evaluateCreature, parameter reads), so a false readmit is
+    // the old filter exactly. Nothing is held or remembered. Its writes: the activator on a hand SA
+    // with none yet (Grab the Reins' ensureActivator; canTarget and canSearchLibraryWith read it)
+    // and, in chooseModes only, the Return mode's target (reset on every routed evaluation, set on
+    // approval only).
+    public static class EvolutionCharm {
+        public static final String NAME = "Evolution Charm";
+        static final int PRINTED_MV = 2;     // {1}{G}
+        static final int GREEN_PIPS = 1;
+        static final int MIN_RETURN_MV = 3; // more than the charm's own 2: a trade up
+        static final int LAND_FLOOR = 5;    // ChangeZoneAi's land-need test, widened for Commander's six-drops
+        static final int MIN_LIBRARY = 4;   // Long-Term Plans' MIN_LIBRARY, a private copy
+
+        // what the plan takes: the search, or the creature card to regrow
+        private static final class Plan {
+            final boolean land;
+            final Card regrow;
+
+            Plan(final boolean land, final Card regrow) {
+                this.land = land;
+                this.regrow = regrow;
+            }
+        }
+
+        // the modes, found by shape: search (an untargeted ChangeZone from library to hand) and regrow
+        // (a targeted ChangeZone from graveyard to hand). makePossibleOptions drops the regrow mode when
+        // no card is targetable, and a drifted script may lose either: each may be null.
+        private static final class Parts {
+            AbilitySub search;
+            AbilitySub regrow;
+
+            static Parts of(final List<AbilitySub> choices) {
+                final Parts p = new Parts();
+                for (final AbilitySub sub : choices) {
+                    if (sub.getApi() != ApiType.ChangeZone || !"Hand".equals(sub.getParam("Destination"))) {
+                        continue;
+                    }
+                    if ("Library".equals(sub.getParam("Origin")) && !sub.usesTargeting()) {
+                        p.search = sub;
+                    } else if ("Graveyard".equals(sub.getParam("Origin")) && sub.usesTargeting()) {
+                        p.regrow = sub;
+                    }
+                }
+                return p;
+            }
+
+            boolean activatorUnset() {
+                return (search != null && search.getActivatingPlayer() == null)
+                        || (regrow != null && regrow.getActivatingPlayer() == null);
+            }
+        }
+
+        // a spell of this card, not a copy and not a Play-effect cast (Goblin Dark-Dwellers, Jeleva,
+        // Nathan Drake keep the stock chooser, as the hint never covered them), keyed on the host's
+        // paper name: the key the readmit switch (RemoveDeckFilter.paperName) and isCardRemAIDeck
+        // read (rules B3-2, B3-3), never getAbilitySourceName, whose original host could divert
+        // another card's stock path
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // our own copy, cast from our own hand: the only cast the hint kept off the list (Melek's
+        // library MayPlay and Pako's or Haldan's exile MayPlay never match)
+        private static boolean ownHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Player activator = sa.getActivatingPlayer();
+            return host != null && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner())
+                    && (activator == null || ai.equals(activator));
+        }
+
+        // the plan's window, O(1): an empty stack, and the end step before our turn or our own Main 2
+        // with a land drop left. Nothing in it changes within a priority pass.
+        private static boolean window(final Player ai) {
+            return ai.getGame().getStack().isEmpty() && (endStepBeforeOurs(ai) || ownMain2Drop(ai));
+        }
+
+        private static boolean endStepBeforeOurs(final Player ai) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            return ph.is(PhaseType.END_OF_TURN) && !ph.isPlayerTurn(ai) && ai.equals(ph.getNextTurn());
+        }
+
+        private static boolean ownMain2Drop(final Player ai) {
+            return ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    && (ai.getMaxLandPlaysInfinite() || ai.getLandsPlayedThisTurn() < ai.getMaxLandPlays());
+        }
+
+        // canTarget and canSearchLibraryWith read the activator; set it on a hand SA that has none yet,
+        // as getOriginalAndAltCostAbilities sets it right after the RemoveDeck filter. It trickles down
+        // to the Choices subs.
+        private static void ensureActivator(final Player ai, final SpellAbility sa, final Parts parts) {
+            if (sa.getActivatingPlayer() == null || parts.activatorUnset()) {
+                sa.setActivatingPlayer(ai);
+            }
+        }
+
+        // G3's readmit case (RemoveDeckFilter.readmit): the owner's hand spell joins the list only while
+        // the plan has a line. RNG-free; sets no target.
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return routes(ai, sa) && plan(ai, sa) != null;
+        }
+
+        // CharmAi's gate: the readmit's own key inside the plan's window, never the plan itself
+        public static boolean routes(final Player ai, final SpellAbility sa) {
+            return handles(sa) && ownHandCast(ai, sa) && window(ai);
+        }
+
+        // CharmAi's chooser behind routes(): the one mode the plan takes, with the Return target set;
+        // empty to decline (CantPlayAi). Draws nothing. The list is mutable: chainAbilities sorts it.
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa, final List<AbilitySub> choices) {
+            final List<AbilitySub> chosen = Lists.newArrayList();
+            final Parts parts = Parts.of(choices);
+            if (parts.regrow != null) {
+                parts.regrow.resetTargets(); // nothing stale from an earlier priority
+            }
+            final Plan plan = plan(ai, sa);
+            if (plan == null) {
+                return chosen;
+            }
+            if (plan.land) {
+                if (parts.search != null) {
+                    chosen.add(parts.search);
+                }
+            } else if (parts.regrow != null && parts.regrow.canTarget(plan.regrow)) {
+                parts.regrow.getTargets().add(plan.regrow);
+                chosen.add(parts.regrow);
+            }
+            return chosen;
+        }
+
+        // the plan, cheapest first (the window, the board, the mana last); null to decline
+        static Plan plan(final Player ai, final SpellAbility sa) {
+            if (!window(ai)) {
+                return null;
+            }
+            final boolean endStep = endStepBeforeOurs(ai);
+            final Card host = sa.getHostCard();
+            final Parts parts = Parts.of(sa.getAdditionalAbilityList("Choices"));
+            ensureActivator(ai, sa, parts);
+            final boolean land = parts.search != null && needsLand(ai, host) && searchable(ai, parts.search, host);
+            final Card regrow = land || !endStep || parts.regrow == null ? null : bestRegrow(ai, parts.regrow);
+            if (!land && regrow == null) {
+                return null;
+            }
+            return affordable(ai, sa) ? new Plan(land, regrow) : null;
+        }
+
+        // no land card in hand besides the charm, and fewer than LAND_FLOOR lands or a nonland card in
+        // hand whose mana value exceeds our land count (the drop unlocks it): ChangeZoneAi's "does the
+        // AI need a land" test, widened for Commander's top end
+        private static boolean needsLand(final Player ai, final Card host) {
+            final int lands = ai.getLandsInPlay().size();
+            boolean unlock = false;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.equals(host)) {
+                    continue;
+                }
+                if (c.isLand() || c.hasPlayableLandFace()) {
+                    return false;
+                }
+                if (c.getCMC() > lands) {
+                    unlock = true;
+                }
+            }
+            return lands < LAND_FLOOR || unlock;
+        }
+
+        // a library of MIN_LIBRARY or more cards holding a basic, searched by us with nobody profiting
+        private static boolean searchable(final Player ai, final AbilitySub search, final Card host) {
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (library.size() < MIN_LIBRARY || !ai.canSearchLibraryWith(search, ai)
+                    || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)) {
+                return false;
+            }
+            return !CardLists.getValidCards(library, "Land.Basic", ai, host, search).isEmpty();
+        }
+
+        // our best creature card of mana value MIN_RETURN_MV or more, targetable and not a legend we
+        // already control, while the hand after (the hand now: the charm out, the creature in) fits
+        private static Card bestRegrow(final Player ai, final AbilitySub regrow) {
+            if (!ai.isUnlimitedHandSize() && ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize()) {
+                return null;
+            }
+            final CardCollection pool = CardLists.filter(ai.getCardsIn(ZoneType.Graveyard), c -> c.isCreature()
+                    && c.getCMC() >= MIN_RETURN_MV
+                    && !(c.getType().isLegendary() && !c.ignoreLegendRule() && ai.isCardInPlay(c.getName()))
+                    && regrow.canTarget(c));
+            return pool.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(pool);
+        }
+
+        // G2 against {1}{G} plus any raise the engine would charge (Thalia, Sphere of Resistance): the
+        // test-mode calculateManaCost above the printed cost, reductions not counted (Grab the Reins'
+        // costRaise, a private copy); and one green source's worth
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int raise = Math.max(0, cost.getConvertedManaCost() - PRINTED_MV);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= PRINTED_MV + raise && mana.colour(MagicColor.GREEN) >= GREEN_PIPS;
+        }
+
+        // Long-Term Plans' searchPunished, a private copy (accepted predicates are not shared): an
+        // opposing permanent that triggers on our search or takes it over, or a permanent on any
+        // battlefield whose Shuffled trigger our own shuffle fires (an absent ValidPlayer matches: a
+        // conservative decline). Parameter reads only.
+        private static boolean searchPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.SearchedLibrary) {
+                            return true;
+                        }
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (st.hasParam("ControlOpponentsSearchingLibrary")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Shuffled && t.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Evolutionary Leap
     // "{G}, Sacrifice a creature: Reveal cards from the top of your library until you reveal a creature card.
     // Put that card into your hand and the rest on the bottom of your library in a random order."
@@ -26743,7 +27017,7 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 5, 10, 16,
-    // 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 57, 58, 60, 79, 83 and 84, keepOff for batch 2's
+    // 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 79, 83 and 84, keepOff for batch 2's
     // row 68.
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -26808,6 +27082,8 @@ public class SpecialCardAi {
                     return EdictForAll.readmit(ai, sa);
                 case InciteRebellion.NAME:
                     return InciteRebellion.readmit(ai, sa);
+                case EvolutionCharm.NAME:
+                    return EvolutionCharm.readmit(ai, sa);
                 default:
                     return false;
             }

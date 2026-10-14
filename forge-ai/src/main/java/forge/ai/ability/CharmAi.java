@@ -94,6 +94,19 @@ public class CharmAi extends SpellAbilityAi {
                 Collections.shuffle(choices, MyRandom.getRandom());
             }
             chosenList = SpecialCardAi.GrabTheReins.chooseModes(ai, sa, choices);
+        } else if (SpecialCardAi.EvolutionCharm.routes(ai, sa)) {
+            // AI:RemoveDeck:All keeps the owner's hand cast off the playable list; G3 readmits it only
+            // while EvolutionCharm's RNG-free plan has a line, so A never reached the shuffle below for
+            // it there. routes() keys on that same owner's hand cast inside the plan's window (an empty
+            // stack; the end step before our turn, or our own Main 2 with a land drop left), never on
+            // the plan, so a plan that a mana hold breaks between the filter and here declines through
+            // an empty list, with no draw. Every other evaluation keeps the stock shuffle and chooser
+            // below, draw for draw: copies (Kalamax, Djinn Illuminatus's replicate, Wort's conspire,
+            // Dualcaster Mage), Play-effect casts (Goblin Dark-Dwellers, Jeleva, Nathan Drake), casts
+            // from other zones (Melek, Pako, Haldan), and hand scans that ignore the hint (ManaAi's
+            // ritual scan, hasReasonToPlayCardThisTurn, the Nykthos and Spectral Searchlight scanners)
+            // outside the window; inside it such a scan meets this chooser instead (skeptic (d)).
+            chosenList = SpecialCardAi.EvolutionCharm.chooseModes(ai, sa, choices);
         } else {
             // only randomize if not all possible together
             if (num < choices.size()) {
