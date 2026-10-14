@@ -11837,6 +11837,84 @@ public class SpecialCardAi {
         }
     }
 
+    // Fateful Tempest (dead-card batch 3, row 54)
+    // {2}{R} Sorcery. "Council's dilemma - Starting with you, each player votes for past or present.
+    // You mill a card for each past vote, then Fateful Tempest deals damage to each opponent equal
+    // to the total mana value of cards milled this way. Exile the top card of your library for each
+    // present vote. Until the end of your next turn, you may play the exiled cards." The script has
+    // no AILogic, so VoteAi.canPlay fell through to CantPlayAi at every priority (held 344 times on
+    // 2.0.15+55e709fa6ba, never cast by its owner on any engine); VoteAi now routes the spell here
+    // by name. No AILogic is added: the votes stay stock and random for every voter (ours
+    // included), so the floor is set on what EITHER outcome gives us: a past vote mills one of our
+    // cards and burns every opponent for its mana value, a present vote is an impulse draw good
+    // through the end of our next turn. Nothing damages us or our permanents. Every decline before
+    // any WillPlay:
+    // - our own Main 2 only (canCastTiming already kept us to our main phases, stack empty): the
+    //   exiled cards stay playable through our next turn, so Main 2 costs the impulse nothing and
+    //   leaves Main 1's mana to the hand (Truth or Consequences' window);
+    // - affordability: the cost as the engine prices it (test-mode calculateManaCost: taxes and
+    //   reductions) against HonestMana (G2, held sources skipped, restrictions read on the root sa)
+    //   in total and in red, never getAvailableManaEstimate (it counts the words of Produced$);
+    // - every vote at the table takes a card off our library: it must keep LIBRARY_MARGIN more,
+    //   unless milling cannot make us lose;
+    // - the burn half must land: at least one opponent that can lose life and is still dealt
+    //   PROBE_DMG through static replacement and prevention (damage is to EACH opponent, so one
+    //   suffices; with none, a past vote is a bare self-mill).
+    // The stock fallthrough drew no random number and no decline here does either: the phase,
+    // calculateManaCost(test), HonestMana (its one write is setActivatingPlayer on the mana
+    // abilities it reads), zone sizes, vote counts, cantLoseCheck, canLoseLife and predictDamageTo
+    // (static scans). Nothing is held past a decline: no target, no X, no memory set, no vote chosen.
+    public static class FatefulTempest {
+        public static final String NAME = "Fateful Tempest";
+        public static final int LIBRARY_MARGIN = 3; // DrawAi's own-deck margin, as Truth or Consequences
+        // a nominal milled mana value: "is any damage dealt at all" through a Benevolent Unicorn-style
+        // one-point shield; a blanket prevention reads 0 at any amount
+        public static final int PROBE_DMG = 2;
+
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && sa.isSpell() && !(sa instanceof AbilitySub)
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            // cheapest first: our Main 2 only
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // a WillPlay goes on to canPayCost, whose test payment can draw MyRandom
+            // (ComputerUtilMana.isManaSourceReserved), so an unpayable window is refused first,
+            // judged on the root sa (never host.getFirstSpellAbility(): row 77)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.RED) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // every vote at the table (optional extra votes too: an upper bound) mills or exiles one
+            // card from the top of OUR library
+            int maxVotes = 0;
+            for (final Player p : game.getPlayers()) {
+                maxVotes += 1 + p.getAdditionalVotesAmount() + p.getAdditionalOptionalVotesAmount();
+            }
+            if (!ai.cantLoseCheck(forge.game.player.GameLossReason.Milled)
+                    && ai.getCardsIn(ZoneType.Library).size() < maxVotes + LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the past half's burn must reach someone
+            for (final Player opp : ai.getOpponents()) {
+                if (opp.canLoseLife() && ComputerUtilCombat.predictDamageTo(opp, PROBE_DMG, host, false) > 0) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+    }
+
     // Fell the Mighty
     public static class FellTheMighty {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

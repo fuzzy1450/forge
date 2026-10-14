@@ -31,6 +31,13 @@ public class VoteAi extends SpellAbilityAi {
         if (SpecialCardAi.TruthOrConsequences.handles(sa)) {
             return SpecialCardAi.TruthOrConsequences.consider(aiPlayer, sa);
         }
+        // Fateful Tempest has no AILogic either (held 344 times on 2.0.15+55e709fa6ba, never cast by
+        // its owner on any engine). Its evaluator draws no random number before any decline; vote
+        // choice stays stock (ComputerUtil.vote with no AILogic), and Play-effect casts keep
+        // doTriggerNoCost.
+        if (SpecialCardAi.FatefulTempest.handles(sa)) {
+            return SpecialCardAi.FatefulTempest.consider(aiPlayer, sa);
+        }
         // TODO: add ailogic
         String logic = sa.getParam("AILogic");
         final Card host = sa.getHostCard();
