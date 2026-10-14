@@ -79,8 +79,9 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
 
     private Card curResolvingCard = null;
     private final Map<Integer, Integer> triggerRepeats = new HashMap<>();
-    // every trigger's repeats, optional and targeted ones included, on triggerRepeats' resets: what an optional
-    // loop's controller reads to stop it (CR 732.2a), where triggerRepeats draws only a mandatory loop (CR 104.4b)
+    // every trigger's repeats, optional and targeted ones included, on triggerRepeats' resets and with its crowd rule
+    // (one already on the stack is not a repeat): what an optional loop's controller reads to stop it (CR 732.2a),
+    // where triggerRepeats draws only a mandatory loop (CR 104.4b)
     private final Map<Integer, Integer> anyTriggerRepeats = new HashMap<>();
 
     private final Game game;
@@ -508,7 +509,8 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
             // a player did something
             triggerRepeats.clear();
             anyTriggerRepeats.clear();
-        } else {
+        } else if (!isOnStack(sp.getSourceTrigger())) {
+            // a crowd of one trigger is one repeat, as below
             anyTriggerRepeats.merge(sp.getSourceTrigger(), 1, Integer::sum);
         }
         if (!sp.isMandatory() || sp.usesTargeting()) {
@@ -523,12 +525,24 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
         return triggerRepeats.merge(id, 1, Integer::sum) > MAX_TRIGGER_REPEATS;
     }
 
+    private boolean isOnStack(final int sourceTriggerId) {
+        for (final SpellAbilityStackInstance si : stack) {
+            if (si.isStateTrigger(sourceTriggerId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public final void clearTriggerRepeats() {
         triggerRepeats.clear();
         anyTriggerRepeats.clear();
     }
 
-    /** How many times this trigger went on the stack since the last reset, optional and targeted ones included. */
+    /**
+     * How many times this trigger went on the stack since the last reset, optional and targeted ones included, not
+     * counting a time it went on beside an instance of it already there (a crowd is one repeat).
+     */
     public final int getTriggerRepeats(final int sourceTriggerId) {
         return anyTriggerRepeats.getOrDefault(sourceTriggerId, 0);
     }

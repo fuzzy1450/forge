@@ -4,7 +4,9 @@ import static org.testng.AssertJUnit.assertEquals;
 import static org.testng.AssertJUnit.assertFalse;
 import static org.testng.AssertJUnit.assertTrue;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.testng.annotations.Test;
@@ -88,6 +90,49 @@ public class OptionalTriggerLoopTest extends AITest {
         assertTrue("Blowfly killed the last Elf", ai.getCreaturesInPlay().isEmpty());
         // The two Elves we started with, then one for each of Flourishing's first 50 triggers: its 51st is declined.
         assertEquals(MagicStack.MAX_TRIGGER_REPEATS + 2, elves.size());
+    }
+
+    /**
+     * CR 732.2a is about a loop, not a crowd, as the draw detector's CR 104.4b is: 51 -1/-1 counters put at once
+     * trigger Flourishing 51 times together, which is one repeat of it, so the AI takes every one of the 51 Elves.
+     */
+    @Test(timeOut = 300_000)
+    public void aCrowdOfOptionalTriggersIsOneRepeatAndTheAiTakesEveryElf() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        Player opponent = game.getPlayers().get(0);
+        Card flourishing = addCard("Flourishing Defenses", ai);
+        int crowd = MagicStack.MAX_TRIGGER_REPEATS + 1;
+        List<Card> bears = new ArrayList<>();
+        for (int i = 0; i < crowd; i++) {
+            bears.add(addCard("Grizzly Bears", opponent));
+        }
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        game.getAction().checkStateEffects(true);
+        assertTrue("the AI starts with no creature", ai.getCreaturesInPlay().isEmpty());
+
+        // one -1/-1 counter on each Bear, all put by one effect: Flourishing triggers once a counter, all together
+        GameEntityCounterTable table = new GameEntityCounterTable();
+        for (Card bear : bears) {
+            bear.addCounter(CounterEnumType.M1M1, 1, ai, table);
+        }
+        table.replaceCounterEffect(game, null);
+
+        MagicStack stack = game.getStack();
+        int id = triggerId(flourishing);
+        int together = 0;
+        int most = 0;
+        int steps = 0;
+        while (chainGoesOn(game) && steps++ < MAX_STEPS) {
+            game.getPhaseHandler().mainLoopStep();
+            together = Math.max(together, stack.size());
+            most = Math.max(most, stack.getTriggerRepeats(id));
+        }
+
+        assertFalse(chainGoesOn(game));
+        assertEquals("the 51 triggers were on the stack together", crowd, together);
+        assertEquals("the AI took every Elf", crowd, ai.getCreaturesInPlay().size());
+        assertEquals("a crowd is one repeat", 1, most);
     }
 
     /** The count the AI reads: every trigger, optional and targeted alike, on the draw detector's own resets. */
