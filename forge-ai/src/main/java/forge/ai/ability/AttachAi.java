@@ -103,6 +103,17 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.TraceOfAbundance.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.CurseOfChaos.NAME.equals(source.getName())
+                && SpecialCardAi.CurseOfChaos.isOwnHandCast(ai, sa)) {
+            // Judged whole in SpecialCardAi.CurseOfChaos: the stock Curse preference
+            // (attachToPlayerAIPreferences) takes the weakest opponent with no look at whether a
+            // creature of ours can attack them or whether a rummage is live. Only the G3 readmit's
+            // shape comes here (our hand, not a Play effect or a copy), and so does a direct
+            // canPlaySa probe of that hand copy (hasReasonToPlayCardThisTurn); a Play-effect cast
+            // or a thief's comes through doTriggerNoCost, never here, and keeps the stock path.
+            return SpecialCardAi.CurseOfChaos.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {

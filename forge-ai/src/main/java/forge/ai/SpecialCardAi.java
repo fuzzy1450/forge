@@ -5986,6 +5986,93 @@ public class SpecialCardAi {
         }
     }
 
+    // Curse of Chaos (dead-card batch 3, row 83)
+    // "Enchant player. Whenever a player attacks enchanted player with one or more creatures, that
+    // attacking player may discard a card. If the player does, they draw a card." ({2}{R} Aura Curse.)
+    // AI:RemoveDeck:All kept the Aura spell off every playable list (AiController.getSpellAbilityToPlay's
+    // filter): 0 owner casts from 1,074 held rows under 2.0.15+55e709fa6ba; the two owner casts on record
+    // are free casts an opponent's Transforming Flourish / Guff Rewrites History forced from the library
+    // (PlayEffect -> canPlayFromEffectAI -> AttachAi.doTriggerNoCost), a path the hint never filtered.
+    // Behind the hint the stock Curse preference (AttachAi.attachToPlayerAIPreferences) curses the
+    // weakest opponent with no floor. The hint is KEPT (G3 readmit, as Gift of Doom), so the -10 sort and
+    // every other isCardRemAIDeck reader (steal, copy, clone and tutor pickers) still refuse the card:
+    // only our own hand cast, in our own Main 2 with no mana reservation live
+    // (RemoveDeckFilter.noManaHeld), when {2}{R} as the engine prices it (test-mode calculateManaCost)
+    // fits HonestMana (G2) in total and in red. AttachAi.checkApiLogic then calls consider() for that same
+    // shape (isOwnHandCast): it curses only while the rummage is live (WitchsMark.willRummage, called
+    // unchanged: we can draw, the library holds 5 or more cards, no opponent's permanent replaces our
+    // draw or triggers on a draw or a discard), and only the lowest-life targetable opponent that a
+    // creature of ours with combat damage can attack next turn (Crown of Doom's canAttackNextTurn floor
+    // with Entrancing Melody's getNetCombatDamage pair: the attack AI never sends a 0-power Kobold or
+    // Plant token, AiAttackController.isEffectiveAttacker, and the curse's own AttackersDeclared trigger
+    // does not count as a reason to). In 1v1 the attacker is the only one the curse helps, and that is us.
+    // A Play-effect cast or a thief's comes through doTriggerNoCost and keeps the stock path. Direct
+    // canPlaySa callers that skip the filter DO reach consider() for our own hand copy in any window
+    // canPlaySa's timing allows (ComputerUtil.hasReasonToPlayCardThisTurn, TapAi's pay-life ETB check;
+    // ComputerUtil.targetPlayableSpellCard; ManaAi's ritual probe), where they used to meet the stock
+    // no-floor WillPlay. Draws no random number, holds no mana and writes no memory set; a decline is a
+    // plain filter (readmit) or a CantPlayAi / TargetingFailed before willPayCosts and canPayCost.
+    public static class CurseOfChaos {
+        public static final String NAME = "Curse of Chaos";
+
+        // the readmit's own shape: our Aura spell in our hand, not from a Play effect, not a copy
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && ai.equals(host.getController()) && sa.isSpell()
+                    && sa.getApi() == ApiType.Attach
+                    && !sa.isCastFromPlayEffect() && !sa.isCopied()
+                    && host.isInZone(ZoneType.Hand);
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa)) {
+                return false; // a thief's or a Play effect's cast keeps the filter / its stock path
+            }
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // outside our own Main 2, or with mana held, it stays filtered as before
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // AttachAi.checkApiLogic's name gate: the player to curse, or don't cast
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            if (!WitchsMark.willRummage(ai, sa)) { // the Attach sa has no NumCards: one card
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            Player best = null;
+            for (final Player opp : ai.getOpponents()) { // list order breaks life ties
+                if (!sa.canTarget(opp) || (best != null && opp.getLife() >= best.getLife())) {
+                    continue;
+                }
+                if (hasAttacker(ai, opp)) {
+                    best = opp;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // a creature of ours that deals combat damage and can attack opp next turn (defender, CantAttack
+        // statics, goad and must-attack, a skipped combat, stun and won't-untap are canAttackNextTurn's)
+        private static boolean hasAttacker(final Player ai, final Player opp) {
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (c.getNetCombatDamage() > 0 && ComputerUtilCombat.canAttackNextTurn(c, opp)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Curse of the Swine
     // "Exile X target creatures. For each creature exiled this way, its controller creates a
     // 2/2 green Boar creature token." Routed from ChangeZoneAi.checkApiLogic for the root SA
@@ -24303,7 +24390,7 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 10, 16, 17, 19, 21, 35, 36, 49, 50, 57, 58 and 60, keepOff for batch 2's row 68. A case
+    // 5, 10, 16, 17, 19, 21, 35, 36, 49, 50, 57, 58, 60 and 83, keepOff for batch 2's row 68. A case
     // must draw no random number and hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
@@ -24354,6 +24441,8 @@ public class SpecialCardAi {
                     return CauldronOfSouls.readmit(ai, sa);
                 case Squallmonger.NAME:
                     return Squallmonger.readmit(ai, sa);
+                case CurseOfChaos.NAME:
+                    return CurseOfChaos.readmit(ai, sa);
                 default:
                     return false;
             }
