@@ -17655,6 +17655,238 @@ public class SpecialCardAi {
         }
     }
 
+    // Magma Giant (dead-card batch 3, row 36)
+    // "When Magma Giant enters, it deals 2 damage to each creature and each player." ({5}{R}{R}
+    // creature, 5/5 Giant.) AI:RemoveDeck:All dropped the owner's creature spell in
+    // AiController.getSpellAbilityToPlay's removeIf before any handler ran, so its owner never cast
+    // it from hand on any engine (0 owner hand casts in 1,172 carrier rows on 2.0.15+55e709fa6ba;
+    // its casts were Silent-Blade Oni thefts and one Transforming Flourish free cast from exile,
+    // Play effects, which never read the hint). The script keeps the hint: the -10 sort
+    // (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck reader (steal, exchange,
+    // copy, clone and tutor pickers; CopyPermanentAi's token copy would re-run the sweep on the
+    // copier's board) still refuse it. The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly
+    // one ability through AiController's filter: the owner's own creature spell from hand, not a
+    // Play-effect cast, and only in a window the stock path would cast it in, that real mana pays
+    // for, and whose sweep the floor below accepts, so every other pass is the stock pass:
+    // - our own main phase with an empty stack (canCastSorcery: canCastTiming's window for a
+    //   sorcery-speed creature; PermanentCreatureAi's flash branches are never entered);
+    // - Main 2, or Main 1 when the stock PermanentAi.checkPhaseRestrictions would cast it there
+    //   (ComputerUtil.castPermanentInMain1: a haste giver such as the carrier's Lightning Greaves);
+    // - no live mana reservation (RemoveDeckFilter.noManaHeld, the morph family's precondition);
+    // - G2 (HonestMana, held sources skipped) covers the engine's test-mode calculateManaCost in
+    //   total and in red, so a readmitted spell never reaches ComputerUtilCost.canPayCost, whose
+    //   test payment draws MyRandom per source it tries, in a window that cannot pay for it.
+    // Value floor (sweepAcceptable): a 5/5 body for 7 (Kalemne's experience counter in the
+    // carrier) plus 2 to each opponent; a cast that kills nothing is a fair 7-drop. What can make
+    // it negative is the symmetric sweep, and each way is checked:
+    // - never into our own death: our life <= our predicted 2 refuses, unqualified, as the stock
+    //   judge's self check (no can't-lose exemption, skeptic A1);
+    // - every opponent dies to its 2 (and can lose the game): accept, the game is over;
+    // - otherwise LifeFloor after our own 2 (5 life left under the Default profile);
+    // - no commander of ours dies (the recast tax, Kalemne's counters);
+    // - no opposing creature that punishes being dealt damage (Brash Taunter, Stuffy Doll, Boros
+    //   Reckoner, enrage), killed or not;
+    // - when a creature of ours dies, what dies of theirs (no shield counter, no SacMe; undying or
+    //   persist worth nothing) must be worth more than everything we lose + 50, DamageAllAi's own
+    //   margin (our losses unfiltered, as the stock judge counts them, skeptic A1);
+    // - no killed creature, ours or theirs, sets off an opposing death trigger that drains,
+    //   damages or edicts us (Blood Artist, Zulaport Cutthroat, Butcher of Malakir, Grave Pact).
+    // The kill test is DamageAllAi.getKillableCreatures' (not indestructible, predictDamageTo >=
+    // getDamageToKill). readmit then also asks stockEtbAccepts, a private mirror of the stock ETB
+    // judge the spell meets next (AiController.checkETBEffects -> DamageAllAi.doTriggerNoCost, not
+    // mandatory), which reads the weakest opponent only: in a pod a summed trade that the stock
+    // judge then vetoes is refused here, before the readmitted spell can re-slot the creature
+    // spells (sortCreatureSpells) for a pass that casts nothing (skeptic A1). In 1v1 the floor
+    // already implies it.
+    // RNG-free and read-only: the phase, noManaHeld, the test-mode calculateManaCost, HonestMana,
+    // castPermanentInMain1 (state reads for this card), predictDamageTo, getDamageToKill,
+    // evaluateCreatureList, LifeFloor's profile int, trigger params (ensureAbility only on a
+    // matched watcher). No ComputerUtil.canRegenerate (its canPayCost probe draws) and no
+    // lifeInDanger. Holds nothing and remembers nothing; its only writes are setActivatingPlayer on
+    // a hand SA with no activator yet (as getOriginalAndAltCostAbilities does right after the
+    // filter) and on the mana abilities G2 reads. A thief's copy fails the owner and hand checks,
+    // and a Play-effect cast never reaches this filter (canPlayFromEffectAI).
+    public static class MagmaGiant {
+        public static final String NAME = "Magma Giant";
+        static final int DMG = 2;              // the trigger's NumDmg$ 2, printed
+        static final int OWN_LOSS_MARGIN = 50; // DamageAllAi.doTriggerNoCost's own trade margin
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // a theft, a Play-effect cast: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (!ai.canCastSorcery()) {
+                return false; // our own main phase with an empty stack, read first
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ai.getGame().getPhaseHandler().is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait (PermanentAi.checkPhaseRestrictions), answered first
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            // the root sa's cost as canPayCost will price it, against G2 (never the bare estimate)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.RED) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)) {
+                return false;
+            }
+            return sweepAcceptable(ai, host) && stockEtbAccepts(ai, host);
+        }
+
+        static boolean sweepAcceptable(final Player ai, final Card host) {
+            final int selfDmg = ComputerUtilCombat.predictDamageTo(ai, DMG, host, false);
+            if (ai.getLife() <= selfDmg) {
+                return false; // never into our own death, unqualified (DamageAllAi's own self check)
+            }
+            // every opponent dies at state-based actions: the game is over, nothing else matters
+            boolean allDie = !ai.getOpponents().isEmpty();
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.canLoseLife() || opp.cantLoseForZeroOrLessLife()
+                        || ComputerUtilCombat.predictDamageTo(opp, DMG, host, false) < opp.getLife()) {
+                    allDie = false;
+                    break;
+                }
+            }
+            if (allDie) {
+                return true;
+            }
+            if (!LifeFloor.keeps(ai, selfDmg)) {
+                return false; // the shared floor after our own 2 (no can't-lose exemption)
+            }
+            final CardCollection ours = CardLists.filter(ai.getCreaturesInPlay(), c -> dies(c, host));
+            for (final Card c : ours) {
+                if (c.isRealCommander()) {
+                    return false; // never a commander of ours
+                }
+            }
+            final CardCollection theirs = new CardCollection();
+            for (final Card c : ai.getOpponents().getCreaturesInPlay()) {
+                if (punishesDamage(c, host)) {
+                    return false; // dealt damage, killed or not
+                }
+                if (dies(c, host) && c.getCounters(CounterEnumType.SHIELD) <= 0 && !c.hasSVar("SacMe")) {
+                    theirs.add(c);
+                }
+            }
+            if (!ours.isEmpty()) {
+                final int lost = ComputerUtilCard.evaluateCreatureList(ours); // unfiltered, as stock counts it
+                final int gained = ComputerUtilCard.evaluateCreatureList(
+                        CardLists.filter(theirs, c -> !ComputerUtilCard.hasActiveUndyingOrPersist(c)));
+                if (gained <= lost + OWN_LOSS_MARGIN) {
+                    return false;
+                }
+            }
+            if (!ours.isEmpty() || !theirs.isEmpty()) {
+                final List<Trigger> watchers = deathWatchers(ai); // once per consult, only when something dies
+                for (final Card c : ours) {
+                    if (punishesDeath(watchers, c)) {
+                        return false;
+                    }
+                }
+                for (final Card c : theirs) {
+                    if (punishesDeath(watchers, c)) {
+                        return false;
+                    }
+                }
+            }
+            return true; // nothing of ours dies, or the trade clears the margin: the 5/5 is the value
+        }
+
+        // DamageAllAi.doTriggerNoCost (:296-315), mirrored privately: the stock ETB judge that
+        // AiController.checkETBEffects runs on the trigger after the readmit (not mandatory). Its
+        // self check (:300) is sweepAcceptable's first line. It reads the weakest opponent only (a
+        // min by life): that opponent dies to the 2 -> accept (:305); else, when a creature of ours
+        // dies, ours + 50 >= the weakest opponent's killed -> refuse (:310). Both lists unfiltered,
+        // as getKillableCreatures builds them (:254-268).
+        static boolean stockEtbAccepts(final Player ai, final Card host) {
+            final Player weakest = ai.getWeakestOpponent();
+            if (weakest == null) {
+                return false;
+            }
+            if (weakest.getLife() <= ComputerUtilCombat.predictDamageTo(weakest, DMG, host, false)) {
+                return true;
+            }
+            final CardCollection ours = CardLists.filter(ai.getCreaturesInPlay(), c -> dies(c, host));
+            if (ours.isEmpty()) {
+                return true;
+            }
+            final CardCollection theirs = CardLists.filter(weakest.getCreaturesInPlay(), c -> dies(c, host));
+            return ComputerUtilCard.evaluateCreatureList(ours) + OWN_LOSS_MARGIN
+                    < ComputerUtilCard.evaluateCreatureList(theirs);
+        }
+
+        // DamageAllAi.getKillableCreatures' test (:262-265)
+        private static boolean dies(final Card c, final Card host) {
+            return !c.hasKeyword(Keyword.INDESTRUCTIBLE)
+                    && ComputerUtilCombat.predictDamageTo(c, DMG, host, false) >= ComputerUtilCombat.getDamageToKill(c, false);
+        }
+
+        // MobVerdict.punishesDamage, copied (never share a predicate with an accepted card):
+        // damage dealt to the creature punishes us.
+        private static boolean punishesDamage(final Card c, final Card source) {
+            for (final Trigger t : c.getTriggers()) {
+                final TriggerType mode = t.getMode();
+                if ((mode == TriggerType.DamageDone || mode == TriggerType.DamageDoneOnce)
+                        && t.hasParam("ValidTarget") && t.matchesValidParam("ValidTarget", c)
+                        && t.matchesValidParam("ValidSource", source)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // MobVerdict.deathWatchers, copied: every opposing permanent's ChangesZone(All) trigger that
+        // may fire on a creature going from the battlefield to the graveyard, scanned once per consult.
+        private static List<Trigger> deathWatchers(final Player ai) {
+            final List<Trigger> out = new ArrayList<>();
+            for (final Card host : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : host.getTriggers()) {
+                    if (t.getMode() != TriggerType.ChangesZone && t.getMode() != TriggerType.ChangesZoneAll) {
+                        continue;
+                    }
+                    final String origin = t.getParamOrDefault("Origin", "Any");
+                    final String destination = t.getParamOrDefault("Destination", "Any");
+                    if (("Any".equals(origin) || origin.contains("Battlefield"))
+                            && ("Any".equals(destination) || destination.contains("Graveyard"))) {
+                        out.add(t);
+                    }
+                }
+            }
+            return out;
+        }
+
+        // MobVerdict.punishesDeath, copied: the creature's death drains, damages or edicts us - a
+        // watcher that matches it and whose chain loses life, deals damage or sacrifices;
+        // over-excluding only costs a cast
+        private static boolean punishesDeath(final List<Trigger> watchers, final Card c) {
+            for (final Trigger t : watchers) {
+                if (!t.matchesValidParam(t.getMode() == TriggerType.ChangesZone ? "ValidCard" : "ValidCards", c)) {
+                    continue;
+                }
+                for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    if (api == ApiType.LoseLife || api == ApiType.DealDamage || api == ApiType.DamageAll
+                            || api == ApiType.Sacrifice || api == ApiType.SacrificeAll) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Manascape Refractor (dead-card batch 2, row 60)
     // "Manascape Refractor enters tapped. Manascape Refractor has all activated abilities of all
     // lands on the battlefield. You may spend mana as though it were mana of any color to pay the
@@ -23904,7 +24136,7 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 10, 16, 17, 19, 21, 35, 49, 50 and 57, keepOff for batch 2's row 68. A case must draw
+    // 5, 10, 16, 17, 19, 21, 35, 36, 49, 50 and 57, keepOff for batch 2's row 68. A case must draw
     // no random number and hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
@@ -23949,6 +24181,8 @@ public class SpecialCardAi {
                     return SlobadGoblinTinkerer.readmit(ai, sa);
                 case SpringleafDrum.NAME:
                     return SpringleafDrum.isOwnHandCast(ai, sa);
+                case MagmaGiant.NAME:
+                    return MagmaGiant.readmit(ai, sa);
                 default:
                     return false;
             }
