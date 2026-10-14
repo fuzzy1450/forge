@@ -71,11 +71,16 @@ public class StaticAbility extends CardTraitBase implements IIdentifiable, Clone
         return id;
     }
 
+    private static final int CLASS_NAME_HASH = StaticAbility.class.getName().hashCode();
+
     @Override
     public int hashCode() {
-        // Objects.hash(StaticAbility.class, getId()) without its array: same calls, same order, same value
+        // Objects.hash(<class constant>, getId()) without its array. The constant is the class NAME's hash,
+        // which is the same in every JVM; StaticAbility.class.hashCode() is an identity hash that changes from one
+        // launch to the next, so every HashMap or HashSet of these iterated in a per-JVM order, and a seed
+        // could play a different game in another JVM (MTG_DeckMaker stored game 973410).
         final int id = getId();
-        return 31 * (31 + StaticAbility.class.hashCode()) + id;
+        return 31 * (31 + CLASS_NAME_HASH) + id;
     }
 
     @Override
