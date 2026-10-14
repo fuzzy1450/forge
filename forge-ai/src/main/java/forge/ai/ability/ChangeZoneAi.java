@@ -405,6 +405,33 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.TitansPresence.consider(aiPlayer, sa, false);
         }
 
+        if (!(sa instanceof AbilitySub) && SpecialCardAi.ReconstructHistory.handles(aiPlayer, sa)) {
+            // "Return up to one target artifact, enchantment, instant, sorcery and planeswalker card
+            // from your graveyard to your hand. Exile Reconstruct History." The generic root
+            // targeting below needs an artifact card, and each "up to one" sub then vetoes the spell
+            // in chkDrawback when its type has no candidate (isPreferredTarget's empty-list refusal
+            // ignores TargetMin$ 0): it was cast only with all five types in the graveyard. The card
+            // has no AI hint, so the stock engine evaluated it here: run that root evaluation and,
+            // when it approved, the sub chain A ran next up to its first decline
+            // (knownOriginPlayDrawbackAI directly: chkDrawback's keepsPlan gate would intercept),
+            // discarding both, so every decline keeps A's draws (chooseCreature's aiLifeInDanger,
+            // isPreferredTarget's no-choice shuffle). willPayCosts and checkConditions, which A ran
+            // between the two, are RNG-free and pass for this mana-only cost. Only our normal cast on
+            // an empty stack comes here (ReconstructHistory.handles, the predicate keepsPlan shares);
+            // copy probes, casts on a non-empty stack and Play-effect casts (doTriggerNoCost) keep
+            // the stock path. Every other ChangeZone card takes exactly the path it took before this
+            // branch.
+            if (knownOriginCanPlayAI(aiPlayer, sa).willingToPlay()) {
+                for (AbilitySub sub = sa.getSubAbility(); sub != null; sub = sub.getSubAbility()) {
+                    if (sub.getApi() != ApiType.ChangeZone || sub.isHidden()
+                            || !knownOriginPlayDrawbackAI(aiPlayer, sub).willingToPlay()) {
+                        break;
+                    }
+                }
+            }
+            return SpecialCardAi.ReconstructHistory.consider(aiPlayer, sa);
+        }
+
         if (SpecialCardAi.Reshape.isReshape(sa) && !(sa instanceof AbilitySub)) {
             // X U U, sacrifice an artifact: tutor an artifact of mana value X or less onto the
             // battlefield. The stock hidden-origin path below announces the largest affordable X
@@ -525,6 +552,17 @@ public class ChangeZoneAi extends SpellAbilityAi {
             // PumpAi.doTriggerNoCost clears the root's X first) the stock path runs as before. The
             // paper name covers a face-down exiled host (Gonti), whose name reads "": PumpAi routes
             // it to the evaluator by its AILogic. Same shape as the Spelltwine gate above.
+            if (sa.isTargetNumberValid()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+        if (SpecialCardAi.ReconstructHistory.keepsPlan(aiPlayer, sa)) {
+            // Each "up to one" slot was picked, or left empty (TargetMin$ 0 allows it), by
+            // SpecialCardAi.ReconstructHistory.consider for the whole chain; keep it. keepsPlan reads
+            // the router's own predicate (our normal cast on an empty stack), so a copy probe, a cast
+            // on a non-empty stack and a Play-effect cast (doTriggerNoCostWithSubs) take the stock
+            // path below, as before. Same shape as the Unfinished Business gate above.
             if (sa.isTargetNumberValid()) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }

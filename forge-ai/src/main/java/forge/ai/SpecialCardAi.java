@@ -25235,6 +25235,364 @@ public class SpecialCardAi {
         }
     }
 
+    // Reconstruct History (dead-card batch 3, row 47; precon:Lorehold Legacies (C21))
+    // "Return up to one target artifact card, up to one target enchantment card, up to one target
+    // instant card, up to one target sorcery card, and up to one target planeswalker card from your
+    // graveyard to your hand. Exile Reconstruct History." ({2}{R}{W} sorcery, no AI hint.) The stock
+    // path treats every "up to one" as exactly one: isPreferredTarget refuses an empty candidate list
+    // whatever TargetMin$ 0 says, at the root (the artifact slot, in knownOriginCanPlayAI) and at
+    // each sub (enchantment, instant, sorcery, planeswalker, in knownOriginPlayDrawbackAI), where
+    // chkDrawbackWithSubs stops at the first decline. So it was cast only with all five types in the
+    // graveyard at once, and the carrier runs one planeswalker (Daretti): 2 owner casts in 639 held
+    // games on the active engine, both on such a board.
+    // Routed from ChangeZoneAi.checkApiLogic (the root, after the stock evaluation is replayed and
+    // discarded there) and ChangeZoneAi.chkDrawback (keepsPlan: each sub keeps the plan's target, or
+    // its empty slot), both behind handles(): our normal cast (a spell, not a copy, not a Play-effect
+    // cast) judged on an empty stack. Everything else keeps the stock path, sub veto included: an
+    // opponent's copy probe of it on the stack (CopySpellAbilityAi's top.copy(), whose isCopied is
+    // false and whose subs' targets are cloned), a flash-granted or a thief's cast on a non-empty
+    // stack, a Play-effect cast (doTriggerNoCost never reaches checkApiLogic) and a face-down exiled
+    // host (its name reads "").
+    // The plan: each targeted ChangeZone slot, in chain order, takes at most one card and a card
+    // fills at most one slot (an artifact enchantment could legally fill two and waste one).
+    // Candidates are the slot's targetable cards in our graveyard that are not lands (an artifact
+    // land is the stock pick's worst outcome, isPreferredTarget's no-choice shuffle) and carry no
+    // AI:RemoveDeck:All hint (a card the AI never casts from hand is no card in hand: the carrier's
+    // Darksteel Mutation, Faithless Looting and Bosh). Slots with the fewest candidates choose first
+    // (chain order breaks ties), each its highest value() card no other slot took (graveyard order
+    // breaks ties). Picks beyond the hand room (the maximum hand size less the hand once this spell
+    // has left it) would be discarded at cleanup: the lowest-valued leave their slots instead, which
+    // "up to one" allows.
+    // Floor: the spell exiles itself, so one return only replaces it. At least MIN_PICKS (2) returns,
+    // the first real card gained (Dance of the Manse's floor), and with exactly two their mana values
+    // add up to MIN_PAIR_MV (4), the mana it paid (Boros Charm + Arcane Signet casts, Sol Ring +
+    // Dispatch waits for a third card); three or more always pass. The root slot may stay empty: a
+    // plan of instants and sorceries only is legal, and an empty slot does not fizzle the spell
+    // (MagicStack.hasFizzled skips zero-target slots; DBExile still exiles it).
+    // Mana, before any approval: the engine's test-mode price (calculateManaCost: taxes and
+    // reductions, rule B3-5) against G2 HonestMana's total, held sources skipped, then Hall's
+    // condition over its coloured pips on separate mana (coloursOnSeparateMana below, a private
+    // verbatim copy of Anikthea's: Marath's pipsOnSeparateMana shape, never called across rows), so
+    // one Command Tower or Study Hall never stands for both R and W. Hand sources and mana
+    // multipliers are under-counted, the safe side.
+    // Draws nothing: graveyard scans, getTargetableCards and canTarget, isCardRemAIDeck,
+    // evaluateCreature, the test-mode price and the mana reads (their only write is
+    // setActivatingPlayer on mana abilities). No aiLifeInDanger (the stock pick's chooseCreature
+    // calls it only on a non-empty list, so it is not cached for every decision). The stock draws
+    // are the router's replay. Holds and remembers nothing; every decline leaves every slot
+    // untargeted. Only a WillPlay goes on to canPayCost's isManaSourceReserved draws.
+    public static class ReconstructHistory {
+        public static final String NAME = "Reconstruct History";
+        static final int MIN_PICKS = 2;   // it exiles itself: the second return is the first card gained
+        static final int MIN_PAIR_MV = 4; // a two-card plan returns at least the mana it paid
+
+        // The one predicate both ChangeZoneAi hooks read: our own normal cast, judged on an empty
+        // stack (sorcery timing; every cast the fix needs). A copy probe, a cast on a non-empty
+        // stack and a Play-effect cast keep the stock path in both hooks together.
+        public static boolean handles(final Player ai, final SpellAbility root) {
+            return root != null && NAME.equals(ComputerUtilAbility.getAbilitySourceName(root))
+                    && root.isSpell() && !root.isCopied() && !root.isCastFromPlayEffect()
+                    && ai.getGame().getStack().isEmpty();
+        }
+
+        // ChangeZoneAi.chkDrawback's keep-gate: a targeted sub of a root consider judged
+        public static boolean keepsPlan(final Player ai, final SpellAbility sub) {
+            return sub instanceof AbilitySub && sub.usesTargeting() && handles(ai, sub.getRootAbility());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final List<SpellAbility> slots = new ArrayList<>(); // the root and each targeted ChangeZone sub
+            for (SpellAbility s = sa; s != null; s = s.getSubAbility()) {
+                if (s.getApi() == ApiType.ChangeZone && s.usesTargeting()) {
+                    slots.add(s);
+                }
+            }
+            clear(slots); // nothing left over from the stock replay or an earlier window
+
+            // 1. the cheap precondition: two returnable cards of the five types in our graveyard
+            int raw = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                if ((c.isArtifact() || c.isEnchantment() || c.isInstant() || c.isSorcery() || c.isPlaneswalker())
+                        && returnable(c) && ++raw >= MIN_PICKS) {
+                    break;
+                }
+            }
+            if (raw < MIN_PICKS) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // 2. hand room once this spell has left the hand (the stock phase gate already refuses a
+            //    full hand on our own turn)
+            final Card host = sa.getHostCard();
+            final int inHand = ai.getCardsIn(ZoneType.Hand).size()
+                    - (host != null && host.isInZone(ZoneType.Hand) ? 1 : 0);
+            final int room = ai.isUnlimitedHandSize() ? slots.size() : ai.getMaxHandSize() - inHand;
+            if (room < MIN_PICKS) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // 3. the RNG-free ceiling, before canPayCost (whose test payment draws MyRandom)
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            // 4. the plan: fewest-candidates slot first (List.sort is stable: chain order breaks
+            //    ties), each its highest-valued card no other slot took
+            final int n = slots.size();
+            final List<List<Card>> cands = new ArrayList<>(n);
+            for (final SpellAbility s : slots) {
+                final List<Card> list = new ArrayList<>();
+                for (final Card c : CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), s)) {
+                    if (returnable(c)) {
+                        list.add(c);
+                    }
+                }
+                cands.add(list);
+            }
+            final List<Integer> order = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                order.add(i);
+            }
+            order.sort(Comparator.comparingInt(i -> cands.get(i).size()));
+            final Card[] pick = new Card[n];
+            final int[] pickValue = new int[n];
+            final Set<Card> taken = new HashSet<>();
+            int picks = 0;
+            for (final int i : order) {
+                Card best = null;
+                int bestValue = Integer.MIN_VALUE;
+                for (final Card c : cands.get(i)) {
+                    if (taken.contains(c)) {
+                        continue;
+                    }
+                    final int v = value(c);
+                    if (v > bestValue) { // strict: graveyard order breaks ties
+                        best = c;
+                        bestValue = v;
+                    }
+                }
+                if (best != null) {
+                    pick[i] = best;
+                    pickValue[i] = bestValue;
+                    taken.add(best);
+                    picks++;
+                }
+            }
+            // keep the `room` highest-valued picks; the rest leave their slots (on a tie the later
+            // slot's pick leaves)
+            while (picks > room) {
+                int drop = -1;
+                for (int i = 0; i < n; i++) {
+                    if (pick[i] != null && (drop < 0 || pickValue[i] <= pickValue[drop])) {
+                        drop = i;
+                    }
+                }
+                pick[drop] = null;
+                picks--;
+            }
+
+            // 5. the floor: three or more returns, or two whose mana values add up to the mana paid
+            int mv = 0;
+            for (final Card c : pick) {
+                if (c != null) {
+                    mv += c.getCMC();
+                }
+            }
+            if (picks < MIN_PICKS || (picks == MIN_PICKS && mv < MIN_PAIR_MV)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // 6. the targets; an empty slot is valid at TargetMin$ 0
+            for (int i = 0; i < n; i++) {
+                if (pick[i] == null) {
+                    continue;
+                }
+                if (!slots.get(i).canTarget(pick[i])) {
+                    clear(slots);
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+                slots.get(i).getTargets().add(pick[i]);
+            }
+            for (final SpellAbility s : slots) {
+                if (!s.isTargetNumberValid()) {
+                    clear(slots);
+                    return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // a land (artifact lands) or a hinted card is no card gained in hand
+        private static boolean returnable(final Card c) {
+            return !c.isLand() && !ComputerUtilCard.isCardRemAIDeck(c);
+        }
+
+        // RNG-free (MaelstromPulse.value's shape): a creature card by evaluateCreature, any other
+        // card 50 + 30 * its mana value
+        private static int value(final Card c) {
+            return c.isCreature() ? ComputerUtilCard.evaluateCreature(c) : 50 + 30 * c.getCMC();
+        }
+
+        // The engine's test-mode price (calculateManaCost: taxes and reductions; RNG-free for this
+        // spell) against G2's total with held sources skipped, then its coloured pips on separate
+        // mana. Judged on sa, never host.getFirstSpellAbility() (row 77).
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            return HonestMana.of(ai, sa, true).total() >= cost.getConvertedManaCost()
+                    && coloursOnSeparateMana(ai, sa);
+        }
+
+        private static void clear(final List<SpellAbility> slots) {
+            for (final SpellAbility s : slots) {
+                s.resetTargets();
+            }
+        }
+
+        // AniktheaHandOfErebos.coloursOnSeparateMana, its heldSource and their constants, copied
+        // verbatim: an accepted row's predicate is not shared (WAVES-2, "Shared infrastructure is
+        // frozen"; this row's skeptic, amendment 2: a call would couple this row to Marath's or
+        // Anikthea's and break with a revert of either)
+        // the five coloured shards, in MagicColor.WUBRG order
+        private static final forge.card.mana.ManaCostShard[] PIPS = {
+                forge.card.mana.ManaCostShard.WHITE, forge.card.mana.ManaCostShard.BLUE,
+                forge.card.mana.ManaCostShard.BLACK, forge.card.mana.ManaCostShard.RED,
+                forge.card.mana.ManaCostShard.GREEN };
+        private static final int ANY_COLOUR = MagicColor.WHITE | MagicColor.BLUE | MagicColor.BLACK
+                | MagicColor.RED | MagicColor.GREEN;
+        // marks a one-colour bundle: every mana of the activation is the same colour
+        private static final int ONE_COLOUR = 1 << 8;
+
+        // A private colour check after G1 (shared helpers stay frozen). Marath's
+        // pipsOnSeparateMana shape (Hall's condition over the cost's coloured pips), with one
+        // change: an ability that adds "X mana of any ONE color" (Produced$ Any, not Combo; Sanctum
+        // Weaver) pays the pips of one colour per activation, never one of each.
+        static boolean coloursOnSeparateMana(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int[] need = new int[PIPS.length];
+            int pips = 0;
+            for (int i = 0; i < PIPS.length; i++) {
+                need[i] = cost.getUnpaidShards(PIPS[i]);
+                pips += need[i];
+            }
+            if (pips <= 1) {
+                return true;
+            }
+            // each source: its counted abilities, each the {mask, amount} units one activation makes
+            final List<List<List<int[]>>> sources = new ArrayList<>();
+            for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                final int k = ai.getManaPool().getAmountOfColor(MagicColor.WUBRG[i]);
+                if (k > 0) {
+                    final List<int[]> units = new ArrayList<>();
+                    units.add(new int[] { MagicColor.WUBRG[i], k });
+                    final List<List<int[]>> one = new ArrayList<>();
+                    one.add(units);
+                    sources.add(one);
+                }
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (heldSource(ai, src)) {
+                    continue;
+                }
+                final List<List<int[]>> abilities = new ArrayList<>();
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean reflectedOrSpecial = ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana();
+                    final List<int[]> units = new ArrayList<>();
+                    if (reflectedOrSpecial || produced.isEmpty()) {
+                        units.add(new int[] { ANY_COLOUR, amount }); // colours unknown here: the safe side
+                    } else if (mp.isComboMana()) {
+                        int mask = 0;
+                        for (final String t : mp.getComboColors(ma).split(" ")) {
+                            if (t.length() == 1) {
+                                mask |= MagicColor.fromName(t.charAt(0)) & ANY_COLOUR;
+                            }
+                        }
+                        if (mask != 0) {
+                            units.add(new int[] { mask, amount }); // each mana its own choice
+                        }
+                    } else if (mp.isAnyMana()) {
+                        units.add(new int[] { ANY_COLOUR | ONE_COLOUR, amount });
+                    } else {
+                        final String letters = produced.contains("Chosen") ? produced.replace("Chosen", mp.getChosenColor(ma)) : produced;
+                        for (final String t : letters.split(" ")) {
+                            final int c = t.length() == 1 ? MagicColor.fromName(t.charAt(0)) & ANY_COLOUR : 0;
+                            if (c != 0) {
+                                units.add(new int[] { c, amount });
+                            }
+                        }
+                    }
+                    if (!units.isEmpty()) {
+                        abilities.add(units);
+                    }
+                }
+                if (!abilities.isEmpty()) {
+                    sources.add(abilities);
+                }
+            }
+            for (int s = 1; s < (1 << PIPS.length); s++) {
+                int needS = 0;
+                int maxS = 0;
+                int maskS = 0;
+                for (int i = 0; i < PIPS.length; i++) {
+                    if ((s & (1 << i)) != 0) {
+                        needS += need[i];
+                        maxS = Math.max(maxS, need[i]);
+                        maskS |= MagicColor.WUBRG[i];
+                    }
+                }
+                if (needS == 0) {
+                    continue;
+                }
+                int have = 0;
+                for (final List<List<int[]>> abilities : sources) {
+                    int best = 0; // one activation: the best of the source's abilities toward this set
+                    for (final List<int[]> units : abilities) {
+                        int got = 0;
+                        for (final int[] u : units) {
+                            if ((u[0] & maskS) != 0) {
+                                got += (u[0] & ONE_COLOUR) != 0 ? Math.min(u[1], maxS) : u[1];
+                            }
+                        }
+                        best = Math.max(best, got);
+                    }
+                    have += best;
+                }
+                if (have < needS) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // HonestMana.isHeld, copied (private there): the sources isManaSourceReserved refuses
+        private static boolean heldSource(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+    }
+
     // Recurring Insight
     // "Draw cards equal to the number of cards in target opponent's hand. Rebound."
     // Reached from PumpAi's AILogic$ RecurringInsight branches: checkApiLogic for the cast from
