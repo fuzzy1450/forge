@@ -12,6 +12,7 @@ import forge.game.card.*;
 import forge.game.combat.Combat;
 import forge.game.combat.CombatUtil;
 import forge.game.cost.Cost;
+import forge.game.cost.CostSacrifice;
 import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
@@ -163,6 +164,18 @@ public class EffectAi extends SpellAbilityAi {
             // consult, and the Fog branch and the tail below target the first opponent, not the
             // attacker. Every other Effect card takes exactly the path it took before this branch.
             return SpecialCardAi.TeferisReproach.consider(ai, sa);
+        }
+
+        if (SpecialCardAi.FlareOfFortitude.handles(sa)) {
+            // "Until end of turn, your life total can't change, and permanents you control gain
+            // hexproof and indestructible" ({2}{W}{W}, or sacrifice a nontoken white creature rather
+            // than pay its mana cost). The no-AILogic fallthrough below refused both variants at every
+            // priority. Routed after the randomReturn roll: the card has no RemoveDeck hint, so the
+            // stock engine evaluated it and drew here (once per variant) before refusing, and every
+            // refusal in the evaluator draws nothing. A name gate, not an AILogic$, so doTriggerNoCost's
+            // AILogic pre-call never runs for it and a Play-effect theft (Jeleva) still draws exactly
+            // one roll. Every other Effect card takes exactly the path it took before this branch.
+            return SpecialCardAi.FlareOfFortitude.consider(ai, sa);
         }
 
         if (sa.hasParam("AILogic")) {
@@ -1016,6 +1029,18 @@ public class EffectAi extends SpellAbilityAi {
         }
 
         return false;
+    }
+
+    @Override
+    protected boolean willPayCosts(final Player payer, final SpellAbility sa, final Cost cost, final Card source) {
+        if (SpecialCardAi.FlareOfFortitude.handles(sa) && cost.hasSpecificCostType(CostSacrifice.class)) {
+            // Flare of Fortitude's sacrifice variant pays with the creature FlareOfFortitude.consider
+            // priced. The stock SacCost preference cannot see a destroy threat with this Effect spell as
+            // the saviour (predictThreatenedObjects skips its Destroy branch for an Effect saviour), so a
+            // wrath response while tapped out would be refused.
+            return SpecialCardAi.FlareOfFortitude.chooseSacrifice(payer, sa) != null;
+        }
+        return super.willPayCosts(payer, sa, cost, source);
     }
 
     @Override

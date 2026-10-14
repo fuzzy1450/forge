@@ -12689,6 +12689,330 @@ public class SpecialCardAi {
         }
     }
 
+    // Flare of Fortitude (dead-card batch 3, row 22; Bird Brains, Rabbits, Rabbits, Rabbits)
+    // "You may sacrifice a nontoken white creature rather than pay this spell's mana cost. Until end
+    // of turn, your life total can't change, and permanents you control gain hexproof and
+    // indestructible." ({2}{W}{W} Instant.) Its root SP$ Effect (STCantChange; its sub DB$ PumpAll
+    // grants Hexproof & Indestructible to Permanent.YouCtrl) carries no AILogic$, so
+    // EffectAi.checkApiLogic refused both variants, the mana spell and then the sacrifice copy, at the
+    // no-AILogic fallthrough at every consult: 0 owner casts in 541 held games. Routed by name from
+    // EffectAi.checkApiLogic, after its randomReturn roll. What the text does not stop, each a
+    // constraint on the value line: commander damage and poison still count
+    // (Player.addDamageAfterPrevention), hexproof stops only targeted effects, indestructible stops
+    // neither -X/-X, -1/-1 counters, exile, bounce nor sacrifice, and the grant covers only the
+    // permanents on the battlefield at resolution. In order, every decline before any approval:
+    // - window, O(1), where nearly every consult ends: an opponent's object on top of the stack
+    //   (RESPONSE), else blocks declared with an empty stack on either player's turn and combat
+    //   damage not already prevented this turn (COMBAT); else AnotherTime;
+    // - RESPONSE: ComputerUtil.predictThreatenedObjects on the top object alone, with the PumpAll
+    //   GRANT as the saviour (with the Effect root as saviour its Destroy branch is skipped):
+    //   lethal damage, destroy, and targeted exile, steal, curse auras and -X/-X are kept;
+    //   untargeted exile and -X/-X are dropped. Our cards count only ON THE BATTLEFIELD (skeptic F2:
+    //   the exile branch keeps a targeted graveyard card, Scavenging Ooze's), never a planeswalker or
+    //   a battle (loyalty or defense lost to damage is an SBA, not a destroy), and none at all when
+    //   the threat is untargeted and its source deals wither or infect damage (skeptic F5: those
+    //   -1/-1 counters kill through indestructible). Lethal non-infect damage to us while our life
+    //   can still change is the GAME;
+    // - COMBAT: the declared attack after blocks, read with IllusionistsGambit's replica
+    //   (withoutAbilities; a private copy, skeptic F1). A commander whose damage reaches us and 21,
+    //   or poison reaching the loss count, kills us whatever this does: DoesntImpactCombat for the
+    //   whole window (skeptic F4). Lethal life damage alone is the GAME. Else the combatants of ours
+    //   that die now and live indestructible: blocked attackers and blockers, never an attacker a
+    //   wither or infect creature blocks (skeptic F5);
+    // - nothing saved and no GAME: CantPlayAi;
+    // - the cost: the sacrifice variant pays with chooseSacrifice's pick (none: CostNotAcceptable);
+    //   then, for both variants unless cast by a Play effect or copied, the engine's test-mode
+    //   calculateManaCost (taxes and reductions; 0 for the sacrifice copy unless taxed) against G2's
+    //   count with held sources skipped, in total and in white shards (skeptic F3), else CantAfford;
+    // - the GAME: WillPlay, whatever the cost;
+    // - the floor, else CantPlayAi. The mana spell: one premium save (our commander, or a creature at
+    //   CreatureEvaluator PREMIUM_VALUE or more, Tower Defense's floor) or MIN_SAVED_VALUE of our
+    //   permanents (creatures at CreatureEvaluator, nontoken noncreatures at NONCREATURE_VALUE, lands
+    //   at LAND_VALUE, other tokens 0). The sacrifice variant: what is saved, the pick left out, must
+    //   clear MIN_SAVED_VALUE plus the pick's own value, which is 0 when the threat kills the pick
+    //   anyway (skeptic F6); a single premium save never justifies a sacrifice.
+    // The pick (chooseSacrifice, shared by consider, EffectAi.willPayCosts and
+    // ComputerUtil.chooseSacrificeType's payment, so all three land on the same creature): the
+    // lowest CreatureEvaluator among our nontoken white creatures the cost accepts, never a
+    // commander, an attacker or a blocker, ties to the lowest id.
+    // RNG parity: the stock path drew the randomReturn roll and refused; this gate sits after that
+    // roll, and every decline here draws nothing: the window reads, predictThreatenedObjects,
+    // damageIfUnblocked(..., true) (it returns before the pump scan's canPayCost), the private
+    // poison and shield counts, CreatureEvaluator, getValidCards, canBeSacrificedBy, calculateManaCost
+    // (test) and HonestMana. No lifeInDanger, lifeThatWouldRemain, resultingPoison or
+    // getLifeThreateningCommanders: they test-pay the attackers' activated pumps, whose payment rolls
+    // isManaSourceReserved (skeptic F1). Residuals (skeptic F7, as Tower Defense documents them): the
+    // combat predictors reach ComputerUtil.canRegenerate, which test-pays a Regenerate ability, ours
+    // or theirs, covering any combatant this window evaluates; and a Count$Random NumDmg or NumDef on
+    // an opposing stack object draws inside predictThreatenedObjects. Nothing is targeted, held,
+    // remembered or reserved on a decline. Not covered, each a missed save: lethal LoseLife drains,
+    // damage-to-each-player wipes, targeted bounce. Known over-count: predictThreatenedObjects
+    // charges divided damage in full to every target, so a split can read as a premium save.
+    public static class FlareOfFortitude {
+        public static final String NAME = "Flare of Fortitude";
+        static final int PREMIUM_VALUE = 200;     // Tower Defense / Cosmic Intervention single-creature floor
+        static final int MIN_SAVED_VALUE = 320;   // two nontoken vanilla 2/2s (Brave the Elements' 160 each)
+        static final int NONCREATURE_VALUE = 160; // a nontoken artifact or enchantment, priced as a 2/2
+        static final int LAND_VALUE = 100;        // a wiped mana base counts; one land never clears the floor
+
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && !(sa instanceof AbilitySub) && sa.getApi() == ApiType.Effect
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean stackEmpty = game.getStack().isEmpty();
+            final SpellAbility top = stackEmpty ? null : game.getStack().peekAbility();
+            // 1. the window, O(1): nearly every consult ends here
+            final boolean response = top != null && top.getActivatingPlayer() != null
+                    && top.getActivatingPlayer().isOpponentOf(ai);
+            final boolean afterBlocks = stackEmpty && combat != null && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    && !game.getReplacementHandler().isPreventCombatDamageThisTurn();
+            if (!response && !afterBlocks) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // judged on this sa's own chain, never host.getFirstSpellAbility() (row 77): the grant is the saviour
+            final SpellAbility grant = sa.findSubAbilityByType(ApiType.PumpAll);
+            if (grant == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 2. what the window saves (board reads only)
+            final Set<Card> saved = new LinkedHashSet<>();
+            final boolean lethalSaved;
+            if (response) {
+                lethalSaved = savedFromStack(ai, grant, top, saved);
+            } else {
+                final Boolean lethal = lethalCombat(ai, combat);
+                if (lethal == null) {
+                    // skeptic F4: commander damage or poison kills us anyway, so nothing here is worth the card
+                    return new AiAbilityDecision(0, AiPlayDecision.DoesntImpactCombat);
+                }
+                lethalSaved = lethal;
+                if (!lethalSaved) {
+                    combatSaves(ai, combat, saved);
+                }
+            }
+            if (!lethalSaved && saved.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 3. the cost
+            final boolean sacMode = sa.getPayCosts() != null && sa.getPayCosts().hasSpecificCostType(CostSacrifice.class);
+            Card pick = null;
+            if (sacMode) {
+                pick = chooseSacrifice(ai, sa);
+                if (pick == null) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
+                }
+            }
+            if (!sa.isCastFromPlayEffect() && !sa.isCopied() && !affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (lethalSaved) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // the game, whatever the cost
+            }
+            // 4. the floor
+            final boolean pickDoomed = pick != null && saved.contains(pick); // skeptic F6: it dies anyway
+            if (pick != null) {
+                saved.remove(pick); // the creature we pay with is not saved
+            }
+            int value = 0;
+            boolean premium = false;
+            for (final Card c : saved) {
+                value += value(c);
+                premium |= isPremium(ai, c);
+            }
+            final boolean pass = sacMode
+                    ? value >= MIN_SAVED_VALUE + (pickDoomed ? 0 : ComputerUtilCard.evaluateCreature(pick))
+                    : premium || value >= MIN_SAVED_VALUE;
+            return pass ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                        : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // RESPONSE: the top object alone, with the PumpAll GRANT as saviour (grantIndestructible and
+        // grantShroud both set). Returns true for lethal non-infect damage to us while our life can still
+        // change.
+        private static boolean savedFromStack(final Player ai, final SpellAbility grant, final SpellAbility top,
+                final Set<Card> saved) {
+            final SpellAbility threat = top.isWrapper() ? ((WrappedAbility) top).getWrappedAbility() : top;
+            final Card src = threat.getHostCard();
+            // skeptic F5: an untargeted wither or infect source's -1/-1 counters kill through indestructible
+            final boolean witherWipe = src != null && src.isWitherDamage() && !threat.usesTargeting();
+            boolean lethal = false;
+            for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, grant, true)) {
+                if (o instanceof Card c) {
+                    // skeptic F2: the grant covers only our permanents on the battlefield (the exile branch
+                    // keeps a targeted graveyard card); loyalty or defense lost to damage is an SBA
+                    if (!witherWipe && c.isInZone(ZoneType.Battlefield) && ai.equals(c.getController())
+                            && !c.isPlaneswalker() && !c.isBattle()) {
+                        saved.add(c);
+                    }
+                } else if (ai.equals(o) && ai.canLoseLife() && !ai.cantLose() && !ai.cantLoseForZeroOrLessLife()
+                        && (src == null || !src.hasKeyword(Keyword.INFECT))) {
+                    lethal = true;
+                }
+            }
+            return lethal;
+        }
+
+        // COMBAT, our life (skeptic F1: IllusionistsGambit's replica, a private copy; never
+        // lifeThatWouldRemain, resultingPoison or getLifeThreateningCommanders, which test-pay the
+        // attackers' pumps). NULL: a commander whose damage reaches us reaches 21, or poison reaches the
+        // loss count, which this cannot stop; TRUE: lethal life damage only; FALSE: not lethal, or not
+        // attacked. Once our life can't change (a resolved Flare) it is never TRUE again.
+        private static Boolean lethalCombat(final Player ai, final Combat combat) {
+            final CardCollection atUs = combat.getAttackersOf(ai);
+            if (atUs.isEmpty() || ai.cantLose()) {
+                return Boolean.FALSE;
+            }
+            final boolean lifeCounts = ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife();
+            final boolean poisonable = ai.canReceiveCounters(CounterEnumType.POISON);
+            int life = 0;
+            int poison = ai.getPoisonCounters();
+            for (final Card c : atUs) {
+                final CardCollection blockers = combat.getBlockers(c);
+                int dealt = 0;
+                if (blockers.isEmpty() || forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked
+                        .assignCombatDamageAsUnblocked(c)) {
+                    dealt = ComputerUtilCombat.damageIfUnblocked(c, ai, combat, true);
+                    life += dealt;
+                    if (poisonable) {
+                        poison += poisonIfUnblocked(c, ai);
+                    }
+                } else if (c.hasKeyword(Keyword.TRAMPLE)) {
+                    dealt = Math.max(0, ComputerUtilCombat.getAttack(c) - shield(blockers));
+                    if (dealt > 0) {
+                        if (!c.hasKeyword(Keyword.INFECT)) {
+                            life += dealt;
+                        }
+                        if (poisonable) {
+                            poison += (c.isInfectDamage(ai) ? dealt : 0)
+                                    + ComputerUtilCombat.predictExtraPoisonWithDamage(c, ai, dealt);
+                        }
+                    }
+                }
+                if (c.isCommander() && dealt > 0 && dealt + ai.getCommanderDamage(c) >= 21) {
+                    return null;
+                }
+            }
+            if (poison >= ai.getGame().getRules().getPoisonCountersToLose()) {
+                return null;
+            }
+            return lifeCounts && ai.getLife() - life < 1;
+        }
+
+        // COMBAT, our combatants (either player's turn): blocked attackers and blockers of ours that die
+        // now; indestructible keeps them. No pumped copies: an indestructible grant needs none.
+        private static void combatSaves(final Player ai, final Combat combat, final Set<Card> saved) {
+            for (final Card c : ai.getCreaturesInPlay()) {
+                final boolean attacking = combat.isAttacking(c);
+                if ((!attacking && !combat.isBlocking(c)) || (attacking && !combat.isBlocked(c))
+                        || c.hasKeyword(Keyword.INDESTRUCTIBLE)) {
+                    continue; // cheap tests first: the predictor below is the one with a residual
+                }
+                if (attacking && combat.getBlockers(c).anyMatch(Card::isWitherDamage)) {
+                    // skeptic F5: attackerWouldBeDestroyed's damage fallback counts a wither or infect
+                    // blocker, whose -1/-1 counters kill through indestructible
+                    continue;
+                }
+                if (ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)) {
+                    saved.add(c);
+                }
+            }
+        }
+
+        // Shared by consider, EffectAi.willPayCosts and ComputerUtil.chooseSacrificeType: the lowest
+        // CreatureEvaluator among our nontoken white creatures the cost accepts, never a commander, never
+        // an attacker or a blocker (no trample or band-through: isDangerousToSacInCombat's cases and
+        // more); ties to the lowest id. RNG-free, so the three callers land on the same creature.
+        public static Card chooseSacrifice(final Player ai, final SpellAbility sa) {
+            final CostSacrifice part = sa.getPayCosts() == null ? null : sa.getPayCosts().getCostPartByType(CostSacrifice.class);
+            if (part == null) {
+                return null;
+            }
+            final CardCollection options = CardLists.filter(
+                    CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), part.getType().split(";"), ai, sa.getHostCard(), sa),
+                    CardPredicates.canBeSacrificedBy(sa, false));
+            return chooseSacrifice(ai, sa, options);
+        }
+
+        public static Card chooseSacrifice(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            final Combat combat = ai.getGame().getCombat();
+            Card best = null;
+            int bestValue = Integer.MAX_VALUE;
+            for (final Card c : options) {
+                if (!c.isCreature() || !ai.equals(c.getController()) || c.isCommander()
+                        || (combat != null && (combat.isAttacking(c) || combat.isBlocking(c)))) {
+                    continue;
+                }
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                if (best == null || v < bestValue || (v == bestValue && c.getId() < best.getId())) {
+                    best = c;
+                    bestValue = v;
+                }
+            }
+            return best;
+        }
+
+        private static int value(final Card c) {
+            if (c.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(c);
+            }
+            if (c.isToken()) {
+                return 0; // Treasure, Clue, Food
+            }
+            return c.isLand() ? LAND_VALUE : NONCREATURE_VALUE;
+        }
+
+        private static boolean isPremium(final Player ai, final Card c) {
+            return (c.isCommander() && ai.equals(c.getOwner()))
+                    || (c.isCreature() && ComputerUtilCard.evaluateCreature(c) >= PREMIUM_VALUE);
+        }
+
+        // skeptic F3 (Tower Defense's form): G2 with held sources skipped against the engine's test-mode
+        // cost (taxes and reductions applied; RNG-free for this cost), in total and in white shards;
+        // judged on sa, never host.getFirstSpellAbility() (row 77). Never getAvailableManaEstimate.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
+        }
+
+        // ComputerUtilCombat.poisonIfUnblocked with the attacker's activated pumps left out
+        // (IllusionistsGambit's, copied: accepted helpers stay private).
+        private static int poisonIfUnblocked(final Card attacker, final Player ai) {
+            final int damage = attacker.getNetCombatDamage()
+                    + ComputerUtilCombat.predictPowerBonusOfAttacker(attacker, null, null, true);
+            int poison = 0;
+            if (attacker.isInfectDamage(ai)) {
+                final int pd = ComputerUtilCombat.predictDamageTo(ai, damage, attacker, true);
+                if (pd > 1 || !attacker.getController().getOpponents().getCardsIn(ZoneType.Battlefield)
+                        .anyMatch(CardPredicates.nameEquals("Vorinclex, Monstrous Raider"))) {
+                    poison = attacker.hasDoubleStrike() ? pd * 2 : pd;
+                }
+            }
+            if (damage > 0) {
+                poison += ComputerUtilCombat.predictExtraPoisonWithDamage(attacker, ai, damage);
+            }
+            return poison;
+        }
+
+        // ComputerUtilCombat.totalShieldDamage without its destroy-before-damage predictor (which can
+        // test-pay a blocker's pump or regeneration) and without flanking (IllusionistsGambit's,
+        // copied). Both overstate the shield, so the trample damage counted as reaching us is
+        // understated: a missed cast, never a bad one.
+        private static int shield(final List<Card> blockers) {
+            int total = 0;
+            for (final Card b : blockers) {
+                total += b.getLethalDamage() + b.getKeywordMagnitude(Keyword.BUSHIDO);
+            }
+            return total;
+        }
+    }
+
     // Follow the Bodies (dead-card batch 2, row 110)
     // "Gravestorm (When you cast this spell, copy it for each permanent put into a graveyard from
     // the battlefield this turn.) Investigate." ({2}{U} Sorcery.) InvestigateAi.canPlay approves

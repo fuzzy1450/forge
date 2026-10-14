@@ -613,6 +613,16 @@ public class ComputerUtil {
             // rather than return null, which would strand the spell (handlePlayingSpellAbility)
         }
 
+        if (amount == 1 && !effect && SpecialCardAi.FlareOfFortitude.handles(ability)) {
+            // Flare of Fortitude's sacrifice variant: pay with the creature FlareOfFortitude.consider
+            // priced and EffectAi.willPayCosts approved, not the SacMe shuffle or getWorstAI
+            final Card pick = SpecialCardAi.FlareOfFortitude.chooseSacrifice(ai, ability, typeList);
+            if (pick != null) {
+                return new CardCollection(pick);
+            }
+            // the board changed between decision and payment: fall through to the stock chooser
+        }
+
         if (amount == 1 && effect && SpecialCardAi.ReadTheRunes.handles(ability)) {
             // Read the Runes' "discard a card unless you sacrifice a permanent" (an unless cost, so
             // effect is true): only the worst token or SacMe permanent that is not a land, a
