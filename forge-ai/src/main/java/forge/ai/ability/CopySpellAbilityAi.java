@@ -194,6 +194,12 @@ public class CopySpellAbilityAi extends SpellAbilityAi {
         if ("ChainOfAcid".equals(sa.getParam("AILogic"))) {
             return SpecialCardAi.ChainOfAcid.consider(player, sa).willingToPlay();
         }
+        // Incarnation Technique's Demonstrate copy (dead-card batch 3, row 31): copying makes an
+        // opponent copy it too, and that copy reanimates the best creature card in THEIR
+        // graveyard, so the copy is taken only when it is not a gift. RNG-free.
+        if (SpecialCardAi.IncarnationTechnique.isDemonstrateCopy(sa)) {
+            return SpecialCardAi.IncarnationTechnique.copyWorthIt(player, sa);
+        }
 
         return true;
     }

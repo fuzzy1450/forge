@@ -16527,6 +16527,145 @@ public class SpecialCardAi {
         }
     }
 
+    // Incarnation Technique (dead-card batch 3, row 31)
+    // "Demonstrate (When you cast this spell, you may copy it. If you do, choose an opponent to also
+    //  copy it.) Mill five cards, then return a creature card from your graveyard to the
+    //  battlefield." ({4}{B} sorcery, C21.) Its root is SP$ Mill | Defined$ You, and
+    // MillAi.checkPhaseRestrictions allows a self-mill only in an opponent's end step and only at
+    // instant speed, so its owner refused it on every consult (MissingPhaseRestrictions) and never
+    // cast it on any engine; every cast in the store is a theft through a Play effect, which takes
+    // MillAi.doTriggerNoCost. Routed by name from MillAi.canPlay for a sorcery-speed spell only, as
+    // Roots of Wisdom (batch 2, row 124); the pick floor is Path of the Schemer's (batch 1, row 97).
+    // Past the gate the stock path would approve with nothing to return
+    // (ChangeZoneAi.hiddenOriginPlayDrawbackAI approves unconditionally), so the milled cards are
+    // a bonus, never the reason: the creature card the resolution would take back NOW must be a
+    // real body. In order, every decline before any WillPlay:
+    // - the base class's restriction check, which the override bypasses (Roots' idiom), else
+    //   CantPlaySa;
+    // - window: our own turn, Main 2 (Main 1 only when castSpellInMain1 says so, the stock rule
+    //   MillAi applies to every other mill), else WaitForMain2. Main 1 creature casts go first, and
+    //   the returned body is summoning-sick either way;
+    // - a library of LIBRARY_FLOOR or more (MillAi.checkApiLogic's own self-mill floor, which the
+    //   routing bypasses), else CantPlayAi;
+    // - affordable, else CantAfford: this spell's own cost as the engine prices it (the test-mode
+    //   calculateManaCost: taxes and reductions; never host.getFirstSpellAbility(): row 77)
+    //   against G2 (HonestMana, held sources skipped) in total, and the printed {B} pips in black.
+    //   G2 is called, not changed;
+    // - the pick, else CantPlayAi: the creature card the resolution's Battlefield pick
+    //   (ChangeZoneAi.chooseCardToHiddenOriginChangeZone: legends the decider controls dropped,
+    //   then getBestAI, i.e. getBestCreatureAI) takes from our graveyard as it stands must exist,
+    //   must not be AI:RemoveDeck:All, must evaluate at MIN_PICK_VALUE or more, must not make us
+    //   lose on entering (PathOfTheSchemer.losesOnEntering, Phage) and must not die at once to a
+    //   static -X/-X (ComputerUtilCard.wouldDieToStaticPT, Elesh Norn). A decline, never the
+    //   runner-up: the resolution still takes the best.
+    // The Demonstrate copy (CopySpellAbilityAi.confirmAction, copyWorthIt): copying makes an
+    // opponent (ChoosePlayerAi's default: the first) copy it too, and that copy, resolving first,
+    // returns the best creature card in THEIR graveyard. Our copy and the original take our best
+    // two, so the copy's own gain is our runner-up: copy only with a library of COPY_LIBRARY_FLOOR
+    // or more (the copy mills five more of ours) and when no opponent's best graveyard creature
+    // evaluates above that runner-up. A declined copy skips the ChoosePlayer and the opponent's
+    // copy (both ConditionDefined$ Remembered). Not owner-gated: a thief judges the copy on its own
+    // graveyard against ours.
+    // RNG: the stock path stopped at checkPhaseRestrictions with no draw, and every check here
+    // reads state without drawing (the restriction check, the phase reads, castSpellInMain1, the
+    // library size, calculateManaCost in test mode, HonestMana, the graveyard filter,
+    // getBestCreatureAI, evaluateCreature, isCardRemAIDeck, losesOnEntering, wouldDieToStaticPT);
+    // nothing is targeted, held or remembered. New draws come only after a WillPlay: the
+    // drawback's defender pick (pods only), canPayCost's reservation roll and the resolution's
+    // shuffle. copyWorthIt draws nothing.
+    public static class IncarnationTechnique {
+        public static final String NAME = "Incarnation Technique";
+        static final int LIBRARY_FLOOR = 10;       // MillAi.checkApiLogic's self-mill floor
+        static final int COPY_LIBRARY_FLOOR = 15;  // the Demonstrate copy mills five more of ours
+        static final int MIN_PICK_VALUE = 200;     // PathOfTheSchemer's "real body" line, row-local
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // Routing from MillAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.isPlayerTurn(ai)
+                    || (ph.getPhase().isBefore(PhaseType.MAIN2) && !ComputerUtil.castSpellInMain1(ai, sa))) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            if (ai.getCardsIn(ZoneType.Library).size() < LIBRARY_FLOOR) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (sa.getPayCosts() == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // judged on this spell's own cost as the engine prices it (never
+            // host.getFirstSpellAbility(): row 77); G2, never the bare estimate
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int blackPips = sa.getPayCosts().getTotalMana().getShardCount(forge.card.mana.ManaCostShard.BLACK);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost() || mana.colour(MagicColor.BLACK) < blackPips) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final SpellAbility back = sa.findSubAbilityByType(ApiType.ChangeZone);
+            if (back == null || !back.hasParam("ChangeType")) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card pick = bestPick(ai, CardLists.getValidCards(ai.getCardsIn(ZoneType.Graveyard),
+                    back.getParam("ChangeType"), ai, host, back));
+            if (pick == null || ComputerUtilCard.isCardRemAIDeck(pick)
+                    || ComputerUtilCard.evaluateCreature(pick) < MIN_PICK_VALUE
+                    || PathOfTheSchemer.losesOnEntering(pick)
+                    || ComputerUtilCard.wouldDieToStaticPT(pick)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The resolution's own Battlefield pick from a graveyard as it stands
+        // (ChangeZoneAi.chooseCardToHiddenOriginChangeZone: legends the decider controls dropped,
+        // then getBestAI = getBestCreatureAI). The milled cards can only add options.
+        static Card bestPick(final Player decider, final CardCollectionView valid) {
+            final CardCollection pool = CardLists.filter(valid, c -> c.isCreature()
+                    && (!c.getType().isLegendary() || !decider.isCardInPlay(c.getName())));
+            return pool.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(pool);
+        }
+
+        // The value of the runner-up under the same filter, 0 with fewer than two.
+        static int secondBestValue(final Player decider, final CardCollectionView valid) {
+            final CardCollection pool = CardLists.filter(valid, c -> c.isCreature()
+                    && (!c.getType().isLegendary() || !decider.isCardInPlay(c.getName())));
+            if (pool.size() < 2) {
+                return 0;
+            }
+            pool.remove(ComputerUtilCard.getBestCreatureAI(pool));
+            return ComputerUtilCard.evaluateCreature(ComputerUtilCard.getBestCreatureAI(pool));
+        }
+
+        // Demonstrate's own optional copy (CardFactoryUtil's Demonstrate trigger): Optional,
+        // Defined$ TriggeredSpellAbility and no Controller. The opponent's copy has
+        // Controller$ ChosenPlayer and is not optional.
+        public static boolean isDemonstrateCopy(final SpellAbility sa) {
+            return sa.getApi() == ApiType.CopySpellAbility && sa.hasParam("Optional") && !sa.hasParam("Controller")
+                    && "TriggeredSpellAbility".equals(sa.getParam("Defined"))
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        // Copy only when the copy is not a gift. A player's graveyard holds only cards it owns, so
+        // "Creature.YouOwn" is the creature cards in that graveyard. Read at resolution only.
+        public static boolean copyWorthIt(final Player ai, final SpellAbility sa) {
+            if (ai.getCardsIn(ZoneType.Library).size() < COPY_LIBRARY_FLOOR) {
+                return false;
+            }
+            final int ours = secondBestValue(ai, CardLists.filter(ai.getCardsIn(ZoneType.Graveyard), CardPredicates.CREATURES));
+            for (final Player o : ai.getOpponents()) {
+                final Card theirs = bestPick(o, CardLists.filter(o.getCardsIn(ZoneType.Graveyard), CardPredicates.CREATURES));
+                if (theirs != null && ComputerUtilCard.evaluateCreature(theirs) > ours) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
     // Indulge // Excess (the Indulge half)
     // "Whenever a creature you control attacks this turn, create a 1/1 green and white Citizen
     // creature token that's tapped and attacking." ({2}{R} sorcery. The Excess half is Aftermath,

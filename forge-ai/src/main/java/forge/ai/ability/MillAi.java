@@ -44,6 +44,16 @@ public class MillAi extends SpellAbilityAi {
             // exactly the path it took before this branch.
             return SpecialCardAi.RootsOfWisdom.consider(ai, sa);
         }
+        if (sa.isSpell() && SpecialCardAi.IncarnationTechnique.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && isSorcerySpeed(sa, ai)) {
+            // Incarnation Technique (dead-card batch 3, row 31) meets the same gate as Roots: a
+            // sorcery whose root mills Defined$ You, which checkPhaseRestrictions refuses on every
+            // evaluation. It is judged in its own Main 2 by IncarnationTechnique.consider instead.
+            // A copy granted flash keeps the stock end-step window, a Play-effect cast goes through
+            // doTriggerNoCost and never reaches canPlay, and a face-down cast reads "" and keeps
+            // the stock refusal.
+            return SpecialCardAi.IncarnationTechnique.consider(ai, sa);
+        }
         return super.canPlay(ai, sa);
     }
     
