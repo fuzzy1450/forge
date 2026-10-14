@@ -47,6 +47,15 @@ public class ChooseCardAi extends SpellAbilityAi {
             // takes exactly the path it took before.
             return SpecialCardAi.SlaughterTheStrong.consider(ai, sa);
         }
+        if (SpecialCardAi.DivineReckoning.isReckoning(sa)) {
+            // Judges the whole spell: the generic answer below is WillPlay on any
+            // board, and the DestroyAll sub (AILogic$ Always) no longer re-judges it
+            // as a full wrath on the empty pre-resolution chosen list.
+            // AI:RemoveDeck:All kept the card out of every hand and flashback
+            // evaluation until now. Every other ChooseCard card takes exactly the
+            // path it took before.
+            return SpecialCardAi.DivineReckoning.consider(ai, sa);
+        }
         if (sa.usesTargeting()) {
             if ("Last Night Together".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
                 // Its targets are creatures: the opponent-only search below can

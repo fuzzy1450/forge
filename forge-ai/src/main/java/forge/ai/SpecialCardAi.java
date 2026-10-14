@@ -8070,6 +8070,172 @@ public class SpecialCardAi {
         }
     }
 
+    // Divine Reckoning (dead-card batch 3, row 18)
+    // {2}{W}{W} Sorcery, "Each player chooses a creature they control. Destroy the rest."
+    // Flashback {5}{W}{W}. AI:RemoveDeck:All hid both spell abilities (the hand cast and the
+    // flashback) from AiController's playable list, and behind the hint nothing judged the
+    // spell: ChooseCardAi.checkApiLogic answers WillPlay on any board, and the DestroyAll sub,
+    // judged by DestroyAllAi.doMassRemovalLogic before the parent resolves, read
+    // Creature.!ChosenCard on an empty chosen list as a full wrath of both boards (WaitForMain2
+    // before Main 2; the block simulation and its MyRandom draws in Main 2). The script drops the
+    // hint and gives the sub AILogic$ Always, so the whole spell is judged here, on the root sa
+    // the caller passes (never host.getFirstSpellAbility(): row 77).
+    // Mirror the resolution: every sim seat is an AI, and ChooseCardAi.chooseSingleCard with no
+    // AILogic keeps getBestAI = getBestCreatureAI of the chooser's own creatures, so each player
+    // keeps exactly that creature and every other destroyable one dies. Cast only when the
+    // opponents lose clearly more creature value than we do (Wave of Reckoning's flat margin), one
+    // kill is worth a card, and no death payoff sits on their side (Wave of Reckoning's private
+    // scan, called unchanged, as Slaughter the Strong does). Payable window: G1
+    // (CommanderCastCeiling.affordable, called unchanged under G4's widened contract) for every
+    // cast we pay for, the flashback's {5}{W}{W} and a thief's cast permission included; a
+    // Play-effect cast is paid, or not, by PlayEffect itself. No Main-2 wait (Slaughter the
+    // Strong's A1): in Main 1 our creature spells are still held for Main 2, so they resolve after
+    // the wipe and survive it. RNG-free on every decline; nothing is held or remembered.
+    // isReckoning also reads the host's and the card state's name (Slaughter's idiom): a card
+    // cast face down from exile reads "" from getAbilitySourceName.
+    public static class DivineReckoning {
+        public static final String NAME = "Divine Reckoning";
+        public static final int MARGIN = WaveOfReckoning.MARGIN; // 200
+
+        public static boolean isReckoning(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final AbilitySub sweep = sa.getSubAbility();
+            // 1. Shape bound: a reshaped or renamed script never approves blind.
+            if (sa.getApi() != ApiType.ChooseCard || !"Player".equals(sa.getParam("Defined"))
+                    || !"Chooser".equals(sa.getParam("ControlledByPlayer"))
+                    || !"Creature".equals(sa.getParam("Choices"))
+                    || !"1".equals(sa.getParamOrDefault("Amount", "1"))
+                    || sweep == null || sweep.getApi() != ApiType.DestroyAll
+                    || !"Creature.!ChosenCard".equals(sweep.getParam("ValidCards"))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 2. A copy over a Reckoning already on the stack keeps the same creatures: worthless
+            // (CopySpellAbilityAi now reaches the card, and an Elsha flash cast could answer one).
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                final SpellAbility other = si.getSpellAbility();
+                if (other != sa && other.getHostCard() != null && NAME.equals(other.getHostCard().getName())) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // 3. Cheap bound before any scan: each player keeps one, so some opponent needs 2+.
+            boolean oppHasSpare = false;
+            for (final Player o : ai.getOpponents()) {
+                if (o.getCreaturesInPlay().size() >= 2) {
+                    oppHasSpare = true;
+                    break;
+                }
+            }
+            if (!oppHasSpare) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 4. Payable window for every cast we pay for (hand, flashback, a thief's static cast
+            // permission): canPayCost's test payment draws MyRandom
+            // (ComputerUtilMana.isManaSourceReserved), so only a window G1 calls payable may pass.
+            // G1 prices the engine's test-mode calculateManaCost (taxes, reductions, this sa's own
+            // {2}{W}{W} or {5}{W}{W}) against HonestMana (G2, held sources skipped), in total and in
+            // white. A Play-effect cast is paid, or not, by PlayEffect itself.
+            if (!sa.isCastFromPlayEffect() && !CommanderCastCeiling.affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // 5. The exact keep, then every other destroyable creature dies, all players
+            // (Defined$ Player). Indestructible creatures and shield counters survive a destroy.
+            final CardCollection dying = new CardCollection();
+            for (final Player p : game.getPlayers()) {
+                final CardCollection mine = p.getCreaturesInPlay();
+                final Card kept = mine.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(mine);
+                for (final Card c : mine) {
+                    if (c != kept && c.canBeDestroyed() && c.getCounters(CounterEnumType.SHIELD) == 0) {
+                        dying.add(c);
+                    }
+                }
+            }
+            // 6. Opponents' death payoffs veto: a death watcher (Blood Artist, Grave Pact) or a
+            // harmful own-death trigger (Wave of Reckoning's scan, reused). An opposing creature
+            // whose own death leaves value behind is not a kill.
+            final CardCollection noValueKills = new CardCollection();
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (!WaveOfReckoning.isDeathTrigger(t)) {
+                        continue;
+                    }
+                    for (final Card d : dying) {
+                        if (!t.matchesValidParam("ValidCard", d) || !t.matchesValidParam("ValidCards", d)) {
+                            continue;
+                        }
+                        if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                        }
+                        noValueKills.add(d);
+                    }
+                }
+            }
+            // 7. Losses at full value (owned counts too: a creature an opponent borrowed comes back
+            // to us; no credit for our own regeneration or undying: we pass priority on our own
+            // spell). Kills exclude own-death value, regeneration shields and abilities,
+            // undying/persist and SacMe.
+            final CardCollection aiLosses = new CardCollection();
+            final CardCollection oppKills = new CardCollection();
+            for (final Card d : dying) {
+                final Player controller = d.getController();
+                if (ai.equals(controller) || ai.equals(d.getOwner())) {
+                    aiLosses.add(d);
+                } else if (ai.isOpponentOf(controller) && !noValueKills.contains(d)
+                        && d.getShieldCount() == 0 && !mayRegenerate(d)
+                        && !ComputerUtilCard.hasActiveUndyingOrPersist(d) && !d.hasSVar("SacMe")) {
+                    oppKills.add(d);
+                }
+            }
+            // 8. Worth a card (the Meteor Blast filter) and the flat wrath margin.
+            boolean worthACard = false;
+            for (final Card k : oppKills) {
+                if ((!k.isToken() && k.getCMC() >= 2) || k.getNetPower() >= 3) {
+                    worthACard = true;
+                    break;
+                }
+            }
+            if (!worthACard || ComputerUtilCard.evaluateCreatureList(oppKills)
+                    <= ComputerUtilCard.evaluateCreatureList(aiLosses) + MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 9. No Main-2 wait (above).
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // ComputerUtil.canRegenerate's coverage test without its payment test, which writes
+        // setActivatingPlayer and draws MyRandom through ComputerUtilCost.canPayCost: any activated
+        // Regenerate ability on the controller's battlefield that covers the card (the same
+        // ValidTgts / Defined match), paid or not, plus canBeShielded. It only over-reads, so it
+        // only declines more.
+        private static boolean mayRegenerate(final Card card) {
+            if (!card.canBeShielded()) {
+                return false;
+            }
+            final Player controller = card.getController();
+            final Game game = controller.getGame();
+            for (final Card c : controller.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility s : c.getSpellAbilities()) {
+                    if (!s.isActivatedAbility() || s.getApi() != ApiType.Regenerate) {
+                        continue;
+                    }
+                    final forge.game.spellability.TargetRestrictions tgt = s.getTargetRestrictions();
+                    if (tgt != null ? CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield),
+                                tgt.getValidTgts(), controller, s.getHostCard(), s).contains(card)
+                            : AbilityUtils.getDefinedCards(s.getHostCard(), s.getParam("Defined"), s).contains(card)) {
+                        return true; // paid or not: only ever declines more
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Djinn Illuminatus (dead-card batch 2, row 81)
     // "Each instant and sorcery spell you cast has replicate. The replicate cost is equal to its
     // mana cost." ({5}{U/R}{U/R} 3/5 flyer.) The body is cast by the stock creature logic once
