@@ -23663,8 +23663,8 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 16, 17, 21 and 35, keepOff for batch 2's row 68. A case must draw no random number and
-    // hold nothing, so that its false is exactly the old filter.
+    // 5, 16, 17, 21, 35 and 49, keepOff for batch 2's row 68. A case must draw no random number
+    // and hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -23698,6 +23698,8 @@ public class SpecialCardAi {
                     return DawnglareInvoker.readmit(ai, sa);
                 case MarshFlitter.NAME:
                     return MarshFlitter.readmit(ai, sa);
+                case VishKalBloodArbiter.NAME:
+                    return VishKalBloodArbiter.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -31358,6 +31360,227 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+    }
+
+    // Vish Kal, Blood Arbiter (dead-card batch 3, row 49)
+    // "Flying, lifelink. Sacrifice a creature: Put X +1/+1 counters on Vish Kal, Blood Arbiter,
+    // where X is the sacrificed creature's power. Remove all +1/+1 counters from Vish Kal: Target
+    // creature gets -1/-1 until end of turn for each +1/+1 counter removed this way."
+    // ({4}{W}{B}{B} legendary creature, 5/5.) AI:RemoveDeck:All dropped the owner's creature spell
+    // in AiController.getSpellAbilityToPlay's removeIf before any handler ran, so its owner never
+    // cast it on any engine (0 owner casts in 503 carrier rows on 2.0.15+55e709fa6ba; its three
+    // casts there were thefts, Obscura Operation's Silent-Blade Oni and a Revival Trance game,
+    // which never read the hint). What the hint really guards is the two activated abilities: a
+    // sacrifice outlet CountersPutAi would feed our creatures to, and a negative pump whose X is
+    // SubCounter<All> for PumpAi. The script KEEPS the hint, so both stay off the list for every
+    // controller (a stolen copy included), and the -10 sort (ComputerUtilAbility.saEvaluator) and
+    // every other isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) still
+    // refuse it. The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through
+    // AiController's filter: the owner's own creature spell from hand, never a Play-effect cast, a
+    // copy or a face-down cast, and only in a window the stock path casts it in and real mana pays
+    // for, so every other pass is A's list:
+    // - our own main phase with an empty stack (Player.canCastSorcery, canCastTiming's window for
+    //   a sorcery-speed creature; PermanentCreatureAi's flash branches are never entered);
+    // - no copy of it in play unless the host ignores the legend rule (PermanentAi.checkApiLogic's
+    //   WouldDestroyLegend, read early so the spell never sits on the list for a stock refusal);
+    // - our Main 2, or our Main 1 when stock would cast a creature there
+    //   (ComputerUtil.castPermanentInMain1: the carrier's Aura Shards, whose BuffedBy is Creature,
+    //   or an unattached Lightning Greaves), so the readmit never puts the spell on a Main-1 list
+    //   that PermanentAi.checkPhaseRestrictions' Main-2 wait would refuse;
+    // - no live mana reservation (RemoveDeckFilter.noManaHeld, the morph family's precondition);
+    // - G1 (CommanderCastCeiling.affordable, under G4's caller contract): {4}{W}{B}{B} as the
+    //   engine prices it (test-mode calculateManaCost: taxes, every RaiseCost and ReduceCost
+    //   static) against HonestMana (G2, held sources skipped), in total and per coloured shard;
+    //   then Hall's condition over W and B on separate mana (coloursOnSeparateMana below, a
+    //   private verbatim copy of Anikthea's), because G1 lets one Command Tower, Rupture Spire,
+    //   Vivid land or Darksteel Ingot stand for both colours. So a readmitted spell never reaches
+    //   ComputerUtilCost.canPayCost, whose test payment draws MyRandom per source it tries, in a
+    //   window that cannot pay for it.
+    // Value floor: the body, a 5/5 flier with lifelink for seven. The cast has no ETB, upkeep
+    // cost, additional cost, X or drawback (the sacrifice and the counter removal belong to the
+    // abilities, which stay filtered), so there is no worthless or self-harming moment the stock
+    // checks behind the filter miss (Patron of the Nezumi's reasoning); they judge the rest
+    // (wouldDieToStaticPT, curses, damage on the cast, CantBeCast statics). Under-counts (the
+    // Signets' filter abilities, which G2 skips) only lose a window. Draws nothing, holds nothing
+    // and remembers nothing; its only writes are setActivatingPlayer on the mana abilities G2 and
+    // the Hall copy read (the hand SA's own activator is already set by
+    // Card.getAllPossibleAbilities). A thief's copy fails the owner, controller and hand checks,
+    // and a Play-effect cast (Silent-Blade Oni, Nathan Drake) never reaches this filter
+    // (canPlayFromEffectAI).
+    public static class VishKalBloodArbiter {
+        public static final String NAME = "Vish Kal, Blood Arbiter";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || sa.isCopied() || sa.isCastFaceDown()
+                    || !ai.equals(host.getOwner()) || !ai.equals(host.getController())
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false; // the abilities, a theft, a copy: the hint as it was
+            }
+            if (!ai.canCastSorcery()) {
+                return false; // canCastTiming's window for a sorcery-speed creature
+            }
+            if (!host.ignoreLegendRule() && ai.isCardInPlay(NAME)) {
+                return false; // PermanentAi's WouldDestroyLegend, answered before the list sees it
+            }
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.is(PhaseType.MAIN2, ai)
+                    && !(ph.is(PhaseType.MAIN1, ai) && ComputerUtil.castPermanentInMain1(ai, sa))) {
+                return false; // PermanentAi's Main-2 wait (Aura Shards or Lightning Greaves passes it)
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            // G1 ({4}{W}{B}{B} as the engine prices it vs HonestMana, held sources skipped),
+            // then Hall's condition over W and B on separate mana (G1 lets Command Tower,
+            // Rupture Spire, a Vivid or Darksteel Ingot stand for both colours)
+            return CommanderCastCeiling.affordable(ai, sa) && coloursOnSeparateMana(ai, sa);
+        }
+
+        // AniktheaHandOfErebos.coloursOnSeparateMana, its heldSource and their constants, copied
+        // verbatim: an accepted row's predicate is not shared (WAVES-2, "Shared infrastructure is
+        // frozen"), and the skeptic chose a private copy (WAVES-3.md, rule B3-4)
+        // the five coloured shards, in MagicColor.WUBRG order
+        private static final forge.card.mana.ManaCostShard[] PIPS = {
+                forge.card.mana.ManaCostShard.WHITE, forge.card.mana.ManaCostShard.BLUE,
+                forge.card.mana.ManaCostShard.BLACK, forge.card.mana.ManaCostShard.RED,
+                forge.card.mana.ManaCostShard.GREEN };
+        private static final int ANY_COLOUR = MagicColor.WHITE | MagicColor.BLUE | MagicColor.BLACK
+                | MagicColor.RED | MagicColor.GREEN;
+        // marks a one-colour bundle: every mana of the activation is the same colour
+        private static final int ONE_COLOUR = 1 << 8;
+
+        // A private colour check after G1 (shared helpers stay frozen). Marath's
+        // pipsOnSeparateMana shape (Hall's condition over the cost's coloured pips), with one
+        // change: an ability that adds "X mana of any ONE color" (Produced$ Any, not Combo; Sanctum
+        // Weaver) pays the pips of one colour per activation, never one of each.
+        static boolean coloursOnSeparateMana(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int[] need = new int[PIPS.length];
+            int pips = 0;
+            for (int i = 0; i < PIPS.length; i++) {
+                need[i] = cost.getUnpaidShards(PIPS[i]);
+                pips += need[i];
+            }
+            if (pips <= 1) {
+                return true;
+            }
+            // each source: its counted abilities, each the {mask, amount} units one activation makes
+            final List<List<List<int[]>>> sources = new ArrayList<>();
+            for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                final int k = ai.getManaPool().getAmountOfColor(MagicColor.WUBRG[i]);
+                if (k > 0) {
+                    final List<int[]> units = new ArrayList<>();
+                    units.add(new int[] { MagicColor.WUBRG[i], k });
+                    final List<List<int[]>> one = new ArrayList<>();
+                    one.add(units);
+                    sources.add(one);
+                }
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (heldSource(ai, src)) {
+                    continue;
+                }
+                final List<List<int[]>> abilities = new ArrayList<>();
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean reflectedOrSpecial = ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana();
+                    final List<int[]> units = new ArrayList<>();
+                    if (reflectedOrSpecial || produced.isEmpty()) {
+                        units.add(new int[] { ANY_COLOUR, amount }); // colours unknown here: the safe side
+                    } else if (mp.isComboMana()) {
+                        int mask = 0;
+                        for (final String t : mp.getComboColors(ma).split(" ")) {
+                            if (t.length() == 1) {
+                                mask |= MagicColor.fromName(t.charAt(0)) & ANY_COLOUR;
+                            }
+                        }
+                        if (mask != 0) {
+                            units.add(new int[] { mask, amount }); // each mana its own choice
+                        }
+                    } else if (mp.isAnyMana()) {
+                        units.add(new int[] { ANY_COLOUR | ONE_COLOUR, amount });
+                    } else {
+                        final String letters = produced.contains("Chosen") ? produced.replace("Chosen", mp.getChosenColor(ma)) : produced;
+                        for (final String t : letters.split(" ")) {
+                            final int c = t.length() == 1 ? MagicColor.fromName(t.charAt(0)) & ANY_COLOUR : 0;
+                            if (c != 0) {
+                                units.add(new int[] { c, amount });
+                            }
+                        }
+                    }
+                    if (!units.isEmpty()) {
+                        abilities.add(units);
+                    }
+                }
+                if (!abilities.isEmpty()) {
+                    sources.add(abilities);
+                }
+            }
+            for (int s = 1; s < (1 << PIPS.length); s++) {
+                int needS = 0;
+                int maxS = 0;
+                int maskS = 0;
+                for (int i = 0; i < PIPS.length; i++) {
+                    if ((s & (1 << i)) != 0) {
+                        needS += need[i];
+                        maxS = Math.max(maxS, need[i]);
+                        maskS |= MagicColor.WUBRG[i];
+                    }
+                }
+                if (needS == 0) {
+                    continue;
+                }
+                int have = 0;
+                for (final List<List<int[]>> abilities : sources) {
+                    int best = 0; // one activation: the best of the source's abilities toward this set
+                    for (final List<int[]> units : abilities) {
+                        int got = 0;
+                        for (final int[] u : units) {
+                            if ((u[0] & maskS) != 0) {
+                                got += (u[0] & ONE_COLOUR) != 0 ? Math.min(u[1], maxS) : u[1];
+                            }
+                        }
+                        best = Math.max(best, got);
+                    }
+                    have += best;
+                }
+                if (have < needS) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // HonestMana.isHeld, copied (private there): the sources isManaSourceReserved refuses
+        private static boolean heldSource(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
         }
     }
 
