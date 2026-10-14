@@ -242,8 +242,10 @@ public class CardQueriesTest extends AITest {
 
     // ---- trait hash codes ----
 
+    /** By class NAME, not Class object: a Class's hashCode is an identity hash that changes from one JVM launch to
+     *  the next, so hash sets of traits would iterate in a per-JVM order and one seed could play different games. */
     @Test
-    public void traitHashCodesAreObjectsHashOfTheirClassAndId() {
+    public void traitHashCodesAreObjectsHashOfTheirClassNameAndId() {
         Game game = initAndCreateGame();
         Player p = game.getPlayers().get(0);
         final Card bears = createCard("Grizzly Bears", p);
@@ -253,15 +255,15 @@ public class CardQueriesTest extends AITest {
         abilities.add(new SpellAbility.EmptySa(bears));
         abilities.addAll(createCard("Forest", p).getAllSpellAbilities());
         for (final SpellAbility sa : abilities) {
-            AssertJUnit.assertEquals(sa.toString(), Objects.hash(SpellAbility.class, sa.getId()), sa.hashCode());
+            AssertJUnit.assertEquals(sa.toString(), Objects.hash(SpellAbility.class.getName(), sa.getId()), sa.hashCode());
         }
         for (int i = 0; i < 3; i++) {
             final Trigger tr = TriggerHandler.parseTrigger(TRIGGER, bears, true);
-            AssertJUnit.assertEquals(Objects.hash(Trigger.class, tr.getId()), tr.hashCode());
+            AssertJUnit.assertEquals(Objects.hash(Trigger.class.getName(), tr.getId()), tr.hashCode());
             final StaticAbility st = StaticAbility.create(STATIC, bears, bears.getCurrentState(), true);
-            AssertJUnit.assertEquals(Objects.hash(StaticAbility.class, st.getId()), st.hashCode());
+            AssertJUnit.assertEquals(Objects.hash(StaticAbility.class.getName(), st.getId()), st.hashCode());
             final ReplacementEffect re = ReplacementHandler.parseReplacement(REPLACEMENT, bears, true);
-            AssertJUnit.assertEquals(Objects.hash(ReplacementEffect.class, re.getId()), re.hashCode());
+            AssertJUnit.assertEquals(Objects.hash(ReplacementEffect.class.getName(), re.getId()), re.hashCode());
         }
     }
 
