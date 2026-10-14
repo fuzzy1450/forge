@@ -3292,6 +3292,173 @@ public class SpecialCardAi {
         }
     }
 
+    // Cauldron of Souls (dead-card batch 3, row 58)
+    // {5} Artifact, "{T}: Choose any number of target creatures. Each of those creatures gains
+    // persist until end of turn." The script keeps AI:RemoveDeck:All, so the -10 sort and every other
+    // isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) stay as they were, and
+    // G3 (RemoveDeckFilter.readmit) lets exactly two abilities through AiController's filter, for the
+    // player who both owns and controls the card (a theft keeps A's path: the Play-effect cast never
+    // read the hint, and a thief's activation stays filtered):
+    // - the cast: the permanent spell from our own hand (not a Play-effect cast, not a copy), in our
+    //   own Main 2 at sorcery speed, with no mana held (noManaHeld), when HonestMana (G2, held sources
+    //   skipped) covers the cost as the engine prices it (test-mode calculateManaCost), and only while
+    //   at least MIN_KEEPERS creatures of ours that persist would really bring back are each worth
+    //   MIN_SAVE_VALUE. The -10 sorts it behind every other costed spell, so it spends the Main-2
+    //   mana nothing else claimed. The stock PermanentNoncreatureAi path then approves it (Main 2
+    //   only, so castPermanentInMain1 is never asked);
+    // - the {T} Pump of our own untapped Cauldron in play. PumpAi.checkApiLogic routes exactly that
+    //   ability here (handles: the readmit's own key on the host's paper name, rules B3-2 and B3-3),
+    //   because the stock path cannot value it: canPumpAgainstRemoval never counts a Persist pump as a
+    //   save, and on an empty stack shouldPumpCard scores the keyword at about 0 and draws MyRandom
+    //   per creature. consider() uses Time Lord Regeneration's two windows and helpers:
+    //   - in response to an opponent's stack top whose chain kills without exiling, bouncing,
+    //     stealing or replacing the death (killsWithoutReplacing), on what
+    //     predictThreatenedObjects(ai, null, true) flags;
+    //   - at declare blockers with an empty stack, on our combatants that combat destroys
+    //     (combatantWouldBeDestroyed) and nothing saves (combatantCantBeDestroyed).
+    //   Never against a source whose damage leaves -1/-1 counters (Card.isWitherDamage: wither,
+    //   infect or a granting static), since the creature then dies with a counter. Floor: the
+    //   creatures saved are worth MIN_SAVE_VALUE together, and it targets exactly them.
+    // returns() is the value line, checked against the printed text: a creature comes back only if it
+    // dies (graveyard, not exile, bounce or steal), with no -1/-1 counter, survives one, and returns
+    // under its owner's control. So never a token, a creature we do not own, one already returning by
+    // itself, one whose death a card-local replacement sends elsewhere, or our commander (the AI moves
+    // a dying commander to the command zone before the persist trigger resolves).
+    // Reads the board only: no random draws on any decline, nothing held, remembered or reserved. The
+    // one stock call that can test-pay is combatantWouldBeDestroyed -> canRegenerate, and only while a
+    // creature with a regeneration ability is in that combat (Taigam's and Time Lord's residual).
+    public static class CauldronOfSouls {
+        public static final String NAME = "Cauldron of Souls";
+        static final int MIN_SAVE_VALUE = 160; // a vanilla non-token 2/2 two-drop (Taigam's MIN_EVAL)
+        static final int MIN_KEEPERS = 2;
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner()) || !ai.equals(host.getController())) {
+                return false; // a theft keeps the filter, as in A
+            }
+            if (sa.isSpell()) {
+                return readmitCast(ai, sa, host);
+            }
+            // the {T} Pump: judged in PumpAi.checkApiLogic; cheap preconditions only
+            return sa.isActivatedAbility() && sa.getApi() == ApiType.Pump && isOwnReadyHost(ai, host);
+        }
+
+        private static boolean readmitCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (sa.getApi() != ApiType.PermanentNoncreature || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false;
+            }
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (HonestMana.of(ai, sa, true).total() < cost.getConvertedManaCost()) {
+                return false; // canPayCost would draw before failing (batch 1's row 159 shape)
+            }
+            int keepers = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (returns(ai, c) && ComputerUtilCard.evaluateCreature(c) >= MIN_SAVE_VALUE
+                        && ++keepers >= MIN_KEEPERS) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the paper card, as RemoveDeckFilter.paperName and isCardRemAIDeck read it (rule B3-3): a
+        // Mairsil, the Pretender cage grant or a Myr Welder imprint has an unhinted host, and an
+        // unhinted clone carries the rules of the card it is, so each keeps the stock path it ran in A
+        static boolean isHost(final Card c) {
+            return c != null && c.getRules() != null && NAME.equals(c.getRules().getName());
+        }
+
+        // the readmitted activation's key: our own Cauldron, in play and untapped, asked by the
+        // player who owns and controls it
+        private static boolean isOwnReadyHost(final Player ai, final Card c) {
+            return isHost(c) && c.isInPlay() && c.isUntapped()
+                    && ai.equals(c.getOwner()) && ai.equals(c.getController());
+        }
+
+        // PumpAi.checkApiLogic's gate: exactly the activations G3's readmit lets through (rule B3-2),
+        // so a canPlaySa caller that skips the RemoveDeck filter meets consider() only for that same
+        // host; a thief's Cauldron, a tapped one and a granted copy keep the stock path
+        public static boolean handles(final Player ai, final SpellAbility sa) {
+            return !(sa instanceof AbilitySub) && sa.isActivatedAbility() && isOwnReadyHost(ai, sa.getHostCard());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            final CardCollection save = new CardCollection();
+            if (!game.getStack().isEmpty()) {
+                final SpellAbility top = game.getStack().peekAbility();
+                if (top == null || top.getActivatingPlayer() == null
+                        || !top.getActivatingPlayer().isOpponentOf(ai)
+                        || !TimeLordRegeneration.killsWithoutReplacing(top)
+                        || dealsWither(top.getHostCard())) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, null, true)) {
+                    if (o instanceof Card c && returns(ai, c) && sa.canTarget(c)) {
+                        save.add(c);
+                    }
+                }
+            } else if (game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS) && game.getCombat() != null) {
+                final Combat combat = game.getCombat();
+                for (final Card c : ai.getCreaturesInPlay()) {
+                    // the cheap reads first; combatantWouldBeDestroyed returns at once for a creature
+                    // outside combat, so combatantCantBeDestroyed's regeneration scan only runs for
+                    // our combatants
+                    if (!returns(ai, c) || !sa.canTarget(c)
+                            || !ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                            || ComputerUtilCombat.combatantCantBeDestroyed(ai, c)) {
+                        continue;
+                    }
+                    final CardCollection foes = combat.isAttacking(c)
+                            ? combat.getBlockers(c) : combat.getAttackersBlockedBy(c);
+                    if (!IterableUtil.any(foes, CauldronOfSouls::dealsWither)) {
+                        save.add(c);
+                    }
+                }
+            } else {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (save.isEmpty() || ComputerUtilCard.evaluateCreatureList(save) < MIN_SAVE_VALUE) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final Card c : save) {
+                if (!sa.canAddMoreTarget()) {
+                    break;
+                }
+                sa.getTargets().add(c);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Dies and comes back under our control with a -1/-1 counter: our own non-token,
+        // non-commander creature (the AI sends a dying commander to the command zone before the
+        // trigger resolves), no -1/-1 counter yet, base toughness 2+ (the stock PumpAiBase "Persist"
+        // rule), not already returning by itself, and its death not replaced card-locally.
+        static boolean returns(final Player ai, final Card c) {
+            return c.isCreature() && !c.isToken() && !c.isCommander()
+                    && ai.equals(c.getOwner()) && ai.equals(c.getController())
+                    && c.getCounters(CounterEnumType.M1M1) == 0
+                    && c.getBaseToughness() >= 2
+                    && !ComputerUtilCard.hasActiveUndyingOrPersist(c)
+                    && !TimeLordRegeneration.deathIsReplaced(c);
+        }
+
+        // damage from it leaves -1/-1 counters (wither, infect or a StaticAbilityWitherDamage grant,
+        // as attackerWouldBeDestroyed and blockerWouldBeDestroyed read it), so persist would not
+        // return the creature
+        private static boolean dealsWither(final Card src) {
+            return src != null && src.isWitherDamage();
+        }
+    }
+
     // Chainer, Nightmare Adept
     // "Discard a card: You may cast a creature spell from your graveyard this turn. Activate only once
     // each turn." (printed text = Oracle = script: ActivationLimit$ 1, STYardCast's MayPlayLimit$ 1.)
@@ -24136,8 +24303,8 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 10, 16, 17, 19, 21, 35, 36, 49, 50 and 57, keepOff for batch 2's row 68. A case must draw
-    // no random number and hold nothing, so that its false is exactly the old filter.
+    // 5, 10, 16, 17, 19, 21, 35, 36, 49, 50, 57 and 58, keepOff for batch 2's row 68. A case must
+    // draw no random number and hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -24183,6 +24350,8 @@ public class SpecialCardAi {
                     return SpringleafDrum.isOwnHandCast(ai, sa);
                 case MagmaGiant.NAME:
                     return MagmaGiant.readmit(ai, sa);
+                case CauldronOfSouls.NAME:
+                    return CauldronOfSouls.readmit(ai, sa);
                 default:
                     return false;
             }

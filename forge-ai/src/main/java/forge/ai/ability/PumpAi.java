@@ -192,6 +192,19 @@ public class PumpAi extends PumpAiBase {
             // other Pump card takes exactly the path it took before this branch.
             return SpecialCardAi.FieryGambit.consider(ai, sa);
         }
+        if (SpecialCardAi.CauldronOfSouls.handles(ai, sa)) {
+            // Dead-card batch 3, row 58. A keyword-only Pump whose only value is persist: the stock
+            // stack branch below (canPumpAgainstRemoval) never counts a Persist pump as a save, and
+            // the empty-stack branch (pumpTgtAI -> shouldPumpCard) scores it at about 0 and draws
+            // MyRandom per creature. The card keeps AI:RemoveDeck:All, and G3 readmits only the
+            // activation of an untapped Cauldron in play by the player who owns and controls it;
+            // handles is that same key, on the host's paper name, not getAbilitySourceName (rules
+            // B3-2 and B3-3). So A never evaluated an ability this gate routes, every decline in
+            // consider draws no random number, and a Mairsil grant, a Myr Welder imprint, a thief's
+            // Cauldron and every canPlaySa caller asking about another host keep the stock path, as
+            // does every other Pump card.
+            return SpecialCardAi.CauldronOfSouls.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final Card source = sa.getHostCard();
         final SpellAbility root = sa.getRootAbility();
