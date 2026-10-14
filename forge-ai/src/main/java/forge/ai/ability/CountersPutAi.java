@@ -155,6 +155,15 @@ public class CountersPutAi extends CountersAi {
             // takes exactly the path it took before this branch.
             return SpecialCardAi.JoltedAwake.consider(ai, sa);
         }
+        if (SpecialCardAi.GrimoireOfTheDead.handlesStudy(ai, sa)) {
+            // Dead-card batch 3, row 27. Only for a Grimoire of the Dead on the battlefield that its
+            // owner controls, the key G3's readmit lets through (rule B3-2): the hint keeps every
+            // other controller off the list, and a canPlaySa scan that skips the filter about any
+            // other Grimoire, a copied ability or a Clone's copy (the Clone's own rules) keeps the
+            // stock path below. Judged whole here, ahead of the 10%-per-counter roll the hinted card
+            // never drew.
+            return SpecialCardAi.GrimoireOfTheDead.considerStudy(ai, sa);
+        }
         final String[] types;
         if (sa.hasParam("CounterType")) {
             // TODO some cards let you choose types, should check each

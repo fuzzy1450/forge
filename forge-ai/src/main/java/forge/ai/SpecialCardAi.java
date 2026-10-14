@@ -14105,6 +14105,197 @@ public class SpecialCardAi {
         }
     }
 
+    // Grimoire of the Dead (dead-card batch 3, row 27; carriers precon:Grave Danger (SCD) 55eb7baa and
+    // precon:Merciless Rage (C19) 8ba4afd6, both implicit anchors)
+    // "{1}, {T}, Discard a card: Put a study counter on Grimoire of the Dead. {T}, Remove three study
+    // counters from Grimoire of the Dead and sacrifice it: Put all creature cards from all graveyards
+    // onto the battlefield under your control. They're black Zombies in addition to their other colors
+    // and types." ({4} Legendary Artifact.) The script keeps AI:RemoveDeck:All, so the -10 sort and every
+    // other isCardRemAIDeck reader (steal, exchange, copy and tutor pickers) still refuse it. Behind the
+    // hint the stock paths have no floor: the cast is PermanentAi's WillPlay in any own Main 2, empty
+    // graveyards or not; the study counter is CountersPutAi's 10%-per-counter roll, with no cap; the
+    // return is ChangeZoneAllAi's 400 floor between two rolls, at any priority (its canPlay override
+    // never applies an AILogic window). G3 (RemoveDeckFilter.readmit) lets exactly three spell
+    // abilities through AiController's filter, for a Grimoire its asker owns AND controls (a Play-effect
+    // thief and a Clone's copy keep A's path):
+    // - the cast from our own hand, in our own Main 2 with an empty stack and no mana held
+    //   (RemoveDeckFilter.noManaHeld), the engine's test-mode cost within HonestMana (G2), while the
+    //   graveyards already hold MIN_CARDS+ creature cards worth CAST_MIN_VALUE+ and none that would
+    //   defeat us once ours (defeatsUs);
+    // - the study counter, below three, at the end step before our turn (judged whole in
+    //   CountersPutAi.checkApiLogic by considerStudy);
+    // - the return, at three counters, at the end step before our turn or while the stack threatens
+    //   the Grimoire (judged whole in ChangeZoneAllAi.canPlay by considerReturn, ahead of its run-away
+    //   roll).
+    // Both handler gates carry the readmit's own key (isOwnInPlay: the paper-named host on the
+    // battlefield, asked by its owner who also controls it; rule B3-2), so a canPlaySa scan that skips
+    // the filter (targetPlayableSpellCard's zone-overridden probes, the Yawgmoth's Will, Nykthos,
+    // Manifold Key and Spectral Searchlight scanners) about an off-battlefield, stolen or copied
+    // Grimoire keeps the stock path, draws included.
+    // RNG-free: reads only (counts, phase, stack scan, HonestMana, evaluateCreature, getCardPreference
+    // short of its replay-card draw, which considerStudy refuses first). A false is the old filter.
+    public static class GrimoireOfTheDead {
+        public static final String NAME = "Grimoire of the Dead";
+        static final int STUDY_NEEDED = 3;
+        static final int MIN_CARDS = 2;
+        static final int CAST_MIN_VALUE = 320;    // LivingDeath's threshold: two vanilla 2/2s (160 each)
+        static final int RETURN_MIN_VALUE = 400;  // ChangeZoneAllAi's own GainControl floor
+        static final int SALVAGE_MIN_VALUE = 160; // one vanilla 2/2 for {2}, when the Grimoire is being lost
+
+        // the filter's own key: the host's paper rules (a Clone's copy answers to the Clone's rules and was
+        // evaluated by the stock path in A, so it keeps that path)
+        static boolean isGrimoire(final Card host) {
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // the readmit's key for the two activations: the Grimoire on the battlefield, asked by its owner
+        // who also controls it
+        static boolean isOwnInPlay(final Player ai, final Card host) {
+            return isGrimoire(host) && host.isInPlay() && ai.equals(host.getController())
+                    && ai.equals(host.getOwner());
+        }
+
+        public static boolean handlesStudy(final Player ai, final SpellAbility sa) {
+            return sa != null && !(sa instanceof AbilitySub) && sa.isActivatedAbility() && !sa.isCopied()
+                    && sa.getApi() == ApiType.PutCounter && isOwnInPlay(ai, sa.getHostCard());
+        }
+
+        public static boolean handlesReturn(final Player ai, final SpellAbility sa) {
+            return sa != null && !(sa instanceof AbilitySub) && sa.isActivatedAbility() && !sa.isCopied()
+                    && sa.getApi() == ApiType.ChangeZoneAll && isOwnInPlay(ai, sa.getHostCard());
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (!isGrimoire(host) || !ai.equals(host.getController()) || !ai.equals(host.getOwner())
+                    || sa.isCopied()) {
+                return false;
+            }
+            if (sa.isSpell()) {
+                return readmitCast(ai, sa, host);
+            }
+            if (!host.isInPlay() || host.isTapped()) {
+                return false;
+            }
+            final int study = host.getCounters(CounterEnumType.STUDY);
+            if (handlesStudy(ai, sa)) {
+                return study < STUDY_NEEDED && endStepBeforeOurTurn(ai);
+            }
+            if (handlesReturn(ai, sa)) {
+                return study >= STUDY_NEEDED && (endStepBeforeOurTurn(ai) || threatened(ai, host));
+            }
+            return false;
+        }
+
+        private static boolean readmitCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (sa.isCastFromPlayEffect() || !host.isInZone(ZoneType.Hand) || !ai.canCastSorcery()
+                    || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || ai.isCardInPlay(NAME) // the legend rule; PermanentAi.checkApiLogic would refuse anyway
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (HonestMana.of(ai, sa, true).total() < cost.getConvertedManaCost()) {
+                return false;
+            }
+            final int[] found = new int[1];
+            return graveyardValue(ai, found) >= CAST_MIN_VALUE && found[0] >= MIN_CARDS;
+        }
+
+        static boolean endStepBeforeOurTurn(final Player ai) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            return ph.is(PhaseType.END_OF_TURN) && ph.getNextTurn() == ai && game.getStack().isEmpty();
+        }
+
+        static boolean threatened(final Player ai, final Card host) {
+            return !ai.getGame().getStack().isEmpty()
+                    && ComputerUtil.predictThreatenedObjects(ai, null).contains(host);
+        }
+
+        // CountersPutAi.checkApiLogic's gate
+        public static AiAbilityDecision considerStudy(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host.getCounters(CounterEnumType.STUDY) >= STUDY_NEEDED || !endStepBeforeOurTurn(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final CardCollection hand = new CardCollection(ai.getCardsIn(ZoneType.Hand));
+            // checkDiscardCost and the payment (getCardsToDiscard) both ask getCardPreference("DiscardCost")
+            // first; over two or more flashback/escape/disturb cards it draws (Aggregates.random), so refuse
+            if (hand.isEmpty() || CardLists.count(hand, c -> c.hasKeyword(Keyword.FLASHBACK)
+                    || c.hasKeyword(Keyword.ESCAPE) || c.hasKeyword(Keyword.DISTURB)) >= 2) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the junk the payment itself would discard: a DiscardMe card, a land the AI does not need, or a
+            // lone replay card (Chainer's rule); never a DoNotDiscardIfAble card
+            final Card junk = ComputerUtil.getCardPreference(ai, host, "DiscardCost", hand);
+            if (junk == null || junk.hasSVar("DoNotDiscardIfAble")) {
+                return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, false)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (HonestMana.of(ai, sa, true).total() < cost.getConvertedManaCost()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // ChangeZoneAllAi.canPlay's gate, ahead of the run-away roll
+        public static AiAbilityDecision considerReturn(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host.getCounters(CounterEnumType.STUDY) < STUDY_NEEDED) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final boolean salvage = threatened(ai, host);
+            if (!salvage && !endStepBeforeOurTurn(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForEndOfTurn);
+            }
+            final int[] found = new int[1];
+            final int value = graveyardValue(ai, found);
+            final boolean worth = salvage ? value >= SALVAGE_MIN_VALUE && found[0] >= 1
+                                          : value >= RETURN_MIN_VALUE && found[0] >= MIN_CARDS;
+            return worth ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                         : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // every creature card in every graveyard (what the effect moves), valued as LivingDeath values them;
+        // Integer.MIN_VALUE when one would defeat us once it is ours (defeatsUs)
+        static int graveyardValue(final Player ai, final int[] count) {
+            int value = 0;
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Graveyard)) {
+                if (!c.isCreature()) {
+                    continue;
+                }
+                if (defeatsUs(c)) {
+                    return Integer.MIN_VALUE;
+                }
+                value += ComputerUtilCard.evaluateCreature(c);
+                count[0]++;
+            }
+            return value;
+        }
+
+        // a creature card that would make us lose, or unable to win, once it is ours: Phage the
+        // Untouchable's ETB, Archfiend of the Dross's empty-oil upkeep (Enduring Angel's replacement
+        // line matches too: a conservative decline), Abyssal Persecutor's "you can't win"
+        private static boolean defeatsUs(final Card c) {
+            for (final String v : c.getSVars().values()) {
+                if (v.startsWith("DB$ LosesGame") && v.contains("Defined$ You")) {
+                    return true;
+                }
+            }
+            for (final ReplacementEffect re : c.getReplacementEffects()) {
+                if (re.getMode() == ReplacementType.GameWin && "You".equals(re.getParam("ValidPlayer"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Grisly Sigil
     public static class GrislySigil {
         public static boolean consider(final Player ai, final SpellAbility sa) {
@@ -25050,8 +25241,9 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 10, 16, 17, 19, 21, 35, 36, 49, 50, 57, 58, 60, 83 and 84, keepOff for batch 2's row 68. A
-    // case must draw no random number and hold nothing, so that its false is exactly the old filter.
+    // 5, 10, 16, 17, 19, 21, 27, 35, 36, 49, 50, 57, 58, 60, 83 and 84, keepOff for batch 2's row 68.
+    // A case must draw no random number and hold nothing, so that its false is exactly the old
+    // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -25105,6 +25297,8 @@ public class SpecialCardAi {
                     return CurseOfChaos.readmit(ai, sa);
                 case CopyEnchantment.NAME:
                     return CopyEnchantment.isOwnHandCast(ai, sa);
+                case GrimoireOfTheDead.NAME:
+                    return GrimoireOfTheDead.readmit(ai, sa);
                 default:
                     return false;
             }

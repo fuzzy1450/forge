@@ -65,6 +65,14 @@ public class ChangeZoneAllAi extends SpellAbilityAi {
             return SpecialCardAi.MassPolymorph.consider(ai, sa);
         }
 
+        if (SpecialCardAi.GrimoireOfTheDead.handlesReturn(ai, sa)) {
+            // Dead-card batch 3, row 27. Only for a Grimoire of the Dead on the battlefield that its
+            // owner controls, the key G3's readmit lets through (rule B3-2). Ahead of the run-away
+            // roll below: AI:RemoveDeck:All kept this ability out of every evaluation until now, so
+            // the gate must draw no random number, and the evaluator draws none.
+            return SpecialCardAi.GrimoireOfTheDead.considerReturn(ai, sa);
+        }
+
         // prevent run-away activations - first time will always return true
         boolean chance = MyRandom.getRandom().nextFloat() <= Math.pow(.6667, sa.getActivationsThisTurn());
 
