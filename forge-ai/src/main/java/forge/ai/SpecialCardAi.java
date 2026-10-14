@@ -27216,6 +27216,201 @@ public class SpecialCardAi {
         }
     }
 
+    // Riot Control (dead-card batch 3, row 26)
+    // "You gain 1 life for each creature your opponents control. Prevent all damage that would be
+    // dealt to you this turn." ({2}{W} Instant.) A fog with a life rider, judged only as a fog: the
+    // rider is a bonus, never the floor. Illusionist's Gambit's shape (batch 1, row 45, 35745a498c1;
+    // a fog in the same deck): the script's AI:RemoveDeck:All is dropped, and LifeGainAi.canPlay's
+    // name gate routes the root GainLife spell here, ahead of checkPhaseRestrictions (whose
+    // lifeInDanger rolls MyRandom at every consult in an opponent's combat) and of checkApiLogic's
+    // WillPlay for any spell with a sub (a cast at an opponent's end step for a few life, throwing
+    // the fog away, and at any priority at life <= 5). Play-effect casts keep doTriggerNoCost, and
+    // every other GainLife card takes the stock path. In order, every decline before any approval:
+    // - the base class's restriction check, which the override bypasses, else CantPlaySa;
+    // - window: an opponent's declare-blockers step after blocks, an empty stack, we can lose, and
+    //   the attacking player, our opponent, attacks us (FogAi's window). Blocks are already made,
+    //   so the AI's own chump decisions are untouched and the fog fires only when the attack still
+    //   threatens. Worship and Elderscale Wurm refuse, as in lifeInDanger;
+    // - danger: lifeInDanger's rule with its random threshold taken at AI_IN_DANGER_MAX_THRESHOLD
+    //   (Default 4 = 4, so the stock rule under the seats' profile), read on the declared attack
+    //   after blocks with Gambit's replica (withoutAbilities): lethal now (a live commander, poison
+    //   reaching the loss count, no life left), below min(threshold, life) after the attack,
+    //   poison over max(7, current), or an unblocked MustBeBlocked attacker whose damage lands now
+    //   and can be prevented (the skeptic's amendment: behind a shield already up, at 0 power or
+    //   with damage that can't be prevented, the card would be spent for its rider alone). Trample
+    //   over blockers is predicted through predictDamageTo, so a shield already up counts there too;
+    // - the cast must help: life after the cast (life, plus the rider read honestly --
+    //   lifegainNegative turns it into a loss, lifegainPositive false into nothing -- minus the
+    //   damage the shield cannot prevent) is at least 1, and outside a lethal, poison or
+    //   MustBeBlocked danger it beats the no-cast line;
+    // - mana, else CantAfford: the engine's test-mode cost (calculateManaCost: taxes and
+    //   reductions) against G2's count with held sources skipped, in total and in white
+    //   (DomineeringWill.affordable's shape; G2 is called, not changed).
+    // Then Tempo at 100, as Gambit. RNG parity: A never evaluated the card (gate 1 removed it
+    // before any handler), so every decline here draws nothing: the window tests come first,
+    // damageIfUnblocked(..., true) returns before the pump scan's canPayCost, the poison and
+    // shield counts are private copies of Gambit's RNG-free ones (accepted helpers stay private),
+    // and calculateAmount, lifegainPositive/Negative, calculateManaCost (test) and HonestMana draw
+    // nothing. No lifeInDanger, no lifeThatWouldRemain, no setMaxXValue. Nothing is held past a
+    // decline: no memory writes, no targets, no X. Draws come only after the approval, in
+    // canPayCost.
+    public static class RiotControl {
+        public static final String NAME = "Riot Control";
+
+        // getAbilitySourceName reads "" for a card cast face down from exile (a thief's Gonti):
+        // read the host's name and the card state's name too (HourOfEternity.isHour's idiom).
+        public static boolean isRiotControl(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            // LifeGainAi.canPlay's name gate bypasses the base class's restriction check: mirror it
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            if (combat == null || ph.isPlayerTurn(ai) || !ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || !game.getStack().isEmpty() || ai.cantLose()) {
+                return no;
+            }
+            final Player attacker = combat.getAttackingPlayer();
+            final CardCollection atUs = combat.getAttackersOf(ai);
+            if (attacker == null || !attacker.isOpponentOf(ai) || atUs.isEmpty()) {
+                return no;
+            }
+            // lifeInDanger's own special cases
+            final CardCollectionView otb = ai.getCardsIn(ZoneType.Battlefield);
+            if ((otb.anyMatch(CardPredicates.nameEquals("Worship")) && !ai.getCreaturesInPlay().isEmpty())
+                    || (otb.anyMatch(CardPredicates.nameEquals("Elderscale Wurm")) && ai.getLife() >= 7)) {
+                return no;
+            }
+
+            // What the declared attack does to us after blocks (IllusionistsGambit's replica), plus
+            // what of it the shield cannot stop.
+            final boolean lifeCounts = ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife();
+            final boolean poisonable = ai.canReceiveCounters(CounterEnumType.POISON);
+            int lifeDamage = 0;
+            int unpreventable = 0;
+            int poison = ai.getPoisonCounters();
+            boolean liveCommander = false;
+            boolean mustBeBlocked = false;
+            for (final Card c : atUs) {
+                final CardCollection blockers = combat.getBlockers(c);
+                int dealt = 0;
+                int poisoned = 0;
+                if (blockers.isEmpty() || forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked
+                        .assignCombatDamageAsUnblocked(c)) {
+                    dealt = ComputerUtilCombat.damageIfUnblocked(c, ai, combat, true); // 0 behind a shield
+                    lifeDamage += dealt;
+                    if (poisonable) {
+                        poisoned = poisonIfUnblocked(c, ai);
+                    }
+                } else if (c.hasKeyword(Keyword.TRAMPLE)) {
+                    final int over = Math.max(0, ComputerUtilCombat.getAttack(c) - shield(blockers));
+                    // unlike Gambit's copy, through predictDamageTo, so a shield already up counts
+                    dealt = over > 0 ? ComputerUtilCombat.predictDamageTo(ai, over, c, true) : 0;
+                    if (dealt > 0) {
+                        if (!c.hasKeyword(Keyword.INFECT)) {
+                            lifeDamage += dealt;
+                        }
+                        if (poisonable) {
+                            poisoned = (c.isInfectDamage(ai) ? dealt : 0)
+                                    + ComputerUtilCombat.predictExtraPoisonWithDamage(c, ai, dealt);
+                        }
+                    }
+                }
+                poison += poisoned;
+                if (dealt > 0 && !c.canDamagePrevented(true) && !c.hasKeyword(Keyword.INFECT)) {
+                    unpreventable += dealt; // what still lands through the shield
+                }
+                if (c.isCommander() && dealt > 0 && dealt + ai.getCommanderDamage(c) >= 21) {
+                    liveCommander = true;
+                }
+                // lifeInDanger's three MustBeBlocked readings, only for damage that lands now and
+                // that the shield can stop
+                if (blockers.isEmpty() && !c.getSVar("MustBeBlocked").isEmpty()
+                        && (dealt > 0 || poisoned > 0) && c.canDamagePrevented(true)) {
+                    final String v = c.getSVar("MustBeBlocked");
+                    final boolean atPlayer = combat.getDefenderByAttacker(c) instanceof Player;
+                    if ("true".equalsIgnoreCase(v) || ("attackingplayer".equalsIgnoreCase(v) && atPlayer)
+                            || ("attackingplayerconservative".equalsIgnoreCase(v) && atPlayer
+                                && ai.getCreaturesInPlay().size() >= 3
+                                && ai.getCreaturesInPlay().size() > c.getController().getCreaturesInPlay().size())) {
+                        mustBeBlocked = true;
+                    }
+                }
+            }
+            final int remain = ai.getLife() - lifeDamage;
+            final int poisonToLose = game.getRules().getPoisonCountersToLose();
+            final boolean poisonDanger = poison > Math.max(7, ai.getPoisonCounters());
+            final boolean lethalNow = liveCommander || poison >= poisonToLose || (lifeCounts && remain < 1);
+            final int maxThreshold = AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD);
+            if (!lethalNow && !mustBeBlocked && !poisonDanger
+                    && !(lifeCounts && remain < Math.min(maxThreshold, ai.getLife()))) {
+                return no; // not in danger: keep the fog
+            }
+
+            // The cast must change the outcome: the rider read honestly (a Tainted Remedy turns it
+            // into a loss), against what the shield cannot stop.
+            if (lifeCounts) {
+                final Card host = sa.getHostCard();
+                final int x = Math.max(0, AbilityUtils.calculateAmount(host, "X", sa));
+                final int gain = ComputerUtil.lifegainNegative(ai, host, Math.max(1, x)) ? -x
+                        : (ComputerUtil.lifegainPositive(ai, host) ? x : 0);
+                final int castLife = ai.getLife() + gain - unpreventable;
+                if (castLife < 1 || (!lethalNow && !mustBeBlocked && !poisonDanger && castLife <= remain)) {
+                    return no;
+                }
+            }
+
+            // G2's honest count, held sources skipped, in total and in white
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.WHITE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.Tempo);
+        }
+
+        // IllusionistsGambit.poisonIfUnblocked, a private copy (accepted helpers stay private):
+        // ComputerUtilCombat.poisonIfUnblocked with the attacker's activated pumps left out.
+        private static int poisonIfUnblocked(final Card attacker, final Player ai) {
+            final int damage = attacker.getNetCombatDamage()
+                    + ComputerUtilCombat.predictPowerBonusOfAttacker(attacker, null, null, true);
+            int poison = 0;
+            if (attacker.isInfectDamage(ai)) {
+                final int pd = ComputerUtilCombat.predictDamageTo(ai, damage, attacker, true);
+                if (pd > 1 || !attacker.getController().getOpponents().getCardsIn(ZoneType.Battlefield)
+                        .anyMatch(CardPredicates.nameEquals("Vorinclex, Monstrous Raider"))) {
+                    poison = attacker.hasDoubleStrike() ? pd * 2 : pd;
+                }
+            }
+            if (damage > 0) {
+                poison += ComputerUtilCombat.predictExtraPoisonWithDamage(attacker, ai, damage);
+            }
+            return poison;
+        }
+
+        // IllusionistsGambit.shield, a private copy: ComputerUtilCombat.totalShieldDamage without
+        // its destroy-before-damage predictor (which can test-pay a blocker's pump or regeneration)
+        // and without flanking. Both overstate the shield, so trample damage reaching us is
+        // understated.
+        private static int shield(final List<Card> blockers) {
+            int total = 0;
+            for (final Card b : blockers) {
+                total += b.getLethalDamage() + b.getKeywordMagnitude(Keyword.BUSHIDO);
+            }
+            return total;
+        }
+    }
+
     // Roots of Wisdom (dead-card batch 2, row 124)
     // "Mill three cards, then return a land card or Elf card from your graveyard to your hand. If
     // you can't, draw a card." ({1}{G} Sorcery.) MillAi.checkPhaseRestrictions allows a Defined$ You

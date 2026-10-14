@@ -18,6 +18,20 @@ import forge.util.MyRandom;
 
 public class LifeGainAi extends SpellAbilityAi {
 
+    @Override
+    protected AiAbilityDecision canPlay(final Player ai, final SpellAbility sa) {
+        if (SpecialCardAi.RiotControl.isRiotControl(sa)) {
+            // Riot Control: a fog with a life rider, judged only as a fog. Routed ahead of
+            // checkPhaseRestrictions, whose lifeInDanger rolls MyRandom at every consult in an
+            // opponent's combat: the card carried AI:RemoveDeck:All, so the stock engine never
+            // evaluated it and never drew for it, and every refusal in the evaluator draws
+            // nothing. Play-effect casts keep doTriggerNoCost as before. Every other GainLife
+            // card takes super.canPlay exactly as before.
+            return SpecialCardAi.RiotControl.consider(ai, sa);
+        }
+        return super.canPlay(ai, sa);
+    }
+
     /*
      * (non-Javadoc)
      * 
