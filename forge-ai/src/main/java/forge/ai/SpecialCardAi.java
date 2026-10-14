@@ -7248,6 +7248,75 @@ public class SpecialCardAi {
         }
     }
 
+    // Dawn's Reflection (dead-card batch 3, row 20)
+    // "Enchant land. Whenever enchanted land is tapped for mana, its controller adds an additional two mana
+    // in any combination of colors." ({3}{G} Aura; printed text and Oracle agree.) AI:RemoveDeck:All dropped
+    // the owner's cast in AiController.getSpellAbilityToPlay's removeIf before any handler ran, so its owner
+    // never cast it on any engine (its casts were Play-effect thefts, which never read the hint). The script
+    // drops the hint; behind it the stock Pump preference had no floor and enchanted getBestLandAI's random
+    // nonbasic. Pure ramp, judged as ramp in Trace of Abundance's shape (batch 2 row 94), every decline
+    // before any WillPlay:
+    // (0) our own Main 2 only (Trace's W9 finding: in Main 1 the Aura takes the mana of the creature or
+    //     commander the AI defers to Main 2; it pays back nothing this turn unless its host stays untapped,
+    //     which Main 2 allows as well). There the Attach spell sorts as mana value 3 (getSpellAbilityPriority's
+    //     Main-2 Attach -1), so a spell of mana value 4 or more and a creature of 3 go first;
+    // (1) payable now from unheld sources: G2's HonestMana total covers the cost after CostAdjustment (the
+    //     G1 ceiling's calculateManaCost test call) with a green source (Toxic Deluge's affordability, a
+    //     private copy), so canPayCost's test payment (isManaSourceReserved draws MyRandom) is entered only
+    //     when the cast goes through;
+    // (2) the mana has a use: TraceOfAbundance.extraManaHasAUse, called unchanged (a spell in hand, not
+    //     this card, not a land, not a RemoveDeck card, the commander with its tax, or a non-mana activated
+    //     ability costs more than our count of mana permanents, or has X);
+    // (3) a safe host: our own land, not a creature, not an artifact, not enchanted, not EndOfTurnLeavePlay,
+    //     a land by its printed type (Arixmethes is a land only while it slumbers; the Aura falls off when it
+    //     wakes), targetable and attachable, and TraceOfAbundance.isSafeManaHost, called unchanged (a {T} mana
+    //     ability and Steward's safe-land test: no self-return, no sacrifice, no fetch, no non-mana ability).
+    // Untapped host first, then battlefield order. Reads the board only: no random draws, nothing held, and a
+    // decline leaves no target. ComputerUtilMana.predictMana reads this card's "Combo Any" trigger as one Any
+    // per mana, so the test payment counts the bonus as the 2 mana it is.
+    public static class DawnsReflection {
+        public static final String NAME = "Dawn's Reflection";
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card aura = sa.getHostCard();
+            sa.resetTargets();
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (!TraceOfAbundance.extraManaHasAUse(ai, aura)) {
+                return new AiAbilityDecision(0, AiPlayDecision.NeedsToPlayCriteriaNotMet);
+            }
+            Card host = null;
+            for (final Card land : ai.getLandsInPlay()) {
+                if (land.isCreature() || land.isArtifact() || land.isEnchanted() || land.hasSVar("EndOfTurnLeavePlay")
+                        || !land.getOriginalType().isLand()
+                        || !sa.canTarget(land) || !land.canBeAttached(aura, sa)
+                        || !TraceOfAbundance.isSafeManaHost(land)) {
+                    continue;
+                }
+                if (host == null || (land.isUntapped() && host.isTapped())) {
+                    host = land;
+                }
+            }
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(host);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the cost after CostAdjustment against G2's unheld total and green
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.GREEN) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+    }
+
     // Day of the Dragons - judged from its ETB exile trigger (ChangeZoneAllAi.doTriggerNoCost,
     // non-mandatory only): trade our creatures for the same number of 5/5 flying Dragons
     // only when that is a clear upgrade. Reads game state only: no token prototype (TokenDb

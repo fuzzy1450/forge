@@ -458,6 +458,12 @@ public class ComputerUtilMana {
                 String produced = trSA.getParam("Produced");
                 if (produced.equals("Chosen")) {
                     produced = MagicColor.toShortString(trSA.getHostCard().getChosenColor());
+                } else if (SpecialCardAi.DawnsReflection.NAME.equals(trSA.getHostCard().getName())) {
+                    // "Combo Any" is two words: repeated per mana it predicted 4 colourless for the 2 mana
+                    // the trigger adds (payMultipleMana reads an unknown word as colourless). One "Any" per
+                    // mana predicts exactly 2, still as colourless (the conservative colour reading Trace,
+                    // Fertile Ground and Wild Growth already get).
+                    produced = "Any";
                 }
                 manaProduced.append(" ").append(StringUtils.repeat(produced, " ", pAmount));
             } else if (ApiType.ManaReflected.equals(trSA.getApi())) {

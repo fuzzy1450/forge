@@ -114,6 +114,16 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.CurseOfChaos.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.DawnsReflection.NAME.equals(source.getName())) {
+            // Ramp Aura judged whole in SpecialCardAi.DawnsReflection (Trace of Abundance's shape): the
+            // stock Pump preference has no floor for an Aura that grants nothing (no static, so no keyword
+            // filter) and takes getBestLandAI's random nonbasic (Aggregates.random), which can be a land
+            // that stops being one (a slumbering Arixmethes) or sacrifices itself (Krosan Verge). This
+            // path draws no random numbers. A Play-effect cast (a thief's DB$ Play) comes through
+            // doTriggerNoCost, never here, and keeps the stock path.
+            return SpecialCardAi.DawnsReflection.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {
