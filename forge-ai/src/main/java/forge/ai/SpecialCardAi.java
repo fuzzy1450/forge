@@ -24303,8 +24303,8 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 10, 16, 17, 19, 21, 35, 36, 49, 50, 57 and 58, keepOff for batch 2's row 68. A case must
-    // draw no random number and hold nothing, so that its false is exactly the old filter.
+    // 5, 10, 16, 17, 19, 21, 35, 36, 49, 50, 57, 58 and 60, keepOff for batch 2's row 68. A case
+    // must draw no random number and hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -24352,6 +24352,8 @@ public class SpecialCardAi {
                     return MagmaGiant.readmit(ai, sa);
                 case CauldronOfSouls.NAME:
                     return CauldronOfSouls.readmit(ai, sa);
+                case Squallmonger.NAME:
+                    return Squallmonger.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -27513,6 +27515,253 @@ public class SpecialCardAi {
             }
             for (final Card c : ai.getCardsIn(ZoneType.Command)) {
                 if (c.isCommander() && c.isCreature() && ai.equals(c.getOwner())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    // Squallmonger (dead-card batch 3, row 60; precon:Counterpunch (CMD))
+    // "{2}: Squallmonger deals 1 damage to each creature with flying and each player. Any player may
+    // activate this ability." ({3}{G} 3/3 Monger; printed text = Oracle = script.) AI:RemoveDeck:All
+    // dropped both abilities in AiController.getSpellAbilityToPlay's filter for every AI player, so
+    // its owner never cast it (every recorded cast is a Play-effect theft: Nathan Drake's library
+    // thieves, Etali, Silent-Blade Oni). The hint is KEPT: the ping is Activator$ Player and
+    // getAvailableCards hands every AI the whole battlefield, so dropping it would let every AI
+    // opponent fire our ping (our own fliers included) through stock DamageAllAi; kept, the -10 sort
+    // and every other isCardRemAIDeck reader (steal, copy, clone and tutor pickers) stay as they were.
+    // The G3 dispatcher readmits, for the player who OWNS the card, exactly two abilities:
+    // - the hand cast (not a Play-effect cast, not a copy), in our own main phase with an empty
+    //   stack (ai.canCastSorcery(), canCastTiming's window for a sorcery-speed creature, so
+    //   PermanentCreatureAi's flash branches, which draw, are never entered), in Main 2 or in Main 1
+    //   only where ComputerUtil.castPermanentInMain1 says so (the stock PermanentAi wait, answered
+    //   before the list sees the spell, so a Main-1 readmit never re-slots sortCreatureSpells for a
+    //   pass that casts nothing), with no mana held (RemoveDeckFilter.noManaHeld) and G2 (HonestMana,
+    //   held sources skipped) paying the test-mode price in total and in green. Stock
+    //   PermanentCreatureAi then casts it. With the ping off every opponent's list the body is pure
+    //   upside: a 3/3 nobody else can turn against us.
+    // - the ping, when it also controls it (a thief keeps the filter), on an empty stack with no mana
+    //   held, while G2 pays at least one activation, and only for:
+    //   LETHAL (any window): an opponent who can lose dies within the activations G2 pays, while our
+    //     life stays above that many pings to us (each ping hits every player at once). In 1v1 the
+    //     opponent dies before any combat damage; a pod would also need the pending combat read
+    //     (stored games are all two-seat today);
+    //   FLIER KILL (an opponent's turn, or our own Main 2 or end step: our own spells' mana first):
+    //     the opposing fliers one ping kills for good (no undying or persist, no Regenerate ability,
+    //     no SacMe, no EndOfTurnLeavePlay, no own harmless death trigger: no value gained there),
+    //     minus every flier of ours it kills, are worth MIN_KILL_VALUE; our life after the ping is
+    //     LIFE_FLOOR or more, and on an opponent's turn with a combat in progress so is the life the
+    //     pending attack leaves us (lifeThatWouldRemain, every attacker unblocked before blocks;
+    //     never lifeInDanger, which draws); and no opposing death watcher sees any flier the ping
+    //     kills, ours included, nor does a noncombat damage-received trigger see what the ping hits.
+    // DamageAllAi.checkApiLogic routes the owner-controller's ping here after its stack-empty refusal,
+    // so the handler and the readmit answer from one plan (rule B3-2: the route carries the readmit's
+    // own key). Draws nothing, holds nothing and remembers nothing (its only writes are
+    // setActivatingPlayer on a hand SA with no activator yet, as getOriginalAndAltCostAbilities does
+    // right after the filter, and on the mana abilities G2 reads), so a refusal is the old filter,
+    // and the first new draw is canPayCost's reservation roll in a window G2 judged payable.
+    // Residuals: LifeLost watchers (an opposing Exquisite Blood) and Fecundity-style triggers on our
+    // side are not scanned; a damage replacement predictDamageTo does not model can keep LETHAL
+    // pinging an opponent who stays at 1 (each plan needs our life above need * self, so we stop at
+    // 1 at worst); behind cantLoseForZeroOrLessLife our own ping counts 0. A Clone or token copy
+    // named Squallmonger that we own and control (unhinted, on every list in A) now meets the plan
+    // in DamageAllAi instead of the stock race. Uncalibrated: MIN_KILL_VALUE, LIFE_FLOOR, MAX_PINGS.
+    public static class Squallmonger {
+        public static final String NAME = "Squallmonger";
+        static final int DMG = 1;            // the ability's NumDmg$ 1, printed
+        // net value per ping: a 1/1 flying token (80 + 15 + 10 + 10 flying); no card is spent, so
+        // below Ion Storm's 130 (a ping that also spends a +1/+1 counter)
+        static final int MIN_KILL_VALUE = 115;
+        static final int LIFE_FLOOR = 5;     // Ion Storm's face floor, applied to us
+        static final int MAX_PINGS = 20;     // bound for a ping a reducer makes free
+
+        // RemoveDeckFilter.readmit's case; cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner())) {
+                return false; // every opponent and every thief keeps the filter
+            }
+            if (sa.isSpell()) {
+                return readmitCast(ai, sa, host);
+            }
+            return isOwnPing(ai, sa) && planPing(ai, sa, host);
+        }
+
+        private static boolean readmitCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (sa.getApi() != ApiType.PermanentCreature || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false;
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (!ai.canCastSorcery()) {
+                return false; // our own main phase with an empty stack, read first
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ai.getGame().getPhaseHandler().is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait (PermanentAi.checkPhaseRestrictions), answered first
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            // the root sa's cost as canPayCost will price it, against G2 (never the bare estimate)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.GREEN) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+
+        // the owner-controller's own DamageAll line on the battlefield; the name test goes first, so
+        // DamageAllAi's route is one string compare for every other DamageAll card
+        public static boolean isOwnPing(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && NAME.equals(host.getName()) && sa.isActivatedAbility()
+                    && sa.getApi() == ApiType.DamageAll && host.isInPlay()
+                    && ai.equals(host.getController()) && ai.equals(host.getOwner());
+        }
+
+        // DamageAllAi.checkApiLogic's route
+        public static AiAbilityDecision considerPing(final Player ai, final SpellAbility sa) {
+            return planPing(ai, sa, sa.getHostCard())
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        static boolean planPing(final Player ai, final SpellAbility sa, final Card host) {
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty() || !RemoveDeckFilter.noManaHeld(ai, false)) {
+                return false;
+            }
+            final int per = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false)
+                    .getConvertedManaCost();
+            final int pings = per <= 0 ? MAX_PINGS : Math.min(MAX_PINGS, HonestMana.of(ai, sa, true).total() / per);
+            if (pings < 1) {
+                return false;
+            }
+            final int self = ai.cantLoseForZeroOrLessLife() ? 0 : ComputerUtilCombat.predictDamageTo(ai, DMG, host, false);
+            if (lethal(ai, host, pings, self)) {
+                return true;
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (ph.isPlayerTurn(ai) && !ph.is(PhaseType.MAIN2) && !ph.is(PhaseType.END_OF_TURN)) {
+                return false; // our own turn before Main 2: the mana is our spells'
+            }
+            if (ai.getLife() - self < LIFE_FLOOR || !fliersWorthIt(ai, sa, host)) {
+                return false;
+            }
+            // an opponent's combat: never ping ourselves into the damage already coming (skeptic F1)
+            final Combat combat = game.getCombat();
+            return combat == null || ph.isPlayerTurn(ai)
+                    || ComputerUtilCombat.lifeThatWouldRemain(ai, combat) - self >= LIFE_FLOOR;
+        }
+
+        // some opponent who can lose dies within `pings` activations while we survive them all
+        // (each ping hits every player at once, so ai life > need * self keeps us alive throughout)
+        private static boolean lethal(final Player ai, final Card host, final int pings, final int self) {
+            for (final Player opp : ai.getOpponents()) {
+                if (opp.cantLoseForZeroOrLessLife() || !opp.canLoseLife()) {
+                    continue;
+                }
+                final int each = ComputerUtilCombat.predictDamageTo(opp, DMG, host, false);
+                if (each < 1) {
+                    continue;
+                }
+                final int need = (opp.getLife() + each - 1) / each;
+                if (need <= pings && ai.getLife() > need * self) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // one ping: opposing fliers it kills for good, minus every flier of ours it kills, vetoed by an
+        // opposing watcher (Sudden Demise's and Wave of Reckoning's opposing scan, both sides' dying)
+        private static boolean fliersWorthIt(final Player ai, final SpellAbility sa, final Card host) {
+            final String valid = sa.getParam("ValidCards"); // the script's own Creature.withFlying
+            if (valid == null) {
+                return false;
+            }
+            final CardCollection hit = CardLists.getValidCards(ai.getGame().getCardsIn(ZoneType.Battlefield),
+                    valid, ai, host, sa);
+            final CardCollection dying = new CardCollection();
+            for (final Card c : hit) {
+                // dies to the ping (toughness, damage marked, prevention, shields, indestructible)
+                if (ComputerUtilCombat.getEnoughDamageToKill(c, DMG, host, false) <= DMG) {
+                    dying.add(c);
+                }
+            }
+            final int n = dying.size();
+            final int[] value = new int[n];
+            final boolean[] kill = new boolean[n];
+            int kills = 0;
+            int net = 0;
+            for (int i = 0; i < n; i++) {
+                final Card c = dying.get(i);
+                if (ai.equals(c.getController()) || ai.equals(c.getOwner())) {
+                    net -= ComputerUtilCard.evaluateCreature(c); // ours, even if it would come back
+                } else if (ai.isOpponentOf(c.getController()) && !ComputerUtilCard.hasActiveUndyingOrPersist(c)
+                        && !regenerates(c) && !c.hasSVar("SacMe") && !c.hasSVar("EndOfTurnLeavePlay")) {
+                    value[i] = ComputerUtilCard.evaluateCreature(c);
+                    kill[i] = true;
+                    kills++;
+                    net += value[i];
+                }
+            }
+            if (kills == 0 || net < MIN_KILL_VALUE) {
+                return false; // the scan below can only lower net
+            }
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (WaveOfReckoning.isDeathTrigger(t)) {
+                        for (int i = 0; i < n; i++) {
+                            final Card d = dying.get(i);
+                            if (!t.matchesValidParam("ValidCard", d) || !t.matchesValidParam("ValidCards", d)) {
+                                continue;
+                            }
+                            if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                                return false; // a death watcher on their side sees a flier of either side die
+                            }
+                            if (kill[i]) {
+                                kill[i] = false; // its own harmless death trigger: no value gained (skeptic F3)
+                                kills--;
+                                net -= value[i];
+                            }
+                        }
+                        continue;
+                    }
+                    final TriggerType mode = t.getMode();
+                    if ((mode != TriggerType.DamageDone && mode != TriggerType.DamageDoneOnce)
+                            || "True".equalsIgnoreCase(t.getParam("CombatDamage"))
+                            || !t.matchesValidParam("ValidSource", host)) {
+                        continue;
+                    }
+                    for (final Player p : ai.getGame().getPlayers()) {
+                        if (t.matchesValidParam("ValidTarget", p)) {
+                            return false;
+                        }
+                    }
+                    for (final Card c : hit) {
+                        if (t.matchesValidParam("ValidTarget", c)) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return kills > 0 && net >= MIN_KILL_VALUE;
+        }
+
+        // SuddenDemise.regenerates, copied (predicates of accepted cards are not shared). Without
+        // ComputerUtil.canRegenerate: its canPayCost probe draws MyRandom
+        // (ComputerUtilMana.isManaSourceReserved). Regeneration shields already read as "never dies"
+        // in getEnoughDamageToKill.
+        private static boolean regenerates(final Card c) {
+            for (final SpellAbility a : c.getSpellAbilities()) {
+                if (a.getApi() == ApiType.Regenerate) {
                     return true;
                 }
             }

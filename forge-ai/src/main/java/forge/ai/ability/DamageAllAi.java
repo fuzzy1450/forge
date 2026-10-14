@@ -24,6 +24,13 @@ public class  DamageAllAi extends SpellAbilityAi {
         if (!ai.getGame().getStack().isEmpty()) {
             return new AiAbilityDecision(0, AiPlayDecision.StackNotEmpty);
         }
+        if (SpecialCardAi.Squallmonger.isOwnPing(ai, sa)) {
+            // Dead-card batch 3, row 60: G3 readmits the owner-controller's ping only when this
+            // same plan holds, so the handler and the filter answer from one plan (the stock
+            // Pestilence race below reads only the weakest opponent and has no value floor). Name
+            // first, so every other DamageAll card pays one string compare. RNG-free.
+            return SpecialCardAi.Squallmonger.considerPing(ai, sa);
+        }
         if (SpecialCardAi.UltimateMagicMeteor.isMeteor(sa)
                 && !SpecialCardAi.UltimateMagicMeteor.canAfford(ai, sa)) {
             // Its DestroyAll sub now passes (the script's AILogic$ Always), so a floor pass below
