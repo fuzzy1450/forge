@@ -9094,6 +9094,81 @@ public class SpecialCardAi {
         }
     }
 
+    // Dulcet Sirens (dead-card batch 3, row 50)
+    // "{U}, {T}: Target creature attacks target opponent this turn if able. Morph {U}" ({2}{U}
+    // creature, 1/3 Siren.) AI:RemoveDeck:All dropped all four of its abilities in
+    // AiController.getSpellAbilityToPlay's removeIf before any handler ran: the face-up creature
+    // spell, the face-down cast, the forced-attack ability and the turn-face-up action. So its
+    // owner never cast it on any engine (0 owner casts in 1,125 carrier rows on
+    // 2.0.15+55e709fa6ba; every recorded cast is Nathan Drake's attack-trigger Play or Silent-Blade
+    // Oni's free cast, which never read the hint). The script keeps the hint:
+    // - the ability has no use in a two-player game: an opposing creature told to attack its own
+    //   controller gets no requirement (StaticAbilityMustAttack.entitiesMustAttack skips the active
+    //   player and the permanents that player controls, CR 506.2), so it could only force our own
+    //   creature into an attack the attack AI already decides, and stock PumpAi would draw MyRandom
+    //   in shouldPumpCard for a +0/+0 pump;
+    // - the face-down cast has no ApiType, so canPlaySa's null-API branch would cast a {3} 2/2
+    //   with no Main-2 wait and no floor; the {U} flip is SetStateAi's trigger-blind compare;
+    // - the -10 sort (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck reader
+    //   (steal, exchange, copy, clone and tutor pickers) still refuse it.
+    // The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through AiController's
+    // filter: the owner's own face-up creature spell from hand, not a face-down cast, not a
+    // Play-effect cast and not a copy, and only in a window the stock path would cast it in and
+    // real mana with blue pays for, so every other pass is the stock pass:
+    // - our own main phase with an empty stack (canCastTiming's window for a sorcery-speed
+    //   creature; PermanentCreatureAi's flash branches are never entered);
+    // - Main 2, or Main 1 when the stock PermanentAi.checkPhaseRestrictions would cast it there
+    //   (ComputerUtil.castPermanentInMain1: a haste giver such as the carrier's Swiftfoot Boots);
+    // - no live mana reservation (RemoveDeckFilter.noManaHeld, the morph family's precondition);
+    // - G2 (HonestMana, held sources skipped) covers the engine's test-mode calculateManaCost
+    //   (Sapphire Medallion's reduction included) in total and in blue (Chromeshell Crab's colour
+    //   check), so a readmitted spell never reaches ComputerUtilCost.canPayCost, whose test
+    //   payment draws MyRandom per source it tries, in a window that cannot pay for it.
+    // Value floor: the body. A 1/3 for 3 has no ETB, upkeep cost, additional cost or drawback once
+    // cast face up, so there is no worthless or self-harming moment the stock checks behind the
+    // filter miss (Patron of the Nezumi's reasoning); they judge the rest (zero toughness, curses,
+    // damage on the cast). The kept -10 key sorts it after the carrier's unhinted creature spells,
+    // so it gets the mana they leave. Under-counts only lose a window. Draws nothing, holds nothing
+    // and remembers nothing; its only writes are setActivatingPlayer on a hand SA with no activator
+    // yet (as getOriginalAndAltCostAbilities does right after the filter) and on the mana abilities
+    // G2 reads. A thief's copy fails the owner and hand checks, and a Play-effect theft never
+    // reaches this filter (canPlayFromEffectAI).
+    public static class DulcetSirens {
+        public static final String NAME = "Dulcet Sirens";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFaceDown() || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand) || !ai.equals(host.getOwner())) {
+                return false; // face-down cast, ability, flip, a theft: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return false;
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ph.is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait, answered before the list sees the spell
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLUE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+    }
+
     // Eater of Hope (dead-card batch 3, row 16)
     // "Flying. {B}, Sacrifice another creature: Regenerate Eater of Hope. {2}{B}, Sacrifice two
     // other creatures: Destroy target creature." ({5}{B}{B} creature, 6/4.) AI:RemoveDeck:All
@@ -23663,7 +23738,7 @@ public class SpecialCardAi {
     // so a hinted card stays off and an unhinted one stays on: the filter as it was. Each case is
     // added by its own row's commit, labelled with that row's class's NAME constant, and delegates
     // to that class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows
-    // 5, 16, 17, 21, 35 and 49, keepOff for batch 2's row 68. A case must draw no random number
+    // 5, 16, 17, 21, 35, 49 and 50, keepOff for batch 2's row 68. A case must draw no random number
     // and hold nothing, so that its false is exactly the old filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
     public static class RemoveDeckFilter {
@@ -23700,6 +23775,8 @@ public class SpecialCardAi {
                     return MarshFlitter.readmit(ai, sa);
                 case VishKalBloodArbiter.NAME:
                     return VishKalBloodArbiter.readmit(ai, sa);
+                case DulcetSirens.NAME:
+                    return DulcetSirens.readmit(ai, sa);
                 default:
                     return false;
             }
