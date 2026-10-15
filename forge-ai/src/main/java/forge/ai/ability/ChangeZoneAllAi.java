@@ -73,6 +73,15 @@ public class ChangeZoneAllAi extends SpellAbilityAi {
             return SpecialCardAi.GrimoireOfTheDead.considerReturn(ai, sa);
         }
 
+        if (SpecialCardAi.ScrapMastery.NAME.equals(sourceName) && SpecialCardAi.ScrapMastery.isOwnHandCast(ai, sa)) {
+            // Dead-card batch 3, row 59. Only for its owner's own hand cast, the key G3's readmit
+            // lets through (rule B3-2): a ReplaySpell probe's copy, a Play-effect theft and an exile
+            // MayPlay keep the stock path below, draws included. Ahead of the run-away roll below:
+            // AI:RemoveDeck:All kept this card out of every evaluation until now, so the gate must
+            // draw no random number, and the evaluator draws none.
+            return SpecialCardAi.ScrapMastery.consider(ai, sa);
+        }
+
         // prevent run-away activations - first time will always return true
         boolean chance = MyRandom.getRandom().nextFloat() <= Math.pow(.6667, sa.getActivationsThisTurn());
 

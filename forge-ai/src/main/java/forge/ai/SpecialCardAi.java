@@ -30831,9 +30831,9 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 16, 17, 19, 21, 23, 25, 27, 28, 32, 35, 36, 41, 48, 49, 50, 52, 57, 58, 60, 63, 68, 71, 75,
-    // 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird
-    // Standard, a readmit).
+    // 16, 17, 19, 21, 23, 25, 27, 28, 32, 35, 36, 41, 48, 49, 50, 52, 57, 58, 59, 60, 63, 68, 71,
+    // 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is
+    // Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -30919,6 +30919,8 @@ public class SpecialCardAi {
                     return Artillerize.readmit(ai, sa);
                 case StaticOrb.NAME:
                     return StaticOrb.isOwnHandCast(sa);
+                case ScrapMastery.NAME:
+                    return ScrapMastery.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -32443,6 +32445,337 @@ public class SpecialCardAi {
             }
 
             return sa.isTargetNumberValid();
+        }
+    }
+
+    // Scrap Mastery (dead-card batch 3, row 59; precon:Built from Scratch (C14), an implicit anchor)
+    // "Each player exiles all artifact cards from their graveyard, then sacrifices all artifacts
+    // they control, then puts all cards they exiled this way onto the battlefield." ({3}{R}{R}
+    // sorcery; the script's Oracle line is the printed text.) Symmetric, no target, no choice, no X:
+    // the artifact twin of Living Death. Each player's exiled cards come back under their owner;
+    // the sacrificed artifacts stay in the graveyard (they were not exiled) and sacrificed tokens
+    // are gone. The script keeps AI:RemoveDeck:All: behind the hint ChangeZoneAllAi.canPlay's
+    // Graveyard -> Exile root falls through its run-away roll to the 80% coin, a WillPlay on any
+    // affordable board (an empty graveyard, our own artifact board on the line), and the subs judge
+    // nothing (SacrificeAllAi.chkDrawback and ChangeZoneAi's known-origin drawback answer WillPlay).
+    // The hint also keeps the card off the steal, exchange, copy (the carrier's own Dualcaster
+    // Mage), clone and tutor lists and sorts it last (priority -10). The G3 dispatcher
+    // (RemoveDeckFilter.readmit) lets exactly one ability through AiController's filter, Gift of
+    // Doom's shape (batch 2, row 104): this card's own spell, cast by its owner from its own hand,
+    // not from a Play effect and not a copy, in its own main phase with an empty stack, with no
+    // mana reservation live (RemoveDeckFilter.noManaHeld), an unhinted artifact card in its
+    // graveyard, and {3}{R}{R} as the engine prices it (test-mode calculateManaCost: Ruby
+    // Medallion, taxes; rule B3-5) within HonestMana (G2) in total and in red.
+    // ChangeZoneAllAi.canPlay routes that same shape (isOwnHandCast, the readmit's own key: rule
+    // B3-2) to consider(), ahead of its run-away roll; every other caller (a ReplaySpell probe's
+    // copy, a Play-effect theft, an exile MayPlay) keeps the stock path and its draws.
+    // Value floor, Living Death's equation and threshold on the script's own lists:
+    // - own = our graveyard's artifact cards (a hinted card counts 0: Dance of the Manse's rule)
+    //   minus every artifact of ours the sub can sacrifice (a useless creature counts 0: Living
+    //   Death's exclusion; our own commander costs COMMANDER_TAX more);
+    // - per opponent, their graveyard's artifact cards minus those of their sacrificable artifacts
+    //   that are real kills (never a commander, an active undying or persist creature, or a SacMe
+    //   card);
+    // - cast only when own >= MIN_OWN_GAIN (never a net loss of our own board, so never a
+    //   self-damaging artifact wrath) and own - theirs >= MARGIN against EVERY opponent.
+    // Then two vetoes, only once the floor has passed:
+    // - a returning opposing artifact that would undo the swap: a Self enters trigger whose chain
+    //   targets or sweeps (DestroyAll, DamageAll, SacrificeAll, ChangeZoneAll: Meteor Golem,
+    //   Duplicant, the Noxious, Combustible and Cataclysmic Gearhulks), or an activated DestroyAll
+    //   or DamageAll (Nevinyrral's Disk, Oblivion Stone). Not deathTriggerHarmsUs as is: its list
+    //   holds ChangeZone, which would veto every Solemn Simulacrum land fetch. A chain not built yet
+    //   is read from its SVar text (MassPolymorph's read, a private copy), so this veto allocates
+    //   no SpellAbility id;
+    // - Slaughter the Strong's payoff loop: an opposing sacrifice payoff or death watcher matching
+    //   any dying artifact, or a dying artifact whose own death trigger harms us, vetoes; a benign
+    //   own death trigger (Wurmcoil Engine, Myr Sire) makes that loss no kill, so its value comes
+    //   back and the floor is checked again. WaveOfReckoning's two statics are called unchanged.
+    // value(): CreatureEvaluator for a creature (a graveyard card at printed P/T, as Living Death
+    // reads it), LAND for a land (an artifact land is a land drop, not a trinket), NONCREATURE_TOKEN
+    // for a noncreature token, else Goblin Archaeologist's 50 + 30 * mana value. Not credited, so
+    // the floor errs low: our own sacrificed cards' death value, returned ETBs (Myr Battlesphere,
+    // Solemn Simulacrum), Daretti's emblem.
+    // No Main-2 wait (Slaughter the Strong's reasoning): in Main 1 our artifact spells still wait
+    // for Main 2 and enter after the swap; in Main 2 what was cast is on the battlefield and the
+    // floor prices it as a loss.
+    // RNG: readmit and consider draw no random number (the switch, zone and phase reads,
+    // AiCardMemory reads, type filters, test-mode calculateManaCost, HonestMana, evaluateCreature,
+    // isUselessCreature, canBeSacrificedBy, matchesValidParam); nothing is held or remembered, and
+    // the only write is HonestMana's setActivatingPlayer on the mana abilities it reads. The first
+    // new draws are canPayCost's, after a WillPlay. Residual (Slaughter the Strong's, accepted):
+    // deathTriggerHarmsUs builds a matching death trigger's ability (Trigger.ensureAbility)
+    // earlier than the game would, only after the floor has passed once.
+    public static class ScrapMastery {
+        public static final String NAME = "Scrap Mastery";
+        public static final int MARGIN = 320;        // Living Death's threshold: a 4/4 flier of swing, per opponent
+        public static final int MIN_OWN_GAIN = 0;    // never a net loss of our own artifacts
+        public static final int COMMANDER_TAX = 100; // Localized Destruction's recast tax: our own artifact commander
+        static final int NONCREATURE_TOKEN = 30;     // a Treasure, Clue or Food is not a card
+        static final int LAND = 140;                 // Maelstrom Pulse's PERMANENT_FLOOR: a mana value 3 noncreature
+        // what a returning opposing artifact's Self enters trigger may not do to the board we swap in
+        private static final EnumSet<ApiType> ENTERS_SWEEPS = EnumSet.of(
+                ApiType.DestroyAll, ApiType.DamageAll, ApiType.SacrificeAll, ApiType.ChangeZoneAll);
+        // and what its activated abilities may not do
+        private static final EnumSet<ApiType> ACTIVATED_SWEEPS = EnumSet.of(ApiType.DestroyAll, ApiType.DamageAll);
+        // the chain links an SVar-text read follows (MassPolymorph's list, from EspersToMagicite)
+        private static final String[] BRANCHES = {"SubAbility", "Execute", "TrueSubAbility", "FalseSubAbility",
+                "WinSubAbility", "LoseSubAbility", "RepeatSubAbility"};
+        private static final int MAX_DEPTH = 12;
+
+        // the readmit's own shape and the ChangeZoneAllAi gate's key (rule B3-2): this card's spell,
+        // cast by its owner from its own hand; not a Play effect, not a copy, not face down
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && ai.equals(host.getController()) && ai.equals(host.getOwner())
+                    && sa.isSpell() && sa.getApi() == ApiType.ChangeZoneAll
+                    && !sa.isCastFromPlayEffect() && !sa.isCopied()
+                    && !host.isFaceDown() && host.isInZone(ZoneType.Hand);
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa) || !ai.canCastSorcery() || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            // O(our graveyard): something of ours worth returning, or consider's scans never run
+            boolean any = false;
+            for (final Card c : AbilityUtils.filterListByType(ai.getCardsIn(ZoneType.Graveyard),
+                    sa.getParam("ChangeType"), sa)) {
+                if (!ComputerUtilCard.isCardRemAIDeck(c)) {
+                    any = true;
+                    break;
+                }
+            }
+            if (!any) {
+                return false;
+            }
+            // {3}{R}{R} as the engine prices it, against G2 in total and in red
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // ChangeZoneAllAi.canPlay's gate, behind isOwnHandCast: the value floor, then the vetoes
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AbilitySub sac = sa.getSubAbility();
+            if (sac == null || sac.getApi() != ApiType.SacrificeAll || ai.getOpponents().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            final String changeType = sa.getParam("ChangeType");
+            // returns: each player's own graveyard (ChangeZoneAllEffect moves every graveyard's list)
+            int own = 0;
+            for (final Card c : AbilityUtils.filterListByType(ai.getCardsIn(ZoneType.Graveyard), changeType, sa)) {
+                if (!ComputerUtilCard.isCardRemAIDeck(c)) { // Dance of the Manse: a hinted card is no return of ours
+                    own += value(c);
+                }
+            }
+            final Map<Player, Integer> opp = new LinkedHashMap<>();
+            final CardCollection theirReturns = new CardCollection();
+            for (final Player o : ai.getOpponents()) {
+                int v = 0;
+                for (final Card c : AbilityUtils.filterListByType(o.getCardsIn(ZoneType.Graveyard), changeType, sa)) {
+                    v += value(c); // their returns count in full, hinted or not
+                    theirReturns.add(c);
+                }
+                opp.put(o, v);
+            }
+            // losses: every artifact the sub can sacrifice (SacrificeAllEffect's list), by controller
+            final CardCollection dying = new CardCollection();
+            for (final Card c : AbilityUtils.filterListByType(game.getCardsIn(ZoneType.Battlefield),
+                    sac.getParam("ValidCards"), sac)) {
+                if (c.canBeSacrificedBy(sac, true)) {
+                    dying.add(c);
+                }
+            }
+            for (final Card d : dying) {
+                final Player ctl = d.getController();
+                if (ai.equals(ctl)) {
+                    if (!(d.isCreature() && ComputerUtilCard.isUselessCreature(ai, d))) { // Living Death's exclusion
+                        own -= value(d) + (d.isCommander() && ai.equals(d.getOwner()) ? COMMANDER_TAX : 0);
+                    }
+                } else if (opp.containsKey(ctl) && isKill(d)) {
+                    opp.put(ctl, opp.get(ctl) - value(d));
+                }
+            }
+            if (!passes(own, opp)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // a returning opposing artifact that would undo the swap (skeptic amendment A2)
+            for (final Card c : theirReturns) {
+                if (threatensOnReturn(c)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // opponents' payoffs (Slaughter the Strong's loop): a sacrifice payoff or a death watcher
+            // matching any dying artifact vetoes, and so does a dying artifact whose own death trigger
+            // harms us; a benign own death trigger (Wurmcoil Engine, Myr Sire) makes that loss no kill
+            final CardCollection noValue = new CardCollection();
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    final boolean sacTrig = t.getMode() == TriggerType.Sacrificed
+                            || t.getMode() == TriggerType.SacrificedOnce;
+                    final boolean deathTrig = WaveOfReckoning.isDeathTrigger(t);
+                    if (!sacTrig && !deathTrig) {
+                        continue;
+                    }
+                    for (final Card d : dying) {
+                        if (!t.matchesValidParam("ValidCard", d)) {
+                            continue;
+                        }
+                        if (sacTrig) {
+                            if (t.matchesValidParam("ValidPlayer", d.getController())) {
+                                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                            }
+                            continue;
+                        }
+                        if (!t.matchesValidParam("ValidCards", d)) {
+                            continue;
+                        }
+                        if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                        }
+                        // h's own benign death trigger: not a kill, so its value comes back, once per card
+                        final Player ctl = d.getController();
+                        if (opp.containsKey(ctl) && isKill(d) && !noValue.contains(d)) {
+                            noValue.add(d);
+                            opp.put(ctl, opp.get(ctl) + value(d));
+                        }
+                    }
+                }
+            }
+            return passes(own, opp) ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        private static boolean passes(final int own, final Map<Player, Integer> opp) {
+            if (own < MIN_OWN_GAIN) {
+                return false;
+            }
+            for (final int theirs : opp.values()) {
+                if (own - theirs < MARGIN) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // an opposing artifact whose sacrifice is a real loss to its controller
+        private static boolean isKill(final Card d) {
+            return !d.isCommander() && !ComputerUtilCard.hasActiveUndyingOrPersist(d) && !d.hasSVar("SacMe");
+        }
+
+        // one scale for mixed artifacts (see the class comment)
+        private static int value(final Card c) {
+            if (c.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(c);
+            }
+            if (c.isLand()) {
+                return LAND;
+            }
+            if (c.isToken()) {
+                return NONCREATURE_TOKEN;
+            }
+            return 50 + 30 * c.getCMC();
+        }
+
+        // skeptic amendment A2: an artifact card that comes back with a Self enters trigger whose
+        // chain targets or sweeps, or with an activated DestroyAll or DamageAll
+        private static boolean threatensOnReturn(final Card c) {
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone
+                        || !tr.getParamOrDefault("Destination", "").contains(ZoneType.Battlefield.toString())
+                        || !tr.getParamOrDefault("ValidCard", "").contains("Self")) {
+                    continue;
+                }
+                final SpellAbility built = tr.getOverridingAbility();
+                if (built != null ? builtThreatens(built, ENTERS_SWEEPS, true, 0) : textThreatens(tr)) {
+                    return true;
+                }
+            }
+            for (final SpellAbility ab : c.getSpellAbilities()) {
+                if (ab.isActivatedAbility() && builtThreatens(ab, ACTIVATED_SWEEPS, false, 0)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean builtThreatens(final SpellAbility sa, final EnumSet<ApiType> sweeps,
+                final boolean targeting, final int depth) {
+            if (sa == null || depth > MAX_DEPTH) {
+                return false;
+            }
+            if ((targeting && sa.usesTargeting()) || (sa.getApi() != null && sweeps.contains(sa.getApi()))
+                    || builtThreatens(sa.getSubAbility(), sweeps, targeting, depth + 1)) {
+                return true;
+            }
+            for (final SpellAbility extra : sa.getAdditionalAbilities().values()) {
+                if (builtThreatens(extra, sweeps, targeting, depth + 1)) {
+                    return true;
+                }
+            }
+            for (final List<AbilitySub> choices : sa.getAdditionalAbilityLists().values()) {
+                for (final AbilitySub choice : choices) {
+                    if (builtThreatens(choice, sweeps, targeting, depth + 1)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // the enters chain read from its SVar text, never built: ValidTgts is what makes
+        // AbilityFactory give a part its TargetRestrictions
+        private static boolean textThreatens(final Trigger tr) {
+            final Deque<String> todo = new ArrayDeque<>();
+            final Set<String> seen = new HashSet<>();
+            if (tr.hasParam("Execute")) {
+                todo.add(tr.getParam("Execute"));
+            }
+            while (!todo.isEmpty()) {
+                final String svar = todo.poll();
+                if (!seen.add(svar)) {
+                    continue;
+                }
+                final String text = tr.getSVar(svar);
+                if (text.isEmpty()) {
+                    continue;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                if (params.containsKey("ValidTgts")) {
+                    return true;
+                }
+                final String api = apiOf(params);
+                if (api != null) {
+                    for (final ApiType sweep : ENTERS_SWEEPS) {
+                        if (sweep.name().equalsIgnoreCase(api)) {
+                            return true;
+                        }
+                    }
+                }
+                for (final String key : BRANCHES) {
+                    if (params.containsKey(key)) {
+                        todo.add(params.get(key));
+                    }
+                }
+                if (params.containsKey("Choices")) {
+                    for (final String choice : params.get("Choices").split(",")) {
+                        todo.add(choice.trim());
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static String apiOf(final Map<String, String> params) {
+            final String api = params.get("DB");
+            if (api != null) {
+                return api;
+            }
+            return params.containsKey("AB") ? params.get("AB") : params.get("SP");
         }
     }
 
