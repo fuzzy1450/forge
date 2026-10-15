@@ -193,7 +193,16 @@ public class FightAi extends SpellAbilityAi {
             System.out.println("Warning: couldn't find a Fight/DealDamage subability from FightAi.canFightAi for card " + source.toString());
             tgtFight = sa.getSubAbility(); // at least avoid a NPE, although this will most likely fail
         }
-        final boolean isChandrasIgnition = "Chandra's Ignition".equals(sourceName); // TODO: generalize this for other "fake Fight" cases that do not target
+        // Dead-card batch 3, row 86: Waltz of Rage is the same fake Fight as Chandra's Ignition (a Pump
+        // target carrier whose damage is a NON-targeting DamageAll sub, DamageSource$ ParentTarget). The
+        // write below put the chosen opposing creature on that sub as a target; a non-targeting sub holding
+        // a target fails isTargetNumberValid, so MagicStack.add refused the paid spell ("Couldn't add to
+        // stack, failed to target") and stranded it in the stack zone: 767 of 964 rows under 55e709fa6ba,
+        // 0 casts. Only that post-decision write changes for it; every check and every exit of this
+        // method is the stock one, and the PowerDmg branch draws no random number. Every other card
+        // takes exactly the path it took before.
+        final boolean isChandrasIgnition = "Chandra's Ignition".equals(sourceName)
+                || "Waltz of Rage".equals(sourceName); // TODO: generalize this for other "fake Fight" cases that do not target
         if ("Savage Punch".equals(sourceName) && !ai.hasFerocious()) {
             power = 0;
             toughness = 0;
