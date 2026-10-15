@@ -282,6 +282,14 @@ public class PermanentCreatureAi extends PermanentAi {
             // the stock path. No random draw; see the class comment.
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
+        if (SpecialCardAi.VizierOfTumblingSands.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
+                && !SpecialCardAi.VizierOfTumblingSands.affordable(ai, sa)) {
+            // Dead-card batch 3, row 42. RNG-free affordability (G2) before canPlayAndPayForFace's
+            // canPayCost rolls ComputerUtilMana.isManaSourceReserved: an unpayable Main 2 draws
+            // nothing. Everything else is the stock creature judgement above. A Play-effect cast
+            // (Nathan Drake) keeps the stock path. See the class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
 
         /*
          * Checks if the creature will have non-positive toughness after

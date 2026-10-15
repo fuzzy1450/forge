@@ -40650,6 +40650,274 @@ public class SpecialCardAi {
         }
     }
 
+    // Vizier of Tumbling Sands (dead-card batch 3, row 42; precon:Timeless Wisdom (C20), commander
+    // Gavi, Nest Warden)
+    // "{T}: Untap another target permanent. Cycling {1}{U}. When you cycle Vizier of Tumbling Sands,
+    // untap target permanent." ({2}{U} Creature 1/3.) Its AI:RemoveDeck:All hint stripped every
+    // spell ability it has -- the creature spell, cycling in hand, the {T} on the battlefield -- at
+    // AiController.getSpellAbilityToPlay, for its owner and a thief alike, so the stock engine never
+    // evaluated it (0 owner casts on every engine; the copies Herald of the Forgotten returned sat
+    // idle). The hint is dropped (nothing about the card is dangerous on the other isCardRemAIDeck
+    // readers' lists), and three name hooks keep what the stock engine would then do sane:
+    // - the cast (PermanentCreatureAi.checkApiLogic, a paid cast; a Play-effect cast keeps the stock
+    //   path): affordable(), so an unpayable Main 2 draws nothing. Everything else is the stock
+    //   creature judgement (our own Main 2 unless castPermanentInMain1).
+    // - cycling (DrawAi.willPayCosts, after the stock floors approved): the same ceiling. Stock still
+    //   cycles a castable 3-drop only when land-starved (ComputerUtil.isWorseThanDraw).
+    // - the {T} (UntapAi.checkApiLogic): considerUntap. Stock untapPrefTargeting takes the most
+    //   expensive tapped permanent of ours at the first priority in any phase, and the 0-cmc-first
+    //   sort (ComputerUtilAbility) makes that the opponent's upkeep: the Vizier would tap every turn
+    //   to untap a land nothing uses, and never block. Here the untap is free mana and nothing else:
+    //   only in our own main phase on an empty stack, only a tapped mana source of ours (tapOnlyMana)
+    //   whose production turns a hand or command spell the AI wants now (canPlaySa WillPlay) from
+    //   unaffordable into affordable, and never while the opponents' next attack, unblocked, would
+    //   leave us within AI_IN_DANGER_MAX_THRESHOLD of dying (the Vizier stays tapped through it:
+    //   incomingUnsafe). Manifold Key's line B (batch 2, row 22) with no Key cost; its helpers are
+    //   private copies here (predicates of accepted cards are not shared).
+    // - the cycle trigger stays stock (UntapAi.doTriggerNoCost never calls checkApiLogic): the refund
+    //   of the land just tapped for {1}{U}.
+    // The {T} and cycling keys read the host's paper name (rule B3-3, G3's key): a Mairsil cage grant,
+    // a Myr Welder imprint or a copy (Crystalline Resonance, a Clone) keeps the stock path it took in
+    // A. The cast key is the host's name, as every creature row's.
+    // RNG parity: A never evaluated the card. Every decline draws nothing: the cast's phase wait and
+    // this ceiling come before canPayCost; so do cycling's discard decline and this ceiling; the {T}'s
+    // window is O(1), and the source scan, HonestMana, test-mode calculateManaCost, the band and the
+    // blocker floor are reads. The first draws are the {T}'s payer tests (canPayManaCost, canPayCost)
+    // and canPlaySa on an in-band spell, only with the Vizier untapped on our battlefield (a cast, a
+    // Herald of the Forgotten or Sun Titan return, a theft). No AiCardMemory, no mana hold; targets
+    // are reset on entry and set only on WillPlay.
+    public static class VizierOfTumblingSands {
+        public static final String NAME = "Vizier of Tumbling Sands";
+
+        // the host's paper name (rule B3-3), never getAbilitySourceName, which reads a granted copy's
+        // original host
+        private static boolean isPaper(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // DrawAi.willPayCosts' key: the root cycling ability (Gavi's {0} alternative included)
+        public static boolean isCycling(final SpellAbility sa) {
+            return !(sa instanceof AbilitySub) && sa.isCycling() && isPaper(sa);
+        }
+
+        // UntapAi.checkApiLogic's key: the root activated untap ({T}: Untap another target permanent)
+        public static boolean isTapUntap(final SpellAbility sa) {
+            return !(sa instanceof AbilitySub) && sa.isActivatedAbility() && isPaper(sa);
+        }
+
+        // The cast ({2}{U}) and cycling ({1}{U}): the cost as the engine prices it now (test-mode
+        // calculateManaCost: tax, ReduceCost/RaiseCost statics) against HonestMana (G2, held sources
+        // skipped, mana restrictions read on this sa), in total and in blue per unpaid U shard. A cost
+        // of no mana (Gavi's free cycle, a no-cost probe copy) answers before the mana scan. RNG-free.
+        public static boolean affordable(final Player ai, final SpellAbility sa) {
+            if (sa.getPayCosts() == null) {
+                return true;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int cmc = cost.getConvertedManaCost();
+            if (cmc == 0) {
+                return true;
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cmc
+                    && mana.colour(MagicColor.BLUE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+
+        // {T}: untap another target permanent -- free, so untapping a tapped mana source of ours is
+        // +amount mana. Cheapest first: the window, the tapped sources, the mana now, the spells one
+        // untap brings into reach (each priced once), the blocker floor, then the payer tests.
+        public static AiAbilityDecision considerUntap(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            sa.resetTargets();
+            if (!ph.isPlayerTurn(ai) || ph.getPhase() == null || !ph.getPhase().isMain()
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime); // O(1), RNG-free
+            }
+            // 1. our tapped, targetable mana sources (never a summoning-sick creature: its mana ability
+            // stays unusable once untapped), larger production first, one per distinct production
+            final List<Pair<Card, SpellAbility>> cands = new ArrayList<>();
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isTapped() || c.isSick()) {
+                    continue;
+                }
+                final SpellAbility ma = tapOnlyMana(c);
+                if (ma != null && sa.canTarget(c)) {
+                    cands.add(Pair.of(c, ma));
+                }
+            }
+            if (cands.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            cands.sort((a, b) -> Integer.compare(b.getRight().amountOfManaGenerated(true),
+                    a.getRight().amountOfManaGenerated(true))); // stable: battlefield order on a tie
+            final Map<String, Pair<Card, SpellAbility>> sources = new LinkedHashMap<>();
+            for (final Pair<Card, SpellAbility> p : cands) {
+                sources.putIfAbsent(productionKey(p.getRight()), p); // five Islands = one test
+            }
+            final int maxAmount = cands.get(0).getRight().amountOfManaGenerated(true);
+            // 2. the mana we have now, and the hand and command spells one untap brings into reach:
+            // more than now (castable already: the RNG-free proxy for the precedent's canPayCost) and
+            // no more than now plus the largest production
+            final int now = HonestMana.of(ai, sa, true).total();
+            final List<SpellAbility> band = new ArrayList<>();
+            final List<ManaCostBeingPaid> rests = new ArrayList<>();
+            // Command too: a commander recast is priced with its tax
+            final List<SpellAbility> all = ComputerUtilAbility.getSpellAbilities(ai.getCardsIn(ZoneType.Hand, ZoneType.Command), ai);
+            for (final SpellAbility testSa : ComputerUtilAbility.getOriginalAndAltCostAbilities(all, ai)) {
+                if (!testSa.isSpell() || testSa.getApi() == null || testSa.hasParam("AINoRecursiveCheck")
+                        || NAME.equals(ComputerUtilAbility.getAbilitySourceName(testSa))
+                        || testSa.getPayCosts() == null || !testSa.canPlay() || filteredOut(ai, testSa)) {
+                    continue; // canPlay also covers unpayable additional (non-mana) costs
+                }
+                final ManaCost mc = testSa.getPayCosts().getTotalMana();
+                if (mc == null || mc.getCMC() == 0 || mc.countX() > 0) {
+                    continue; // nothing to ramp into; X sizing is setMaxXValue's job
+                }
+                testSa.setActivatingPlayer(ai);
+                final ManaCostBeingPaid rest = ComputerUtilMana.calculateManaCost(testSa.getPayCosts(), testSa, ai, true, 0, false);
+                final int cmc = rest.getConvertedManaCost(); // the adjusted cost: tax, Medallions
+                if (cmc <= now || cmc > now + maxAmount) {
+                    continue;
+                }
+                band.add(testSa);
+                rests.add(rest);
+            }
+            if (band.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 3. the Vizier stays tapped through the opponents' next combat
+            if (incomingUnsafe(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 4. the payer tests (the first draws): per spell, the productions larger first, the
+            // source's mana applied to a copy of the spell's cost, the rest payable by what is
+            // untapped now; then at most one canPayCost and one canPlaySa
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            for (int i = 0; i < band.size(); i++) {
+                final SpellAbility testSa = band.get(i);
+                final ManaCostBeingPaid rest = rests.get(i);
+                for (final Pair<Card, SpellAbility> p : sources.values()) {
+                    final SpellAbility ma = p.getRight();
+                    final int amount = ma.amountOfManaGenerated(true);
+                    if (rest.getConvertedManaCost() > now + amount) {
+                        break; // larger productions first: no smaller one reaches
+                    }
+                    final ManaCostBeingPaid left = new ManaCostBeingPaid(rest);
+                    if (!payWithRock(left, ma, amount, ai)) {
+                        continue; // none of this source's mana fits the spell
+                    }
+                    if (!ComputerUtilMana.canPayManaCost(left, testSa, ai, false)) {
+                        continue; // still short even with it back
+                    }
+                    if (!ComputerUtilCost.canPayCost(testSa, ai, false)
+                            && aic.canPlaySa(testSa) == AiPlayDecision.WillPlay) {
+                        sa.getTargets().add(p.getLeft()); // we want this spell and can only afford it with the untap
+                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                    }
+                    break; // castable already, or not wanted now: canPayCost and canPlaySa once per spell
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // ManifoldKey.bigTapMana, copied, with two changes: one mana is enough (the untap costs no
+        // mana, so a basic land nets +1), and an ability carrying an activation condition (IsPresent,
+        // CheckSVar, ActivationLimit, ActivationPhases) is skipped, so an untapped Temple of the
+        // False God is never counted on. A tap-only cost (no mana, sacrifice or sub), no spending
+        // restriction, no Special or reflected production. Never canPlay() on a tapped source;
+        // RNG-free. Rules out Signets ({1}), Treasures (sacrifice), Exotic Orchard (reflected) and a
+        // pain land's coloured ability (damage sub); keeps basics, karoos and Sol Ring (2), and
+        // Command Tower, Arcane Signet, Commander's Sphere and Raugrin Crystal (Combo).
+        private static SpellAbility tapOnlyMana(final Card c) {
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                if (mp == null || ma.getApi() == ApiType.ManaReflected || ma.getPayCosts() == null
+                        || !ma.getPayCosts().hasTapCost()
+                        || !ma.getPayCosts().hasOnlySpecificCostType(CostTap.class)
+                        || ma.getSubAbility() != null || mp.isSpecialMana()
+                        || !mp.getManaRestrictions().isEmpty()
+                        || ma.hasParam("IsPresent") || ma.hasParam("CheckSVar")
+                        || ma.hasParam("ActivationLimit") || ma.hasParam("ActivationPhases")) {
+                    continue;
+                }
+                if (ma.amountOfManaGenerated(true) >= 1) {
+                    return ma;
+                }
+            }
+            return null;
+        }
+
+        // what payWithRock reads of a production: choice or fixed, its letters, its amount
+        private static String productionKey(final SpellAbility ma) {
+            final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+            final String produced = mp.isComboMana() ? "Combo " + mp.getComboColors(ma)
+                    : mp.isAnyMana() ? "Any" : mp.mana(ma);
+            return produced + "|" + ma.amountOfManaGenerated(true);
+        }
+
+        // ManifoldKey.payWithRock, copied: applies the source's mana to rest. Each unit of a choice
+        // production (Combo, Any) tries each colour it can make and stops at the first that pays
+        // something; a fixed production pays its symbols as printed. A unit that fits no shard stays
+        // unspent. True when one unit applied.
+        private static boolean payWithRock(final ManaCostBeingPaid rest, final SpellAbility ma, final int amount,
+                final Player ai) {
+            final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+            final boolean choice = mp.isComboMana() || mp.isAnyMana();
+            final String produced = mp.isComboMana() ? mp.getComboColors(ma) : mp.isAnyMana() ? "W U B R G" : mp.mana(ma);
+            final List<String> units = new ArrayList<>();
+            for (final String t : produced.trim().split(" ")) {
+                if (t.length() == 1 && "WUBRGC".indexOf(t.charAt(0)) >= 0) {
+                    units.add(t);
+                }
+            }
+            if (units.isEmpty()) {
+                return false;
+            }
+            boolean applied = false;
+            for (int i = 0; i < amount; i++) {
+                if (choice) {
+                    for (final String colour : units) {
+                        if (rest.ai_payMana(colour, ai.getManaPool())) {
+                            applied = true;
+                            break;
+                        }
+                    }
+                } else if (rest.ai_payMana(units.get(i % units.size()), ai.getManaPool())) {
+                    applied = true; // amount = symbols x Amount for a fixed production
+                }
+            }
+            return applied;
+        }
+
+        // ManifoldKey.filteredOut, copied: the RemoveDeck filter's own answer (G3's dispatcher in
+        // AiController.getSpellAbilityToPlay), so the Vizier never untaps a source for a spell that
+        // filter then drops
+        private static boolean filteredOut(final Player ai, final SpellAbility testSa) {
+            final Card host = testSa.getHostCard();
+            return host != null && (ComputerUtilCard.isCardRemAIDeck(host)
+                    ? !RemoveDeckFilter.readmit(ai, testSa) : RemoveDeckFilter.keepOff(ai, testSa));
+        }
+
+        // A private copy of ComputerUtilMana.stewardGrantUnsafe (package-private there and frozen;
+        // batch 1's Steward of the Harvest retry, 6e8112b771f), read for our own turn, the only one
+        // considerUntap acts in: the opponents' creatures that can attack next turn, unblocked, bring
+        // us within AI_IN_DANGER_MAX_THRESHOLD of our life. RNG-free: never lifeInDanger or
+        // predictNextCombatsRemainingLife, whose block simulation draws.
+        private static boolean incomingUnsafe(final Player ai) {
+            int incoming = 0;
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card att : opp.getCreaturesInPlay()) {
+                    if (ComputerUtilCombat.canAttackNextTurn(att, ai)) {
+                        incoming += ComputerUtilCombat.damageIfUnblocked(att, ai, null, false);
+                    }
+                }
+            }
+            return incoming + AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD) >= ai.getLife();
+        }
+    }
+
 
     // Volrath's Shapeshifter
     public static class VolrathsShapeshifter {

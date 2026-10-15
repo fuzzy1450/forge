@@ -71,6 +71,16 @@ public class UntapAi extends SpellAbilityAi {
             // the path it took before this branch.
             return SpecialCardAi.ManifoldKey.considerUntap(ai, sa);
         }
+        if (SpecialCardAi.VizierOfTumblingSands.isTapUntap(sa)) {
+            // Dead-card batch 3, row 42. Vizier of Tumbling Sands' "{T}: Untap another target
+            // permanent." Its AI:RemoveDeck:All hint (dropped) kept A from ever evaluating it; behind
+            // the hint, untapPrefTargeting below untaps our most expensive tapped permanent at the
+            // first priority in any phase, so the Vizier would tap every opponent's upkeep and never
+            // block. Keyed on the host's paper name (rule B3-3): a Mairsil grant or a copy keeps this
+            // stock path. Every decline draws no RNG. The cycle trigger goes through doTriggerNoCost
+            // and stays stock.
+            return SpecialCardAi.VizierOfTumblingSands.considerUntap(ai, sa);
+        }
         final Card source = sa.getHostCard();
 
         if (sa.usesTargeting()) {

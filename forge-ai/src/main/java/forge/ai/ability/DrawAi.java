@@ -226,6 +226,15 @@ public class DrawAi extends SpellAbilityAi {
             return false;
         }
 
+        if (SpecialCardAi.VizierOfTumblingSands.isCycling(sa)
+                && !SpecialCardAi.VizierOfTumblingSands.affordable(payer, sa)) {
+            // Dead-card batch 3, row 42. The stock floors above approved the cycle (in practice only
+            // when land-starved, ComputerUtil.isWorseThanDraw); refuse an unpayable window without RNG,
+            // before canPlayAndPayForFace's canPayCost rolls ComputerUtilMana.isManaSourceReserved.
+            // Gavi's {0} alternative answers before the mana scan. See the class comment.
+            return false;
+        }
+
         return true;
     }
 
