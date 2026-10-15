@@ -2572,6 +2572,1628 @@ public class SpecialCardAi {
         }
     }
 
+    // Benevolent Offering (dead-card batch 3, row 11; W9 508330848ca reverted at d4b10ecba32; W11)
+    // Design: tools/deadcards/b3/benevolent-offering/final-design.md.
+    // "Choose an opponent. You and that player each create three 1/1 white Spirit creature tokens with
+    // flying. Choose an opponent. You gain 2 life for each creature you control and that player gains 2
+    // life for each creature they control." ({3}{W} instant, C14.) The gift is symmetric: in a duel only
+    // OUR table (side-named statics, entering payoffs, self-counting bodies, affinity), the life split,
+    // the clock and survival tell the halves apart. AI:RemoveDeck:All is KEPT (B3-1): every other
+    // isCardRemAIDeck reader still refuses the card and the -10 sort keeps it last. ChoosePlayerAi (stock
+    // WillPlay) is untouched, so thefts, Play-effect casts and canPlaySa probes keep A's path. readmit IS
+    // the cast decision, in five windows:
+    // - END: the opponent's end step before our turn (value: Plan);
+    // - MAIN2: our Main 2 with idle mana, only when an entering payoff cashes now (Plan);
+    // - DEFEND: the opponent's declare-attackers step, attacked: lethal through our best blocks before
+    //   the cast, alive after it with three flying blockers and the life (survival: Survive.defend);
+    // - SAVE: the opponent's declare-blockers step, the declared attack lethal by life (Survive.save);
+    // - RESPOND: an opponent's spell or ability on top that would kill us by damage or life loss.
+    // findHoist (commit 2, AiController.getSpellAbilityToPlay) is the Main-2 hoist: H2 (the tokens make
+    // the chosen spell cheaper: Millicent's affinity) and H1 (the Offering beats the chosen creature by
+    // HOIST_MARGIN). Every refusal reads the board only: no random number, no card, no spell-ability id,
+    // nothing remembered or held; Survive.save and lossFromTop take RiotControl's accepted reads.
+    public static class BenevolentOffering {
+        public static final String NAME = "Benevolent Offering";
+        static final String TOKEN_SCRIPT = "w_1_1_spirit_flying";
+        static final int TOKENS = 3;            // TokenAmount$ 3, checked against the script
+        static final int NET_FLOOR = 100;       // a card; a 1/1 flying token is 116 (reviewed in W9)
+        static final int LIFE_W = 5;            // per life point (reviewed)
+        static final int LIFE_CAP = 50;         // the split alone never clears the floor (reviewed)
+        static final int DRAW_CREDIT = 50;      // per paid entering draw (reviewed)
+        static final int COUNTER_CREDIT = 25;   // a +1/+1 counter (reviewed)
+        static final int SELF_P_W = 15;         // self-counting power, per new body (Sylvan's (c))
+        static final int SELF_T_W = 10;         // self-counting toughness, per new body
+        static final int RACE_TURNS = 2;        // the clock guard's horizon (RC4)
+        static final int HOIST_MARGIN = 50;     // H1: the Offering must beat the creature by half a card
+        static final int SEQ_MIN_SAVING = 2;    // H2: the tokens take at least {2} off the chosen spell
+        static final int ETB_CREDIT = 50;       // H1: a creature's own plain ETB (evaluateCreature ignores it)
+        static final int ENGINE_CREDIT = NET_FLOOR; // H1: a static, trigger or activated engine (RC5)
+        static final String LIFE_TOTAL = "YourLifeTotal";
+        static final int NO = 0, MAYBE = 1, YES = 2;
+        private static final List<ZoneType> TABLE = Arrays.asList(ZoneType.Battlefield, ZoneType.Command);
+
+        enum Window { NONE, END, MAIN2, DEFEND, SAVE, RESPOND, HOIST }
+
+        // ---- shape and window (O(1) on every consult) ----
+
+        // the owner's own paid cast of the root spell from hand, of the reviewed script
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())
+                    || !sa.isSpell() || sa.getParent() != null || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || sa.getApi() != ApiType.ChoosePlayer || !ai.equals(host.getOwner())
+                    || !ai.equals(host.getController()) || !host.isInZone(ZoneType.Hand)) {
+                return false;
+            }
+            final AbilitySub tok = sa.getSubAbility();
+            return tok != null && tok.getApi() == ApiType.Token && TOKEN_SCRIPT.equals(tok.getParam("TokenScript"))
+                    && String.valueOf(TOKENS).equals(tok.getParam("TokenAmount"));
+        }
+
+        static Window window(final Player ai) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!game.getStack().isEmpty()) {
+                final SpellAbility top = game.getStack().peekAbility();
+                final Player by = top == null ? null : top.getActivatingPlayer();
+                return by != null && by.isOpponentOf(ai) ? Window.RESPOND : Window.NONE;
+            }
+            if (ph.is(PhaseType.MAIN2, ai)) {
+                return Window.MAIN2;
+            }
+            final Player active = ph.getPlayerTurn();
+            if (active == null || !active.isOpponentOf(ai)) {
+                return Window.NONE;
+            }
+            if (ph.is(PhaseType.END_OF_TURN)) {
+                return ai.equals(ph.getNextTurn()) ? Window.END : Window.NONE;
+            }
+            final Combat combat = game.getCombat();
+            if (combat == null || !active.equals(combat.getAttackingPlayer()) || combat.getAttackersOf(ai).isEmpty()) {
+                return Window.NONE;
+            }
+            if (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS)) {
+                return Window.DEFEND;
+            }
+            return ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) ? Window.SAVE : Window.NONE;
+        }
+
+        // RemoveDeckFilter.readmit's case: cheapest checks first, each refusal its own return
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa)) {
+                return false;                                  // shape: thefts, copies, Play effects keep A's path
+            }
+            final Window w = window(ai);
+            if (w == Window.NONE) {
+                return false;                                  // window
+            }
+            if (w == Window.RESPOND && Survive.lossFromTop(ai) < 1) {
+                return false;                                  // nothing on top hurts us: O(subs)
+            }
+            if (!castableNow(ai, sa, sa.getHostCard())) {
+                return false;                                  // castable (508330848ca verbatim)
+            }
+            switch (w) {
+                case DEFEND:
+                    return Survive.defend(ai, sa).why == null;
+                case SAVE:
+                case RESPOND:
+                    return Survive.save(ai, sa, w).why == null;
+                default:
+                    return Plan.of(ai, sa, w, 0, null).why == null;
+            }
+        }
+
+        // The spell's own restrictions, then CantBeCast statics; the hand card's prior castSA is put back
+        // (508330848ca verbatim: cantBeCastAbility writes it and nothing resets it).
+        private static boolean castableNow(final Player ai, final SpellAbility sa, final Card host) {
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return false;
+            }
+            final SpellAbility prior = host.getCastSA();
+            try {
+                return !forge.game.staticability.StaticAbilityCantBeCast.cantBeCastAbility(sa, host, ai);
+            } finally {
+                host.setCastSA(prior);
+            }
+        }
+
+        // ---- the value plan: END, MAIN2 and the hook's HOIST ----
+
+        static final class Plan {
+            Window w;
+            String why;                          // null = pass
+            int need, total, white, reserved, reserve, spare, payoff, mentorPayAll, counters, selfPT;
+            int net = Integer.MAX_VALUE;         // min over the opponents judged so far
+            Half ours;
+            Race race;                           // the last opponent's clock (census)
+            String veto;
+
+            private Plan no(final String reason) {
+                why = reason;
+                return this;
+            }
+
+            // reserved: mana a chosen spell keeps (H1's fits test, H2); reservedCost: its test-mode cost
+            static Plan of(final Player ai, final SpellAbility sa, final Window w, final int reserved,
+                    final ManaCostBeingPaid reservedCost) {
+                final Plan p = new Plan();
+                p.w = w;
+                p.reserved = reserved;
+                final Game game = ai.getGame();
+                // 1 mana: the engine's test-mode cost (taxes, reductions: B3-5) within G2, colours too
+                final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+                final HonestMana mana = HonestMana.of(ai, sa, true);
+                p.need = cost.getConvertedManaCost();
+                p.total = mana.total();
+                p.white = mana.colour(MagicColor.WHITE);
+                if (p.total < p.need + reserved || !coversColours(mana, cost, reservedCost)) {
+                    return p.no("mana");
+                }
+                // 2 our half and our entering payoffs (the reserve and the clock need them)
+                p.ours = Half.of(ai, game, false);
+                final int ourC = ai.getCreaturesInPlay().size();
+                final Payoffs pay = Payoffs.of(ai, game, p.ours.p, ourC);
+                p.mentorPayAll = pay.mentorPayAll;
+                p.counters = pay.counters;
+                // 3 MAIN2 only: an entering enabler in hand goes first; the instant reserve is real (RC6)
+                if (w == Window.MAIN2) {
+                    if (enteringEnablerInHand(ai, sa.getHostCard(), null, p.ours.p, p.total)) {
+                        return p.no("entersFirst");
+                    }
+                    p.reserve = cheapestInstant(ai, sa.getHostCard(), p.total);
+                    final int left = p.total - p.need - reserved;
+                    if (left < p.reserve || (p.reserve > 0 && p.mentorPayAll > 0 && left - p.mentorPayAll < p.reserve)) {
+                        return p.no("reserve");
+                    }
+                }
+                p.spare = p.total - p.need - reserved - p.reserve;
+                // 4 the clock (RC4): never slow a race we are winning
+                for (final Player opp : ai.getOpponents()) {
+                    p.race = Race.of(ai, opp, p.ours, pay);
+                    if (p.race.refuse) {
+                        return p.no("race");
+                    }
+                }
+                // 5 their converters (508330848ca's theirTablePays + RC1)
+                p.veto = veto(ai, game);
+                if (p.veto != null) {
+                    return p.no("veto:" + p.veto);
+                }
+                // 6 ours alive on arrival
+                if (p.ours.t < 1) {
+                    return p.no("dies");
+                }
+                // 7 payoffs
+                p.payoff = pay.credit(p.spare);
+                p.selfPT = selfCounting(ai, p.ours.p);
+                // 8 MAIN2 only: something cashes now; a static-only board waits for END
+                if (w == Window.MAIN2 && p.payoff <= 0) {
+                    return p.no("static");
+                }
+                // 9 better half and net, per opponent
+                for (final Player opp : ai.getOpponents()) {
+                    final Half theirs = Half.of(opp, game, true);
+                    if (theirs.p > p.ours.p || theirs.t > p.ours.t) {
+                        return p.no("betterHalf");
+                    }
+                    final int theirC = opp.getCreaturesInPlay().size();
+                    final int life = (ai.canGainLife() ? 2 * (ourC + TOKENS) : 0)
+                            - (opp.canGainLife() ? 2 * (theirC + TOKENS) : 0);
+                    final int net = TOKENS * (value(p.ours) - value(theirs)) + p.payoff + p.selfPT
+                            + Math.min(LIFE_CAP, LIFE_W * life);
+                    p.net = Math.min(p.net, net);
+                    if (net < NET_FLOOR) {
+                        return p.no("net");
+                    }
+                }
+                return p;
+            }
+        }
+
+        // G2's colours cover the Offering's white (at least one) plus the reserved spell's shards
+        static boolean coversColours(final HonestMana mana, final ManaCostBeingPaid cost, final ManaCostBeingPaid reservedCost) {
+            final int w = Math.max(1, cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE));
+            if (reservedCost == null) {
+                return mana.colour(MagicColor.WHITE) >= w;
+            }
+            if (mana.colour(MagicColor.WHITE) < w + reservedCost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)) {
+                return false;
+            }
+            return mana.colour(MagicColor.BLUE) >= reservedCost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE)
+                    && mana.colour(MagicColor.BLACK) >= reservedCost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)
+                    && mana.colour(MagicColor.RED) >= reservedCost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)
+                    && mana.colour(MagicColor.GREEN) >= reservedCost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+
+        // ---- the clock (RC4) ----
+
+        static final class Race {
+            int r, rTok, chump, l, g, kBefore, kAfter;
+            boolean refuse;
+
+            static Race of(final Player ai, final Player opp, final Half ours, final Payoffs pay) {
+                final Race x = new Race();
+                x.r = reach(ai);
+                x.l = opp.getLife();
+                if (x.r <= 0 || !opp.canLoseLife()) {
+                    return x;                     // no clock to protect
+                }
+                final int c = pay.counters;       // Crusade-type counters every creature of ours gets
+                final int tokDs = ours.ds ? 2 : 1;
+                final List<Integer> hits = new ArrayList<>();
+                for (final Card cr : ai.getCreaturesInPlay()) {
+                    if (cr.hasKeyword(Keyword.DEFENDER)) {
+                        continue;
+                    }
+                    final int ds = cr.hasDoubleStrike() ? 2 : 1;
+                    x.rTok += c * ds;
+                    hits.add((Math.max(0, cr.getNetCombatDamage()) + c) * ds);
+                }
+                for (int i = 0; i < TOKENS; i++) {
+                    final int d = Math.max(0, ours.p + c) * tokDs;
+                    x.rTok += d;
+                    hits.add(d);
+                }
+                hits.sort(Collections.reverseOrder());
+                for (int i = 0; i < Math.min(TOKENS, hits.size()); i++) {
+                    x.chump += hits.get(i);       // their three fliers chump our three biggest once
+                }
+                x.g = opp.canGainLife() ? 2 * (opp.getCreaturesInPlay().size() + TOKENS) : 0;
+                x.kBefore = (x.l + x.r - 1) / x.r;
+                final int per = x.r + x.rTok;
+                x.kAfter = Math.max(1, (x.l + x.g + x.chump + per - 1) / per);
+                x.refuse = x.l <= x.r || (x.l <= RACE_TURNS * x.r && x.kAfter > x.kBefore);
+                return x;
+            }
+        }
+
+        // The combat damage our creatures can deal next turn (508330848ca verbatim)
+        private static int reach(final Player ai) {
+            int reach = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (c.hasKeyword(Keyword.DEFENDER)) {
+                    continue;
+                }
+                final int dmg = Math.max(0, c.getNetCombatDamage());
+                reach += c.hasDoubleStrike() ? 2 * dmg : dmg;
+            }
+            return reach;
+        }
+
+        // ---- the halves ----
+
+        // One new Spirit token under ctrl, from continuous statics whose conditions hold now
+        // (508330848ca's tokenStats, now also keeping its keywords). careful=false (OUR token): a filter
+        // the matcher cannot read adds no boost but keeps a debuff; careful=true (THEIR token): the reverse.
+        static final class Half {
+            int p = 1, t = 1, kv;
+            boolean ds;
+            final List<String> kws = new ArrayList<>();
+
+            static Half of(final Player ctrl, final Game game, final boolean careful) {
+                final Half h = new Half();
+                for (final Card c : game.getCardsIn(TABLE)) {
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (!st.checkMode(StaticAbilityMode.Continuous) || !st.hasParam("Affected")
+                                || st.hasParam("AffectedDefined") || !st.checkConditions()) {
+                            continue;
+                        }
+                        final int m = match(st.getParam("Affected"), c.getController(), ctrl, -1);
+                        if (m == NO) {
+                            continue;
+                        }
+                        final int dp = st.hasParam("AddPower") ? AbilityUtils.calculateAmount(c, st.getParam("AddPower"), st, true) : 0;
+                        final int dt = st.hasParam("AddToughness") ? AbilityUtils.calculateAmount(c, st.getParam("AddToughness"), st, true) : 0;
+                        if (m == YES || (careful ? dp > 0 : dp < 0)) {
+                            h.p += dp;
+                        }
+                        if (m == YES || (careful ? dt > 0 : dt < 0)) {
+                            h.t += dt;
+                        }
+                        if (st.hasParam("AddKeyword") && (m == YES || careful)) {
+                            h.kws.addAll(Arrays.asList(st.getParam("AddKeyword").split(" & ")));
+                        }
+                    }
+                }
+                for (final String k : h.kws) {
+                    if ("Double Strike".equals(k.trim())) {
+                        h.ds = true;
+                    }
+                }
+                h.kv = kwValue(h.kws, Math.max(0, h.p), Math.max(0, h.t));
+                return h;
+            }
+        }
+
+        // CreatureEvaluator's weights for a flying token (power 15 plus flying 10 per power, toughness 10)
+        private static int value(final Half h) {
+            return 25 * Math.max(0, h.p) + 10 * Math.max(0, h.t) + h.kv;
+        }
+
+        // CreatureEvaluator's values for the keywords an anthem or lord grants (508330848ca verbatim)
+        private static int kwValue(final List<String> kws, final int p, final int t) {
+            int v = 0;
+            for (final String k : kws) {
+                switch (k.trim()) {
+                    case "Hexproof": v += 35; break;
+                    case "Shroud": v += 30; break;
+                    case "Indestructible": v += 70; break;
+                    case "Double Strike": v += 10 + 15 * p; break;
+                    case "First Strike": v += 10 + 5 * p; break;
+                    case "Lifelink": v += 10 * p; break;
+                    case "Vigilance": v += 5 * p + 5 * t; break;
+                    case "Deathtouch": v += 25; break;
+                    default: break;
+                }
+            }
+            return v;
+        }
+
+        // ---- our entering payoffs (508330848ca's entersPayoff, split so the reserve and the clock can read it) ----
+
+        static final class Payoffs {
+            static final class Entry {
+                Card host;
+                Trigger tr;
+                String valid;
+                boolean counters;   // Crusade-type, else a draw
+                int fires, each, num;
+            }
+
+            final List<Entry> entries = new ArrayList<>();
+            int ourC;
+            int mentorPayAll;       // every paid entering draw the AI could pay as the tokens enter
+            int counters;           // +1/+1 counters each creature of ours gets from the three tokens
+
+            static Payoffs of(final Player ai, final Game game, final int power, final int ourC) {
+                final Payoffs pay = new Payoffs();
+                pay.ourC = ourC;
+                for (final Card c : ai.getCardsIn(TABLE)) {
+                    for (final Trigger tr : c.getTriggers()) {
+                        final boolean all = tr.getMode() == TriggerType.ChangesZoneAll;
+                        if ((tr.getMode() != TriggerType.ChangesZone && !all) || !tr.zonesCheck(game.getZoneOf(c))
+                                || !tr.getParamOrDefault("Destination", "").contains("Battlefield")
+                                || !"Any".equals(tr.getParamOrDefault("Origin", "Any"))) {
+                            continue;
+                        }
+                        final String valid = tr.getParamOrDefault(all ? "ValidCards" : "ValidCard", "");
+                        if (match(valid, ai, ai, power) != YES) {
+                            continue;
+                        }
+                        final Pair<String, Map<String, String>> link = executeLink(tr);
+                        if (link == null) {
+                            continue;
+                        }
+                        final Map<String, String> ex = link.getRight();
+                        final Entry e = new Entry();
+                        e.host = c;
+                        e.tr = tr;
+                        e.valid = valid;
+                        e.fires = all ? 1 : TOKENS;
+                        if ("PutCounterAll".equals(link.getLeft()) && "P1P1".equals(ex.get("CounterType"))
+                                && "Creature.YouCtrl".equals(ex.get("ValidCards"))) {
+                            e.counters = true;
+                            e.num = Math.max(1, AbilityUtils.calculateAmount(c, ex.getOrDefault("CounterNum", "1"), tr));
+                            pay.counters += e.fires * e.num;
+                        } else if ("Draw".equals(link.getLeft()) && "You".equals(ex.getOrDefault("Defined", "You"))) {
+                            final String costText = ex.getOrDefault("Cost", "0").trim();
+                            if (!costText.matches("\\d+")) {
+                                continue;               // a non-mana cost: not credited
+                            }
+                            e.each = Integer.parseInt(costText);
+                            e.num = Math.max(1, AbilityUtils.calculateAmount(c, ex.getOrDefault("NumCards", "1"), tr));
+                            pay.mentorPayAll += e.each * e.fires;
+                        } else {
+                            continue;                   // any other API credits nothing (the safe side)
+                        }
+                        pay.entries.add(e);
+                    }
+                }
+                return pay;
+            }
+
+            // the credit with `spare` mana left after the cast: counters always, paid draws from spare
+            int credit(int spare) {
+                int credit = 0;
+                for (final Entry e : entries) {
+                    if (e.counters) {
+                        credit += e.fires * (ourC + TOKENS) * COUNTER_CREDIT * e.num;
+                    } else {
+                        final int draws = e.each == 0 ? e.fires : Math.min(e.fires, Math.max(0, spare) / e.each);
+                        spare -= draws * e.each;
+                        credit += draws * e.num * DRAW_CREDIT;
+                    }
+                }
+                return credit;
+            }
+        }
+
+        // Our creatures whose P/T counts a filter our token surely matches (Geist-Honored Monk): +1/+1 per body
+        static int selfCounting(final Player ai, final int power) {
+            int credit = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (!st.checkMode(StaticAbilityMode.Continuous)) {
+                        continue;
+                    }
+                    final boolean cda = "True".equalsIgnoreCase(st.getParam("CharacteristicDefining"));
+                    final boolean self = "Self".equals(st.getParam("AffectedDefined"))
+                            || "Card.Self".equals(st.getParam("Affected")) || "Creature.Self".equals(st.getParam("Affected"));
+                    if (!cda && !self) {
+                        continue;
+                    }
+                    final int pm = countMult(st, st.getParam(cda ? "SetPower" : "AddPower"), ai, power);
+                    final int tm = countMult(st, st.getParam(cda ? "SetToughness" : "AddToughness"), ai, power);
+                    credit += TOKENS * (SELF_P_W * pm + SELF_T_W * tm);
+                }
+            }
+            return credit;
+        }
+
+        // N when the amount SVar is "Count$Valid <filter>[/Times.N]" and our token surely matches the filter
+        private static int countMult(final StaticAbility st, final String amount, final Player ai, final int power) {
+            if (amount == null) {
+                return 0;
+            }
+            final String text = st.getSVar(amount);
+            if (text == null || !text.startsWith("Count$Valid ")) {
+                return 0;
+            }
+            final String[] parts = text.substring("Count$Valid ".length()).split("/");
+            int mult = 1;
+            if (parts.length > 1) {
+                if (!parts[1].startsWith("Times.")) {
+                    return 0;
+                }
+                mult = parse(parts[1], 6);
+            }
+            return mult > 0 && match(parts[0].trim(), ai, ai, power) == YES ? mult : 0;
+        }
+
+        // ---- their converters: 508330848ca's theirTablePays, then RC1's four shapes ----
+
+        static String veto(final Player ai, final Game game) {
+            final String w9 = theirTablePays(ai, game);
+            if (w9 != null) {
+                return w9;
+            }
+            for (final Player opp : ai.getOpponents()) {
+                final int tp = Half.of(opp, game, true).p;
+                for (final Card c : opp.getCardsIn(TABLE)) {
+                    for (final Trigger tr : c.getTriggers()) {
+                        if (!tr.zonesCheck(game.getZoneOf(c))) {
+                            continue;
+                        }
+                        final TriggerType mode = tr.getMode();
+                        if ((mode == TriggerType.DamageDone || mode == TriggerType.DamageDoneOnce)
+                                && "True".equalsIgnoreCase(tr.getParam("CombatDamage"))) {
+                            final String tgt = tr.getParam("ValidTarget");
+                            if ((tgt == null || tgt.contains("Player") || tgt.contains("Opponent"))
+                                    && match(tr.getParamOrDefault("ValidSource", "Card"), opp, opp, tp) != NO) {
+                                return label(c) + ":combatDamage";        // (a) Coastal Piracy, Edric
+                            }
+                        } else if (mode == TriggerType.Attacks) {
+                            final String v = tr.getParam("ValidCard");
+                            if (v == null || match(v, opp, opp, tp) != NO) {
+                                return label(c) + ":attack";              // (b)
+                            }
+                        } else if (mode == TriggerType.AttackersDeclared && tr.hasParam("ValidAttackers")
+                                && match(tr.getParam("ValidAttackers"), opp, opp, tp) != NO) {
+                            return label(c) + ":attack";                  // (b)
+                        }
+                    }
+                }
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final SpellAbility ab : c.getSpellAbilities()) {
+                        if (ab.isSpell()) {
+                            continue;
+                        }
+                        final ApiType api = ab.getApi();
+                        if ((api == ApiType.PumpAll || api == ApiType.AnimateAll || api == ApiType.PutCounterAll)
+                                && ab.hasParam("ValidCards") && match(ab.getParam("ValidCards"), opp, opp, tp) != NO) {
+                            return label(c) + ":massPump";                // (c) Mirror Entity, Gavony Township
+                        }
+                        if (outletAmount(ab, opp, tp) >= 0) {
+                            return label(c) + ":engine";                  // (d) altars, Bombardment, Seer
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        // -1 when ab is not a sacrifice/tap-type outlet our gift's bodies feed (mana part CMC <= 1, the
+        // paid card not CARDNAME), else what one activation can take off our life (0 when nothing)
+        static int outletAmount(final SpellAbility ab, final Player opp, final int tp) {
+            final Cost cost = ab.getPayCosts();
+            if (cost == null || cost.getTotalMana().getCMC() > 1) {
+                return -1;
+            }
+            for (final CostPart part : cost.getCostParts()) {
+                if (!(part instanceof CostSacrifice || part instanceof forge.game.cost.CostTapType)
+                        || part.payCostFromSource() || part.getType() == null
+                        || match(part.getType(), opp, opp, tp) == NO) {
+                    continue;
+                }
+                final ApiType api = ab.getApi();
+                if (api == ApiType.DealDamage || api == ApiType.LoseLife) {
+                    return amount(ab.getHostCard(), ab.getParam(api == ApiType.DealDamage ? "NumDmg" : "LifeAmount"), ab, 1);
+                }
+                return 0;
+            }
+            return -1;
+        }
+
+        // 508330848ca's veto, each hit named for the census
+        static String theirTablePays(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(TABLE)) {
+                if ("NonActive".equals(c.getSVar("AICurseEffect"))) {
+                    return label(c) + ":curse";
+                }
+                final Player ctrl = c.getController();
+                final boolean theirs = ctrl != null && ctrl.isOpponentOf(ai);
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (!re.zonesCheck(game.getZoneOf(c))) {
+                        continue;
+                    }
+                    if (re.getMode() == ReplacementType.CreateToken
+                            && (theirs || !re.getParamOrDefault("ValidToken", "").contains("YouCtrl"))) {
+                        return label(c) + ":createToken";
+                    }
+                    if (theirs && re.getMode() == ReplacementType.GainLife) {
+                        return label(c) + ":gainLife";
+                    }
+                }
+                if (!theirs) {
+                    continue;
+                }
+                for (final Trigger tr : c.getTriggers()) {
+                    if (!tr.zonesCheck(game.getZoneOf(c))) {
+                        continue;
+                    }
+                    final TriggerType mode = tr.getMode();
+                    if (mode == TriggerType.LifeGained || mode == TriggerType.TokenCreated
+                            || mode == TriggerType.TokenCreatedOnce) {
+                        return label(c) + ":" + mode.name();
+                    }
+                    if (tr.hasParam("LifeTotal") || readsLifeTotal(tr)) {
+                        return label(c) + ":lifeTotalTrig";
+                    }
+                    if (mode == TriggerType.ChangesZone || mode == TriggerType.ChangesZoneAll) {
+                        final String valid = tr.getParamOrDefault(mode == TriggerType.ChangesZoneAll ? "ValidCards" : "ValidCard", "");
+                        final boolean enters = tr.getParamOrDefault("Destination", "").contains("Battlefield");
+                        final boolean leaves = tr.getParamOrDefault("Origin", "").contains("Battlefield");
+                        if ((enters || leaves) && match(valid, null, null, 1) != NO) {
+                            return label(c) + ":zone(" + valid + ")";
+                        }
+                    }
+                }
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (readsLifeTotal(st)) {
+                        return label(c) + ":lifeTotalStatic";
+                    }
+                }
+                for (final SpellAbility ab : c.getSpellAbilities()) {
+                    if (readsLifeTotal(ab)) {
+                        return label(c) + ":lifeTotalAbility";
+                    }
+                }
+            }
+            return null;
+        }
+
+        // a CheckSVar that names, or whose SVar text holds, YourLifeTotal (508330848ca verbatim)
+        private static boolean readsLifeTotal(final forge.game.CardTraitBase trait) {
+            final String x = trait.getParam("CheckSVar");
+            return x != null && (x.contains(LIFE_TOTAL) || trait.getSVar(x).contains(LIFE_TOTAL));
+        }
+
+        private static String label(final Card c) {
+            return c.getName().replace(' ', '_');
+        }
+
+        // ---- survival: DEFEND, SAVE, RESPOND (no floor, race, better half or veto: RC3) ----
+
+        static final class Survive {
+            String why;                 // null = cast
+            int life, loss, gain, hurt, before, after, grow, giftBlockers;
+
+            private Survive no(final String reason) {
+                why = reason;
+                return this;
+            }
+
+            // The opponent's declared attack at us, before blocks: lethal through our best blocks now,
+            // and we live after the cast with three more flying blockers and the life.
+            static Survive defend(final Player ai, final SpellAbility sa) {
+                final Survive s = new Survive();
+                if (ai.cantLose() || ai.cantLoseForZeroOrLessLife() || !ai.canLoseLife()) {
+                    return s.no("cantLose");
+                }
+                final Game game = ai.getGame();
+                final Combat combat = game.getCombat();
+                if (combat == null) {
+                    return s.no("noCombat");
+                }
+                if (!affordable(ai, sa)) {
+                    return s.no("mana");
+                }
+                final Half ours = Half.of(ai, game, false);
+                final List<Att> atts = new ArrayList<>();
+                for (final Card a : combat.getAttackersOf(ai)) {
+                    atts.add(Att.of(a, ai, ours));
+                }
+                final List<Blk> blks = new ArrayList<>();
+                for (final Card b : ai.getCreaturesInPlay()) {
+                    if (CombatUtil.canBlock(b, false)) {
+                        blks.add(new Blk(b, Math.max(0, b.getLethalDamage())));
+                    }
+                }
+                s.life = ai.getLife();
+                s.before = through(atts, blks);
+                if (s.before < s.life) {
+                    return s.no("notLethal");
+                }
+                final Player opp = combat.getAttackingPlayer();
+                final int ourC = ai.getCreaturesInPlay().size();
+                s.gain = gain(ai, sa.getHostCard(), 2 * (ourC + TOKENS));
+                s.hurt = hurt(ai, opp, game, ours, s.gain);
+                s.grow = grow(ai, opp, game, ours);
+                for (final Att a : atts) {
+                    a.dmg += s.grow * a.mult;
+                }
+                final int gift = Math.max(0, ours.t + Payoffs.of(ai, game, ours.p, ourC).counters);
+                for (int i = 0; i < TOKENS; i++) {
+                    blks.add(new Blk(null, gift));
+                }
+                for (final Att a : atts) {
+                    if (a.giftOk) {
+                        s.giftBlockers++;
+                    }
+                }
+                s.after = through(atts, blks);
+                if (s.life + s.gain - s.hurt - s.after < 1) {
+                    return s.no("noSave");
+                }
+                return s;
+            }
+
+            // SAVE: the declared attack after blocks (RiotControl's read); RESPOND: the opponent's top item
+            static Survive save(final Player ai, final SpellAbility sa, final Window w) {
+                final Survive s = new Survive();
+                if (ai.cantLose() || ai.cantLoseForZeroOrLessLife() || !ai.canLoseLife()) {
+                    return s.no("cantLose");
+                }
+                final Game game = ai.getGame();
+                s.life = ai.getLife();
+                final Half ours = Half.of(ai, game, false);
+                final Player opp;
+                if (w == Window.SAVE) {
+                    final Combat combat = game.getCombat();
+                    if (combat == null) {
+                        return s.no("noCombat");
+                    }
+                    opp = combat.getAttackingPlayer();
+                    s.grow = grow(ai, opp, game, ours);
+                    s.loss = combatLoss(ai, combat, s.grow);
+                } else {
+                    final SpellAbility top = game.getStack().peekAbility();
+                    opp = top == null ? null : top.getActivatingPlayer();
+                    s.loss = lossFromTop(ai);
+                }
+                if (s.loss < 0) {
+                    return s.no("notLife");      // a commander's 21 or poison: life cannot answer it
+                }
+                if (s.life - s.loss >= 1) {
+                    return s.no("notLethal");
+                }
+                s.gain = gain(ai, sa.getHostCard(), 2 * (ai.getCreaturesInPlay().size() + TOKENS));
+                s.hurt = hurt(ai, opp, game, ours, s.gain);
+                if (s.life - s.loss + s.gain - s.hurt < 1) {
+                    return s.no("noSave");
+                }
+                if (!affordable(ai, sa)) {
+                    return s.no("mana");
+                }
+                return s;
+            }
+
+            // what the opponent's top stack item takes off our life by damage or life loss, read part by
+            // part (always advancing, unlike predictDamageFromSpell's continue)
+            static int lossFromTop(final Player ai) {
+                final Game game = ai.getGame();
+                if (game.getStack().isEmpty()) {
+                    return 0;
+                }
+                final SpellAbility top = game.getStack().peekAbility();
+                if (top == null || top.getActivatingPlayer() == null || !top.getActivatingPlayer().isOpponentOf(ai)) {
+                    return 0;
+                }
+                final Card host = top.getHostCard();
+                int loss = 0;
+                for (SpellAbility ab = top; ab != null; ab = ab.getSubAbility()) {
+                    final ApiType api = ab.getApi();
+                    if ((api != ApiType.DealDamage && api != ApiType.LoseLife) || !hitsUs(ab, ai)) {
+                        continue;
+                    }
+                    if (api == ApiType.DealDamage && ab.hasParam("NumDmg")) {
+                        loss += ComputerUtilCombat.predictDamageTo(ai,
+                                AbilityUtils.calculateAmount(host, ab.getParam("NumDmg"), ab), host, false);
+                    } else if (api == ApiType.LoseLife && ab.hasParam("LifeAmount")) {
+                        loss += Math.max(0, AbilityUtils.calculateAmount(host, ab.getParam("LifeAmount"), ab));
+                    }
+                }
+                return loss;
+            }
+
+            private static boolean hitsUs(final SpellAbility ab, final Player ai) {
+                if (ab.usesTargeting()) {
+                    return ab.getTargets() != null && ab.getTargets().contains(ai);
+                }
+                final String d = ab.getParam("Defined");
+                return d != null && (d.contains("Opponent") || d.startsWith("Player"));
+            }
+
+            // RiotControl's replica of the declared attack after blocks; -1 when a live commander reaches
+            // 21 or poison reaches the loss count. grow: their entering counters on every attacker.
+            static int combatLoss(final Player ai, final Combat combat, final int grow) {
+                int loss = 0;
+                int poison = ai.getPoisonCounters();
+                boolean commander = false;
+                for (final Card c : combat.getAttackersOf(ai)) {
+                    final CardCollection blockers = combat.getBlockers(c);
+                    final int mult = c.hasDoubleStrike() ? 2 : 1;
+                    int dealt = 0;
+                    if (blockers.isEmpty() || forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked
+                            .assignCombatDamageAsUnblocked(c)) {
+                        if (c.hasKeyword(Keyword.INFECT)) {
+                            poison += (Math.max(0, c.getNetCombatDamage()) + grow) * mult;
+                            continue;
+                        }
+                        dealt = ComputerUtilCombat.damageIfUnblocked(c, ai, combat, true);
+                        if (dealt > 0) {
+                            dealt += grow * mult;
+                        }
+                    } else if (c.hasKeyword(Keyword.TRAMPLE) && !c.hasKeyword(Keyword.INFECT)) {
+                        final int over = Math.max(0, ComputerUtilCombat.getAttack(c) + grow * mult - shield(blockers));
+                        dealt = over > 0 ? ComputerUtilCombat.predictDamageTo(ai, over, c, true) : 0;
+                    }
+                    loss += dealt;
+                    if (c.isCommander() && dealt > 0 && dealt + ai.getCommanderDamage(c) >= 21) {
+                        commander = true;
+                    }
+                }
+                if (commander || poison >= ai.getGame().getRules().getPoisonCountersToLose()) {
+                    return -1;
+                }
+                return loss;
+            }
+
+            // RiotControl.shield, a private copy
+            private static int shield(final List<Card> blockers) {
+                int total = 0;
+                for (final Card b : blockers) {
+                    total += b.getLethalDamage() + b.getKeywordMagnitude(Keyword.BUSHIDO);
+                }
+                return total;
+            }
+
+            // our gain read honestly: a Tainted Remedy turns it into a loss
+            static int gain(final Player ai, final Card host, final int n) {
+                return ComputerUtil.lifegainNegative(ai, host, n) ? -n : (ComputerUtil.lifegainPositive(ai, host) ? n : 0);
+            }
+
+            // RC8: what their table takes off our life because of the cast
+            static int hurt(final Player ai, final Player opp, final Game game, final Half ours, final int ourGain) {
+                if (opp == null) {
+                    return 0;
+                }
+                final int tp = Half.of(opp, game, true).p;
+                final int theirGain = opp.canGainLife() ? 2 * (opp.getCreaturesInPlay().size() + TOKENS) : 0;
+                int hurt = 0;
+                for (final Card c : opp.getCardsIn(TABLE)) {
+                    for (final Trigger tr : c.getTriggers()) {
+                        if (!tr.zonesCheck(game.getZoneOf(c))) {
+                            continue;
+                        }
+                        final TriggerType mode = tr.getMode();
+                        final boolean all = mode == TriggerType.ChangesZoneAll;
+                        if (mode == TriggerType.ChangesZone || all) {
+                            if (!tr.getParamOrDefault("Destination", "").contains("Battlefield")) {
+                                continue;
+                            }
+                            final String valid = tr.getParamOrDefault(all ? "ValidCards" : "ValidCard", "");
+                            final int sides = (match(valid, opp, opp, tp) != NO ? 1 : 0)
+                                    + (match(valid, opp, ai, ours.p) != NO ? 1 : 0);
+                            final int fires = all ? Math.min(1, sides) : TOKENS * sides;
+                            if (fires > 0) {
+                                hurt += fires * linkHurt(c, tr, 1);         // (1) Impact Tremors, Purphoros
+                            }
+                        } else if (mode == TriggerType.LifeGained) {
+                            final String who = tr.getParamOrDefault("ValidPlayer", "You");
+                            int g = 0;
+                            if (who.contains("Opponent")) {
+                                g += Math.max(0, ourGain);
+                            }
+                            if (who.contains("You")) {
+                                g += theirGain;
+                            }
+                            if ("Player".equals(who)) {
+                                g += Math.max(0, ourGain) + theirGain;
+                            }
+                            if (g > 0) {
+                                hurt += linkHurt(c, tr, g);                 // (2) Sanguine Bond, Vito
+                            }
+                        }
+                    }
+                }
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final SpellAbility ab : c.getSpellAbilities()) {
+                        if (!ab.isSpell()) {
+                            hurt += TOKENS * Math.max(0, outletAmount(ab, opp, tp)); // (3) Goblin Bombardment
+                        }
+                    }
+                }
+                return hurt;
+            }
+
+            // a DealDamage or LoseLife link that can reach us: its amount, else dflt (the gain it answers)
+            private static int linkHurt(final Card c, final Trigger tr, final int dflt) {
+                final Pair<String, Map<String, String>> link = executeLink(tr);
+                if (link == null) {
+                    return 0;
+                }
+                final Map<String, String> ex = link.getRight();
+                final String key = "DealDamage".equals(link.getLeft()) ? "NumDmg"
+                        : ("LoseLife".equals(link.getLeft()) ? "LifeAmount" : null);
+                if (key == null) {
+                    return 0;
+                }
+                final String d = ex.get("Defined");
+                if (!ex.containsKey("ValidTgts") && d != null && !d.contains("Player") && !d.contains("Opponent")
+                        && !d.contains("Controller") && !d.contains("Owner")) {
+                    return 0;
+                }
+                return amount(c, ex.get(key), tr, dflt);
+            }
+
+            // their entering +1/+1 counters on their own creatures (their Cathars' Crusade): per attacker
+            static int grow(final Player ai, final Player opp, final Game game, final Half ours) {
+                if (opp == null) {
+                    return 0;
+                }
+                final int tp = Half.of(opp, game, true).p;
+                int grow = 0;
+                for (final Card c : opp.getCardsIn(TABLE)) {
+                    for (final Trigger tr : c.getTriggers()) {
+                        final boolean all = tr.getMode() == TriggerType.ChangesZoneAll;
+                        if ((tr.getMode() != TriggerType.ChangesZone && !all) || !tr.zonesCheck(game.getZoneOf(c))
+                                || !tr.getParamOrDefault("Destination", "").contains("Battlefield")) {
+                            continue;
+                        }
+                        final String valid = tr.getParamOrDefault(all ? "ValidCards" : "ValidCard", "");
+                        final int sides = (match(valid, opp, opp, tp) != NO ? 1 : 0)
+                                + (match(valid, opp, ai, ours.p) != NO ? 1 : 0);
+                        if (sides == 0) {
+                            continue;
+                        }
+                        final Pair<String, Map<String, String>> link = executeLink(tr);
+                        if (link == null || !"PutCounterAll".equals(link.getLeft())
+                                || !"P1P1".equals(link.getRight().get("CounterType"))
+                                || match(link.getRight().getOrDefault("ValidCards", ""), opp, opp, tp) == NO) {
+                            continue;
+                        }
+                        grow += (all ? 1 : TOKENS * sides) * amount(c, link.getRight().get("CounterNum"), tr, 1);
+                    }
+                }
+                return grow;
+            }
+
+            // An attacker at us: its damage (double strike twice, infect none), trample, menace count, and
+            // whether our gift token may block it (no CantBlock on our token, no CantBlockBy naming it
+            // whose ValidBlocker can be our token: Flying's withoutFlying cannot, Pathlighter's nonLegendary can)
+            static final class Att {
+                Card card;
+                int dmg, mult, minBlk;
+                boolean trample, giftOk;
+
+                static Att of(final Card c, final Player ai, final Half ours) {
+                    final Att a = new Att();
+                    a.card = c;
+                    a.mult = c.hasKeyword(Keyword.INFECT) ? 0 : (c.hasDoubleStrike() ? 2 : 1);
+                    a.dmg = Math.max(0, c.getNetCombatDamage()) * a.mult;
+                    a.trample = c.hasKeyword(Keyword.TRAMPLE);
+                    a.minBlk = Math.max(1, CombatUtil.getMinNumBlockersForAttacker(c, ai));
+                    a.giftOk = giftCanBlock(c, ai, ours);
+                    return a;
+                }
+            }
+
+            static final class Blk {
+                final Card card;        // null = our gift token
+                final int tough;
+
+                Blk(final Card card, final int tough) {
+                    this.card = card;
+                    this.tough = tough;
+                }
+            }
+
+            static boolean giftCanBlock(final Card attacker, final Player ai, final Half ours) {
+                final CardCollection list = new CardCollection(attacker);
+                list.addAllUnique(ai.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
+                for (final Card ca : list) {
+                    for (final StaticAbility st : ca.getStaticAbilities()) {
+                        if (st.checkMode(StaticAbilityMode.CantBlock) && st.checkConditions(StaticAbilityMode.CantBlock)
+                                && match(st.getParamOrDefault("ValidCard", "Card"), ca.getController(), ai, ours.p) != NO) {
+                            return false;
+                        }
+                        if (!st.checkMode(StaticAbilityMode.CantBlockBy) || !st.checkConditions(StaticAbilityMode.CantBlockBy)
+                                || !st.matchesValidParam("ValidAttacker", attacker)) {
+                            continue;
+                        }
+                        if (!st.hasParam("ValidBlocker")
+                                || match(st.getParam("ValidBlocker"), ca.getController(), ai, ours.p) != NO) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+
+            // Damage through our best blocks: the most constrained attacker first; a non-trampler takes its
+            // smallest able blockers (any chump stops it), a trampler its biggest; then every unused blocker
+            // soaks the blocked trampler with the most excess it can block. A blocker blocks one attacker.
+            static int through(final List<Att> atts, final List<Blk> blks) {
+                final int na = atts.size(), nb = blks.size();
+                final boolean[][] can = new boolean[na][nb];
+                final int[] able = new int[na];
+                for (int i = 0; i < na; i++) {
+                    final Att a = atts.get(i);
+                    for (int j = 0; j < nb; j++) {
+                        final Blk b = blks.get(j);
+                        can[i][j] = b.card == null ? a.giftOk : CombatUtil.canBlock(a.card, b.card, false);
+                        if (can[i][j]) {
+                            able[i]++;
+                        }
+                    }
+                }
+                final List<Integer> order = new ArrayList<>();
+                for (int i = 0; i < na; i++) {
+                    order.add(i);
+                }
+                order.sort((x, y) -> able[x] != able[y] ? Integer.compare(able[x], able[y])
+                        : (atts.get(x).dmg != atts.get(y).dmg ? Integer.compare(atts.get(y).dmg, atts.get(x).dmg)
+                        : Integer.compare(atts.get(x).card.getId(), atts.get(y).card.getId())));
+                final boolean[] used = new boolean[nb];
+                final boolean[] blocked = new boolean[na];
+                final int[] soak = new int[na];
+                for (final int i : order) {
+                    final Att a = atts.get(i);
+                    final List<Integer> mine = new ArrayList<>();
+                    for (int j = 0; j < nb; j++) {
+                        if (!used[j] && can[i][j]) {
+                            mine.add(j);
+                        }
+                    }
+                    if (mine.size() < a.minBlk) {
+                        continue;                 // unblocked: all of it
+                    }
+                    mine.sort((x, y) -> a.trample ? Integer.compare(blks.get(y).tough, blks.get(x).tough)
+                            : Integer.compare(blks.get(x).tough, blks.get(y).tough));
+                    for (int k = 0; k < a.minBlk; k++) {
+                        used[mine.get(k)] = true;
+                        soak[i] += blks.get(mine.get(k)).tough;
+                    }
+                    blocked[i] = true;
+                }
+                final List<Integer> rest = new ArrayList<>();
+                for (int j = 0; j < nb; j++) {
+                    if (!used[j]) {
+                        rest.add(j);
+                    }
+                }
+                rest.sort((x, y) -> Integer.compare(blks.get(y).tough, blks.get(x).tough));
+                for (final int j : rest) {
+                    int best = -1, bestEx = 0;
+                    for (int i = 0; i < na; i++) {
+                        final Att a = atts.get(i);
+                        if (blocked[i] && a.trample && can[i][j] && a.dmg - soak[i] > bestEx) {
+                            best = i;
+                            bestEx = a.dmg - soak[i];
+                        }
+                    }
+                    if (best >= 0) {
+                        soak[best] += blks.get(j).tough;
+                    }
+                }
+                int sum = 0;
+                for (int i = 0; i < na; i++) {
+                    final Att a = atts.get(i);
+                    sum += !blocked[i] ? a.dmg : (a.trample ? Math.max(0, a.dmg - soak[i]) : 0);
+                }
+                return sum;
+            }
+        }
+
+        // the test-mode cost within G2, in total and in white (RiotControl's shape)
+        static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.WHITE) >= Math.max(1, cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE));
+        }
+
+        // a literal amount, else calculateAmount on the trait, never below dflt
+        static int amount(final Card host, final String text, final forge.game.CardTraitBase trait, final int dflt) {
+            if (text == null) {
+                return dflt;
+            }
+            final String t = text.trim();
+            if (t.matches("\\d+")) {
+                return Integer.parseInt(t);
+            }
+            return Math.max(dflt, AbilityUtils.calculateAmount(host, t, trait));
+        }
+
+        // ---- the hand reads shared by MAIN2 and the hook ----
+
+        // Sylvan Offering's asksController, a private copy (B3-4): never test-cost such a spell (G1's caveat)
+        static boolean asksController(final SpellAbility s) {
+            final Card h = s.getHostCard();
+            if (h != null && (h.hasKeyword(Keyword.CONVOKE) || h.hasKeyword(Keyword.DELVE) || h.hasKeyword(Keyword.IMPROVISE)
+                    || h.hasKeyword(Keyword.ASSIST) || h.hasKeyword(Keyword.EMERGE) || h.hasKeyword(Keyword.OFFERING))) {
+                return true;
+            }
+            if (s.getPayCosts() != null && s.getPayCosts().getMaxWaterbend() != null) {
+                return true;
+            }
+            final String ann = s.getParam("Announce");
+            return ann != null && ann.contains("NumTimes");
+        }
+
+        // what a hand spell costs now: printed CMC for a controller-asking cost, else the test-mode cost
+        private static int handCost(final Player ai, final SpellAbility s) {
+            s.setActivatingPlayer(ai);         // the list builder's own write (ComputerUtilAbility:104)
+            return asksController(s) ? s.getPayCosts().getTotalMana().getCMC()
+                    : ComputerUtilMana.calculateManaCost(s.getPayCosts(), s, ai, true, 0, false).getConvertedManaCost();
+        }
+
+        // the cheapest castable instant or flash card in hand other than an Offering (Sylvan's reserve rule,
+        // extended to Flash: Nebelgast Herald and Spectral Sailor wait for the opponent's end step too)
+        static int cheapestInstant(final Player ai, final Card offCard, final int total) {
+            int best = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.equals(offCard) || (c.getRules() != null && NAME.equals(c.getRules().getName()))
+                        || !(c.isInstant() || c.hasKeyword(Keyword.FLASH))) {
+                    continue;
+                }
+                for (final SpellAbility s : c.getSpellAbilities()) {
+                    if (!s.isSpell() || s.getParent() != null || s.costHasManaX()) {
+                        continue;
+                    }
+                    final int cost = handCost(ai, s);
+                    if (cost > 0 && cost <= total && (best == 0 || cost < best)) {
+                        best = cost;
+                    }
+                }
+            }
+            return best;
+        }
+
+        // An entering enabler: an enters trigger, whatever its API, whose filter surely matches our token
+        // (Mentor of the Meek, Cathars' Crusade, Nebelgast Herald: RC5(d))
+        static boolean isEnteringEnabler(final Card card, final Player ai, final int power) {
+            for (final Trigger tr : card.getTriggers()) {
+                final boolean all = tr.getMode() == TriggerType.ChangesZoneAll;
+                if ((tr.getMode() == TriggerType.ChangesZone || all)
+                        && tr.getParamOrDefault("Destination", "").contains("Battlefield")
+                        && "Any".equals(tr.getParamOrDefault("Origin", "Any"))
+                        && match(tr.getParamOrDefault(all ? "ValidCards" : "ValidCard", ""), ai, ai, power) == YES) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A static enabler: a side-named anthem that surely reaches our token with P/T or a valued keyword
+        static boolean isStaticEnabler(final Card card, final Player ai) {
+            for (final StaticAbility st : card.getStaticAbilities()) {
+                if (!st.checkMode(StaticAbilityMode.Continuous) || !st.hasParam("Affected") || st.hasParam("AffectedDefined")
+                        || match(st.getParam("Affected"), ai, ai, -1) != YES) {
+                    continue;
+                }
+                final int dp = st.hasParam("AddPower") ? AbilityUtils.calculateAmount(card, st.getParam("AddPower"), st, true) : 0;
+                final int dt = st.hasParam("AddToughness") ? AbilityUtils.calculateAmount(card, st.getParam("AddToughness"), st, true) : 0;
+                final List<String> kws = st.hasParam("AddKeyword")
+                        ? Arrays.asList(st.getParam("AddKeyword").split(" & ")) : Collections.emptyList();
+                if (dp > 0 || dt > 0 || kwValue(kws, 1, 1) > 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // a castable entering enabler in hand (not the Offering, not the chosen card)
+        static boolean enteringEnablerInHand(final Player ai, final Card offCard, final Card chosen, final int power, final int total) {
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.equals(offCard) || c.equals(chosen) || !isEnteringEnabler(c, ai, power)) {
+                    continue;
+                }
+                for (final SpellAbility s : c.getSpellAbilities()) {
+                    if (s.isSpell() && s.getParent() == null && !s.costHasManaX() && handCost(ai, s) <= total) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // ---- commit 2: the Main-2 hoist ----
+
+        public static final class Hoist {
+            String why;                 // the refusal, or H1 / H2
+            public boolean pick;        // cast the Offering in place of the chosen play
+            public SpellAbility offering;
+            public final List<Card> hold = new ArrayList<>();   // H2: the chosen spell's off-white sources
+            String chosenName, h2;      // h2: why H2 did not fire
+            int total, need, chosenCost, saving, costAfter, chosenExtra, reserve, vc, net = Integer.MIN_VALUE;
+
+            private Hoist no(final String reason) {
+                why = reason;
+                return this;
+            }
+
+            private Hoist yes(final String reason) {
+                why = reason;
+                pick = true;
+                return this;
+            }
+        }
+
+        // AiController.getSpellAbilityToPlay's hook: null when inert, else the decision (pick, offering, hold)
+        public static Hoist findHoist(final Player ai, final SpellAbility chosen, final List<SpellAbility> saList) {
+            final Hoist h = hoist(ai, chosen, saList);
+            return h;
+        }
+
+        // null = inert (no census line); else the decision
+        static Hoist hoist(final Player ai, final SpellAbility chosen, final List<SpellAbility> saList) {
+            final Card offCard = offeringInHand(ai);              // RC9: the paper-name hand test first
+            if (offCard == null || chosen == null) {
+                return null;
+            }
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty() || !game.getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return null;
+            }
+            final Card chosenHost = chosen.getHostCard();
+            if (chosenHost == null || chosenHost.equals(offCard)) {
+                return null;
+            }
+            final SpellAbility off = offeringSa(ai, offCard, saList);
+            if (off == null) {
+                return null;
+            }
+            final Hoist h = new Hoist();
+            h.offering = off;
+            h.chosenName = chosenHost.getName();
+            // the chosen play: our own creature spell from hand or the command zone
+            if (!chosen.isSpell() || chosen.getParent() != null || chosen.isCopied() || chosen.isCastFromPlayEffect()
+                    || chosen.getApi() != ApiType.PermanentCreature || !ai.equals(chosenHost.getOwner())
+                    || !ai.equals(chosenHost.getController())
+                    || !(chosenHost.isInZone(ZoneType.Hand) || chosenHost.isInZone(ZoneType.Command))) {
+                return h.no("notCreature");
+            }
+            if (asksController(chosen) || chosen.costHasManaX()) {
+                return h.no("asks");
+            }
+            final ManaCostBeingPaid chosenCost = ComputerUtilMana.calculateManaCost(chosen.getPayCosts(), chosen, ai, true, 0, false);
+            final ManaCostBeingPaid offCost = ComputerUtilMana.calculateManaCost(off.getPayCosts(), off, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, off, true);
+            h.total = mana.total();
+            h.need = offCost.getConvertedManaCost();
+            h.chosenCost = chosenCost.getConvertedManaCost();
+            final Half ours = Half.of(ai, game, false);
+            final int ourC = ai.getCreaturesInPlay().size();
+            final Payoffs pay = Payoffs.of(ai, game, ours.p, ourC);
+            // enablers: never displaced, never run ahead of (RC5(d)), H2 included
+            if (isStaticEnabler(chosenHost, ai) || isEnteringEnabler(chosenHost, ai, ours.p)) {
+                return h.no("enabler");
+            }
+            if (enteringEnablerInHand(ai, offCard, chosenHost, ours.p, h.total)) {
+                return h.no("entersFirst");
+            }
+            h.reserve = cheapestInstant(ai, offCard, h.total);
+            // H2: the tokens make the chosen spell cheaper, so both fit this turn (RC7's read)
+            h.saving = Math.min(affinitySaving(chosenHost, ai, ours.p), chosenCost.getGenericManaAmount());
+            if (h.saving >= SEQ_MIN_SAVING) {
+                h.costAfter = h.chosenCost - h.saving;
+                if (h.total < h.need + h.costAfter || !coversColours(mana, offCost, chosenCost)) {
+                    h.h2 = "mana";
+                } else if (h.total - h.need - pay.mentorPayAll < h.costAfter) {
+                    h.h2 = "seqPay";            // the AI pays every affordable Mentor trigger first
+                } else if (dropsReserve(h.total, h.chosenCost, h.need + h.costAfter + pay.mentorPayAll, h.reserve)) {
+                    h.h2 = "reserve";
+                } else {
+                    final Plan p = Plan.of(ai, off, Window.HOIST, h.costAfter, chosenCost);
+                    h.net = p.net;
+                    if (p.why == null) {
+                        h.hold.addAll(holdFor(ai, chosenCost));
+                        return h.yes("H2");
+                    }
+                    h.h2 = "plan:" + p.why;
+                }
+            }
+            // H1 guards
+            if (chosenHost.isCommander()) {
+                return h.no("commander");
+            }
+            if (!chosenHost.getManaAbilities().isEmpty()) {
+                return h.no("manaSource");
+            }
+            if (staticEnablerStarved(ai, offCard, chosenHost, h.total, h.total - h.need)) {
+                return h.no("staticFirst");
+            }
+            // the chosen creature as it would stand on our board, with what it pays (RC5)
+            final Boost b = Boost.of(ai, game, chosenHost);
+            final int bp = chosenHost.getNetPower() + b.dp;
+            final int bt = chosenHost.getNetToughness() + b.dt;
+            int vc = ComputerUtilCard.evaluateCreature(chosen)
+                    + 15 * b.dp + 10 * b.dt + (chosenHost.hasKeyword(Keyword.FLYING) ? 10 * b.dp : 0)
+                    + kwValue(b.kws, Math.max(0, bp), Math.max(0, bt))
+                    + engineCredit(chosenHost) + spellCastCredit(ai, game, chosenHost);
+            for (final Payoffs.Entry e : pay.entries) {
+                if (!validAt(chosenHost, e.valid, e.host, e.tr, bp)) {
+                    continue;
+                }
+                if (e.counters) {
+                    vc += COUNTER_CREDIT * (ourC + 1) * e.num;
+                } else if (e.each == 0) {
+                    vc += DRAW_CREDIT * e.num;
+                } else if (h.total - h.chosenCost - h.chosenExtra >= e.each) {
+                    vc += DRAW_CREDIT * e.num;
+                    h.chosenExtra += e.each;
+                }
+            }
+            h.vc = vc;
+            // fits: both fit with the Offering still above its floor -> the creature first, the next pass judges
+            final int aSpend = h.chosenCost + h.chosenExtra;
+            if (h.total - aSpend >= h.need && coversColours(mana, offCost, chosenCost)
+                    && Plan.of(ai, off, Window.HOIST, aSpend, chosenCost).why == null) {
+                return h.no("fits");
+            }
+            if (dropsReserve(h.total, aSpend, h.need + pay.mentorPayAll, h.reserve)) {
+                return h.no("reserve");
+            }
+            final Plan p = Plan.of(ai, off, Window.HOIST, 0, null);
+            h.net = p.net;
+            if (p.why != null) {
+                return h.no("plan:" + p.why);
+            }
+            return p.net >= vc + HOIST_MARGIN ? h.yes("H1") : h.no("value");
+        }
+
+        // H2's hold: one untapped source per off-white shard of the chosen spell, sources that cannot make
+        // white first, then by card id, so the Offering's payer leaves them for the spell it makes cheaper
+        // (the hook remembers them in HELD_MANA_SOURCES_FOR_NEXT_SPELL, which isManaSourceReserved obeys
+        // before any random draw). Deterministic: no test payment.
+        static List<Card> holdFor(final Player ai, final ManaCostBeingPaid chosenCost) {
+            final List<Card> hold = new ArrayList<>();
+            final List<Card> sources = new ArrayList<>();
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.getManaAbilities().isEmpty()) {
+                    sources.add(c);
+                }
+            }
+            sources.sort(Comparator.comparingInt(Card::getId));
+            final forge.card.mana.ManaCostShard[] shards = {forge.card.mana.ManaCostShard.BLUE,
+                    forge.card.mana.ManaCostShard.BLACK, forge.card.mana.ManaCostShard.RED,
+                    forge.card.mana.ManaCostShard.GREEN};
+            final String[] letters = {"U", "B", "R", "G"};
+            for (int k = 0; k < shards.length; k++) {
+                int want = chosenCost.getUnpaidShards(shards[k]);
+                for (int pass = 0; pass < 2 && want > 0; pass++) {
+                    for (final Card c : sources) {
+                        if (want > 0 && !hold.contains(c) && makes(c, ai, letters[k])
+                                && (pass == 1 || !makes(c, ai, "W"))) {
+                            hold.add(c);
+                            want--;
+                        }
+                    }
+                }
+            }
+            return hold;
+        }
+
+        // an untapped source of ours whose free mana ability can make this colour now
+        private static boolean makes(final Card c, final Player ai, final String colour) {
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                ma.setActivatingPlayer(ai);     // HonestMana's own write
+                if (ma.getManaPart() != null && !ma.getPayCosts().hasManaCost() && ma.canPlay()
+                        && ma.getManaPart().canProduce(colour, ma)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A's line kept the instant reserve and B's would not
+        private static boolean dropsReserve(final int total, final int aSpend, final int bSpend, final int reserve) {
+            return reserve > 0 && total - aSpend >= reserve && total - bSpend < reserve;
+        }
+
+        static Card offeringInHand(final Player ai) {
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.getRules() != null && NAME.equals(c.getRules().getName()) && ai.equals(c.getOwner())) {
+                    return c;
+                }
+            }
+            return null;
+        }
+
+        // the saList SA when the filter readmitted it, else the hand card's own root spell
+        private static SpellAbility offeringSa(final Player ai, final Card offCard, final List<SpellAbility> saList) {
+            for (final SpellAbility s : saList) {
+                if (!s.isSkip() && offCard.equals(s.getHostCard()) && isOwnHandCast(ai, s)) {
+                    return s;
+                }
+            }
+            for (final SpellAbility s : offCard.getSpellAbilities()) {
+                if (!s.isSkip() && isOwnHandCast(ai, s)) {
+                    s.setActivatingPlayer(ai);
+                    return s;
+                }
+            }
+            return null;
+        }
+
+        // affinity-type reductions the three tokens add: ReduceCost Card.Self whose Amount SVar, read on the
+        // static itself (CardFactoryUtil sets AffinityX there: RC7), counts a filter our token surely matches
+        static int affinitySaving(final Card card, final Player ai, final int power) {
+            int saving = 0;
+            for (final StaticAbility st : card.getStaticAbilities()) {
+                if (!st.checkMode(StaticAbilityMode.ReduceCost) || !"Card.Self".equals(st.getParam("ValidCard"))
+                        || !st.hasParam("Amount")) {
+                    continue;
+                }
+                final String text = st.getSVar(st.getParam("Amount"));
+                if (text == null || !text.startsWith("Count$Valid ")) {
+                    continue;
+                }
+                if (match(text.substring("Count$Valid ".length()).split("/")[0].trim(), ai, ai, power) == YES) {
+                    saving += TOKENS;
+                }
+            }
+            return saving;
+        }
+
+        // a castable static enabler in hand that the Offering's mana would leave unaffordable
+        private static boolean staticEnablerStarved(final Player ai, final Card offCard, final Card chosen,
+                final int total, final int leftAfter) {
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.equals(offCard) || c.equals(chosen) || !isStaticEnabler(c, ai)) {
+                    continue;
+                }
+                for (final SpellAbility s : c.getSpellAbilities()) {
+                    if (s.isSpell() && s.getParent() == null && !s.costHasManaX()) {
+                        final int cost = handCost(ai, s);
+                        if (cost <= total && cost > leftAfter) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // every static of any table card that reaches the chosen card (the engine's own matcher on a real card)
+        static final class Boost {
+            int dp, dt;
+            final List<String> kws = new ArrayList<>();
+
+            static Boost of(final Player ai, final Game game, final Card card) {
+                final Boost b = new Boost();
+                for (final Card c : game.getCardsIn(TABLE)) {
+                    if (c.equals(card)) {
+                        continue;
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (!st.checkMode(StaticAbilityMode.Continuous) || !st.hasParam("Affected")
+                                || st.hasParam("AffectedDefined") || !st.checkConditions()
+                                || !card.isValid(st.getParam("Affected").split(","), c.getController(), c, st)) {
+                            continue;
+                        }
+                        if (st.hasParam("AddPower")) {
+                            b.dp += AbilityUtils.calculateAmount(c, st.getParam("AddPower"), st, true);
+                        }
+                        if (st.hasParam("AddToughness")) {
+                            b.dt += AbilityUtils.calculateAmount(c, st.getParam("AddToughness"), st, true);
+                        }
+                        if (st.hasParam("AddKeyword")) {
+                            b.kws.addAll(Arrays.asList(st.getParam("AddKeyword").split(" & ")));
+                        }
+                    }
+                }
+                return b;
+            }
+        }
+
+        // RC5 (a)+(b): what evaluateCreature cannot see on the chosen card
+        static int engineCredit(final Card card) {
+            int v = 0;
+            for (final StaticAbility st : card.getStaticAbilities()) {
+                if (st.getKeyword() == null && !st.isSecondary()
+                        && !"True".equalsIgnoreCase(st.getParam("CharacteristicDefining"))) {
+                    v += ENGINE_CREDIT;                       // Windborn Muse, Drogskol Captain
+                }
+            }
+            for (final Trigger tr : card.getTriggers()) {
+                if (tr.getKeyword() != null || tr.isSecondary()) {
+                    continue;
+                }
+                if (tr.getMode() == TriggerType.ChangesZone && "Card.Self".equals(tr.getParam("ValidCard"))
+                        && tr.getParamOrDefault("Destination", "").contains("Battlefield")) {
+                    v += etbEngine(tr) ? ENGINE_CREDIT : ETB_CREDIT;   // Flickerwisp : Hanged Executioner
+                } else {
+                    v += ENGINE_CREDIT;                       // Kemba, Geist of Saint Traft, Bygone Bishop
+                }
+            }
+            for (final SpellAbility ab : card.getSpellAbilities()) {
+                if (ab.isSpell() || ab.isManaAbility() || ab.getKeyword() != null || ab.isSecondary()) {
+                    continue;
+                }
+                final ZoneType z = ab.getRestrictions() == null ? null : ab.getRestrictions().getZone();
+                if (z == null || z == ZoneType.Battlefield) {
+                    v += ENGINE_CREDIT;                       // Remorseful Cleric, Spectral Sailor
+                }
+            }
+            return v;
+        }
+
+        // an own ETB that targets, or moves another card onto the battlefield or into a hand
+        private static boolean etbEngine(final Trigger tr) {
+            final Pair<String, Map<String, String>> link = executeLink(tr);
+            if (link == null) {
+                return false;
+            }
+            final Map<String, String> ex = link.getRight();
+            if (ex.containsKey("ValidTgts")) {
+                return true;
+            }
+            final String dest = ex.getOrDefault("Destination", "");
+            return ("ChangeZone".equals(link.getLeft()) || "ChangeZoneAll".equals(link.getLeft()))
+                    && (dest.contains("Battlefield") || dest.contains("Hand")) && !"Self".equals(ex.get("Defined"));
+        }
+
+        // our SpellCast triggers the chosen spell sets off (Sire of the Storm, Bygone Bishop)
+        private static int spellCastCredit(final Player ai, final Game game, final Card card) {
+            int v = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger tr : c.getTriggers()) {
+                    if (tr.getMode() != TriggerType.SpellCast || !tr.zonesCheck(game.getZoneOf(c))) {
+                        continue;
+                    }
+                    final String who = tr.getParam("ValidActivatingPlayer");
+                    final String valid = tr.getParam("ValidCard");
+                    if ((who == null || "You".equals(who))
+                            && (valid == null || card.isValid(valid.split(","), ai, c, tr))) {
+                        v += DRAW_CREDIT;
+                    }
+                }
+            }
+            return v;
+        }
+
+        // isValid on a real card with power filters read at the power it would have on our board
+        private static boolean validAt(final Card card, final String valid, final Card host,
+                final forge.game.CardTraitBase trait, final int power) {
+            for (final String alt : valid.split(",")) {
+                final String[] hr = alt.trim().split("\\.", 2);
+                final List<String> keep = new ArrayList<>();
+                boolean ok = true;
+                if (hr.length > 1) {
+                    for (final String q : hr[1].split("\\+")) {
+                        if (q.startsWith("powerLE")) {
+                            ok &= power <= parse(q, 7);
+                        } else if (q.startsWith("powerGE")) {
+                            ok &= power >= parse(q, 7);
+                        } else {
+                            keep.add(q);
+                        }
+                    }
+                }
+                final String rest = keep.isEmpty() ? hr[0] : hr[0] + "." + String.join("+", keep);
+                if (ok && card.isValid(rest, host.getController(), host, trait)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // ---- the matcher (508330848ca, with the census's NO-list amendments) ----
+
+        // One Valid param (comma-separated alternatives) against a new 1/1 white flying Spirit creature
+        // token: YES when an alternative surely matches, MAYBE when one might, else NO. srcCtrl/tokenCtrl
+        // null = either side. power < 0 = unknown (power filters read MAYBE).
+        static int match(final String valid, final Player srcCtrl, final Player tokenCtrl, final int power) {
+            int best = NO;
+            for (final String alt : valid.split(",")) {
+                final String[] hr = alt.trim().split("\\.", 2);
+                if (!("Creature".equals(hr[0]) || "Spirit".equals(hr[0]) || "Card".equals(hr[0])
+                        || "Permanent".equals(hr[0]))) {
+                    continue;
+                }
+                int r = YES;
+                if (hr.length > 1) {
+                    for (final String q : hr[1].split("\\+")) {
+                        r = Math.min(r, restriction(q, srcCtrl, tokenCtrl, power));
+                    }
+                }
+                best = Math.max(best, r);
+            }
+            return best;
+        }
+
+        private static int restriction(final String q, final Player src, final Player tok, final int power) {
+            switch (q) {
+                case "YouCtrl": case "YouOwn":
+                    return src == null || tok == null ? YES : (src.equals(tok) ? YES : NO);
+                case "OppCtrl": case "OppOwn":
+                    return src == null || tok == null ? YES : (src.isOpponentOf(tok) ? YES : NO);
+                case "Other": case "token": case "Token": case "White": case "Spirit": case "Creature":
+                case "withFlying": case "nonLand": case "nonArtifact": case "nonLegendary": case "nonHuman":
+                case "untapped": case "nonBlack": case "nonBlue": case "nonRed": case "nonGreen":
+                case "cmcEQ0":
+                    return YES;
+                case "nonToken": case "!token": case "Self": case "withoutFlying": case "nonWhite":
+                case "nonSpirit": case "tapped": case "attacking": case "blocking": case "nonCreature":
+                case "Colorless": case "IsCommander": case "IsRemembered": case "IsImprinted": case "faceDown":
+                case "Legendary": case "Black": case "Blue": case "Red": case "Green": case "Multicolor":
+                    return NO;
+                case "EquippedBy": case "EnchantedBy": case "AttachedBy":
+                    return src == null ? MAYBE : NO;
+                default:
+                    if (power >= 0 && q.startsWith("powerLE")) {
+                        return power <= parse(q, 7) ? YES : NO;
+                    }
+                    if (power >= 0 && q.startsWith("powerGE")) {
+                        return power >= parse(q, 7) ? YES : NO;
+                    }
+                    return MAYBE;
+            }
+        }
+
+        private static int parse(final String q, final int from) {
+            try {
+                return Integer.parseInt(q.substring(from));
+            } catch (NumberFormatException e) {
+                return Integer.MIN_VALUE;
+            }
+        }
+
+        // The trigger's first Execute link as {API name, params} (508330848ca verbatim): the built
+        // overriding ability when there is one, else the Execute SVar's text (no ability is built).
+        static Pair<String, Map<String, String>> executeLink(final Trigger tr) {
+            final SpellAbility built = tr.getOverridingAbility();
+            if (built != null) {
+                return Pair.of(built.getApi() == null ? "" : built.getApi().name(), built.getMapParams());
+            }
+            final String svar = tr.getParam("Execute");
+            final String text = svar == null ? "" : tr.getSVar(svar);
+            if (text.isEmpty()) {
+                return null;
+            }
+            final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+            String api = params.get("DB");
+            if (api == null) {
+                api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+            }
+            return Pair.of(api == null ? "" : api, params);
+        }
+    }
+
     // Berserker's Frenzy (dead-card batch 2, row 80; precon:Draconic Rage (AFC))
     // "Cast this spell only before combat or during combat before blockers are declared. Roll two
     // d20 and ignore the lower roll. 1-14: Choose any number of creatures. They block this turn if
@@ -34987,9 +36609,9 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
-    // 8, 10, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52, 57,
-    // 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row
-    // 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
+    // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's
+    // row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -35099,6 +36721,8 @@ public class SpecialCardAi {
                     return Skyscribing.readmit(ai, sa);
                 case SharedTrauma.NAME:
                     return SharedTrauma.readmit(ai, sa);
+                case BenevolentOffering.NAME:            // batch 3, row 11 (W11)
+                    return BenevolentOffering.readmit(ai, sa);
                 default:
                     return false;
             }
