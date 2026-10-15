@@ -1737,6 +1737,12 @@ public class AiController {
             Sentry.captureMessage(ex.getMessage() + "\nAssertionError [verifyTransitivity]: " + assertex);
         }
 
+        // Dead-card batch 3, row 6: Sylvan Offering before its "draw for each creature" follower in
+        // the same Main 2. Inert (an O(1) phase test) outside our own Main 2 with an empty stack;
+        // draws nothing, makes no card; either moves that follower to just after Offering or leaves
+        // the list exactly as it is.
+        SpecialCardAi.SylvanOffering.sequenceFollower(player, all);
+
         FutureTask<SpellAbility> future = new FutureTask<>(() -> {
             //avoid ComputerUtil.aiLifeInDanger in loops as it slows down a lot.. call this outside loops will generally be fast...
             boolean isLifeInDanger = useLivingEnd && ComputerUtil.aiLifeInDanger(player, true, 0);

@@ -40620,6 +40620,10 @@ public class SpecialCardAi {
     //   blockers for the dying); their half bigger on a stat (CantPlayAi, before the draw).
     // Then setMaxXValue sizes the real X and the exact halves are built (TokenAi.spawnToken, 3482c8b3130's
     // protos), and X is capped at the largest x that still clears every floor.
+    // Follower (final-design.md commit 2): with a castable Collective Unconscious or Shamanic Revelation
+    // in hand, AiController.chooseSpellAbilityToPlayFromList asks sequenceFollower to judge Offering
+    // first, and consider caps X where the follower keeps its mana and DrawAi's own-turn hand rule still
+    // accepts it, crediting its immediate draw (CARD per body) instead of next turn's FOLLOWER.
     // RNG parity: A drops the card at the RemoveDeck filter and never evaluates it; every decline before
     // setMaxXValue reads the board only (no MyRandom, no card id, X left null). Cost: O(1) outside our
     // Main 2.
@@ -40653,7 +40657,7 @@ public class SpecialCardAi {
 
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
             sa.setXManaCostPaid(null); // nothing held from an earlier pass
-            final Plan plan = Plan.of(ai, sa);
+            final Plan plan = Plan.of(ai, sa, Follower.inHand(ai, sa));
             if (plan.decline != null) {
                 return new AiAbilityDecision(0, plan.decline);
             }
@@ -41150,6 +41154,116 @@ public class SpecialCardAi {
             return false;
         }
 
+        // The follower (final-design.md 2.2): a "draw a card for each creature you control" spell of ours
+        // (Collective Unconscious, Shamanic Revelation): a root Draw spell from our hand, not Offering, not
+        // a copy or a Play-effect cast, no AILogic, no controller-asking cost, whose NumCards counts bodies
+        // of ours that the gift raises. Its test-mode cost, green shards and current count are recorded.
+        // The three carriers hold at most one such spell each.
+        static final class Follower {
+            final SpellAbility sa;
+            final String filter;
+            final int cost;
+            final int green;
+            final int countNow;
+
+            private Follower(final SpellAbility sa, final String filter, final int cost, final int green, final int countNow) {
+                this.sa = sa;
+                this.filter = filter;
+                this.cost = cost;
+                this.green = green;
+                this.countNow = countNow;
+            }
+
+            static Follower of(final Player ai, final SpellAbility offering, final SpellAbility cand) {
+                final Card host = cand.getHostCard();
+                if (host == null || !cand.isSpell() || cand.getParent() != null || cand.getApi() != ApiType.Draw
+                        || cand.getPayCosts() == null || !host.isInZone(ZoneType.Hand) || !ai.equals(host.getController())
+                        || host.equals(offering.getHostCard()) || cand.isCopied() || cand.isCastFromPlayEffect()
+                        || cand.hasParam("AILogic") || asksController(cand)) {
+                    return null;
+                }
+                final String[] f = countFilter(countText(cand, cand.getParam("NumCards")), false);
+                if (f == null || bodies(f[0], ai, ai, X_MIN, false) <= 0) {
+                    return null;
+                }
+                cand.setActivatingPlayer(ai); // the same write getOriginalAndAltCostAbilities makes (ComputerUtilAbility:104)
+                final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(cand.getPayCosts(), cand, ai, true, 0, false);
+                return new Follower(cand, f[0], cost.getConvertedManaCost(),
+                        cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN),
+                        AbilityUtils.calculateAmount(host, cand.getParam("NumCards"), cand));
+            }
+
+            // the first card in our hand, in hand order, with a follower spell
+            static Follower inHand(final Player ai, final SpellAbility offering) {
+                for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                    for (final SpellAbility s : c.getSpells()) {
+                        final Follower f = of(ai, offering, s);
+                        if (f != null) {
+                            return f;
+                        }
+                    }
+                }
+                return null;
+            }
+        }
+
+        // The hook in AiController.chooseSpellAbilityToPlayFromList (final-design.md 2.3), right after the
+        // sort: in our own Main 2 on an empty stack, a follower sorted ahead of our own hand cast of
+        // Offering moves to just after it, when after any ONE castable SA judged between them the follower
+        // is still castable (re-checked on every pass, so the move never starves it) and Offering's plan
+        // passes in follower mode. Enablers sorted between them stay ahead of Offering, now also ahead of
+        // the follower. Inert, an O(1) phase test, outside our Main 2; draws nothing, makes no card; its
+        // only writes are setActivatingPlayer (the same value) and G2's. Either moves that one SA or leaves
+        // the list exactly as it is.
+        public static void sequenceFollower(final Player ai, final List<SpellAbility> all) {
+            final Game game = ai.getGame();
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return;
+            }
+            int at = -1;
+            for (int i = 0; i < all.size() && at < 0; i++) {
+                if (isOwnHandCast(ai, all.get(i))) {
+                    at = i;
+                }
+            }
+            if (at <= 0) {
+                return; // absent, or nothing ahead of it
+            }
+            final SpellAbility sa = all.get(at);
+            int fAt = -1;
+            Follower f = null;
+            for (int i = 0; i < at && f == null; i++) {
+                f = Follower.of(ai, sa, all.get(i));
+                fAt = i;
+            }
+            if (f == null) {
+                return;
+            }
+            // GUARD: after any ONE castable SA judged between F and Offering, F is still castable
+            final HonestMana g2 = HonestMana.of(ai, sa, true);
+            int maxBetween = 0;
+            for (int i = fAt + 1; i < at; i++) {
+                final SpellAbility o = all.get(i);
+                final Card h = o.getHostCard();
+                if (h == null || !ai.equals(h.getController()) || o.isManaAbility()) {
+                    continue;
+                }
+                o.setActivatingPlayer(ai); // the same write getOriginalAndAltCostAbilities makes (ComputerUtilAbility:104)
+                final int c = asksController(o) ? printedCmc(o) : costOf(ai, o);
+                if (c > 0 && c <= g2.total()) {
+                    maxBetween = Math.max(maxBetween, c);
+                }
+            }
+            if (g2.total() - maxBetween < f.cost || g2.colour(MagicColor.GREEN) - maxBetween < f.green) {
+                return;
+            }
+            final Plan plan = Plan.of(ai, sa, f);
+            if (plan.decline != null || !plan.followerMode) {
+                return;
+            }
+            all.add(at, all.remove(fAt)); // removing fAt (< at) shifts Offering to at - 1: F lands right after it
+        }
+
         // one side's half, per kind: the P/T sums and keywords of the statics that reach it
         static final class Half {
             final int[] p = new int[2];
@@ -41325,15 +41439,29 @@ public class SpecialCardAi {
             final List<StaticAbility> cantBlockBy = new ArrayList<>();
             final Map<String, Integer> tokenValues = new HashMap<>();
             Clash[] clashes;
+            final Follower follower; // commit 2: the follower this plan sequences Offering ahead of, or null
+            boolean followerMode;
+            int xF;
+            int xHand;
 
-            private Plan(final Player ai, final SpellAbility sa) {
+            private Plan(final Player ai, final SpellAbility sa, final Follower follower) {
                 this.ai = ai;
                 this.sa = sa;
                 this.game = ai.getGame();
+                this.follower = follower;
             }
 
-            static Plan of(final Player ai, final SpellAbility sa) {
-                final Plan p = new Plan(ai, sa);
+            // with a follower, follower mode first; if it does not apply or its steps decline, the plan
+            // re-runs in normal mode (stateless: the new bodies are what let DrawAi accept F next pass)
+            static Plan of(final Player ai, final SpellAbility sa, final Follower f) {
+                if (f != null) {
+                    final Plan p = new Plan(ai, sa, f);
+                    p.build();
+                    if (p.decline == null && p.followerMode) {
+                        return p;
+                    }
+                }
+                final Plan p = new Plan(ai, sa, null);
                 p.build();
                 return p;
             }
@@ -41375,6 +41503,26 @@ public class SpecialCardAi {
                 if (xBound < X_MIN) {
                     fail(AiPlayDecision.AnotherTime, "reserve");
                     return;
+                }
+                if (follower != null) {
+                    // follower mode (2.2): X leaves the follower its mana, and stays where DrawAi's own-turn
+                    // rule still accepts it right after Offering (DrawAi.java:418-421, 707-723: the hand is
+                    // one down for Offering, the follower's own card is not counted, library above 3)
+                    xF = g2Total - fixed - reserve - follower.cost;
+                    final int roomNow = Math.min(ai.getMaxHandSize() - ai.getCardsIn(ZoneType.Hand).size() + 2,
+                            ai.getCardsIn(ZoneType.Library).size() - 4) - follower.countNow;
+                    xHand = -1;
+                    for (int x = Math.max(xF, roomNow); x >= X_MIN && xHand < 0; x--) {
+                        if (bodies(follower.filter, ai, ai, x, false) <= roomNow) {
+                            xHand = x;
+                        }
+                    }
+                    if (Math.min(xF, xHand) < X_MIN || g2.colour(MagicColor.GREEN) < follower.green + 1) {
+                        fail(AiPlayDecision.AnotherTime, "follower"); // Plan.of re-runs in normal mode
+                        return;
+                    }
+                    xBound = Math.min(xF, xHand);
+                    followerMode = true;
                 }
                 // 3. their conversions
                 taxed = taxed();
@@ -42107,8 +42255,12 @@ public class SpecialCardAi {
                 return best;
             }
 
-            // (e): the best ready "draw for each" spell next turn, within its room
+            // (e): the best ready "draw for each" spell next turn, within its room; in follower mode the
+            // follower's immediate draw instead, CARD per body it counts (commit 2)
             int follow(final int x) {
+                if (followerMode) {
+                    return CARD * bodies(follower.filter, ai, ai, x, false);
+                }
                 int best = 0;
                 for (final Next f : followers) {
                     best = Math.max(best, FOLLOWER * Math.min(bodies(f.filter, ai, ai, x, false), Math.max(0, f.room)));
