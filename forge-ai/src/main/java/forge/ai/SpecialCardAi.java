@@ -22078,6 +22078,535 @@ public class SpecialCardAi {
         }
     }
 
+    // Infernal Offering (dead-card batch 3, row 8; carriers precon:Sworn to Darkness (C14), the
+    // card's own precon, and precon:Silverquill Statement (C21), both anchors)
+    // "Choose an opponent. You and that player each sacrifice a creature. Each player who sacrificed
+    // a creature this way draws two cards. Choose an opponent. Return a creature card from your
+    // graveyard to the battlefield, then that player returns a creature card from their graveyard to
+    // the battlefield." ({4}{B} sorcery.) A sacrificed nontoken creature reaches its owner's
+    // graveyard before the returns, so the edict sticks only on tokens: the spell's edge is our
+    // reanimation against theirs, plus two cards when only one side had a creature to sacrifice.
+    // AI:RemoveDeck:All kept it off AiController.getSpellAbilityToPlay's list, so its owner never
+    // considered it. Behind the hint ChoosePlayerAi.canPlay answers an unconditional WillPlay and
+    // every sub approves in chkDrawback, blind to both graveyards: it would hand an opponent its best
+    // creature back plus two cards. The hint is KEPT (rule B3-1): every other isCardRemAIDeck reader
+    // keeps A's answer, and the -10 sort (ComputerUtilAbility.saEvaluator) judges it after every
+    // positive-key spell or ability, from the mana the turn's other plays left.
+    // - readmit(), G3's case: our own cast from our own hand (isOwnHandCast) in a sorcery window
+    //   with no mana held (RemoveDeckFilter.noManaHeld), as Gift of Doom's.
+    // - consider(), from ChoosePlayerAi.canPlay behind isOwnPaidRoot: the readmit's own key
+    //   (rule B3-2) plus a paid mana cost, so ManaAi's ritual look-ahead (copyWithNoManaCost,
+    //   WithoutManaCost) keeps the stock answer. Every input is predicted with the resolution's own
+    //   pickers: ComputerUtil.choosePermanentsToSacrifice (non-optional: SacMe, else
+    //   getWorstCreatureAI) for both edicts, and getBestCreatureAI after the legend filter for both
+    //   returns (ChangeZoneAi.chooseCardToHiddenOriginChangeZone; with no GainControl the opponent
+    //   returns its own best). In order, every decline before the WillPlay:
+    //   0. shape: a Sacrifice and a ChangeZone on this root's own chain (never
+    //      host.getFirstSpellAbility(): row 77) and an opponent, MissingLogic;
+    //   1. no creature card in our graveyard worth MIN_PICK_VALUE, CantPlayAi: O(graveyard);
+    //   2. the test-mode cost (calculateManaCost: taxes, reductions) is not covered by G2
+    //      (HonestMana, held sources skipped) in total and in black, CantAfford;
+    //   3. our half: we would sacrifice a planeswalker or a land (an animated Gideon), or draw two
+    //      from a library under MIN_LIBRARY; our pick is missing, is the creature we sacrifice, or
+    //      carries AI:RemoveDeck:All, CantPlayAi; it is worth under MIN_PICK_VALUE or beats our
+    //      sacrifice by under MIN_UPGRADE, DoesntImpactGame. Our sacrifice joins our pool unless it
+    //      is a token, a commander or another player's card; our two cards count only when we can
+    //      draw;
+    //   4. every opponent (the stock chooser takes the first; in a pod each must pass): their
+    //      sacrifice costs them its value (none with persist or undying, which bring it back: it is
+    //      then left out of their pool too) and draws them two cards; their pool is their graveyard's
+    //      creatures plus their nontoken sacrifice and any creature of theirs we sacrifice; their
+    //      pick's enters trigger and their sacrifice's dies trigger are classified part by part:
+    //      a part that can kill, shrink, take, bounce or edict our creatures is a decline,
+    //      CantPlayAi; a Token part adds TOKEN_VALUE per token (a TokenAmount that is not a number
+    //      declines: Avenger of Zendikar); any other part adds TRIGGER_ALLOWANCE once per trigger.
+    //      Our half must beat theirs by NET_FLOOR, CantPlayAi;
+    //   5. our pick's enters trigger hands an opponent a token (Hunted Lammasu), CantPlayAi;
+    //   6. an opposing permanent's death trigger for creatures other than itself makes us sacrifice
+    //      (Butcher of Malakir, Grave Pact): their sacrifice fires it after the spell, CantPlayAi;
+    //   7. last, our pick loses us the game on entering (Phage), CantPlayAi: a private verbatim copy
+    //      of Path of the Schemer's check, whose ensureAbility builds the trigger's chain and so
+    //      allocates SpellAbility ids; last, it never runs on the declines above;
+    //   8. else WillPlay 100.
+    // RNG parity: A never evaluated the card for its owner (gate 1), so A drew nothing for it.
+    // Steps 0-6 read zones, parameters, triggers (built chains as they are, unbuilt ones as their
+    // parsed SVar text, never ensureAbility), the test-mode cost and HonestMana, and run the
+    // resolution's non-optional sacrifice picker and getBest/WorstCreatureAI (Aggregates.itemWith-
+    // Max/Min): no MyRandom, no card, no target, nothing held or remembered, so readmit's false is
+    // the old filter and every decline is A's stream; the -10 sort also keeps every decline behind
+    // A's whole list. The only writes are setActivatingPlayer on the mana abilities G2 reads and
+    // calculateManaCost's restored castFrom. canPayCost's draws follow a WillPlay only.
+    // Play-effect casts and thefts keep the stock WillPlay: isOwnPaidRoot fails them, and
+    // ChoosePlayerAi.doTriggerNoCost answers the stock WillPlay for this card before canPlay.
+    public static class InfernalOffering {
+        public static final String NAME = "Infernal Offering";
+        static final int MIN_PICK_VALUE = 200;    // Path of the Schemer's real-body line
+        static final int MIN_UPGRADE = 100;       // our return beats our own sacrifice by a body
+        static final int CARD_VALUE = 100;        // one drawn card, in evaluateCreature units
+        static final int TOKEN_VALUE = 130;       // a 2/2 creature token
+        static final int TRIGGER_ALLOWANCE = 75;  // any other enters or dies effect of theirs
+        static final int NET_FLOOR = 100;         // our swing beats theirs by a card
+        static final int MIN_LIBRARY = 3;         // two forced draws leave a draw step to spare
+        private static final int DECLINE = -1;
+        private static final String[] SELF = {"Card.Self", "Creature.Self", "Permanent.Self"};
+        private static final String[] BRANCHES = {"SubAbility", "Execute", "TrueSubAbility", "FalseSubAbility",
+                "WinSubAbility", "LoseSubAbility", "RepeatSubAbility"};
+
+        // our own spell of this card cast from our own hand: not a sub, not a copy, not a Play-effect
+        // cast; keyed on the host's paper name, the key the readmit switch (RemoveDeckFilter.paperName)
+        // and isCardRemAIDeck read (rules B3-2, B3-3)
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            if (sa == null || !sa.isSpell() || sa.getParent() != null || sa.isCopied() || sa.isCastFromPlayEffect()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner()) && ai.equals(host.getController());
+        }
+
+        // G3's case (RemoveDeckFilter.readmit), cheapest checks first: reads only
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isOwnHandCast(ai, sa) && ai.canCastSorcery() && RemoveDeckFilter.noManaHeld(ai, true);
+        }
+
+        // ChoosePlayerAi.canPlay's gate: the readmit's key with a mana cost to pay. The DBChoose sub
+        // (parent set), ManaAi's copyWithNoManaCost probe, copies, Play-effect casts and thefts keep
+        // the stock answer.
+        public static boolean isOwnPaidRoot(final Player ai, final SpellAbility sa) {
+            return isOwnHandCast(ai, sa) && !sa.hasParam("WithoutManaCost") && sa.getPayCosts() != null
+                    && !sa.getPayCosts().getTotalMana().isZero();
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // 0. shape: this root's own chain
+            SpellAbility sac = null;
+            SpellAbility back = null;
+            for (SpellAbility part = sa.getSubAbility(); part != null; part = part.getSubAbility()) {
+                if (sac == null && part.getApi() == ApiType.Sacrifice) {
+                    sac = part;
+                } else if (back == null && part.getApi() == ApiType.ChangeZone) {
+                    back = part; // DBReturnYou, the first return
+                }
+            }
+            if (sac == null || back == null || ai.getOpponents().isEmpty()) {
+                return no(AiPlayDecision.MissingLogic);
+            }
+            // 1. a creature card worth returning in our graveyard (a pick that is only our own
+            //    sacrifice fails MIN_UPGRADE anyway): O(graveyard)
+            final CardCollection ourGy = CardLists.getValidCards(ai.getCardsIn(ZoneType.Graveyard),
+                    back.getParamOrDefault("ChangeType", "Creature"), ai, sa.getHostCard(), back);
+            if (ourGy.isEmpty()
+                    || ComputerUtilCard.evaluateCreature(ComputerUtilCard.getBestCreatureAI(ourGy)) < MIN_PICK_VALUE) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            // 2. the cost as the engine prices it, on this spell's own cost, against real mana
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLACK) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)) {
+                return no(AiPlayDecision.CantAfford);
+            }
+            // 3. our half
+            final Card ourSac = predictSacrifice(ai, sac);
+            if (ourSac != null && (ourSac.isPlaneswalker() || ourSac.isLand())) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            final boolean weDraw = ourSac != null && ai.canDraw();
+            if (weDraw && ai.getCardsIn(ZoneType.Library).size() < MIN_LIBRARY) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection ourPool = new CardCollection(ourGy);
+            if (returnsTo(ai, ourSac, false)) {
+                ourPool.add(ourSac);
+            }
+            final Card ourPick = bestReturn(ai, ourPool, ourSac);
+            if (ourPick == null || ourPick == ourSac || ComputerUtilCard.isCardRemAIDeck(ourPick)) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            final int pickValue = ComputerUtilCard.evaluateCreature(ourPick);
+            final int sacValue = ourSac == null ? 0 : ComputerUtilCard.evaluateCreature(ourSac);
+            if (pickValue < MIN_PICK_VALUE || pickValue - sacValue < MIN_UPGRADE) {
+                return no(AiPlayDecision.DoesntImpactGame);
+            }
+            final int ourGain = pickValue - sacValue + (weDraw ? 2 * CARD_VALUE : 0);
+            // 4. their half, against every opponent the chooser could take
+            for (final Player opp : ai.getOpponents()) {
+                final Card theirSac = predictSacrifice(opp, sac);
+                final boolean theyKeep = theirSac != null && ComputerUtilCard.hasActiveUndyingOrPersist(theirSac);
+                final CardCollection theirPool = CardLists.filter(opp.getCardsIn(ZoneType.Graveyard), CardPredicates.CREATURES);
+                if (!theyKeep && returnsTo(opp, theirSac, true)) {
+                    theirPool.add(theirSac);
+                }
+                if (returnsTo(opp, ourSac, true)) {
+                    theirPool.add(ourSac); // a creature of theirs we control goes to their graveyard
+                }
+                final Card theirPick = bestReturn(opp, theirPool, theirSac);
+                int theirGain = 0;
+                if (theirSac != null) {
+                    theirGain += 2 * CARD_VALUE - (theyKeep ? 0 : ComputerUtilCard.evaluateCreature(theirSac));
+                    final int dies = theirTriggerValue(theirSac, false);
+                    if (dies == DECLINE) {
+                        return no(AiPlayDecision.CantPlayAi);
+                    }
+                    theirGain += dies;
+                }
+                if (theirPick != null) {
+                    final int enters = theirTriggerValue(theirPick, true);
+                    if (enters == DECLINE) {
+                        return no(AiPlayDecision.CantPlayAi);
+                    }
+                    theirGain += ComputerUtilCard.evaluateCreature(theirPick) + enters;
+                }
+                if (ourGain - theirGain < NET_FLOOR) {
+                    return no(AiPlayDecision.CantPlayAi);
+                }
+            }
+            // 5. our pick's gift; 6. their death payoffs that make us sacrifice
+            if (giftsOnEntering(ourPick) || opposingSacrificePayoff(ai)) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            // 7. last: it builds the trigger's chain (SpellAbility ids)
+            if (losesOnEntering(ourPick)) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the resolution's own pick: SacrificeEffect -> PlayerControllerAi.choosePermanentsToSacrifice
+        // -> ComputerUtil.choosePermanentsToSacrifice(p, valid, 1, sa, false, false); null = none
+        private static Card predictSacrifice(final Player p, final SpellAbility sacSa) {
+            final CardCollection valid = CardLists.filter(p.getCreaturesInPlay(), CardPredicates.canBeSacrificedBy(sacSa, true));
+            if (valid.isEmpty()) {
+                return null;
+            }
+            final CardCollection picked = ComputerUtil.choosePermanentsToSacrifice(p, valid, 1, sacSa, false, false);
+            return picked.isEmpty() ? null : picked.getFirst();
+        }
+
+        // a sacrificed creature p can return: not a token, owned by p (it goes to its owner's
+        // graveyard), and for our own side not a commander (excluding it only under-counts ours)
+        private static boolean returnsTo(final Player p, final Card sacrificed, final boolean keepCommander) {
+            return sacrificed != null && !sacrificed.isToken() && p.equals(sacrificed.getOwner())
+                    && (keepCommander || !sacrificed.isCommander());
+        }
+
+        // the creature card p returns from pool: the picker's legend filter on p's battlefield after
+        // its sacrifice, then the best creature
+        private static Card bestReturn(final Player p, final CardCollection pool, final Card sacrificed) {
+            final CardCollectionView inPlay = p.getCardsIn(ZoneType.Battlefield);
+            final CardCollection legal = CardLists.filter(pool, c -> !c.getType().isLegendary()
+                    || !inPlay.anyMatch(b -> b != sacrificed && b.getName().equals(c.getName())));
+            return legal.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(legal);
+        }
+
+        // Their side's value of one card's own enters (etb) or dies triggers: DECLINE for a part that
+        // can kill, shrink, take, bounce or edict our creatures, or a token count that is not a
+        // number; else TOKEN_VALUE per token plus TRIGGER_ALLOWANCE for each trigger with any other
+        // part (bookkeeping Cleanup aside).
+        private static int theirTriggerValue(final Card c, final boolean etb) {
+            int value = 0;
+            for (final Trigger t : c.getTriggers()) {
+                if (!(etb ? isSelfEtb(t) : isSelfDies(t))) {
+                    continue;
+                }
+                boolean other = false;
+                for (final Part part : chain(t)) {
+                    if (part.api == null) {
+                        continue;
+                    }
+                    if (hostile(part)) {
+                        return DECLINE;
+                    }
+                    if (part.is(ApiType.Token)) {
+                        final int n = tokenCount(part.params);
+                        if (n < 0) {
+                            return DECLINE;
+                        }
+                        value += TOKEN_VALUE * n;
+                    } else if (!part.is(ApiType.Cleanup)) {
+                        other = true;
+                    }
+                }
+                if (other) {
+                    value += TRIGGER_ALLOWANCE;
+                }
+            }
+            return value;
+        }
+
+        // a part that can kill, shrink, take, bounce or edict a creature of ours (Noxious Gearhulk,
+        // Mind Flayer, Shriekmaw, Fleshbag Marauder, Man-o'-War)
+        private static boolean hostile(final Part part) {
+            if (part.is(ApiType.Destroy) || part.is(ApiType.DestroyAll) || part.is(ApiType.DealDamage)
+                    || part.is(ApiType.DamageAll) || part.is(ApiType.GainControl) || part.is(ApiType.ExchangeControl)
+                    || part.is(ApiType.ExchangeControlVariant) || part.is(ApiType.Fight) || part.is(ApiType.PumpAll)) {
+                return true;
+            }
+            if (part.is(ApiType.Sacrifice)) {
+                return namesOthers(part.params);
+            }
+            if (part.is(ApiType.SacrificeAll)) {
+                return !part.params.getOrDefault("ValidCards", "").contains("YouCtrl");
+            }
+            if (part.is(ApiType.Pump)) {
+                return "True".equalsIgnoreCase(part.params.get("IsCurse"))
+                        || part.params.getOrDefault("NumAtt", "").startsWith("-")
+                        || part.params.getOrDefault("NumDef", "").startsWith("-");
+            }
+            if (part.is(ApiType.PutCounter) || part.is(ApiType.PutCounterAll)) {
+                return "M1M1".equalsIgnoreCase(part.params.get("CounterType"));
+            }
+            if (part.is(ApiType.ChangeZone) || part.is(ApiType.ChangeZoneAll)) {
+                return zoneListHas(part.params.get("Origin"), "Battlefield");
+            }
+            return false;
+        }
+
+        // a player other than the part's controller among Defined or ValidTgts ("each player", "each
+        // opponent", "each other player")
+        private static boolean namesOthers(final Map<String, String> params) {
+            for (final String key : new String[] {"Defined", "ValidTgts"}) {
+                final String v = params.get(key);
+                if (v == null) {
+                    continue;
+                }
+                for (final String raw : v.split(",")) {
+                    final String s = raw.trim();
+                    if (s.equals("Player") || s.equals("Any") || s.contains("Opponent") || s.contains("Other")
+                            || s.contains("nonYou") || s.contains("NonYou")) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // TokenAmount (1 when absent) times the number of token scripts; -1 when it is not a number
+        private static int tokenCount(final Map<String, String> params) {
+            final String amount = params.getOrDefault("TokenAmount", "1").trim();
+            if (amount.isEmpty()) {
+                return -1;
+            }
+            for (int i = 0; i < amount.length(); i++) {
+                if (!Character.isDigit(amount.charAt(i))) {
+                    return -1;
+                }
+            }
+            final String scripts = params.get("TokenScript");
+            final int kinds = scripts == null ? 1 : Math.max(1, scripts.split(",").length);
+            return Integer.parseInt(amount) * kinds;
+        }
+
+        // our pick's own enters trigger makes a token for someone else (Hunted Lammasu's 4/4 Horror)
+        private static boolean giftsOnEntering(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (!isSelfEtb(t)) {
+                    continue;
+                }
+                for (final Part part : chain(t)) {
+                    if (part.is(ApiType.Token)) {
+                        final String owner = part.params.get("TokenOwner");
+                        if (owner != null && !"You".equals(owner)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // An opposing permanent whose dies trigger watches creatures other than itself and makes its
+        // controller's opponents sacrifice (Butcher of Malakir, Grave Pact): their edict fires it
+        // after the spell resolves, when our pick may be the creature we have to give up.
+        private static boolean opposingSacrificePayoff(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        final boolean single = t.getMode() == TriggerType.ChangesZone;
+                        if (!single && t.getMode() != TriggerType.ChangesZoneAll) {
+                            continue;
+                        }
+                        if (!zoneMatches(t.getParam("Origin"), "Battlefield")
+                                || !zoneMatches(t.getParam("Destination"), "Graveyard")
+                                || selfOnly(t.getParam(single ? "ValidCard" : "ValidCards"))) {
+                            continue;
+                        }
+                        for (final Part part : chain(t)) {
+                            if ((part.is(ApiType.Sacrifice) && namesOthers(part.params))
+                                    || (part.is(ApiType.SacrificeAll)
+                                        && !part.params.getOrDefault("ValidCards", "").contains("YouCtrl"))) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // a self enters trigger that fires on a return from the graveyard
+        private static boolean isSelfEtb(final Trigger t) {
+            return t.getMode() == TriggerType.ChangesZone && zoneListHas(t.getParam("Destination"), "Battlefield")
+                    && zoneMatches(t.getParam("Origin"), "Graveyard") && namesSelf(t.getParam("ValidCard"));
+        }
+
+        // a self dies (or leaves-the-battlefield) trigger
+        private static boolean isSelfDies(final Trigger t) {
+            return t.getMode() == TriggerType.ChangesZone && zoneMatches(t.getParam("Origin"), "Battlefield")
+                    && zoneMatches(t.getParam("Destination"), "Graveyard") && namesSelf(t.getParam("ValidCard"));
+        }
+
+        private static boolean namesSelf(final String valid) {
+            if (valid == null) {
+                return false;
+            }
+            for (final String raw : valid.split(",")) {
+                if (isSelfPart(raw.trim())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean selfOnly(final String valid) {
+            if (valid == null) {
+                return false;
+            }
+            for (final String raw : valid.split(",")) {
+                if (!isSelfPart(raw.trim())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean isSelfPart(final String part) {
+            for (final String self : SELF) {
+                if (part.startsWith(self)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // an absent zone list or "Any" matches every zone
+        private static boolean zoneMatches(final String zones, final String zone) {
+            return zones == null || zoneListHas(zones, "Any") || zoneListHas(zones, zone);
+        }
+
+        private static boolean zoneListHas(final String zones, final String zone) {
+            if (zones == null) {
+                return false;
+            }
+            for (final String z : zones.split(",")) {
+                if (z.trim().equals(zone)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // one part of a trigger's chain: its API name and parameters
+        private static final class Part {
+            final String api;
+            final Map<String, String> params;
+
+            Part(final String api, final Map<String, String> params) {
+                this.api = api;
+                this.params = params;
+            }
+
+            boolean is(final ApiType type) {
+                return api != null && type.name().equalsIgnoreCase(api);
+            }
+        }
+
+        // A trigger's chain, read without building it: a built chain as it is, an unbuilt one from its
+        // parsed SVar text (sub-abilities, branches and charm choices), because building one
+        // (ensureAbility) allocates SpellAbility ids and this runs on declines.
+        private static List<Part> chain(final Trigger t) {
+            final List<Part> parts = new ArrayList<>();
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                addBuilt(built, parts, 0);
+                return parts;
+            }
+            final Deque<String> todo = new ArrayDeque<>();
+            final Set<String> seen = new HashSet<>();
+            if (t.hasParam("Execute")) {
+                todo.add(t.getParam("Execute"));
+            }
+            while (!todo.isEmpty()) {
+                final String svar = todo.poll();
+                if (!seen.add(svar)) {
+                    continue;
+                }
+                final String text = t.getSVar(svar);
+                if (text.isEmpty()) {
+                    continue;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                parts.add(new Part(apiOf(params), params));
+                for (final String key : BRANCHES) {
+                    if (params.containsKey(key)) {
+                        todo.add(params.get(key));
+                    }
+                }
+                if (params.containsKey("Choices")) {
+                    for (final String choice : params.get("Choices").split(",")) {
+                        todo.add(choice.trim());
+                    }
+                }
+            }
+            return parts;
+        }
+
+        private static void addBuilt(final SpellAbility sa, final List<Part> parts, final int depth) {
+            if (sa == null || depth > 12) {
+                return;
+            }
+            parts.add(new Part(sa.getApi() == null ? null : sa.getApi().name(), sa.getMapParams()));
+            addBuilt(sa.getSubAbility(), parts, depth + 1);
+            for (final SpellAbility extra : sa.getAdditionalAbilities().values()) {
+                addBuilt(extra, parts, depth + 1);
+            }
+            for (final List<AbilitySub> choices : sa.getAdditionalAbilityLists().values()) {
+                for (final AbilitySub choice : choices) {
+                    addBuilt(choice, parts, depth + 1);
+                }
+            }
+        }
+
+        private static String apiOf(final Map<String, String> params) {
+            final String api = params.get("DB");
+            if (api != null) {
+                return api;
+            }
+            return params.containsKey("AB") ? params.get("AB") : params.get("SP");
+        }
+
+        // PathOfTheSchemer.losesOnEntering, a private verbatim copy (an accepted predicate is not
+        // shared). Phage the Untouchable shape: a self-ETB trigger whose chain makes its controller
+        // lose. Its ensureAbility builds the chain (SpellAbility ids): consider asks it last.
+        private static boolean losesOnEntering(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() != TriggerType.ChangesZone || !"Battlefield".equals(t.getParam("Destination"))) {
+                    continue;
+                }
+                for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                    if (part.getApi() == ApiType.LosesGame && "You".equals(part.getParamOrDefault("Defined", "You"))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision why) {
+            return new AiAbilityDecision(0, why);
+        }
+    }
+
     // Infinite Reflection
     // Enchant a creature (ours or an opponent's) only when turning each other nontoken creature
     // we control into a copy of it is a clear board upgrade. The target must be a nonlegendary
@@ -34133,7 +34662,7 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
-    // 7, 10, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58, 59,
+    // 7, 8, 10, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58, 59,
     // 60, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row 68 (Trench
     // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
@@ -34239,6 +34768,8 @@ public class SpecialCardAi {
                     return SylvanOffering.isOwnHandCast(ai, sa);
                 case CollectiveVoyage.NAME:
                     return CollectiveVoyage.readmit(ai, sa);
+                case InfernalOffering.NAME:
+                    return InfernalOffering.readmit(ai, sa);
                 default:
                     return false;
             }

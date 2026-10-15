@@ -34,6 +34,14 @@ public class ChoosePlayerAi extends SpellAbilityAi {
             // (B3-2). The DBChoose sub (parent set), copies, effect casts and thefts keep the stock answer.
             return SpecialCardAi.SylvanOffering.consider(ai, sa);
         }
+        if (SpecialCardAi.InfernalOffering.isOwnPaidRoot(ai, sa)) {
+            // Dead-card batch 3, row 8: the owner's own paid hand cast only, the G3 readmit's own key
+            // (B3-2). The stock WillPlay below reads neither graveyard, and the reanimate halves
+            // approve unconditionally in chkDrawback (AI:RemoveDeck:All hid that). The DBChoose sub
+            // (parent set), ManaAi's no-cost ritual probe, copies, Play-effect casts and thefts keep
+            // the stock answer.
+            return SpecialCardAi.InfernalOffering.consider(ai, sa);
+        }
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 
@@ -44,6 +52,11 @@ public class ChoosePlayerAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        if (SpecialCardAi.InfernalOffering.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dead-card batch 3, row 8: effect casts (Nathan Drake's thefts, Prosper, cascade) keep the
+            // stock answer, never the paid-cast evaluator
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         return canPlay(ai, sa);
     }
 
