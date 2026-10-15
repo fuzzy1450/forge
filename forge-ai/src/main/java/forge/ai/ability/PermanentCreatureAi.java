@@ -208,6 +208,18 @@ public class PermanentCreatureAi extends PermanentAi {
                 return floor;
             }
         }
+        if (SpecialCardAi.ArchonOfValorsReach.NAME.equals(sa.getHostCard().getName()) && !sa.isCastFromPlayEffect()) {
+            // Dead-card batch 3, row 44. RNG-free cast floor (a lock type that strands nothing we can
+            // cast; real mana, {G} and {W} on separate sources), answered before super and before
+            // canPlayAndPayForFace's canPayCost rolls ComputerUtilMana.isManaSourceReserved. It only
+            // declines. Every paid cast meets it, a MayPlay thief's too (judged for the thief's own
+            // side); a Play-effect cast (Nathan Drake, Silent-Blade Oni) keeps the stock path. See the
+            // class comment.
+            final AiAbilityDecision floor = SpecialCardAi.ArchonOfValorsReach.considerCast(ai, sa);
+            if (!floor.willingToPlay()) {
+                return floor;
+            }
+        }
         AiAbilityDecision decision = super.checkApiLogic(ai, sa);
         if (!decision.willingToPlay()) {
             return decision;

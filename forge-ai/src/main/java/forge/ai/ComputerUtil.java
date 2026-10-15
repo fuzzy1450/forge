@@ -2559,6 +2559,13 @@ public class ComputerUtil {
                 // again at resolution for the resolving player's own graveyard and hand (a thief
                 // or a copier picks for its own); always a permanent type, never empty.
                 chosen = SpecialCardAi.CreepingRenaissance.chooseType(ai, sa, validTypes);
+            } else if (SpecialCardAi.ArchonOfValorsReach.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // The lock SpecialCardAi.ArchonOfValorsReach.considerCast judged the cast on, picked at
+                // resolution for whoever controls the entering Archon (a thief or a clone picks for
+                // its own side): never a new lock on a card we can cast while a type that adds none
+                // is left, then the one that costs the opponents most net of us. Deterministic and
+                // never empty, so Aggregates.random below is never reached for this card.
+                chosen = SpecialCardAi.ArchonOfValorsReach.chooseType(ai, sa, validTypes);
             } else if (game.getPhaseHandler().is(PhaseType.UNTAP) && logic == null) { // Storage Matrix
                 double amount = 0;
                 for (String type : validTypes) {

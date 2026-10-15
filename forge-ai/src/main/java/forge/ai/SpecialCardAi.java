@@ -1187,6 +1187,253 @@ public class SpecialCardAi {
         }
     }
 
+    // Archon of Valor's Reach (dead-card batch 3, row 44; precon:Symbiotic Swarm (C20), an anchor)
+    // "Flying, vigilance, trample. As Archon of Valor's Reach enters, choose artifact, enchantment,
+    // instant, sorcery, or planeswalker. Players can't cast spells of the chosen type." ({4}{G}{W}
+    // 5/6.) Its owner never cast it: AI:RemoveDeck:All kept the creature spell off every playable
+    // list (AiController.getSpellAbilityToPlay's removeIf), and behind the hint the "Card" chooser
+    // (ComputerUtil.chooseSomeType) fell to Aggregates.random, a uniform random lock that binds us
+    // too (the hint went in on 2018-05-26 with the removal of an AILogic that chooser never read).
+    // The hint is dropped (AI:RemoveDeck:Random stays, Wall of Limbs' shape) and the card is routed
+    // by name from PermanentCreatureAi.checkApiLogic (the cast floor, ahead of super; every paid
+    // cast, a MayPlay thief's included, judged for the caster's own side; a Play-effect cast keeps
+    // the stock path) and from ComputerUtil.chooseSomeType's "Card" block (the pick, for every
+    // chooser: the controller of the entering Archon, a thief or a clone included).
+    // The body is the value (a 5/6 flying, vigilant trampler for six). The stock creature checks
+    // stay in force (sorcery timing, Main 2 unless castPermanentInMain1, the enters check), and the
+    // floor adds, every decline before any WillPlay:
+    // - some lock type strands nothing we can cast, else CantPlayAi (cheapest: one pass over our
+    //   hand, graveyard, exile and commanders);
+    // - real mana, else CantAfford: CommanderCastCeiling.affordable (G1 on G2 HonestMana: this sa's
+    //   own cost as the engine prices it in test mode, never host.getFirstSpellAbility()), then
+    //   AniktheaHandOfErebos.coloursOnSeparateMana (Hall's condition: {G} and {W} on separate mana;
+    //   a one-colour bundle such as Gilded Lotus pays one colour an activation, a karoo's two mana
+    //   each their own colour). canPayCost's isManaSourceReserved rolls are then reached only in
+    //   windows that pay.
+    // Castable (what a lock strands): every card of ours in our hand but the Archon; in our
+    // graveyard, one with Flashback, Escape, Jump-start, Retrace, Aftermath, Disturb or Harmonize,
+    // or a live mayPlay grant; in our exile, a foretold, adventuring, plotted or suspended card, or
+    // one with a live mayPlay grant; and our commanders, wherever they are. A card is of a type
+    // when a face a cast can put on the stack is (the front, a split card's halves, an adventure or
+    // omen, a modal back, a disturb back from the graveyard), tested as the lock tests it
+    // (CardStateProperty's ChosenType, hasStringType); a land face never (a land is played, not
+    // cast; an artifact land too).
+    // Pick (resolution; deterministic, never empty): the candidates are the valid types that
+    // strand nothing castable of ours, plus any type a battlefield Archon already locks (a second
+    // lock of it costs nobody anything); all valid types when there are none. A locked type is
+    // priced at net 0 and own 0, any other at own = cost(us) and net = the opponents' summed cost
+    // minus own. The highest net wins, then the lower own, then a locked type, then ValidTypes
+    // order: an open type beats a locked one only with a net above 0.
+    // cost(p), hundredths of a card per type: COMMANDER_X100 for each commander of p's of the type
+    // (public; a commander can be recast all game); CARD_X100 for each castable card of p's of the
+    // type (ours exactly; an opponent's face-up graveyard only, its hand is never read); and p's
+    // library composition (decklist knowledge, the stock Chalice of the Void line in PermanentAi;
+    // never its order) over HORIZON draws, plus an opponent's hidden hand at its size. The
+    // opponents' costs are summed, with no threat weighting.
+    // Every read draws nothing; nothing is targeted, held or remembered. The floor reads our own
+    // zones once a consult, O(5 x (hand + graveyard + exile)); the library scans run once, at
+    // resolution.
+    public static class ArchonOfValorsReach {
+        public static final String NAME = "Archon of Valor's Reach";
+        // the script's ValidTypes$, in its order (the pick's last tie-break)
+        static final List<String> TYPES = List.of("Artifact", "Enchantment", "Instant", "Sorcery", "Planeswalker");
+        static final int ALL = (1 << TYPES.size()) - 1;
+        static final int CARD_X100 = 100;       // a castable card of the type
+        static final int COMMANDER_X100 = 300;  // a commander can be recast all game
+        static final int HORIZON = 4;           // draws counted ahead, ours and theirs
+
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            // cheapest first: one pass over our castables; every type strands one, so no lock is free
+            if (castableMask(ai, sa.getHostCard()) == ALL) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // G1 (total and each coloured shard), then Hall's condition over the adjusted cost's pips
+            if (!CommanderCastCeiling.affordable(ai, sa) || !AniktheaHandOfErebos.coloursOnSeparateMana(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Resolution (ComputerUtil.chooseSomeType, "Card"), for the player choosing: the controller
+        // of the entering Archon. Deterministic, never empty while validTypes is not, draws nothing.
+        public static String chooseType(final Player ai, final SpellAbility sa, final Collection<String> validTypes) {
+            final Card host = sa.getHostCard();
+            final int stranded = castableMask(ai, host);
+            final int locked = lockedMask(ai.getGame(), host);
+            final List<String> pool = new ArrayList<>();
+            for (final String t : validTypes) {
+                if ((stranded & bit(t)) == 0 || (locked & bit(t)) != 0) {
+                    pool.add(t);
+                }
+            }
+            if (pool.isEmpty()) {
+                pool.addAll(validTypes);
+            }
+            final int[] own = cost(ai, host, true);
+            final int[] opp = new int[TYPES.size()];
+            for (final Player o : ai.getOpponents()) {
+                final int[] theirs = cost(o, host, false);
+                for (int i = 0; i < opp.length; i++) {
+                    opp[i] += theirs[i];
+                }
+            }
+            String best = null;
+            int bestNet = 0;
+            int bestOwn = 0;
+            boolean bestLocked = false;
+            for (final String t : pool) {
+                final int i = TYPES.indexOf(t);
+                final boolean isLocked = (locked & bit(t)) != 0;
+                // a locked type adds nothing; a type outside TYPES (no script names one) is priced 0
+                final int o = isLocked || i < 0 ? 0 : own[i];
+                final int net = isLocked || i < 0 ? 0 : opp[i] - own[i];
+                if (best == null || net > bestNet
+                        || (net == bestNet && (o < bestOwn || (o == bestOwn && isLocked && !bestLocked)))) {
+                    best = t;
+                    bestNet = net;
+                    bestOwn = o;
+                    bestLocked = isLocked;
+                }
+            }
+            return best != null ? best : "Creature";
+        }
+
+        // the TYPES bits a lock would strand for p: its commanders and every castable card of its
+        // own but the host
+        static int castableMask(final Player p, final Card host) {
+            final int[] mask = {0};
+            for (final Card c : p.getCommanders()) {
+                mask[0] |= castMask(c, false);
+            }
+            castables(p, host, true, m -> mask[0] |= m);
+            return mask[0];
+        }
+
+        // hundredths of a card per TYPES entry: what a lock of each type costs player p (see the
+        // class comment); self: p is the chooser, whose hand and exile are read exactly
+        static int[] cost(final Player p, final Card host, final boolean self) {
+            final int[] x100 = new int[TYPES.size()];
+            for (final Card c : p.getCommanders()) {
+                add(x100, castMask(c, false), COMMANDER_X100);
+            }
+            castables(p, host, self, m -> add(x100, m, CARD_X100));
+            final CardCollectionView library = p.getCardsIn(ZoneType.Library);
+            if (!library.isEmpty()) {
+                final int[] n = new int[TYPES.size()];
+                for (final Card c : library) {
+                    add(n, castMask(c, false), 1);
+                }
+                // an opponent's hidden hand is dealt from the same composition
+                final int draws = HORIZON + (self ? 0 : p.getCardsIn(ZoneType.Hand).size());
+                for (int i = 0; i < n.length; i++) {
+                    x100[i] += CARD_X100 * draws * n[i] / library.size();
+                }
+            }
+            return x100;
+        }
+
+        // the type mask of each castable card of p's but the host and p's commanders (counted on
+        // their own): the hand and the exile only for the chooser (an opponent's hand is hidden, a
+        // foretold card face down), the graveyard for everyone (face up)
+        static void castables(final Player p, final Card host, final boolean self, final java.util.function.IntConsumer sink) {
+            if (self) {
+                for (final Card c : p.getCardsIn(ZoneType.Hand)) {
+                    if (!c.equals(host) && !c.isCommander()) {
+                        sink.accept(castMask(c, false));
+                    }
+                }
+            }
+            for (final Card c : p.getCardsIn(ZoneType.Graveyard)) {
+                if (!c.equals(host) && !c.isCommander() && fromGraveyard(p, c)) {
+                    sink.accept(castMask(c, c.hasKeyword(Keyword.DISTURB)));
+                }
+            }
+            if (self) {
+                for (final Card c : p.getCardsIn(ZoneType.Exile)) {
+                    if (!c.equals(host) && !c.isCommander() && fromExile(p, c)) {
+                        sink.accept(castMask(c, false));
+                    }
+                }
+            }
+        }
+
+        // a graveyard card p can cast from there (PlayerZone's own-cards list, plus Aftermath and
+        // Harmonize)
+        static boolean fromGraveyard(final Player p, final Card c) {
+            return c.hasKeyword(Keyword.FLASHBACK) || c.hasKeyword(Keyword.ESCAPE) || c.hasKeyword(Keyword.JUMP_START)
+                    || c.hasKeyword(Keyword.RETRACE) || c.hasKeyword(Keyword.AFTERMATH) || c.hasKeyword(Keyword.DISTURB)
+                    || c.hasKeyword(Keyword.HARMONIZE) || !c.mayPlay(p).isEmpty();
+        }
+
+        // an exiled card of p's that p can cast from there
+        static boolean fromExile(final Player p, final Card c) {
+            return c.isForetold() || c.isOnAdventure() || c.isPlotted() || c.hasSuspend() || !c.mayPlay(p).isEmpty();
+        }
+
+        // the TYPES bits of every face a cast can put on the stack: the front (a split card's
+        // combined type), both split halves, an adventure or omen, a modal back, and a disturb back
+        // when asked; a land face adds none
+        static int castMask(final Card c, final boolean disturbBack) {
+            int mask = faceMask(c.getState(forge.card.CardStateName.Original));
+            if (c.isSplitCard()) {
+                if (c.hasState(forge.card.CardStateName.LeftSplit)) {
+                    mask |= faceMask(c.getState(forge.card.CardStateName.LeftSplit));
+                }
+                if (c.hasState(forge.card.CardStateName.RightSplit)) {
+                    mask |= faceMask(c.getState(forge.card.CardStateName.RightSplit));
+                }
+            }
+            if (c.hasState(forge.card.CardStateName.Secondary)) {
+                mask |= faceMask(c.getState(forge.card.CardStateName.Secondary));
+            }
+            if ((c.isModal() || disturbBack) && c.hasState(forge.card.CardStateName.Backside)) {
+                mask |= faceMask(c.getState(forge.card.CardStateName.Backside));
+            }
+            return mask;
+        }
+
+        static int faceMask(final CardState face) {
+            if (face == null) {
+                return 0;
+            }
+            final forge.card.CardTypeView type = face.getTypeWithChanges();
+            if (type.isLand()) {
+                return 0;
+            }
+            int mask = 0;
+            for (int i = 0; i < TYPES.size(); i++) {
+                if (type.hasStringType(TYPES.get(i))) {
+                    mask |= 1 << i;
+                }
+            }
+            return mask;
+        }
+
+        // the types a battlefield Archon of Valor's Reach other than the host locks, any controller
+        static int lockedMask(final Game game, final Card host) {
+            int mask = 0;
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.equals(host) && NAME.equals(c.getName()) && c.hasChosenType()) {
+                    mask |= bit(c.getChosenType());
+                }
+            }
+            return mask;
+        }
+
+        static int bit(final String t) {
+            final int i = TYPES.indexOf(t);
+            return i < 0 ? 0 : 1 << i;
+        }
+
+        private static void add(final int[] x100, final int mask, final int amount) {
+            for (int i = 0; i < x100.length; i++) {
+                if ((mask & (1 << i)) != 0) {
+                    x100[i] += amount;
+                }
+            }
+        }
+    }
+
     // Arena and Magus of the Arena
     public static class Arena {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
