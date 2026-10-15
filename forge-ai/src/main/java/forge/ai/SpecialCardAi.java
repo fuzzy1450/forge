@@ -11404,6 +11404,238 @@ public class SpecialCardAi {
         }
     }
 
+    // Djinn of Infinite Deceits (dead-card batch 3, row 80; precon:Evasive Maneuvers (C13))
+    // {4}{U}{U} Creature - Djinn 2/7, "Flying. {T}: Exchange control of two target nonlegendary
+    // creatures. You can't activate this ability during combat." (printed text = Oracle = script;
+    // ActivationPhases$ Upkeep->Main1,Main2->Cleanup is "not during combat", on any player's turn.)
+    // AI:RemoveDeck:All dropped both of its abilities in AiController.getSpellAbilityToPlay's
+    // removeIf before any handler ran, so its owner never cast it on any engine (0 owner casts in
+    // 295 carrier rows on 2.0.15+55e709fa6ba; every recorded cast is a theft: Nathan Drake's DB$
+    // Play, Gonti, Otrimi, and Silent-Blade Oni casting it from its owner's hand). The script keeps
+    // the hint: the -10 sort (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck
+    // reader (steal, exchange, copy, clone and tutor pickers) still refuse it, and a thief's Djinn
+    // keeps the filter for both abilities. The G3 dispatcher (RemoveDeckFilter.readmit) lets two
+    // abilities through AiController's filter, for its owner only:
+    // - the creature spell from our own hand, not a Play-effect cast and not a copy (the Dulcet
+    //   Sirens window): our own main phase with an empty stack; Main 2, or Main 1 when the stock
+    //   PermanentAi.checkPhaseRestrictions would cast it there (ComputerUtil.castPermanentInMain1:
+    //   the carrier's Swiftfoot Boots); no live mana reservation (RemoveDeckFilter.noManaHeld, read
+    //   first: memory reads only); G2 (HonestMana, held sources skipped) covering the engine's
+    //   test-mode calculateManaCost in total and in blue, so a readmitted spell never reaches
+    //   ComputerUtilCost.canPayCost, whose test payment draws MyRandom per source it tries, in a
+    //   window that cannot pay for it. Floor: the body, a 2/7 flier with no ETB, upkeep cost or
+    //   drawback, which the stock PermanentCreatureAi path then judges as it judges any creature.
+    // - the {T} exchange of the Djinn we own and control (Chromeshell Crab's swap floor, batch 2
+    //   row 63): untapped and not ability-sick (CostTap.canPay), the ability's own restrictions, an
+    //   empty stack, in our own main phase or in the end step right before our turn (Nullmage
+    //   Shepherd's window), at no mana (a tax on activations would send canPayCost into its test
+    //   payment), and only when plan() finds a pair:
+    //   take: the opponents' most valuable creature we can target, take and keep, worth
+    //     MIN_GAIN_VALUE (a 4/4 for 4): power > 0; no ward (canPayCost would price the ward and
+    //     test-pay it with draws); not RemoveDeck (stock never grabs one); not EndOfTurnLeavePlay
+    //     (Crab F2); no Aura of ours on it; no Equipment we do not control on it (its bonus goes
+    //     back at sorcery speed); P/T not counted from its controller's board; and, at the end step
+    //     before our turn, never a creature we own (skeptic F2: an Act of Treason or Threaten steal
+    //     comes back at cleanup anyway, so only our give would change hands for good);
+    //   give: our least valuable creature we can hand over: never the Djinn (the engine stays ours),
+    //     our commander, a face-down card (Crab F1), one carrying our Aura or Equipment, an anthem
+    //     or lord (OrderOfSuccession.affectsBeyondItself), one with a non-mana activated ability (an
+    //     engine its new controller's AI would turn on us every turn), or one whose value is a link
+    //     that ends when it changes sides (skeptic F1: a remembered or exiled card, Fiend Hunter's
+    //     exile that returns when it leaves; the source of a command-zone effect, Dungeon Geists'
+    //     "for as long as you control this creature"); the take's controller must be able to
+    //     control it (ControlExchangeEffect does nothing otherwise);
+    //   and take >= give + MIN_SWAP_MARGIN.
+    //   ControlExchangeAi.checkApiLogic asks isOwnExchange first (the readmit's own key, rule B3-2:
+    //   the paper name, the activated ExchangeControl, a host in play that ai owns and controls),
+    //   and chooseSwap re-picks the same pair on live state and aims it, our give first as stock
+    //   does. A Clone's copy (its own paper name), a granted copy (Mairsil) and a thief's or a
+    //   stolen Djinn keep the stock pick.
+    // Reads only: no random number, no held mana, no memory write. Its writes are
+    // setActivatingPlayer on an SA with no activator yet (as getOriginalAndAltCostAbilities does
+    // right after the filter) and on the mana abilities G2 reads, and the two targets on a
+    // WillPlay; a decline leaves no target. A refusal is the old filter.
+    public static class DjinnOfInfiniteDeceits {
+        public static final String NAME = "Djinn of Infinite Deceits";
+        // Order of Succession's and Chromeshell Crab's floor: a 4/4 for 4 (220) qualifies; a 3/3
+        // for 3 (190), a 2/2 (160) or a 1/1 token (105) never does
+        public static final int MIN_GAIN_VALUE = 200;
+        // stock ControlExchangeAi.checkApiLogic's best-for-worst margin; here we pick both sides
+        public static final int MIN_SWAP_MARGIN = 40;
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner())) {
+                return false; // a thief's Djinn (Nathan Drake, Gonti): the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (sa.isSpell()) {
+                return readmitCast(ai, sa, host);
+            }
+            return isOwnExchange(ai, sa) && readmitExchange(ai, sa, host);
+        }
+
+        // The readmit's own key for the exchange and ControlExchangeAi.checkApiLogic's gate: the
+        // paper Djinn's own activated ExchangeControl, in play, owned and controlled by ai
+        public static boolean isOwnExchange(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())
+                    || !sa.isActivatedAbility() || sa.getApi() != ApiType.ExchangeControl) {
+                return false;
+            }
+            final Player activator = sa.getActivatingPlayer();
+            return host.isInPlay() && ai.equals(host.getOwner()) && ai.equals(host.getController())
+                    && (activator == null || ai.equals(activator));
+        }
+
+        // the owner's creature spell from hand (the Dulcet Sirens window)
+        private static boolean readmitCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (sa.getApi() != ApiType.PermanentCreature || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false; // a Play-effect cast, a copy, another zone: the hint as it was
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return false;
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            if (sa.getActivatingPlayer() == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ph.is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait, answered before the list sees the spell
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLUE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+
+        // the {T} exchange (isOwnExchange already held): its windows, its cost, and a pair
+        private static boolean readmitExchange(final Player ai, final SpellAbility sa, final Card host) {
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty()) {
+                return false;
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean ownMain = ph.isPlayerTurn(ai) && ph.getPhase().isMain();
+            final boolean endBeforeOurs = !ph.isPlayerTurn(ai) && ph.is(PhaseType.END_OF_TURN)
+                    && ai.equals(ph.getNextTurn());
+            if (!ownMain && !endBeforeOurs) {
+                return false;
+            }
+            if (!host.canTap() || host.isAbilitySick()) {
+                return false; // CostTap.canPay
+            }
+            if (sa.getActivatingPlayer() == null) {
+                sa.setActivatingPlayer(ai);
+            }
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return false; // ActivationPhases: never in combat
+            }
+            if (ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false).getConvertedManaCost() > 0) {
+                return false; // a tax on activations would reach canPayCost's MyRandom test payment
+            }
+            return plan(ai, sa, host) != null;
+        }
+
+        // ControlExchangeAi.checkApiLogic, behind isOwnExchange: the pair on live state, aimed
+        // (our give first, then the take, as stock adds them); a decline leaves no target
+        public static AiAbilityDecision chooseSwap(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Card[] pair = plan(ai, sa, sa.getHostCard());
+            if (pair == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(pair[0]); // give
+            sa.getTargets().add(pair[1]); // take
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // {give, take}, or null. RNG-free: filters, canTarget, evaluateCreature, itemWithMax/Min.
+        private static Card[] plan(final Player ai, final SpellAbility sa, final Card host) {
+            final Game game = ai.getGame();
+            // off our turn the only window is the end step right before it (skeptic F2)
+            final boolean theirTurn = !game.getPhaseHandler().isPlayerTurn(ai);
+            final CardCollection takes = CardLists.filter(ai.getOpponents().getCreaturesInPlay(), c ->
+                    !c.isPhasedOut() && c.canBeControlledBy(ai) && c.getNetPower() > 0
+                    // canPayCost would add the ward to the cost and test-pay it
+                    && !c.hasKeyword(Keyword.WARD)
+                    // stock ControlExchangeAi.checkApiLogic never grabs a RemoveDeck card
+                    && !ComputerUtilCard.isCardRemAIDeck(c)
+                    // Dash, Blitz, Warp or an end-of-turn copy leaves at the end step (Crab F2)
+                    && !c.hasSVar("EndOfTurnLeavePlay")
+                    // our own Aura on it (Journey to Nowhere, Prison Term) makes it a crippled steal
+                    && !c.getEnchantedBy().anyMatch(CardPredicates.isController(ai))
+                    // an Equipment we do not control goes back at sorcery speed with its bonus
+                    && !c.getEquippedBy().anyMatch(CardPredicates.isController(ai).negate())
+                    // P/T counted from its controller's board shrinks on our side (Order of Succession)
+                    && !OrderOfSuccession.hasControllerRelativePT(c)
+                    // our own Act of Treason or Threaten steal comes back at cleanup anyway
+                    && !(theirTurn && ai.equals(c.getOwner()))
+                    && sa.canTarget(c));
+            if (takes.isEmpty()) {
+                return null;
+            }
+            final Card take = ComputerUtilCard.getBestCreatureAI(takes);
+            if (take == null) {
+                return null;
+            }
+            final int takeValue = ComputerUtilCard.evaluateCreature(take);
+            if (takeValue < MIN_GAIN_VALUE) {
+                return null;
+            }
+            final Player them = take.getController();
+            final CardCollection gives = CardLists.filter(ai.getCreaturesInPlay(), c ->
+                    !c.equals(host) && !c.isPhasedOut()
+                    // a face-down 2/2 is a hidden card its new controller may turn face up (Crab F1)
+                    && !c.isFaceDown()
+                    && !(c.isCommander() && ai.equals(c.getOwner())) // never our commander
+                    // our Aura or Equipment would stay ours on their creature
+                    && !c.getEnchantedBy().anyMatch(CardPredicates.isController(ai))
+                    && !c.getEquippedBy().anyMatch(CardPredicates.isController(ai))
+                    // an intrinsic anthem or lord changes sides with it (Order of Succession)
+                    && !OrderOfSuccession.affectsBeyondItself(c)
+                    // a repeatable engine its new controller would turn on us
+                    && !c.getNonManaAbilities().anyMatch(SpellAbility::isActivatedAbility)
+                    // a link that ends when it changes sides (skeptic F1): Fiend Hunter's exiled
+                    // card, Dungeon Geists' "as long as you control" effect
+                    && !c.hasRemembered() && !c.hasExiledCard()
+                    && !isEffectSource(game, c)
+                    && c.canBeControlledBy(them)
+                    && sa.canTarget(c));
+            if (gives.isEmpty()) {
+                return null;
+            }
+            final Card give = ComputerUtilCard.getWorstCreatureAI(gives);
+            if (give == null || takeValue < ComputerUtilCard.evaluateCreature(give) + MIN_SWAP_MARGIN) {
+                return null;
+            }
+            return new Card[] { give, take };
+        }
+
+        // c is the source of an effect in a command zone (Duration$ AsLongAsControl and the like)
+        private static boolean isEffectSource(final Game game, final Card c) {
+            for (final Card e : game.getCardsIn(ZoneType.Command)) {
+                if (c.equals(e.getEffectSource())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Domineering Will (dead-card batch 2, row 44)
     // "Target player gains control of up to three target nonattacking creatures until end of turn.
     // Untap those creatures. They block this turn if able." ({3}{U} instant.) One window, the
@@ -34002,8 +34234,8 @@ public class SpecialCardAi {
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
     // 11, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58, 59, 60,
-    // 63, 68, 69, 71, 73, 75, 76, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger;
-    // batch 3's row 68 is Sunbird Standard, a readmit).
+    // 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row 68 (Trench
+    // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -34103,6 +34335,8 @@ public class SpecialCardAi {
                     return ShieldsOfVelisVel.readmit(ai, sa);
                 case Firespout.NAME:
                     return Firespout.readmit(ai, sa);
+                case DjinnOfInfiniteDeceits.NAME:
+                    return DjinnOfInfiniteDeceits.readmit(ai, sa);
                 default:
                     return false;
             }

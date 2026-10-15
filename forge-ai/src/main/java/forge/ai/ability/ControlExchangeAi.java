@@ -19,6 +19,14 @@ public class ControlExchangeAi extends SpellAbilityAi {
  */
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, final SpellAbility sa) {
+        if (SpecialCardAi.DjinnOfInfiniteDeceits.isOwnExchange(ai, sa)) {
+            // Dead-card batch 3, row 80: the paper Djinn's own {T} exchange, in play, owned and
+            // controlled by ai (G3's readmit key, rule B3-2). G3 admitted it only in its windows
+            // and with a pair; re-pick the pair on live state and aim it
+            // (SpecialCardAi.DjinnOfInfiniteDeceits). A Clone's copy, a granted copy and a
+            // thief's or a stolen Djinn keep the stock pick below. No random draw.
+            return SpecialCardAi.DjinnOfInfiniteDeceits.chooseSwap(ai, sa);
+        }
         Card object1 = null;
         Card object2 = null;
         final TargetRestrictions tgt = sa.getTargetRestrictions();
