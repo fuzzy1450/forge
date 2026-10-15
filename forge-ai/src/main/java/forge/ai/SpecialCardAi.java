@@ -47207,7 +47207,7 @@ public class SpecialCardAi {
     //   non-mandatory consult never volunteers one: TargetingFailed, the stock answer.
     // - Forced (the enters or attack trigger at resolution): ours first as above, then the
     //   multiplayer goad pick, else the least harmful creature, one that cannot block The Rani in
-    //   this combat, else ComputerUtilCard.getWorstCreatureAI (GoadAi's forced fallback).
+    //   this combat, else ComputerUtilCard.getWorstCreatureAI over the legal targets.
     //   AiAttackController.shouldAttack keeps The Rani home in a game of two when its attack trigger
     //   could only mark an opposing creature (markWouldGoToOpponent).
     // Answered from TokenAi.doTriggerNoCost after the stock spawnToken, so every consult allocates
