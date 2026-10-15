@@ -27947,7 +27947,7 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 16, 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 79, 83 and 84, keepOff
+    // 16, 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 75, 79, 83 and 84, keepOff
     // for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -28020,6 +28020,8 @@ public class SpecialCardAi {
                     return VisceraSeer.readmit(ai, sa);
                 case AdNauseam.NAME:
                     return AdNauseam.readmit(ai, sa);
+                case VampiricTutor.NAME:
+                    return VampiricTutor.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -37360,6 +37362,182 @@ public class SpecialCardAi {
             final int va = net[a] + b * KNIGHT;
             final int vb = net[b] + a * KNIGHT;
             return va > vb || (va == vb && a >= b) ? a : b;
+        }
+    }
+
+    // Vampiric Tutor (dead-card batch 3, row 75; carrier the-millennium-calendar, not an anchor)
+    // "Search your library for a card, then shuffle and put that card on top. You lose 2 life."
+    // ({B} instant.) One card, {B} and 2 life turn this turn's draw into the resolution pick
+    // (ChangeZoneAi.chooseCardToHiddenOriginChangeZone: a land only when land-light with nothing
+    // castable, else the best creature, else the best card - Demonic Tutor's pick in the same deck).
+    // AI:RemoveDeck:All kept it off AiController.getSpellAbilityToPlay's list, so its owner never
+    // considered it. Behind the hint the stock hidden-origin path (hiddenOriginCanPlayAI) approves it
+    // in every window from Main 2 on with no floor, down to 3 life (LifeLoseAi.chkDrawback's
+    // amount + 3), and an approval with no black source reaches canPayCost's isManaSourceReserved
+    // draws. The hint is KEPT (rule B3-1): the copy evaluators (Wild Ricochet, Dualcaster Mage,
+    // Reverberate, Cooperate), the MayPlay thieves, the opponents' ReplaySpell probes and every other
+    // isCardRemAIDeck reader keep A's answers, and the -10 sort evaluates it after every other spell.
+    // - readmit(), G3's case: only our own cast from our own hand (isOwnHandCast) inside the window,
+    //   our own upkeep after turn 1 with an empty stack (HuaTuo's window: the pick replaces this
+    //   turn's draw). Not the opponent's end step: the carrier's commander, Sisay, Weatherlight
+    //   Captain, has a {W}{U}{B}{R}{G} search the stock AI activates at its first priority after our
+    //   untap, which would shuffle the pick away before the draw. In our upkeep Sisay's ability sorts
+    //   ahead of this hinted spell and resolves first, and upkeep triggers (Midnight Clock's twelfth
+    //   counter, The Prismatic Bridge) resolve before the empty-stack priority. turn > 1: the
+    //   starting player skips its first draw in a two-player game, so a turn-1 pick would wait a
+    //   whole turn.
+    // - consider(), from the top of ChangeZoneAi.checkApiLogic behind isOwnHandCast, the readmit's
+    //   own key (rule B3-2). In order, every decline before any WillPlay:
+    //   1. outside the window, AnotherTime: O(1), no scan (only the canPlaySa callers that skip the
+    //      filter ask there: TapAi's hasReasonToPlayCardThisTurn, ManaAi's ritual look-ahead);
+    //   2. the 2 life breaks LifeFloor (7 life or more before the loss under Default), CantPlayAi;
+    //   3. the test-mode cost (calculateManaCost: taxes, reductions; this spell's own cost, never
+    //      host.getFirstSpellAbility(): row 77) is not covered by G2 (HonestMana, held sources
+    //      skipped, restrictions read on this spell) in total and in black, CantAfford;
+    //   4. the search is not ours to make, or somebody profits from it, CantPlayAi:
+    //      canSearchLibraryWith (Stranglehold, Leonin Arbiter), LimitSearchLibrary (Aven
+    //      Mindcensor's top four), searchPunished (Long-Term Plans', a private verbatim copy:
+    //      Ob Nixilis, Unshackled; Opposition Agent; Widespread Panic);
+    //   5. a pick already waits in the library, CantPlayAi: our graveyard holds a tutor whose spell
+    //      puts the searched card back into the library at a position from the top (Enlightened,
+    //      Mystical and Worldly Tutor, Long-Term Plans) and that got there since our last turn
+    //      began, so its pick has not been drawn and our shuffle would lose it. A tutor discarded or
+    //      cast in our previous upkeep only makes it wait a turn;
+    //   6. a library under MIN_LIBRARY cards, or with no nonland card other than another Vampiric
+    //      Tutor (a land reorder for a card and 2 life), CantPlayAi;
+    //   7. else WillPlay 100.
+    // RNG parity: A never evaluated the card for its owner (gate 1), so A drew nothing for it.
+    // Every check reads the phase, the stack, zones, parameters, triggers, statics, the profile, the
+    // test-mode cost and HonestMana: no draw, no target, nothing held or remembered, so readmit's
+    // false is the old filter exactly. The only writes are setActivatingPlayer on the mana abilities
+    // G2 reads and calculateManaCost's restored castFrom. canPayCost's draws follow a WillPlay only.
+    // Play-effect casts (ChangeZoneAi.doTriggerNoCost -> hiddenTriggerAI) never come here, so a
+    // thief's free cast (Chaos Wand) keeps the stock path.
+    public static class VampiricTutor {
+        public static final String NAME = "Vampiric Tutor";
+        static final int LIFE_LOSS = 2;    // printed: "You lose 2 life."
+        static final int MIN_LIBRARY = 2;  // with one card the pick is already the next draw
+
+        // our own spell of this card cast from our own hand: not a sub, not a copy, not a Play-effect
+        // cast; keyed on the host's paper name, the key the readmit switch (RemoveDeckFilter.paperName)
+        // and isCardRemAIDeck read (rules B3-2, B3-3)
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())) {
+                return false;
+            }
+            final Player activator = sa.getActivatingPlayer();
+            return host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner()) && ai.equals(host.getController())
+                    && (activator == null || ai.equals(activator));
+        }
+
+        // our own upkeep after turn 1, with an empty stack; O(1)
+        static boolean inWindow(final Player ai) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            return ph.is(PhaseType.UPKEEP, ai) && ph.getTurn() > 1 && game.getStack().isEmpty();
+        }
+
+        // G3's case (RemoveDeckFilter.readmit): the owner's hand spell joins the list only in the window
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isOwnHandCast(ai, sa) && inWindow(ai);
+        }
+
+        // ChangeZoneAi.checkApiLogic's gate, behind isOwnHandCast
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // O(1) window first: no scan at all outside it
+            if (!inWindow(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!LifeFloor.keeps(ai, LIFE_LOSS)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the cost as the engine prices it, on this spell's own cost (never host.getFirstSpellAbility(): row 77)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLACK) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (!ai.canSearchLibraryWith(sa, ai) || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (pickPending(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            if (library.size() < MIN_LIBRARY
+                    || !library.anyMatch(c -> !c.isLand() && !NAME.equals(c.getName()))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // A card in our graveyard that got there since our last turn began (getLastTurnNr is stamped
+        // in our cleanup, so in our upkeep it is our previous turn; getTurnInZone is stamped as the
+        // card enters the graveyard) whose spell searches our library and puts the card back at a
+        // position from the top: its pick has not been drawn yet. Parameter reads only.
+        private static boolean pickPending(final Player ai) {
+            final int since = ai.getLastTurnNr();
+            for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                if (c.getTurnInZone() < since) {
+                    continue;
+                }
+                for (final SpellAbility sp : c.getSpells()) {
+                    if (sp.getApi() == ApiType.ChangeZone
+                            && "Library".equals(sp.getParam("Origin"))
+                            && "Library".equals(sp.getParam("Destination"))
+                            && fromTop(sp.getParam("LibraryPosition"))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // LibraryPosition$ n with n >= 0, counted from the top; absent, -1 (the bottom) or an SVar is not
+        private static boolean fromTop(final String position) {
+            if (position == null || position.isEmpty()) {
+                return false;
+            }
+            for (int i = 0; i < position.length(); i++) {
+                if (!Character.isDigit(position.charAt(i))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // LongTermPlans.searchPunished, a private verbatim copy (an accepted helper is not shared).
+        // An opposing permanent that triggers on our search or takes it over, or a permanent on
+        // any battlefield whose Shuffled trigger our own shuffle fires (an absent ValidPlayer
+        // matches: a conservative decline). Parameter reads only.
+        private static boolean searchPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.SearchedLibrary) {
+                            return true;
+                        }
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (st.hasParam("ControlOpponentsSearchingLibrary")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Shuffled && t.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
     }
 

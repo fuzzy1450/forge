@@ -209,6 +209,25 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.PraetorsGrasp.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.VampiricTutor.isOwnHandCast(aiPlayer, sa)) {
+            // Tutors to the top for {B}, a card and 2 life, so it is worth casting only where the pick
+            // replaces this turn's draw: our own upkeep after turn 1, on an empty stack, at a safe
+            // life, from real mana, when the search is ours, no other tutor's pick still waits in the
+            // library and the library holds a nonland card. The stock hidden-origin path below
+            // approves it from Main 2 on with no floor (down to 3 life), and an approval with no black
+            // source reaches canPayCost's MyRandom draws. Its AI:RemoveDeck:All hint is kept: G3's
+            // readmit (SpecialCardAi.VampiricTutor.readmit) puts our own hand cast back on the list
+            // only in that window, and this gate carries the readmit's own key, our own hand cast
+            // (rule B3-2), so the canPlaySa callers that skip the filter meet the same evaluator,
+            // which is RNG-free. Everyone else's look at the card (an opponent's ReplaySpell probe of
+            // our graveyard, a copy on the stack) and every Play-effect cast (doTriggerNoCost ->
+            // hiddenTriggerAI, which never comes here) keeps the stock path. Ahead of
+            // multipleCardsToChoose.clear(), as Long-Term Plans: in A the card never reached that
+            // clear either, so a decline leaves no state. Every other ChangeZone card takes exactly
+            // the path it took before this branch.
+            return SpecialCardAi.VampiricTutor.consider(aiPlayer, sa);
+        }
+
         cardsToChoose().clear();
 
         if ("Spelltwine".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
