@@ -372,6 +372,14 @@ public class ComputerUtil {
                 // the SacMe shuffle, for whoever controls the Seer
                 return SpecialCardAi.VisceraSeer.chooseSacrifice(ai, sa, typeList);
             }
+            if (SpecialCardAi.TrashForTreasure.handles(activate) && ai.equals(activate.getOwner())) {
+                // the artifact TrashForTreasure.consider priced (a noncreature token or SacMe artifact,
+                // in Main 2 a creature token, else a spare one-mana rock): serves checkSacrificeCost
+                // (willPayCosts) and the payment's chooseSacrificeType alike, ahead of the SacMe
+                // shuffle (Myr Retriever) and the lands branch that would sell an artifact land. A
+                // stolen copy (Nathan Drake's attack trigger) keeps the stock path.
+                return SpecialCardAi.TrashForTreasure.chooseSacrifice(ai, sa, typeList);
+            }
             // search for permanents with SacMe. priority 1 is the lowest, priority 5 the highest
             for (int ip = 0; ip < 6; ip++) {
                 final int priority = 6 - ip;

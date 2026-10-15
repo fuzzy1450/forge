@@ -39039,6 +39039,457 @@ public class SpecialCardAi {
         }
     }
 
+    // Trash for Treasure (dead-card batch 3, row 46; precon:Invent Superiority (C16))
+    // "As an additional cost to cast this spell, sacrifice an artifact. Return target artifact card
+    // from your graveyard to the battlefield." ({2}{R} Sorcery; printed text and Oracle agree.
+    // Targets are chosen before costs are paid, CR 601.2c before 601.2h, so the return is already in
+    // the graveyard and the artifact sold is never it.) AI:RemoveDeck:All dropped the owner's cast in
+    // AiController.getSpellAbilityToPlay's removeIf before any handler ran, so its owner never cast
+    // it on any engine (every recorded cast was a Play-effect theft by Nathan Drake's attack
+    // trigger, which never reads the hint). The script drops the hint. Behind it the stock
+    // known-origin path had no value floor (getMostExpensivePermanentAI on any graveyard artifact),
+    // timed our own reanimation with useRemovalNow (an AiAttackController in Main 1 and a closing
+    // MyRandom roll), and paid with the shuffled SacMe pick (Myr Retriever, whose dies trigger takes
+    // the target to hand and fizzles the spell) or an artifact land. Daretti, Scrap Savant's -2 is
+    // the same value line (batch 2, row 2). Routed from ChangeZoneAi.checkApiLogic by name (the root
+    // spell; Play-effect casts and copies take doTriggerNoCost and never come here), with one
+    // owner-gated line in ComputerUtil.getCardPreference's SacCost chain, so consider,
+    // checkSacrificeCost (willPayCosts) and the payment's chooseSacrificeType sell the same artifact.
+    // consider, cheapest first, every decline before any WillPlay:
+    // - the owner's cast (a static-permission theft declines, as A's filter refused it), in our own
+    //   Main 1 or Main 2 on an empty stack (Reshape's revert lesson: Main 2 alone starves behind the
+    //   deck's own Main-2 artifact casts);
+    // - an artifact card worth MIN_RETURN in our graveyard (one graveyard pass);
+    // - Main 1 only with no live mana reservation (RemoveDeckFilter.noManaHeld, G3, read only);
+    // - a sacrifice cost on the ability (none: CantPlayAi, DiabolicIntent's guard);
+    // - an artifact to sell (chooseSacrifice), else CostNotAcceptable;
+    // - G1 (CommanderCastCeiling.affordable, under G4's widened contract): the engine's test-mode
+    //   cost against G2 with held sources skipped, in total and in red;
+    // - the return: a targetable artifact card worth max(MIN_RETURN, fodder worth + MARGIN) or more
+    //   that worthReturning admits; the best worth first, a creature before a noncreature, then
+    //   the higher mana value, then card id;
+    // - Main 1 only (the skeptic's M3): a nonland permanent card in our hand whose mana value beats
+    //   the return's worth, fits G2's total and would not fit after this spell's three mana waits
+    //   for Main 2, where it sorts first (PermanentAi defers permanents to Main 2) and this spell
+    //   takes what mana is left. Checked ahead of each candidate's enters-trigger veto: worth is the
+    //   sort's first key, so a wait at one candidate is a wait at every later one, and a Main-1 wait
+    //   never runs a held ETB evaluation;
+    // - checkETBEffects (Dance of the Manse's veto), once per candidate, only on a candidate every
+    //   other floor passed.
+    // Draws nothing before checkETBEffects: zone scans, getValidCards and getTargetableCards,
+    // canBeSacrificedBy, evaluateCreature, survivesUnblocked's combat sums (no AiBlockController),
+    // noManaHeld's memory reads, G1 and G2 (calculateManaCost in test mode; HonestMana's only write is
+    // setActivatingPlayer on the mana abilities it reads), isETBprevented, the arrival-replacement
+    // scan, wouldDieToStaticPT's LKI copy, checkNeedsToPlayReqs without an SA, and script reads that
+    // never build an ability (a built ability takes a SpellAbility id). No setMaxXValue, no
+    // useRemovalNow, no getMostExpensivePermanentAI. Every decline leaves no target; nothing is held
+    // or remembered.
+    public static class TrashForTreasure {
+        public static final String NAME = "Trash for Treasure";
+        // the return must be worth more than the {2}{R} paid ...
+        static final int MIN_RETURN = 4;
+        // ... and more than the artifact sold plus the spell's three mana
+        static final int MARGIN = 3;
+        // a spare one-mana rock is sold only with this many lands in play (Reshape's floor)
+        static final int SPARE_ROCK_LANDS = 6;
+        // M3: what this spell's {2}{R} takes from the mana a hand permanent needs
+        static final int SPELL_MANA = 3;
+
+        public static boolean handles(final Card source) {
+            return source != null && NAME.equals(source.getName());
+        }
+
+        // getAbilitySourceName reads "" for a card cast face down from exile (Gonti, Thief of
+        // Sanity): read the host's name or the card state's name too (DiabolicIntent.isIntent's
+        // idiom), so a face-down stolen copy still meets the owner check in consider.
+        public static boolean isTrash(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets(); // nothing held from an earlier window
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // a static-permission theft
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean main2 = ph.is(PhaseType.MAIN2, ai);
+            if (!game.getStack().isEmpty() || !(main2 || ph.is(PhaseType.MAIN1, ai))) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // the cheap precondition first: one graveyard pass, no other evaluation
+            if (!ai.getCardsIn(ZoneType.Graveyard).anyMatch(c -> c.isArtifact() && worth(c) >= MIN_RETURN)) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            // Main 1 only with no live mana reservation (the morph family's frozen predicate)
+            if (!main2 && !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            // M2: no sacrifice cost to price (DiabolicIntent's guard)
+            final CostSacrifice sac = sa.getPayCosts() == null ? null
+                    : sa.getPayCosts().getCostPartByType(CostSacrifice.class);
+            if (sac == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection options = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                    sac.getType().split(";"), ai, host, sa);
+            final Card fodder = chooseSacrifice(ai, sa, options);
+            if (fodder == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
+            }
+            // G1 as it is: the test-mode calculateManaCost (taxes, reductions) against G2's HonestMana
+            // with held sources skipped, the red shard against G2's red
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int need = Math.max(MIN_RETURN, fodderWorth(fodder) + MARGIN);
+            final List<Card> cands = new ArrayList<>();
+            for (final Card c : CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Graveyard), sa)) {
+                if (c.isArtifact() && worth(c) >= need && worthReturning(ai, game, c)) {
+                    cands.add(c);
+                }
+            }
+            if (cands.isEmpty() || !(ai.getController() instanceof PlayerControllerAi)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the best worth first; a creature before a noncreature; then the higher mana value; then
+            // card id
+            cands.sort((a, b) -> {
+                int d = Integer.compare(worth(b), worth(a));
+                if (d == 0) {
+                    d = Boolean.compare(b.isCreature(), a.isCreature());
+                }
+                if (d == 0) {
+                    d = Integer.compare(b.getCMC(), a.getCMC());
+                }
+                return d != 0 ? d : Integer.compare(a.getId(), b.getId());
+            });
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            final int pending = main2 ? -1 : pendingPermanentMv(ai, sa, host);
+            for (final Card c : cands) {
+                if (worth(c) < pending) {
+                    return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2); // M3
+                }
+                if (c.hasETBTrigger(false) && !aic.checkETBEffects(c, sa, null)) {
+                    continue; // a mandatory enters trigger the AI would not run
+                }
+                if (sa.canTarget(c)) {
+                    sa.getTargets().add(c);
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // DarettiScrapSavant.worth, copied (a private method of an accepted class): mana value (a
+        // copy token keeps the copied one); a land at least a land drop; a creature at least half
+        // its body.
+        static int worth(final Card c) {
+            if (c.isLand()) {
+                return Math.max(2, c.getCMC());
+            }
+            final int body = c.isCreature() ? (c.getNetPower() + c.getNetToughness()) / 2 : 0;
+            return Math.max(c.getCMC(), body);
+        }
+
+        // what selling it costs: nothing for a tier-0 artifact, which replaces itself or was
+        // leaving anyway; else its worth
+        private static int fodderWorth(final Card c) {
+            return isTierZero(c) ? 0 : worth(c);
+        }
+
+        // Never returned: an AI:RemoveDeck:All card the AI cannot use (Trading Post), a legend we
+        // already control (Sharuum), a card whose arrival is prevented (Grafdigger's Cage) or
+        // redirected (the skeptic's M1: Containment Priest exiles a creature card for good), a
+        // creature that arrives dead (Etched Oracle's sunburst 0/0), a card whose own NeedsToPlay
+        // (Var) fails (Bonehoard's creature-card count), an Equipment with no creature to carry it,
+        // and a card with an activated ability that reaches DestroyAll (Nevinyrral's Disk).
+        private static boolean worthReturning(final Player ai, final Game game, final Card c) {
+            return !ComputerUtilCard.isCardRemAIDeck(c)
+                    && (c.ignoreLegendRule() || !ai.isCardInPlay(c.getName()))
+                    && !ComputerUtil.isETBprevented(c)
+                    && !redirectedOnArrival(game, c)
+                    && !ComputerUtilCard.wouldDieToStaticPT(c)
+                    && ComputerUtilCard.checkNeedsToPlayReqs(c, null) == AiPlayDecision.WillPlay
+                    && (!c.isEquipment() || !ai.getCreaturesInPlay().isEmpty())
+                    && !reachesDestroyAll(c);
+        }
+
+        // M3: the largest mana value among the nonland permanent cards in our hand (this card
+        // aside) that G2's honest total pays now but would no longer pay after this spell's three
+        // mana; -1 when none. Reads the hand and G2 only.
+        private static int pendingPermanentMv(final Player ai, final SpellAbility sa, final Card host) {
+            final int total = HonestMana.of(ai, sa, true).total();
+            int best = -1;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.equals(host) || !c.isPermanent() || c.isLand()) {
+                    continue;
+                }
+                final int mv = c.getCMC();
+                if (mv <= total && mv > total - SPELL_MANA) {
+                    best = Math.max(best, mv);
+                }
+            }
+            return best;
+        }
+
+        // A function of the board and the phase alone, so consider, checkSacrificeCost and the
+        // payment get the same artifact (the payment decides before it pays, and moving the spell to
+        // the stack changes neither). sa may be null (ComputerUtilCost's callers without one).
+        // Never sold: an artifact we do not control, the commander, a land (Darksteel Citadel, Seat
+        // of the Synod), an Equipment, a nontoken creature (Myr Retriever, Breya), one this spell
+        // cannot sacrifice, and one with a leaves-the-battlefield trigger aimed at a graveyard card
+        // (Myr Retriever's would take the target to hand and fizzle the spell).
+        // Tier 0, worth 0: a noncreature artifact with no mana ability that is a token, has SacMe
+        //   (Ichor Wellspring draws, Mycosynth Wellspring fetches a basic) or leaves at end of turn.
+        // Tier 1, Main 2 only (after its attack), its worth: a creature token with no mana ability,
+        //   evaluateCreature within SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL (Default.ai 135), not in
+        //   combat, while survivesUnblocked holds (Breya's and Thopter Foundry's Thopters, Myr
+        //   Battlesphere's Myr).
+        // Tier 2, its worth: with SPARE_ROCK_LANDS lands in play, a nontoken spare rock (isSpareRock:
+        //   Fellwar Stone, an Everflowing Chalice at one counter; never Sol Ring). It is counted in the
+        //   mana and sold after paying (CostPartMana pays first, CostSacrifice at 15), and a tapped
+        //   rock is still a legal sacrifice.
+        // A token with a mana ability (Treasure, Gold) is never sold, so G2's count never also spends
+        // the fodder (DiabolicIntent's rule). Lowest tier, then the lower worth, then card id.
+        public static Card chooseSacrifice(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            final Game game = ai.getGame();
+            final boolean main2 = game.getPhaseHandler().is(PhaseType.MAIN2, ai);
+            final boolean rocksSpare = ai.getLandsInPlay().size() >= SPARE_ROCK_LANDS;
+            // Default.ai:315 = 135: a 2/2 vanilla token (131) passes, a 3/3 (156) does not
+            final int maxEval = AiProfileUtil.getIntProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL);
+            final Combat combat = game.getCombat();
+            Boolean safe = null; // survivesUnblocked, computed at most once per call
+            Card best = null;
+            int bestTier = 0, bestWorth = 0;
+            for (final Card c : options) {
+                if (!c.isArtifact() || !ai.equals(c.getController()) || c.isCommander() || c.isLand()
+                        || c.isEquipment() || (c.isCreature() && !c.isToken())
+                        || (sa != null && !c.canBeSacrificedBy(sa, false))
+                        || aimsAtGraveyardOnLeaving(c)) {
+                    continue;
+                }
+                final int tier;
+                if (isTierZero(c)) {
+                    tier = 0;
+                } else if (c.isCreature()) { // a creature token
+                    if (!main2 || !c.getManaAbilities().isEmpty()
+                            || ComputerUtilCard.evaluateCreature(c) > maxEval
+                            || (combat != null && (combat.isAttacking(c) || combat.isBlocking(c)))) {
+                        continue;
+                    }
+                    if (safe == null) {
+                        safe = survivesUnblocked(ai);
+                    }
+                    if (!safe) {
+                        continue; // it may be a blocker we need
+                    }
+                    tier = 1;
+                } else if (rocksSpare && !c.isToken() && isSpareRock(c)) {
+                    tier = 2;
+                } else {
+                    continue;
+                }
+                final int w = tier == 0 ? 0 : worth(c);
+                if (best == null || tier < bestTier || (tier == bestTier && (w < bestWorth
+                        || (w == bestWorth && c.getId() < best.getId())))) {
+                    best = c;
+                    bestTier = tier;
+                    bestWorth = w;
+                }
+            }
+            return best;
+        }
+
+        private static boolean isTierZero(final Card c) {
+            return !c.isCreature() && c.getManaAbilities().isEmpty()
+                    && (c.isToken() || c.hasSVar("SacMe") || leavesThisTurn(c));
+        }
+
+        // EndOfTurnLeavePlay: AtEOT, Blitz or True; a Dash or Warp permanent comes back, so selling
+        // it is a real loss
+        private static boolean leavesThisTurn(final Card c) {
+            final String v = c.getSVar("EndOfTurnLeavePlay");
+            return !v.isEmpty() && !"Dash".equals(v) && !"Warp".equals(v);
+        }
+
+        // A leaves-the-battlefield trigger (ChangesZone, Origin Battlefield) whose ability targets a
+        // card in a graveyard: Myr Retriever's dies trigger, the general form. Its ability is read as
+        // built when it is, else from its Execute SVar text, never built here.
+        private static boolean aimsAtGraveyardOnLeaving(final Card c) {
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone
+                        || !tr.getParamOrDefault("Origin", "").contains(ZoneType.Battlefield.toString())) {
+                    continue;
+                }
+                final SpellAbility built = tr.getOverridingAbility();
+                if (built != null) {
+                    if (built.usesTargeting() && built.getTargetRestrictions().getZone().contains(ZoneType.Graveyard)) {
+                        return true;
+                    }
+                    continue;
+                }
+                if (!tr.hasParam("Execute")) {
+                    continue;
+                }
+                final String text = tr.getSVar(tr.getParam("Execute"));
+                if (text.isEmpty()) {
+                    continue;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                if (params.containsKey("ValidTgts")
+                        && (params.getOrDefault("TgtZone", "").contains(ZoneType.Graveyard.toString())
+                        || params.getOrDefault("Origin", "").contains(ZoneType.Graveyard.toString()))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The skeptic's M1: WakeTheDead.arrivalReplacement's -1 branch for a card coming from our
+        // graveyard, in MassPolymorph.redirectedOnArrival's form (both private there): a Moved
+        // replacement of layer Other whose ability is a ChangeZone sends it elsewhere instead
+        // (Containment Priest exiles a nontoken creature card that was not cast). Its ability is
+        // read as built when it is, else from its ReplaceWith SVar text, never built here
+        // (ensureAbility would build and keep one, taking a SpellAbility id).
+        private static boolean redirectedOnArrival(final Game game, final Card c) {
+            final Map<forge.game.ability.AbilityKey, Object> repParams = forge.game.ability.AbilityKey.mapFromAffected(c);
+            repParams.put(forge.game.ability.AbilityKey.CardLKI, c);
+            repParams.put(forge.game.ability.AbilityKey.Origin, ZoneType.Graveyard);
+            repParams.put(forge.game.ability.AbilityKey.Destination, ZoneType.Battlefield);
+            // add Params for AddCounter Replacements
+            final GameEntityCounterTable table = new GameEntityCounterTable();
+            repParams.put(forge.game.ability.AbilityKey.EffectOnly, true);
+            repParams.put(forge.game.ability.AbilityKey.CounterTable, table);
+            repParams.put(forge.game.ability.AbilityKey.CounterMap, table.column(c));
+            for (ReplacementEffect re : game.getReplacementHandler().getReplacementList(ReplacementType.Moved, repParams, ReplacementLayer.Other)) {
+                final SpellAbility with = re.getOverridingAbility();
+                final String api;
+                if (with != null) {
+                    api = with.getApi() == null ? null : with.getApi().name();
+                } else if (re.hasParam("ReplaceWith")) {
+                    final String text = re.getSVar(re.getParam("ReplaceWith"));
+                    api = text.isEmpty() ? null : apiOf(FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR));
+                } else {
+                    api = null;
+                }
+                if (ApiType.ChangeZone.name().equalsIgnoreCase(api)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static String apiOf(final Map<String, String> params) {
+            final String api = params.get("DB");
+            if (api != null) {
+                return api;
+            }
+            return params.containsKey("AB") ? params.get("AB") : params.get("SP");
+        }
+
+        // Reshape.isHarmful, a private copy (the skeptic's rule: no unreviewed helper is shared): an
+        // artifact with an activated (non-spell) ability whose chain - sub-abilities, additional
+        // abilities and ability lists - reaches DestroyAll. In the carrier it matches Nevinyrral's
+        // Disk only. A pure read of the card's scripted abilities: no random number.
+        private static boolean reachesDestroyAll(final Card c) {
+            for (final SpellAbility a : c.getNonManaAbilities()) {
+                if (a.isSpell()) {
+                    continue;
+                }
+                for (final SpellAbility part : partsOf(a)) {
+                    if (part.getApi() == ApiType.DestroyAll) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // root and every ability part reachable from it, each once (identity, not SpellAbility.equals)
+        private static List<SpellAbility> partsOf(final SpellAbility root) {
+            final List<SpellAbility> parts = new ArrayList<>();
+            collectParts(root, parts);
+            return parts;
+        }
+
+        private static void collectParts(final SpellAbility part, final List<SpellAbility> parts) {
+            if (part == null) {
+                return;
+            }
+            for (final SpellAbility seen : parts) {
+                if (seen == part) {
+                    return;
+                }
+            }
+            parts.add(part);
+            collectParts(part.getSubAbility(), parts);
+            for (final SpellAbility add : part.getAdditionalAbilities().values()) {
+                collectParts(add, parts);
+            }
+            for (final List<AbilitySub> list : part.getAdditionalAbilityLists().values()) {
+                for (final AbilitySub sub : list) {
+                    collectParts(sub, parts);
+                }
+            }
+        }
+
+        // Reshape.isSpareRock, a private copy: a nonlegendary rock of mana value <= 2 whose best
+        // activation nets exactly one mana (Fellwar Stone, an Everflowing Chalice at one counter;
+        // never Sol Ring), with no static ability and no non-mana ability but its own spell or a
+        // self-sacrifice.
+        private static boolean isSpareRock(final Card c) {
+            if (c.getType().isLegendary() || c.getCMC() > 2 || c.getManaAbilities().isEmpty()
+                    || !c.getStaticAbilities().isEmpty()) {
+                return false;
+            }
+            for (final SpellAbility a : c.getNonManaAbilities()) {
+                if (!a.isSpell() && (a.getPayCosts() == null
+                        || !a.getPayCosts().hasSpecificCostType(CostSacrifice.class))) {
+                    return false;
+                }
+            }
+            int best = 0;
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final int cost = ma.getPayCosts() != null && ma.getPayCosts().getCostMana() != null
+                        ? ma.getPayCosts().getCostMana().convertAmount() : 0;
+                best = Math.max(best, producedPerActivation(c, ma) - cost);
+            }
+            return best == 1;
+        }
+
+        // Reshape.producedPerActivation, a private copy: one mana per produced symbol, a Combo
+        // choice (or an empty production, ManaReflected) one mana, times Amount
+        private static int producedPerActivation(final Card src, final SpellAbility ma) {
+            final String produced = ma.getParamOrDefault("Produced", "");
+            final int symbols = produced.isEmpty() || produced.startsWith("Combo") ? 1 : produced.split(" ").length;
+            return symbols * AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+        }
+
+        // Deterministic next-turn safety: the AI survives every opponent's next attack even if
+        // nothing blocks, so no token it cashes in was a needed blocker. Independent of the
+        // candidate. DiabolicIntent.survivesUnblocked (itself LifesLegacy's), copied verbatim.
+        private static boolean survivesUnblocked(final Player ai) {
+            if (ai.cantLose()) {
+                return true;
+            }
+            int damage = 0, poison = 0;
+            for (final Player opp : ai.getOpponents()) {
+                final CardCollection attackers = CardLists.filter(opp.getCreaturesInPlay(),
+                        c -> ComputerUtilCombat.canAttackNextTurn(c, ai));
+                damage += ComputerUtilCombat.sumDamageIfUnblocked(attackers, ai);
+                poison += ComputerUtilCombat.sumPoisonIfUnblocked(attackers, ai);
+            }
+            final boolean lifeSafe = ai.cantLoseForZeroOrLessLife()
+                    || ai.getLife() - damage >= AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_THRESHOLD);
+            return lifeSafe && ai.getPoisonCounters() + poison < 7;
+        }
+    }
+
     // Travel Through Caradhras (dead-card batch 3, row 65)
     // {5}{G} Sorcery. "Council's dilemma - Starting with you, each player votes for Redhorn Pass or
     // Mines of Moria. For each Redhorn Pass vote, search your library for a basic land card and put it

@@ -509,6 +509,22 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.Reshape.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.TrashForTreasure.isTrash(sa) && !(sa instanceof AbilitySub)) {
+            // "As an additional cost to cast this spell, sacrifice an artifact. Return target
+            // artifact card from your graveyard to the battlefield." The generic known-origin path
+            // below has no value floor (getMostExpensivePermanentAI on any graveyard artifact), times
+            // our own reanimation with useRemovalNow (an AiAttackController in Main 1 and a closing
+            // MyRandom roll), and its sacrifice falls to the shuffled SacMe pick (Myr Retriever,
+            // whose dies trigger takes the target to hand) or an artifact land. AI:RemoveDeck:All
+            // stripped the card before any handler ran, so the stock path drew no random numbers for
+            // it. A non-owner (a static "you may cast it" theft, a face-down exile included) declines
+            // in TrashForTreasure.consider, RNG-free, as A's filter refused it; Play-effect casts
+            // (Nathan Drake's attack trigger, every recorded cast) go through doTriggerNoCost and
+            // never reach checkApiLogic. Every other ChangeZone card takes exactly the path it took
+            // before this branch.
+            return SpecialCardAi.TrashForTreasure.consider(aiPlayer, sa);
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
