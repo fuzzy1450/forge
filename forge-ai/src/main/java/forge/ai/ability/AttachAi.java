@@ -136,6 +136,18 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.Flickerform.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.BreathOfFury.NAME.equals(source.getName())
+                && SpecialCardAi.BreathOfFury.window(ai, sa)) {
+            // Breath of Fury's chain, judged whole in SpecialCardAi.BreathOfFury: the stock Pump preference
+            // (attachAIPumpPreference -> getBestAI :1425) enchants our BEST attacker, the commander included, and
+            // the card's own trigger sacrifices it on its first hit. Only the readmit's own window (our hand cast in
+            // our Main 1 with an empty stack, two creatures, the mana): every other probe of the card -- ManaAi's
+            // ritual look-ahead, targetPlayableSpellCard's copies, TapAi's hasReasonToPlayCardThisTurn during a
+            // resolution (stack not empty), a Play-effect cast through doTriggerNoCost -- keeps the stock path.
+            // A decline writes no ATTACHED_THIS_TURN.
+            return SpecialCardAi.BreathOfFury.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {
@@ -1939,6 +1951,19 @@ public class AttachAi extends SpellAbilityAi {
             // attach-target pick that follows (params "Attachments"). RNG-free; reached only when
             // her +2 resolves, i.e. only in games where she was cast.
             return SpecialCardAi.NahiriTheLithomancer.chooseEquipment(ai, sa, options, params);
+        }
+        final Card bofAura = sa.getHostCard();
+        if (bofAura != null && SpecialCardAi.BreathOfFury.NAME.equals(bofAura.getName())
+                && sa.getApi() == ApiType.Attach && sa.hasParam("Object") && sa.hasParam("Choices")
+                && ai.equals(bofAura.getOwner()) && ai.equals(bofAura.getController())) {
+            // Breath of Fury's mandatory re-attach (StillFurious) after its host was sacrificed: the next host of a
+            // chain that kills, else the next expendable host while the link pays, else the park
+            // (SpecialCardAi.BreathOfFury.chooseNewHost). Stock took getWorstPermanentAI(biasEnch, biasArt): Iroas
+            // first, the commander included. Owner only: a thief's re-attach stays stock. Reached only after a cast.
+            final Card pick = SpecialCardAi.BreathOfFury.chooseNewHost(ai, sa, options);
+            if (pick != null || isOptional) {
+                return pick;
+            }
         }
         return attachGeneralAI(ai, sa, (List<Card>)options, !isOptional, sa.getHostCard(), sa.getParam("AILogic"));
     }

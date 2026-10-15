@@ -373,6 +373,16 @@ public class ComputerUtilAbility {
                         && SpecialCardAi.CrownOfDoom.NAME.equals(source.getName())) {
                     p += 9;
                 }
+                // Breath of Fury keeps its hint (-10 above) for every other reader. Inside its own cast window (our
+                // hand cast, our Main 1, empty stack, two creatures) +10 sorts it by its own cost again, and +30 more
+                // puts a chain that kills this turn ahead of every other spell (1077649 t13: a seven-drop took the
+                // mana and the kill). The lethal verdict is RemoveDeckFilter.readmit's, memoised for this hand SA on
+                // the game thread just before this sort, so the bonus is O(1) and fixed for the whole sort: the
+                // comparator stays transitive. predictSpellToCastInMain2's sorts (eval thread) read no memo, and
+                // return only SpellPermanents, which an Aura spell is not.
+                if (sa.isSpell() && SpecialCardAi.BreathOfFury.NAME.equals(source.getName())) {
+                    p += SpecialCardAi.BreathOfFury.sortBonus(ai, sa);
+                }
                 // try to use it before it's gone
                 if (source.isInPlay() && source.hasSVar("EndOfTurnLeavePlay")) {
                     p += 1;

@@ -4312,6 +4312,808 @@ public class SpecialCardAi {
         }
     }
 
+    // Breath of Fury (dead-card batch 3, row 33; batch 2 row 35 a3d9d9d45bc, reverted windowless db9ebaf27b0)
+    // Design: tools/deadcards/b3/breath-of-fury/final-design.md.
+    // "Enchant creature you control. When enchanted creature deals combat damage to a player, sacrifice it and
+    // attach Breath of Fury to a creature you control. If you do, untap all creatures you control and after this
+    // phase, there is an additional combat phase." The sacrifice and the re-attach are mandatory, and with no
+    // creature to take the Aura there is no untap and no combat (ruling 2005-10-01), so the card is a chain: each
+    // connect of its host spends that host for one more full-team combat, doubled in 1v1 by Saskia the Unyielding.
+    // One stateless model (board + simulate) judges every link: the cast (consider, behind the G3 readmit), every
+    // re-attach (chooseNewHost) and every later attack declaration (steerAttack).
+    //  ALL_IN: every body that can go attacks each combat; the next host is the connecting body with the least
+    //          damage, lords next to last and our commander last. A chain that kills may spend anything.
+    //  VALUE:  the chain goes on only through expendable bodies, a link only while another expendable body of ours
+    //          is left to park the Aura on and the combat that link buys deals MIN_LINK; the park stays home.
+    // Cast floors: LETHAL (the ALL_IN chain reaches the opponent's life and its first combat alone does not), or
+    // VALUE (an expendable host, MIN_EXTRA in the added combats -- MIN_LINK for a stolen body worth denying --, an
+    // expendable park of ours, our commander never spent, and the opponents' next attack short of our life even
+    // unblocked). No chain at all under an attack cap, a resolved fog, or a fog ability on the opponent's
+    // battlefield. The script keeps AI:RemoveDeck:All: every other isCardRemAIDeck reader still refuses the card.
+    // RNG parity: A never evaluated the card for its owner, so every refusal reads the board only (P/T, keywords,
+    // statics, triggers' parse-built abilities, canAttack/canBlock/getAttackCost, evaluateCreature, HonestMana,
+    // test-mode calculateManaCost): no damage prediction, no AiBlockController, no hasAFogEffect, no memory write.
+    // The only draw left is canPayCost's test payment after a WillPlay. chooseNewHost and steerAttack act only with
+    // the Aura on its owner's battlefield, i.e. after a cast.
+    public static class BreathOfFury {
+        public static final String NAME = "Breath of Fury";
+        private static final String SASKIA = "Saskia the Unyielding";
+        // a nontoken body worth one combat: an untapped vanilla 2/2 two-drop (80+20+30+20+10+1)
+        public static final int MAX_FODDER_EVAL = 161;
+        // a token worth one combat: up to an untapped vanilla 4/4 token (80+60+40+1); a 5/5 (206) is kept
+        public static final int MAX_TOKEN_EVAL = 181;
+        // what a cast must buy in the added combats with a host of ours (Saskia's copy and drains included)
+        public static final int MIN_EXTRA = 6;
+        // what one more link must buy; also a cast on a stolen body worth denying (its death is the rest)
+        public static final int MIN_LINK = 2;
+        private static final int MIN_CREATURES = 2;     // a host and one more body
+        public static final int SORT_WINDOW = 10;       // undoes the hint's -10 inside the cast window
+        public static final int SORT_LETHAL = 30;       // a lethal chain sorts ahead of every other spell
+        // readmit's lethal verdict for the sort, keyed by the hand SA it was found for; set on the game thread just
+        // before chooseSpellAbilityToPlayFromList's sort (RideTheAvalanche.PENDING's pattern). Weak, so a serve
+        // slot's thread never keeps a finished game alive; the "Game AI Eval" thread always reads null.
+        private static final ThreadLocal<java.lang.ref.WeakReference<SpellAbility>> LETHAL = new ThreadLocal<>();
+
+        private enum Policy { ALL_IN, VALUE }
+
+        // one of our creatures as the chain sees it against one opponent; built once per decision
+        private static final class Body {
+            Card card;
+            int dmg;              // net combat damage to that player if unblocked (0 for infect)
+            int hit;              // what it deals that player for sure (hit()); > 0: it connects
+            boolean goesNow;      // attacks now: canAttack, no attack tax, not a dork the cast taps
+            boolean goesAgain;    // attacks in an added combat (the trigger untaps it): not sick, no attack tax
+            boolean commander;    // our own commander
+            boolean saskia;       // Saskia the Unyielding aimed at that player
+            boolean lord;         // a Continuous static over other cards (isLord)
+            boolean owned;
+            boolean canHost;      // the Aura can be attached to it
+            boolean expendable;   // spendable outside a lethal chain (expendable)
+            boolean parkable;     // ours, and it keeps the Aura: not leaving at end of turn, not SacMe
+            int eval;
+            int drain;            // "whenever a creature you control attacks, defending player loses N" (drainOf)
+
+            // never risked in a block while a chain runs: its statics or its copy are in every count
+            boolean key() {
+                return lord || commander || saskia;
+            }
+        }
+
+        // our bodies, plus what the opponent's untapped creatures allow
+        private static final class Board {
+            final List<Body> all = new ArrayList<>();
+            int blockers;         // the opponent's untapped potential blockers (CombatUtil.canBlock)
+            boolean bound;        // the k-blocker bound is usable: none blocks more than one or has lifelink
+            int fixedDrain;       // drain per attacker from our noncreature permanents
+        }
+
+        private static final class Chain {
+            int first;            // damage (drains included) in the combat being judged
+            int extra;            // damage in the added combats after it
+            boolean lethal;
+            boolean commanderLost;
+            boolean parkCommander;
+            boolean parkExpendable = true;
+            final List<Body> wave = new ArrayList<>();      // the attackers the judged combat counted
+        }
+
+        // GiftOfDoom.isOwnHandCast's shape, on the paper name: our face-up Aura spell in our hand, not a Play
+        // effect, not a copy
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && ai.equals(host.getController()) && sa.isSpell() && !sa.isCastFaceDown()
+                    && sa.getApi() == ApiType.Attach && !sa.isCastFromPlayEffect() && !sa.isCopied()
+                    && !host.isFaceDown() && host.isInZone(ZoneType.Hand);
+        }
+
+        // the cast window, cheapest checks first: RemoveDeckFilter.readmit's and AttachAi's router gate. HonestMana
+        // with held sources skipped (G2) covers the engine's test-mode price in total and in red (B3-5)
+        public static boolean window(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa) || !ai.canCastSorcery()
+                    || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN1, ai)
+                    || ai.getCreaturesInPlay().size() < MIN_CREATURES) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // RemoveDeckFilter.readmit's case: the window, plus the sort's lethal verdict for this hand SA (memo). Only
+        // our hand cast touches the memo, so a copy elsewhere (graveyard, battlefield) never clears its verdict.
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa)) {
+                return false;
+            }
+            LETHAL.remove();
+            if (!window(ai, sa)) {
+                return false;
+            }
+            if (lethalNow(ai, sa)) {
+                LETHAL.set(new java.lang.ref.WeakReference<>(sa));
+            }
+            return true;
+        }
+
+        // ComputerUtilAbility.getSpellAbilityPriority's bonus: O(1) window checks plus the memo
+        public static int sortBonus(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa) || !ai.canCastSorcery()
+                    || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN1, ai)
+                    || ai.getCreaturesInPlay().size() < MIN_CREATURES) {
+                return 0;
+            }
+            final java.lang.ref.WeakReference<SpellAbility> r = LETHAL.get();
+            return SORT_WINDOW + (r != null && r.get() == sa ? SORT_LETHAL : 0);
+        }
+
+        // AttachAi.checkApiLogic's gate (inside the window): the host to enchant, or decline
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card aura = sa.getHostCard();
+            sa.resetTargets();
+            final boolean dorkFree = paidWithoutCreatures(ai, sa);
+            final boolean safe = crackBackSafe(ai);
+            Card pick = null;
+            long pickRank = Long.MIN_VALUE;
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.canLoseLife() || chainBlocked(ai, opp)) {
+                    continue;
+                }
+                final int life = opp.getLife();
+                final boolean canDie = !opp.cantLoseForZeroOrLessLife();
+                final Board bd = board(ai, opp, aura, dorkFree);
+                for (final Body h : bd.all) {
+                    if (!h.goesNow || h.hit <= 0 || !h.canHost || !sa.canTarget(h.card) || !castTargetOk(h.card)) {
+                        continue;
+                    }
+                    long rank = Long.MIN_VALUE;
+                    if (canDie) {
+                        final Chain kill = simulate(bd, h, true, Policy.ALL_IN, life, null);
+                        if (kill.lethal && kill.first < life) {             // the chain is needed (D5)
+                            rank = 3_000_000L - (h.commander ? 2_000_000L : 0L) - cost(h);
+                        }
+                    }
+                    if (rank == Long.MIN_VALUE && h.expendable && safe && valueLink(bd, bd.all, h)) {
+                        final Chain value = simulate(bd, h, true, Policy.VALUE, life, null);
+                        if (valueOk(value, castFloor(h))) {
+                            rank = 1000L * Math.min(value.extra, 900) - cost(h);   // most damage, then cheapest
+                        }
+                    }
+                    if (rank > pickRank) {
+                        pickRank = rank;
+                        pick = h.card;
+                    }
+                }
+            }
+            if (pick == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // AttachAi.chooseSingleCard's gate: the mandatory re-attach (SacrificeAll resolved first, so the old host is
+        // not among the options)
+        public static Card chooseNewHost(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            final CardCollection opts = new CardCollection(options);
+            if (opts.isEmpty()) {
+                return null;
+            }
+            final Game game = ai.getGame();
+            final Combat combat = game.getCombat();
+            final Player opp = defender(ai, combat);
+            if (opp != null && opp.canLoseLife() && !chainBlocked(ai, opp)) {
+                final Board bd = board(ai, opp, sa.getHostCard(), true);
+                final boolean canDie = !opp.cantLoseForZeroOrLessLife();
+                final boolean safe = crackBackSafe(ai);
+                Body kill = null;
+                Body value = null;
+                for (final Body b : bd.all) {
+                    if (!opts.contains(b.card) || !b.canHost || !b.goesAgain || b.hit <= 0) {
+                        continue;
+                    }
+                    if (canDie && (kill == null || spendsFirst(b, kill))
+                            && simulate(bd, b, false, Policy.ALL_IN, opp.getLife(), null).lethal) {
+                        kill = b;
+                    }
+                    if (b.expendable && safe && (value == null || cost(b) < cost(value)) && valueLink(bd, bd.all, b)) {
+                        value = b;
+                    }
+                }
+                if (kill != null) {
+                    return kill.card;
+                }
+                if (value != null) {
+                    return value.card;
+                }
+            }
+            return park(ai, sa.getHostCard(), opts, combat, game.getPhaseHandler().is(PhaseType.COMBAT_FIRST_STRIKE_DAMAGE));
+        }
+
+        // AiController.declareAttackers' hook (our own declaration): the host goes, with every body its chain
+        // counted, only when the chain from it kills or pays; otherwise it is held home, and the rest of the attack
+        // is forced only when it alone is lethal (alpha) or it is VALUE's parked combat (not the first combat)
+        public static void steerAttack(final Player ai, final Combat combat) {
+            if (combat == null || !ai.isCardInPlay(NAME)) {
+                return;
+            }
+            final Game game = ai.getGame();
+            for (final Card aura : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!NAME.equals(aura.getName()) || !ai.equals(aura.getOwner())) {
+                    continue;
+                }
+                final Card host = aura.getEnchantingCard();
+                if (host == null || !ai.equals(host.getController())) {
+                    continue;
+                }
+                final Player opp = defender(ai, combat);
+                if (opp == null || !opp.canLoseLife() || chainBlocked(ai, opp)) {
+                    hold(combat, host);
+                    continue;
+                }
+                final Board bd = board(ai, opp, aura, true);
+                final Body h = bodyOf(bd, host);
+                final int life = opp.getLife();
+                final boolean canDie = !opp.cantLoseForZeroOrLessLife();
+                final boolean safe = crackBackSafe(ai);
+                Chain go = null;
+                boolean value = false;
+                if (h != null && h.goesNow && h.hit > 0) {
+                    final Chain kill = canDie ? simulate(bd, h, true, Policy.ALL_IN, life, null) : null;
+                    if (kill != null && kill.lethal) {
+                        go = kill;
+                    } else if (h.expendable && safe && valueLink(bd, bd.all, h)) {
+                        go = simulate(bd, h, true, Policy.VALUE, life, null);
+                        value = true;
+                    }
+                }
+                if (go != null) {
+                    sendAt(combat, host, opp);
+                    if (opp.equals(combat.getDefenderByAttacker(host))) {   // the wave rides only on a real hit
+                        commit(combat, go.wave, bd, opp, value);
+                    }
+                    continue;
+                }
+                hold(combat, host);
+                final Chain alpha = canDie && h != null ? simulate(bd, null, true, Policy.ALL_IN, life, h) : null;
+                if (alpha != null && alpha.lethal) {
+                    commit(combat, alpha.wave, bd, opp, false);
+                } else if (!game.getPhaseHandler().isFirstCombat() && safe) {
+                    final List<Body> wave = new ArrayList<>();                // VALUE's parked combat, played
+                    for (final Body b : bd.all) {
+                        if (b != h && b.goesNow && b.hit > 0) {
+                            wave.add(b);
+                        }
+                    }
+                    commit(combat, wave, bd, opp, false);
+                }
+            }
+        }
+
+        // ---- the model ----
+
+        // the ALL_IN cast verdict consider would reach (same inputs, same order); readmit's memo for the sort
+        private static boolean lethalNow(final Player ai, final SpellAbility sa) {
+            final Card aura = sa.getHostCard();
+            final boolean dorkFree = paidWithoutCreatures(ai, sa);
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.canLoseLife() || opp.cantLoseForZeroOrLessLife() || chainBlocked(ai, opp)) {
+                    continue;
+                }
+                final Board bd = board(ai, opp, aura, dorkFree);
+                for (final Body h : bd.all) {
+                    if (h.goesNow && h.hit > 0 && h.canHost && sa.canTarget(h.card) && castTargetOk(h.card)) {
+                        final Chain ch = simulate(bd, h, true, Policy.ALL_IN, opp.getLife(), null);
+                        if (ch.lethal && ch.first < opp.getLife()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // one creature's standing, without the combat reads (also park()'s)
+        private static Body self(final Player ai, final Card c, final Card aura) {
+            final Body b = new Body();
+            b.card = c;
+            b.owned = ai.equals(c.getOwner());
+            b.commander = b.owned && c.isCommander();
+            b.lord = isLord(c);
+            b.eval = ComputerUtilCard.evaluateCreature(c);
+            b.expendable = expendable(ai, c, aura, b);
+            b.parkable = b.owned && !c.hasSVar("EndOfTurnLeavePlay") && !c.hasSVar("SacMe");
+            return b;
+        }
+
+        private static Board board(final Player ai, final Player opp, final Card aura, final boolean dorkFree) {
+            final Game game = ai.getGame();
+            final Board bd = new Board();
+            final CardCollection blockers = CardLists.filter(opp.getCreaturesInPlay(), b -> CombatUtil.canBlock(b));
+            bd.blockers = blockers.size();
+            bd.bound = true;
+            for (final Card b : blockers) {
+                if (b.canBlockAny() || b.canBlockAdditional() > 0 || b.hasKeyword(Keyword.LIFELINK)) {
+                    bd.bound = false;
+                }
+            }
+            for (final Card p : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!p.isCreature()) {
+                    bd.fixedDrain += drainOf(p);
+                }
+            }
+            for (final Card c : ai.getCreaturesInPlay()) {
+                final Body b = self(ai, c, aura);
+                final boolean taxed = CombatUtil.getAttackCost(game, c, opp) != null;
+                b.dmg = c.hasKeyword(Keyword.INFECT) ? 0 : Math.max(0, c.getNetCombatDamage());
+                b.hit = hit(c, b.dmg, blockers, opp);
+                b.goesNow = !taxed && CombatUtil.canAttack(c, opp) && (dorkFree || !isDork(c));
+                b.goesAgain = !taxed && !CombatUtil.isAttackerSick(c, opp) && CombatUtil.canAttackNextTurn(c, opp);
+                b.saskia = SASKIA.equals(c.getName()) && opp.equals(c.getChosenPlayer());
+                b.canHost = c.canBeAttached(aura, null);
+                b.drain = drainOf(c);
+                bd.all.add(b);
+            }
+            return bd;
+        }
+
+        // what c deals opp for sure: all of it when fewer untapped creatures of opp can block it than it needs
+        // (getMinNumBlockersForAttacker: menace minimums read, and "can't be blocked by more than one" reads right),
+        // else, with trample, the excess over every able blocker blocking at once when it also survives all of them
+        // (a host that dies takes the Aura with it: no attach, no combat), else 0
+        private static int hit(final Card c, final int dmg, final CardCollection blockers, final Player opp) {
+            if (dmg <= 0) {
+                return 0;
+            }
+            int able = 0;
+            int absorb = 0;
+            int power = 0;
+            boolean deathtouch = false;
+            for (final Card b : blockers) {
+                if (!CombatUtil.canBlock(c, b)) {
+                    continue;
+                }
+                able++;
+                absorb += c.hasKeyword(Keyword.DEATHTOUCH) ? 1 : Math.max(1, b.getNetToughness() - b.getDamage());
+                power += Math.max(0, b.getNetCombatDamage()) * (b.hasDoubleStrike() ? 2 : 1);
+                deathtouch |= b.hasKeyword(Keyword.DEATHTOUCH);
+            }
+            if (able == 0 || able < CombatUtil.getMinNumBlockersForAttacker(c, opp)) {
+                return dmg;
+            }
+            if (c.hasKeyword(Keyword.TRAMPLE) && !deathtouch && power < c.getNetToughness() - c.getDamage()
+                    && dmg > absorb) {
+                return dmg - absorb;
+            }
+            return 0;
+        }
+
+        // a Continuous static over other cards (Thelonite Hermit, Ravos, Thunderfoot Baloth, Iroas); a static on
+        // itself (Wight of Precinct Six's AffectedDefined$ Self, an Affected$ Card.Self...) is not one
+        private static boolean isLord(final Card c) {
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (!st.checkMode(StaticAbilityMode.Continuous) || !st.hasParam("Affected")
+                        || st.hasParam("AffectedDefined")) {
+                    continue;
+                }
+                final String affected = st.getParam("Affected");
+                if (!affected.startsWith("Card.Self") && !affected.startsWith("Creature.Self")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // spendable outside a lethal chain: a body we do not own (it goes back anyway, and its death is theirs), one
+        // that leaves or is sacrificed anyway (EndOfTurnLeavePlay, SacMe), else a token up to MAX_TOKEN_EVAL or a
+        // nontoken up to MAX_FODDER_EVAL; never our commander, a face-down card (a morph we mean to flip), a lord,
+        // or a body carrying an Equipment or Aura of ours other than this one (Conqueror's Flail, Frenzied Fugue)
+        private static boolean expendable(final Player ai, final Card c, final Card aura, final Body b) {
+            if (b.lord || b.commander || c.isFaceDown()) {
+                return false;
+            }
+            for (final Card a : c.getAttachedCards()) {
+                if (ai.equals(a.getController()) && !a.equals(aura)) {
+                    return false;
+                }
+            }
+            if (!b.owned || c.hasSVar("EndOfTurnLeavePlay") || c.hasSVar("SacMe")) {
+                return true;
+            }
+            return b.eval <= (c.isToken() ? MAX_TOKEN_EVAL : MAX_FODDER_EVAL);
+        }
+
+        // N life per attacker per combat from "Whenever a creature you control attacks, defending player loses N
+        // life" (Brutal Hordechief, Campaign of Vengeance: the two scripts of this shape at 55e709fa6ba); life loss,
+        // so Saskia does not double it. The trigger's ability was built at parse (TriggerHandler.parseTrigger).
+        private static int drainOf(final Card c) {
+            int n = 0;
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() != TriggerType.Attacks || !"Creature.YouCtrl".equals(t.getParam("ValidCard"))
+                        || !"Battlefield".equals(t.getParam("TriggerZones"))) {
+                    continue;
+                }
+                final SpellAbility ab = t.getOverridingAbility();
+                if (ab != null && ab.getApi() == ApiType.LoseLife
+                        && "TriggeredDefendingPlayer".equals(ab.getParam("Defined"))) {
+                    n += Math.max(0, AbilityUtils.calculateAmount(c, ab.getParamOrDefault("LifeAmount", "1"), ab));
+                }
+            }
+            return n;
+        }
+
+        // an untapped, unsick creature with a {T} mana ability (HonestMana counts it once)
+        private static boolean isDork(final Card c) {
+            if (c.isTapped() || c.hasSickness()) {
+                return false;
+            }
+            for (final SpellAbility ab : c.getManaAbilities()) {
+                if (ab.getPayCosts() != null && ab.getPayCosts().hasTapCost()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // lands and artifacts pay the whole cost and its red (the payer taps creature sources last,
+        // ComputerUtilMana:1585-1587)
+        private static boolean paidWithoutCreatures(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            int dorks = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (isDork(c)) {
+                    dorks++;
+                }
+            }
+            return mana.total() - dorks >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) - dorks >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // the cast target only (the re-attach does not target): no Targeting Dies/Counter body, and no {T} ability
+        // other than mana that it could use this main phase instead of attacking
+        private static boolean castTargetOk(final Card c) {
+            if ("Dies".equals(c.getSVar("Targeting")) || "Counter".equals(c.getSVar("Targeting"))) {
+                return false;
+            }
+            for (final SpellAbility ab : c.getSpellAbilities()) {
+                if (!ab.isSpell() && !ab.isManaAbility() && ab.getPayCosts() != null && ab.getPayCosts().hasTapCost()
+                        && ab.canPlay()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static int castFloor(final Body h) {
+            return !h.owned && (h.card.isCommander() || h.eval >= MAX_FODDER_EVAL) ? MIN_LINK : MIN_EXTRA;
+        }
+
+        private static int cost(final Body b) {
+            return b.owned ? Math.min(b.eval, 999_999) : 0;
+        }
+
+        // ALL_IN's spend order: the least sure damage first (keeps the most for the combats after), a body we do not
+        // own before ours on a tie, lords next to last, our commander last
+        private static boolean spendsFirst(final Body a, final Body b) {
+            final int ta = a.commander ? 2 : a.lord ? 1 : 0;
+            final int tb = b.commander ? 2 : b.lord ? 1 : 0;
+            if (ta != tb) {
+                return ta < tb;
+            }
+            if (a.hit != b.hit) {
+                return a.hit < b.hit;
+            }
+            return !a.owned && b.owned;
+        }
+
+        // The chain from host hitting in the judged combat (now: the bodies that can attack now; else an added
+        // combat: the bodies that can attack again), heldFirst kept home in the judged combat (steerAttack's alpha).
+        // Each combat: every goer that hits deals its hit; under ALL_IN with the bound, the blockable goers that are
+        // not key bodies attack too and the opponent blocks the `blockers` largest of them (they deal nothing and are
+        // taken as dead); Saskia doubles the unblocked damage while she is alive (key: never blocked here); each
+        // attacker drains `drain`. A link continues while its host hits; the count stops after a lord or our
+        // commander is sacrificed (the other bodies' P/T and keywords were read with its statics). The park is held
+        // home in the combat after (steerAttack holds a host with no go-branch). O(bodies^3) integers per host.
+        private static Chain simulate(final Board bd, final Body host, final boolean now, final Policy policy,
+                final int life, final Body heldFirst) {
+            final Chain ch = new Chain();
+            final List<Body> alive = new ArrayList<>(bd.all);
+            Body cur = host;
+            Body held = heldFirst;
+            boolean judged = true;
+            int total = 0;
+            while (true) {
+                final boolean first = judged && now;
+                final List<Body> goers = new ArrayList<>();
+                final List<Body> blockable = new ArrayList<>();
+                for (final Body b : alive) {
+                    if (b == held || !(first ? b.goesNow : b.goesAgain)) {
+                        continue;
+                    }
+                    if (b.hit > 0) {
+                        goers.add(b);
+                    } else if (policy == Policy.ALL_IN && bd.bound && !b.key()) {
+                        blockable.add(b);
+                    }
+                }
+                blockable.sort((x, y) -> Integer.compare(y.dmg, x.dmg));
+                final int blocked = Math.min(bd.blockers, blockable.size());
+                int dmg = 0;
+                for (final Body b : goers) {
+                    dmg += b.hit;
+                }
+                for (int i = blocked; i < blockable.size(); i++) {
+                    dmg += blockable.get(i).dmg;
+                }
+                boolean doubled = false;
+                int drain = bd.fixedDrain;
+                for (final Body b : alive) {
+                    doubled |= b.saskia;
+                    drain += b.drain;
+                }
+                dmg = (doubled ? 2 * dmg : dmg) + drain * (goers.size() + blockable.size());
+                total += dmg;
+                if (judged) {
+                    ch.first = dmg;
+                    ch.wave.addAll(goers);
+                    ch.wave.addAll(blockable);
+                } else {
+                    ch.extra += dmg;
+                }
+                if (total >= life) {
+                    ch.lethal = true;
+                    return ch;
+                }
+                alive.removeAll(blockable.subList(0, blocked));            // taken as dead
+                if (cur == null || cur.hit <= 0 || !(first ? cur.goesNow : cur.goesAgain)) {
+                    return ch;                                              // nothing fires the trigger
+                }
+                alive.remove(cur);                                          // sacrificed
+                ch.commanderLost |= cur.commander;
+                if (cur.lord || cur.commander) {
+                    return ch;                                              // its statics leave with it
+                }
+                Body next = null;
+                for (final Body b : alive) {
+                    if (!b.canHost || !b.goesAgain || b.hit <= 0) {
+                        continue;
+                    }
+                    if (policy == Policy.ALL_IN) {
+                        if (next == null || spendsFirst(b, next)) {
+                            next = b;
+                        }
+                    } else if (b.expendable && (next == null || cost(b) < cost(next)) && valueLink(bd, alive, b)) {
+                        next = b;
+                    }
+                }
+                Body park = null;
+                if (next == null) {
+                    park = parkOf(alive);
+                    if (park == null) {
+                        return ch;                                          // the ruling: no untap, no combat
+                    }
+                    ch.parkExpendable = park.expendable && park.parkable;
+                    ch.parkCommander = park.commander;
+                }
+                cur = next;
+                held = park;
+                judged = false;
+            }
+        }
+
+        // VALUE's link rule (simulate, chooseNewHost, steerAttack, consider): spend expendable h, which hits in the
+        // combat at hand, only when an expendable body of ours other than h is left to park the Aura on and the combat
+        // h's hit buys deals MIN_LINK with h gone and that park kept home (a floor: a further link only adds)
+        private static boolean valueLink(final Board bd, final List<Body> alive, final Body h) {
+            Body park = null;
+            for (final Body b : alive) {
+                if (b != h && b.canHost && b.expendable && b.parkable && (park == null || cost(b) < cost(park))) {
+                    park = b;
+                }
+            }
+            if (park == null) {
+                return false;
+            }
+            int dmg = 0;
+            int goers = 0;
+            int drain = bd.fixedDrain;
+            boolean doubled = false;
+            for (final Body b : alive) {
+                if (b == h) {
+                    continue;
+                }
+                doubled |= b.saskia;
+                drain += b.drain;
+                if (b != park && b.goesAgain && b.hit > 0) {
+                    dmg += b.hit;
+                    goers++;
+                }
+            }
+            return (doubled ? 2 * dmg : dmg) + drain * goers >= MIN_LINK;
+        }
+
+        private static boolean valueOk(final Chain ch, final int floor) {
+            return !ch.commanderLost && !ch.parkCommander && ch.parkExpendable && ch.extra >= floor;
+        }
+
+        // an expendable body of ours first, then any other of ours, then one that cannot keep the Aura (not ours, or
+        // leaving: the Aura goes with it), our commander last (she would then be held home)
+        private static int parkRank(final Body b) {
+            return b.commander ? 3 : !b.parkable ? 2 : b.expendable ? 0 : 1;
+        }
+
+        // the park simulate expects park() to take (park() adds the first-strike-step rule)
+        private static Body parkOf(final List<Body> list) {
+            Body best = null;
+            for (final Body b : list) {
+                if (b.canHost && (best == null || parkRank(b) < parkRank(best)
+                        || (parkRank(b) == parkRank(best) && b.eval < best.eval))) {
+                    best = b;
+                }
+            }
+            return best;
+        }
+
+        // the park among the real options; in the first-strike damage step a body that is not expendable (our
+        // commander included) still attacking unblocked without first strike goes after all others: its regular
+        // damage would sacrifice it unjudged (an expendable one fires again through chooseNewHost)
+        private static Card park(final Player ai, final Card aura, final CardCollection opts, final Combat combat,
+                final boolean fsStep) {
+            Card best = null;
+            int bestRank = Integer.MAX_VALUE;
+            int bestEval = Integer.MAX_VALUE;
+            for (final Card c : opts) {
+                final Body b = self(ai, c, aura);
+                int rank = parkRank(b);
+                if (fsStep && !b.expendable && combat != null && combat.isAttacking(c) && !combat.isBlocked(c)
+                        && !c.hasFirstStrike() && !c.hasDoubleStrike()) {
+                    rank += 4;
+                }
+                if (rank < bestRank || (rank == bestRank && b.eval < bestEval)) {
+                    best = c;
+                    bestRank = rank;
+                    bestEval = b.eval;
+                }
+            }
+            return best;
+        }
+
+        // the opponents' next attack, unblocked, is short of our life (a board read; no AiBlockController). A body we
+        // control but do not own goes back at end of turn and counts on their side.
+        private static boolean crackBackSafe(final Player ai) {
+            if (ai.cantLoseForZeroOrLessLife()) {
+                return true;
+            }
+            int power = 0;
+            for (final Player o : ai.getOpponents()) {
+                for (final Card c : o.getCreaturesInPlay()) {
+                    if (CombatUtil.canAttackNextTurn(c, ai)) {
+                        power += Math.max(0, c.getNetCombatDamage());
+                    }
+                }
+            }
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!ai.equals(c.getOwner())) {
+                    power += Math.max(0, c.getNetCombatDamage());
+                }
+            }
+            return power < ai.getLife();
+        }
+
+        // no chain is judged against an attack cap (Silent Arbiter, Crawlspace: the forced wave would not be
+        // declarable), a fog that already resolved this turn, or a fog ability the opponent shows on the battlefield
+        // (Spore Frog, Sunstone). Board reads only: never ComputerUtil.hasAFogEffect, whose canPayCost draws
+        // (ComputerUtilMana:1241). getSpellAbilities() of battlefield cards was built by this pass's collection
+        // (ComputerUtilAbility.getAvailableCards takes the whole battlefield).
+        private static boolean chainBlocked(final Player ai, final Player opp) {
+            final Game game = ai.getGame();
+            if (StaticAbilityAttackRestrict.globalAttackRestrict(game) != null
+                    || StaticAbilityAttackRestrict.attackRestrictNum(opp) != null
+                    || game.getReplacementHandler().isPreventCombatDamageThisTurn()) {
+                return true;
+            }
+            for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ab : c.getSpellAbilities()) {
+                    for (SpellAbility s = ab; s != null; s = s.getSubAbility()) {
+                        if (s.getApi() == ApiType.Fog) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // 1v1: the opponent; otherwise the opponent most of our declared attackers attack (none: no chain judged)
+        private static Player defender(final Player ai, final Combat combat) {
+            final PlayerCollection opps = ai.getOpponents();
+            if (opps.size() == 1) {
+                return opps.get(0);
+            }
+            if (combat == null) {
+                return null;
+            }
+            Player best = null;
+            int most = 0;
+            for (final Player p : opps) {
+                final int n = combat.getAttackersOf(p).size();
+                if (n > most) {
+                    most = n;
+                    best = p;
+                }
+            }
+            return best;
+        }
+
+        private static Body bodyOf(final Board bd, final Card c) {
+            for (final Body b : bd.all) {
+                if (b.card.equals(c)) {
+                    return b;
+                }
+            }
+            return null;
+        }
+
+        // the wave attacks the player; then every key body (a lord, our commander, Saskia) attacking outside it is
+        // held home, and with keepParks every expendable body of ours outside it too (VALUE needs its park alive)
+        private static void commit(final Combat combat, final List<Body> wave, final Board bd, final Player opp,
+                final boolean keepParks) {
+            for (final Body b : wave) {
+                sendAt(combat, b.card, opp);
+            }
+            for (final Body b : bd.all) {
+                if (!wave.contains(b) && (b.key() || (keepParks && b.expendable && b.parkable))) {
+                    hold(combat, b.card);
+                }
+            }
+        }
+
+        // c attacks opp: declared when it is not attacking (never with an attack cost: removeUnpayableAttackers
+        // stays the judge of those), or moved from a planeswalker or battle when nothing requires that; every change
+        // is validated and undone when it breaks the declaration
+        private static void sendAt(final Combat combat, final Card c, final Player opp) {
+            final GameEntity was = combat.getDefenderByAttacker(c);
+            if (opp.equals(was)) {
+                return;
+            }
+            if (was != null) {
+                if (mustAttack(combat, c)) {
+                    return;
+                }
+                combat.removeFromCombat(c);
+            }
+            if (CombatUtil.canAttack(c, opp) && CombatUtil.getAttackCost(c.getGame(), c, opp) == null) {
+                combat.addAttacker(c, opp);
+                if (CombatUtil.validateAttackers(combat)) {
+                    return;
+                }
+                combat.removeFromCombat(c);
+            }
+            if (was != null) {
+                combat.addAttacker(c, was);
+            }
+        }
+
+        // c stays home unless something requires its attack; undone when the removal breaks the declaration
+        private static void hold(final Combat combat, final Card c) {
+            if (!combat.isAttacking(c) || mustAttack(combat, c)) {
+                return;
+            }
+            final GameEntity was = combat.getDefenderByAttacker(c);
+            combat.removeFromCombat(c);
+            if (!CombatUtil.validateAttackers(combat)) {
+                combat.addAttacker(c, was);
+            }
+        }
+
+        private static boolean mustAttack(final Combat combat, final Card c) {
+            final var req = combat.getAttackConstraints().getRequirements().get(c);
+            return req != null && req.hasRequirement();
+        }
+    }
+
     // Brokers Confluence
     // "Choose three. You may choose the same mode more than once." CharmAi's multi-mode picker
     // (chooseMultipleOptionsAi) ignores CanRepeatModes and needs three distinct modes that each pass
@@ -31458,9 +32260,9 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 11, 16, 17, 19, 21, 23, 25, 27, 28, 32, 35, 36, 41, 48, 49, 50, 52, 57, 58, 59, 60, 63, 68,
-    // 71, 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is
-    // Sunbird Standard, a readmit).
+    // 11, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 41, 48, 49, 50, 52, 57, 58, 59, 60, 63,
+    // 68, 71, 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row
+    // 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -31550,6 +32352,8 @@ public class SpecialCardAi {
                     return ScrapMastery.readmit(ai, sa);
                 case BenevolentOffering.NAME:
                     return BenevolentOffering.readmit(ai, sa);
+                case BreathOfFury.NAME:
+                    return BreathOfFury.readmit(ai, sa);
                 default:
                     return false;
             }

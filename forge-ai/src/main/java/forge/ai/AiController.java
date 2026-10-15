@@ -1390,6 +1390,15 @@ public class AiController {
 
         aiAtk.reinforceWithBanding(combat);
 
+        // Breath of Fury on our battlefield (SpecialCardAi.BreathOfFury.steerAttack): its host attacks only when the
+        // chain from it kills or pays, with every body that chain counted; otherwise it is held home. Our own
+        // declaration only: under "you choose which creatures attack" the other player's Breath keeps the stock
+        // attack. Inert without the Aura (one isCardInPlay scan). Every change is validated and undone if it breaks
+        // the declaration; no attacker with an attack cost is ever added (removeUnpayableAttackers stays the judge).
+        if (attacker.equals(player)) {
+            SpecialCardAi.BreathOfFury.steerAttack(attacker, combat);
+        }
+
         // Per CR 508.1d, the decision to pay attack costs (e.g. Propaganda)
         // is made at declaration time. Remove attackers the AI can't pay for.
         removeUnpayableAttackers(combat);
