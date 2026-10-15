@@ -29269,6 +29269,209 @@ public class SpecialCardAi {
         }
     }
 
+    // Sail into the West (dead-card batch 3, row 72)
+    // {2}{G}{U} Instant. "Will of the council - Starting with you, each player votes for return or
+    // embark. If return gets more votes, each player returns up to two cards from their graveyard to
+    // their hand, then you exile Sail into the West. If embark gets more votes or the vote is tied,
+    // each player may discard their hand and draw seven cards." The script has no AILogic, so
+    // VoteAi.canPlay fell through to CantPlayAi at every priority (held 205 times on
+    // 2.0.15+55e709fa6ba, never cast by its owner on any engine); VoteAi now routes the spell here
+    // by name. No AILogic is added: the votes stay stock and random for every voter, ours included
+    // (1v1: the wheel 3/4, return 1/4), and every AI player always takes the wheel
+    // (DiscardAi.confirmAction answers Random mode true), so the floor makes EVERY outcome worth a
+    // card to us. With H the other cards in our hand and O an opponent's hand:
+    // - the wheel nets 6 - H >= +2 after the spent Sail (Imposing Grandeur's MIN_CAST_GAIN:
+    //   7 - H >= 3), and every opponent nets 7 - O <= 5 - H, at least a card behind us (Grandeur's
+    //   refill veto, one card stricter to pay for the random return branch);
+    // - return nets +1 (two cards back from a graveyard of two or more, Sail exiled), an opponent
+    //   at most +2.
+    // Worst accepted 1v1 cast (H = 4, O = 6): +1.75 cards, +0.5 against the opponent. Every decline
+    // before any WillPlay, cheapest first:
+    // - an opponent's end step right before our own turn, on an empty stack (Read the Runes' and
+    //   Mystic Confluence's window: we untap with the new seven and use them before any opponent
+    //   uses theirs), else AnotherTime;
+    // - H <= 4 (a MayPlay cast from exile counts the whole hand);
+    // - our wheel is real: a non-empty hand we may discard (canDiscardBy as an effect; an empty
+    //   hand is still remembered and draws) and seven cards we may draw (canDraw, CantDraw statics);
+    // - the library keeps LIBRARY_MARGIN cards past the seven, unless milling cannot make us lose;
+    // - our graveyard holds RETURN_FLOOR cards for the return branch;
+    // - every opponent holds at least H + OPP_MARGIN cards (no opponent: decline);
+    // - affordability: the cost as the engine prices it (test-mode calculateManaCost: taxes and
+    //   reductions) against HonestMana (G2, held sources skipped, restrictions read on the root sa)
+    //   in total, in green and in blue, then a green and a blue source that are DISTINCT unless one
+    //   floats (Truth or Consequences' Hall check, a private copy that also skips the sources G2
+    //   skips as held), never getAvailableManaEstimate (it counts the words of Produced$);
+    // - last, the table scan: no draw thief or draw punisher (Truth or Consequences' predicate) and
+    //   no opponent's discard punisher or payoff (Discarded and DiscardedAll triggers), every
+    //   opponent wheeling O cards.
+    // The stock fallthrough drew no random number and no decline here does either: the phase and
+    // stack, zone sizes, canDiscardBy and canDraw (static scans), cantLoseCheck,
+    // calculateManaCost(test), HonestMana and the source scan (their one write is
+    // setActivatingPlayer on the mana abilities they read), AiCardMemory reads, trigger and
+    // replacement parameter reads. Nothing is held past a decline: no target, no X, no memory set,
+    // no vote chosen.
+    public static class SailIntoTheWest {
+        public static final String NAME = "Sail into the West";
+        public static final int WHEEL_DRAW = 7;      // printed: "draw seven cards"
+        public static final int MIN_CAST_GAIN = 3;   // ImposingGrandeur.MIN_CAST_GAIN: 7 - H >= 3
+        public static final int OPP_MARGIN = 2;      // every opponent holds at least H + 2 cards
+        public static final int RETURN_FLOOR = 2;    // "return" hands us two cards for the exiled Sail
+        public static final int LIBRARY_MARGIN = 3;  // DrawAi's own-deck margin, as Truth or Consequences
+
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && sa.isSpell() && !(sa instanceof AbilitySub)
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // cheapest first (an instant is consulted at nearly every priority): the end step of an
+            // opponent's turn right before our own, nothing on the stack
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai) || !ai.equals(ph.getNextTurn())
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // the wheel's refill: seven for the OTHER cards in hand
+            final int ourHand = CardLists.count(ai.getCardsIn(ZoneType.Hand), c -> !c.equals(host));
+            if (WHEEL_DRAW - ourHand < MIN_CAST_GAIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // a player who may not discard a non-empty hand is not remembered and draws nothing
+            if ((ourHand > 0 && !ai.canDiscardBy(sa, true)) || !ai.canDraw(WHEEL_DRAW)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!ai.cantLoseCheck(forge.game.player.GameLossReason.Milled)
+                    && ai.getCardsIn(ZoneType.Library).size() < WHEEL_DRAW + LIBRARY_MARGIN) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the random return branch must pay for the exiled Sail too
+            if (ai.getCardsIn(ZoneType.Graveyard).size() < RETURN_FLOOR) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // every AI opponent always takes the wheel (DiscardAi.confirmAction, Random mode): none
+            // may refill as much as we do, with a card to spare for the return branch
+            final PlayerCollection opps = ai.getOpponents();
+            if (opps.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final Player opp : opps) {
+                if (opp.getCardsIn(ZoneType.Hand).size() < ourHand + OPP_MARGIN) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // a WillPlay goes on to canPayCost, whose test payment can draw MyRandom
+            // (ComputerUtilMana.isManaSourceReserved), so an unpayable window is refused first,
+            // judged on the root sa (never host.getFirstSpellAbility(): row 77)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int needG = cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+            final int needU = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.GREEN) < needG || mana.colour(MagicColor.BLUE) < needU
+                    || !hasGreenAndBlueSources(ai, sa, needG > 0, needU > 0)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // last: no draw thief, draw punisher or opposing discard payoff at the table
+            if (tablePunishesWheel(ai, game)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // TruthOrConsequences.hasBlueAndRedSources, copied with green and blue (never share a
+        // predicate with an accepted card): a green and a blue source from DISTINCT permanents
+        // unless that colour floats, Hall's condition for two one-mana demands, so a lone dual that
+        // makes one or the other (Hinterland Harbor, Talisman of Curiosity) is never both. Each untapped mana
+        // ability is read once for its colours: a Combo through getComboColors (its letters; Chosen,
+        // ColorID and ColorIdentity resolved, Combo Any as every colour), else its printed
+        // production, where Any and Chosen count as either colour. Restrictions are judged against
+        // the root spell. Unlike the original it skips the sources HonestMana skips as held
+        // (HonestMana.isHeld, unchanged; skeptic A2): a HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK hold
+        // made in the opponent's combat is still live at their end step, and
+        // isManaSourceReserved refuses that source to canPayCost. It reads state only; its one
+        // write is setActivatingPlayer on the mana abilities it reads, as the estimate's.
+        private static boolean hasGreenAndBlueSources(final Player ai, final SpellAbility spell,
+                final boolean greenNeeded, final boolean blueNeeded) {
+            final int needG = greenNeeded && ai.getManaPool().getAmountOfColor(MagicColor.GREEN) <= 0 ? 1 : 0;
+            final int needU = blueNeeded && ai.getManaPool().getAmountOfColor(MagicColor.BLUE) <= 0 ? 1 : 0;
+            if (needG + needU == 0) {
+                return true;
+            }
+            int greenOnly = 0, blueOnly = 0, both = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (HonestMana.isHeld(ai, src)) {
+                    continue;
+                }
+                boolean g = false, u = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || !mp.meetsManaRestrictions(spell)) {
+                        continue;
+                    }
+                    final String p = mp.isComboMana() ? mp.getComboColors(ma) : mp.getOrigProduced();
+                    g |= p.contains("G") || p.contains("Any") || p.contains("Chosen");
+                    u |= p.contains("U") || p.contains("Any") || p.contains("Chosen");
+                }
+                if (g && u) {
+                    both++;
+                } else if (g) {
+                    greenOnly++;
+                } else if (u) {
+                    blueOnly++;
+                }
+            }
+            return greenOnly + both >= needG && blueOnly + both >= needU
+                    && greenOnly + blueOnly + both >= needG + needU;
+        }
+
+        // TruthOrConsequences.tableStealsOrPunishesDraws, copied (never share a predicate with an
+        // accepted card), plus the discard clause (skeptic A1): draw thieves and punishers, and
+        // discard punishers and payoffs, on the battlefield or in the Command zone, counted only
+        // where they work (zonesCheck). Any opponent's Drawn, Discarded or DiscardedAll trigger, or
+        // Draw/DrawCards replacement, is a veto: every opponent wheels O >= H + 2 cards (Megrim,
+        // Liliana's Caress and Waste Not are Discarded; Magmakin Artillerist and Rielle, the
+        // Everwise are DiscardedAll, which WitchsMark.willRummage's Discarded test misses). One of
+        // ours (or an emblem we own) is a veto when it names no side (Spiteful Visions, Chains of
+        // Mephistopheles); our own one-sided payoffs still pass.
+        private static boolean tablePunishesWheel(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                final boolean theirs = controller != null && controller.isOpponentOf(ai);
+                for (final Trigger t : c.getTriggers()) {
+                    final TriggerType mode = t.getMode();
+                    if ((mode == TriggerType.Drawn || mode == TriggerType.Discarded || mode == TriggerType.DiscardedAll)
+                            && t.zonesCheck(game.getZoneOf(c))
+                            && (theirs || (!namesASide(t.getParam("ValidCard")) && !namesASide(t.getParam("ValidPlayer"))))) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.zonesCheck(game.getZoneOf(c))) {
+                        final String validPlayer = re.getParam("ValidPlayer");
+                        if (theirs || validPlayer == null || !validPlayer.contains("Opp")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean namesASide(final String valid) {
+            return valid != null && (valid.contains("You") || valid.contains("Opp"));
+        }
+    }
+
     public static class SarkhanTheMad {
         public static AiAbilityDecision considerDig(final Player ai, final SpellAbility sa) {
             if (sa.getHostCard().getCounters(CounterEnumType.LOYALTY) == 1) {

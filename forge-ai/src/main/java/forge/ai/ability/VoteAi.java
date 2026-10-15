@@ -45,6 +45,13 @@ public class VoteAi extends SpellAbilityAi {
         if (SpecialCardAi.TravelThroughCaradhras.handles(sa)) {
             return SpecialCardAi.TravelThroughCaradhras.consider(aiPlayer, sa);
         }
+        // Sail into the West has no AILogic either (held 205 times on 2.0.15+55e709fa6ba, never
+        // cast by its owner on any engine). Its evaluator draws no random number before any
+        // decline; vote choice stays stock (ComputerUtil.vote with no AILogic), each player's wheel
+        // stays DiscardAi.confirmAction's, and Play-effect casts keep doTriggerNoCost.
+        if (SpecialCardAi.SailIntoTheWest.handles(sa)) {
+            return SpecialCardAi.SailIntoTheWest.consider(aiPlayer, sa);
+        }
         // TODO: add ailogic
         String logic = sa.getParam("AILogic");
         final Card host = sa.getHostCard();
