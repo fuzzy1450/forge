@@ -77,6 +77,23 @@ public class AnimateAi extends SpellAbilityAi {
             // of the stock path. Every other Animate card takes the path it took before.
             return SpecialCardAi.TurnToFrog.consider(ai, sa);
         }
+        if (SpecialCardAi.Snakeform.isSnakeform(sa)) {
+            // A cantrip Turn to Frog (dead-card batch 3, row 37), judged whole in
+            // SpecialCardAi.Snakeform.consider. The generic checks cannot take it, for Turn to Frog's
+            // reasons: checkPhaseRestrictions closes the declare-blockers window on both turns, and
+            // animateTgtAI's "pure P/T" branch shrinks the most valuable creature on the board - ours
+            // included - in any open window, with no combat model. The card carried AI:RemoveDeck:All,
+            // so the stock cast path never evaluated it, and every decline through consider is
+            // RNG-free (see there). No Sacrifice fallback to the stock path: on the cast path, where A
+            // drew nothing, it would add canPayCost draws. Untargeted Play-effect casts and copies
+            // (doTriggerNoCost) do not come through here and keep the stock path; hand scans that call
+            // canPlaySa (targetPlayableSpellCard, hasReasonToPlayCardThisTurn, ManaAi's ritual
+            // look-ahead) now meet consider instead of the stock path. The DBDraw sub is still judged
+            // by chkDrawbackWithSubs after a WillPlay; consider reads its two declines first, so the
+            // sub cannot refuse once the target is set. Every other Animate card takes the path it
+            // took before.
+            return SpecialCardAi.Snakeform.consider(ai, sa);
+        }
         if (sa.isPwAbility()
                 && SpecialCardAi.GideonChampionOfJustice.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             // Gideon, Champion of Justice's 0 (dead-card batch 2, row 102), judged whole in

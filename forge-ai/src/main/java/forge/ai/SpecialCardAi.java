@@ -33578,6 +33578,142 @@ public class SpecialCardAi {
         }
     }
 
+    // Snakeform (dead-card batch 3, row 37)
+    // {2}{G/U} Instant. "Until end of turn, target creature loses all abilities and becomes a green
+    // Snake with base power and toughness 1/1. Draw a card." Turn to Frog (batch 2, row 101) plus a
+    // cantrip, judged as TurnToFrog judges it: CombatShrinkAll's window (declare-blockers step, stack
+    // empty, combat damage not prevented), its defuse levels, its no-grow veto and its
+    // gains-minus-losses swing over a single victim, by calling CombatShrinkAll's private
+    // defuseLevel, growsPower and swing unchanged (legal from a sibling nested class). That couples
+    // this card to them: any later change to those helpers moves Polymorphist's Jest, Sudden
+    // Spoiling, Flatline, Turn to Frog and Snakeform together. This is a private copy of
+    // TurnToFrog.consider, because TurnToFrog is an accepted card and is not refactored; the copy
+    // differs in two places, each marked (*):
+    // - the hybrid {G/U} pip is paid by one green OR one blue source (G2 counts a multicolour source
+    //   toward each colour it can make);
+    // - the DBDraw sub's own declines (DrawAi.targetAI's untargeted drawback branch: a library of 4
+    //   or fewer without a Laboratory Maniac we can win with, or a hand already over its maximum) are
+    //   read before any combat predictor, so chkDrawbackWithSubs can never refuse the sub after the
+    //   target is set. The mirror is as literal as DrawAi: getMaxHandSize, never isUnlimitedHandSize
+    //   (DrawAi's drawback branch ignores Reliquary Tower, which the carrier runs; a mirror that read
+    //   it would approve casts whose sub then refuses, leaving a stale target).
+    // Candidates, floors and score are TurnToFrog's: on an opponent's attack each attacker (the
+    // defuse computed only for one attacking us that is unblocked, tramples or assigns its damage as
+    // though unblocked), on ours each opposing blocker; targetable, never warded (ward is priced
+    // after targeting and can counter the spell), never ours. Floors: defuse >= 1, or swing >=
+    // MIN_SWING_VALUE. Affordability runs before any combat predictor: the printed mana value and
+    // one green or blue source against HonestMana (G2, held sources skipped, restrictions read on
+    // this sa), never getAvailableManaEstimate, which counts the words of Produced$.
+    // RNG: the card carried AI:RemoveDeck:All, so A never evaluated its cast. Every decline before
+    // the swing is a read (restrictions, phase, stack, the mirror's library, Laboratory Maniac,
+    // cantWin and hand reads, G2, canTarget, ward, growsPower, the defuse's predictDamageTo and
+    // isCombatDamagePrevented). The swing's destroy predictors draw only while a matching Regenerate
+    // ability is on the battlefield: attackerWouldBeDestroyed (through combatantCantBeDestroyed) and
+    // blockerWouldBeDestroyed both reach ComputerUtil.canRegenerate, whose cost check pays through
+    // the mana reservation roll - the Jest's and Turn to Frog's accepted residual. No AiCardMemory
+    // write, no mana hold, no target set on a decline. isSnakeform also reads the host's and the card
+    // state's name, as isFrog does: a card cast face down from exile (Gonti, Lord of Luxury) reads ""
+    // from getAbilitySourceName.
+    public static class Snakeform {
+        public static final String NAME = "Snakeform";
+        // TurnToFrog's floor, the CreatureEvaluator of a non-token vanilla 3/3 for 3: 80 + 20 + 45 +
+        // 30 + 15. Snakeform costs one mana more but replaces itself, so the same real 3-drop's fate
+        // changed is worth the cast.
+        public static final int MIN_SWING_VALUE = 190;
+
+        public static boolean isSnakeform(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            // The router bypasses the base class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final Combat combat = game.getCombat();
+            if (combat == null || !game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || !game.getStack().isEmpty() || game.getReplacementHandler().isPreventCombatDamageThisTurn()
+                    || !sa.usesTargeting() || !sa.hasParam("Power") || !sa.hasParam("Toughness")) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // (*) the DBDraw sub's two declines (DrawAi.targetAI, untargeted drawback branch), read
+            // first: numCards 1 >= library - 3 without a winning Laboratory Maniac, or a hand (this
+            // card counted, as DrawAi counts it for a sub) already over its maximum
+            final int library = ai.getCardsIn(ZoneType.Library).size();
+            if ((library <= 4 && !(ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin()))
+                    || ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int manaValue = sa.getPayCosts() != null && sa.getPayCosts().getTotalMana() != null
+                    ? sa.getPayCosts().getTotalMana().getCMC() : 0;
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            // (*) the {G/U} pip: one green or one blue source
+            if (mana.total() < manaValue
+                    || (mana.colour(MagicColor.GREEN) < 1 && mana.colour(MagicColor.BLUE) < 1)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final Player attacking = combat.getAttackingPlayer();
+            final boolean ourAttack = ai.equals(attacking);
+            final CardCollection candidates = new CardCollection();
+            if (ourAttack) {
+                for (final Card b : combat.getAllBlockers()) {
+                    if (b.getController().isOpponentOf(ai) && !candidates.contains(b)) {
+                        candidates.add(b);
+                    }
+                }
+            } else if (attacking != null && attacking.isOpponentOf(ai)) {
+                candidates.addAll(combat.getAttackers());
+            }
+            if (candidates.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card host = sa.getHostCard();
+            final int bp = AbilityUtils.calculateAmount(host, sa.getParam("Power"), sa);
+            final int bt = AbilityUtils.calculateAmount(host, sa.getParam("Toughness"), sa);
+            final boolean keeps = !sa.hasParam("RemoveAllAbilities");   // false for this card
+            final CardCollection onUs = ourAttack ? new CardCollection() : combat.getAttackersOf(ai);
+
+            Card best = null;
+            int bestScore = 0;
+            for (final Card c : candidates) {
+                if (!c.isCreature() || !c.getController().isOpponentOf(ai) || !sa.canTarget(c)
+                        || c.hasKeyword(Keyword.WARD)) {
+                    continue;
+                }
+                final CardCollection one = new CardCollection(c);
+                // Only an attacker on us that reaches us (unblocked, trampling or assigning its
+                // damage as though unblocked) can change the defuse; for any other victim
+                // defuseLevel's pre and post are equal, except for a blocked attacker whose
+                // blocker was removed, which it would misread as unblocked.
+                final boolean canDefuse = onUs.contains(c) && (!combat.isBlocked(c) || c.hasKeyword(Keyword.TRAMPLE)
+                        || forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(c));
+                final int defuse = canDefuse ? CombatShrinkAll.defuseLevel(ai, combat, one, bp, keeps) : 0;
+                if (defuse < 2 && CombatShrinkAll.growsPower(combat, one, bp)) {
+                    continue;   // the Jest's no-grow veto: a 0-power or no-damage victim gains damage
+                }
+                final int swing = CombatShrinkAll.swing(ai, combat, one, bp, bt, keeps);
+                if (defuse == 0 && swing < MIN_SWING_VALUE) {
+                    continue;
+                }
+                final int score = defuse * 100000 + swing;   // defusing a hit on us outranks any trade
+                if (best == null || score > bestScore) {
+                    best = c;
+                    bestScore = score;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.resetTargets();
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Song of Inspiration
     // Both d20 results return the targets, so this is a five-mana instant Regrowth for up to two
     // permanent cards (15+ also gains life equal to their total mana value). The script uses Pump as
