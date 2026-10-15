@@ -28973,6 +28973,375 @@ public class SpecialCardAi {
         }
     }
 
+    // Prismatic Ending (dead-card batch 3, row 43)
+    // "Converge - Exile target nonland permanent if its mana value is less than or equal to the
+    // number of colors of mana spent to cast this spell." {X}{W} sorcery: X = m - 1 buys a target
+    // of mana value m when the payment spends m colours, the {W} included; mana value 0-1 costs {W}
+    // at X = 0. Routed from ChangeZoneAi.checkApiLogic for the root spell (normal casts and
+    // canPlaySa probes; Play-effect casts and copies keep the stock trigger path, and
+    // SVar:AINoCopy keeps the copy probes off it: a copy has no mana spent and whiffs), with
+    // ChangeZoneAi.checkConditions judging the condition against the converge chosen here
+    // (conditionHolds) instead of the 0 an unpaid spell reads.
+    // consider() picks the target and X together. Not in main 1 while we control no creature
+    // (isPreferredTarget's own "don't rush"). Targets: an opposing nonland permanent of mana value
+    // 5 or less that we may target and that is worth a card - a creature of evaluateCreature 160 (a
+    // vanilla nontoken 2/2, Dispatch's floor), a planeswalker or a commander always (the command
+    // zone costs it two more), a nontoken noncreature of 50 + 30 * mana value 110 (mana value 2+);
+    // never a noncreature token (cracked in response, the spell fizzles), a card we own (exiling it
+    // loses it), a warded one (canPayCost adds ward after targeting), one wearing our Aura, one
+    // leaving at end of turn anyway, a SacMe or Targeting:Dies one, or one dying this turn anyway.
+    // These are filtered before any mana is read. Then the converge budget: the largest m, up to
+    // the highest worthy mana value, whose X = m - 1 the AI's own payment surely spends as m
+    // colours (sure() and Colours below), and the most valuable worthy target inside it, the
+    // cheaper on a tie, then battlefield order; X = max(1, its mana value) - 1.
+    // RNG-free: no setMaxXValue (its test payments draw in isManaSourceReserved), no
+    // useRemovalNow; the reads are HonestMana (G2, called unchanged), calculateManaCost in test
+    // mode (G1's call: castFrom backed up and restored, the spell's own X untouched) and the source
+    // scan, whose only write is setActivatingPlayer on the mana abilities it reads, as HonestMana's.
+    // Every decline leaves no target and no X behind.
+    public static class PrismaticEnding {
+        public static final String NAME = "Prismatic Ending";
+        static final int CREATURE_FLOOR = 160;   // evaluateCreature of a vanilla nontoken 2/2 (Dispatch's floor)
+        static final int PERMANENT_FLOOR = 110;  // 50 + 30 * mana value: a nontoken noncreature of mana value 2+
+        static final int MAX_REACH = 5;          // one colour per point of mana value
+
+        // the source, host or card-state name (Titan's Presence's idiom: a card cast face down from
+        // exile reads "" from getAbilitySourceName), the root spell only
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            sa.setXManaCostPaid(null);                          // nothing stale from an earlier consult
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.MAIN2)
+                    && ai.getCreaturesInPlay().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            CardCollection cands = CardLists.getTargetableCards(
+                    ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa);
+            if (cands.isEmpty()) {                              // cheapest precondition
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            cands = CardLists.filter(cands, t -> t.getCMC() <= MAX_REACH && isCandidate(ai, t) && worthy(t));
+            cands = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, cands);
+            if (cands.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            int reach = 1;
+            for (final Card t : cands) {
+                reach = Math.max(reach, t.getCMC());
+            }
+            final Colours col = Colours.scan(ai, sa);
+            if (col == null) {                                  // floating mana, or a multi-mana colour source
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            int budget = 0;
+            for (int m = 1; m <= reach && sure(ai, sa, col, mana, m); m++) {
+                budget = m;
+            }
+            if (budget == 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            Card best = null;
+            int bestValue = 0;
+            for (final Card t : cands) {                        // battlefield order; first wins ties
+                if (t.getCMC() > budget) {
+                    continue;
+                }
+                final int v = value(t);
+                if (best == null || v > bestValue || (v == bestValue && t.getCMC() < best.getCMC())) {
+                    best = t;
+                    bestValue = v;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+            if (!sa.canTarget(best)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.setXManaCostPaid(Math.max(1, best.getCMC()) - 1);
+            sa.getTargets().add(best);
+            if (!sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                sa.setXManaCostPaid(null);
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // ChangeZoneAi.checkConditions: the target against the converge consider() guaranteed (X + 1)
+        public static boolean conditionHolds(final SpellAbility sa) {
+            final Card t = sa.getTargetCard();
+            final Integer x = sa.getXManaCostPaid();
+            return t != null && x != null && t.isPermanent() && !t.isLand() && t.getCMC() <= x + 1;
+        }
+
+        // Maelstrom Pulse's and Curse of the Swine's exclusions, minus the destroy-only ones
+        private static boolean isCandidate(final Player ai, final Card t) {
+            return t.getController().isOpponentOf(ai) && !ai.equals(t.getOwner())
+                    && !t.hasKeyword(Keyword.WARD)
+                    && !t.hasSVar("EndOfTurnLeavePlay") && !t.hasSVar("SacMe")
+                    && !"Dies".equals(t.getSVar("Targeting"))
+                    && !(!t.isCreature() && (t.isToken() || t.isTokenCard()))
+                    && t.getEnchantedBy().stream().noneMatch(a -> ai.equals(a.getController()));
+        }
+
+        private static boolean worthy(final Card t) {
+            if (t.isPlaneswalker() || t.isCommander()) {
+                return true;
+            }
+            if (t.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(t) >= CREATURE_FLOOR;
+            }
+            return !t.isToken() && !t.isTokenCard() && value(t) >= PERMANENT_FLOOR;
+        }
+
+        // LegionsToAshes.removalValue / MaelstromPulse.value, copied (an accepted helper is not refactored)
+        private static int value(final Card c) {
+            if (c.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(c);
+            }
+            int v = 50 + 30 * c.getCMC();
+            if (c.isPlaneswalker()) {
+                v += c.getCounters(CounterEnumType.LOYALTY) * 10;
+            }
+            return v;
+        }
+
+        // m colours are sure when the engine's test-mode cost at X = m - 1 (calculateManaCost with
+        // extraMana = m - 1, which prices X without touching sa; at m = 1 it reads sa's X, nulled
+        // above, so 0: Curse of the Swine's use) still charges at least max(1, m) (a reduction would
+        // eat an X shard, a free cast is Converge 0), G2's total covers it plus one payer per payment
+        // filter, and the colour coverage holds for all of its shards (Colours.covers).
+        private static boolean sure(final Player ai, final SpellAbility sa, final Colours col,
+                final HonestMana mana, final int m) {
+            final int n = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, m - 1, false)
+                    .getConvertedManaCost();
+            return n >= Math.max(1, m) && mana.total() >= n + col.filters && col.covers(m, n);
+        }
+
+        // The colour guarantee. The payment (ComputerUtilMana.payManaCost; Card.hasConverge is true
+        // through Count$Converge) pays the {W} shard first, then each X shard with the FIRST colour
+        // not yet paid whose source list is not empty, from the first entry chooseManaAbility
+        // accepts, and drops that source from every list; when every entry of the chosen list is
+        // refused, the payment stops (canPayCost then fails after a WillPlay, its draws spent). The
+        // lists are groupSourcesByManaColor's, which never read this spell's mana restrictions or
+        // the held sources. So, per battlefield source of ours, over getAIPlayableMana's abilities
+        // that canPlay with their conditions met (the only ones in a colour list):
+        // - SURELY USABLE: a cost of {T} and/or sacrificing itself, the host not held (HonestMana's
+        //   isHeld, copied), meetsManaRestrictions on this spell, Amount 1 or more, and no sub but a
+        //   painland's (painKept). It counts once per source in o[c] for each colour it makes
+        //   (canProduce, as the lists read it: Combo letters, ColorIdentity through the commander,
+        //   Any as all five, Chosen as the chosen colour); a reflected one (Exotic Orchard) counts
+        //   none but is usable.
+        // - PAYMENT FILTERS (getGenericCostToActivate > 0; getAIPlayableMana keeps only
+        //   isFilterManaAbility, so Prismatic Lens's, Abstergo Entertainment's and Three Tree
+        //   Mascot's Any for {1} are no payment source at all, neither counted nor filters): their
+        //   colours must be covered, and each adds one to the total the cost needs.
+        // - POISON: any other listed ability (a restriction this spell fails: Brotherhood
+        //   Headquarters, Secluded Courtyard; a held host; a tapXType, life or other cost; another
+        //   sub; Amount 0) makes its colours poison unless its host has a surely usable ability for
+        //   that colour: such a list may hold only refusals once its usable sources are spent.
+        // - DECLINE (null): floating mana (the payment spends the pool first); an unrestricted
+        //   non-filter ability making two or more coloured mana at once (a bounceland, Amount 2):
+        //   one activation would pay two X shards with one colour; any special production (Bloom
+        //   Tender, Faeburrow Elder), whose count cannot be read without running it.
+        // covers(m, need), need = the shards to pay (the test-mode cost: m unless something raises
+        // it). With need <= 1 only the {W} step runs, and it skips refusals: o[W] >= 1. Otherwise
+        // o[W] >= need, m - 1 other colours with o[c] >= need, and every poison or filter colour
+        // with o[c] >= need. Each step consumes one source, so before any X step at most need - 1
+        // are gone: every covered colour still has a usable source, the first non-empty unpaid list
+        // is never all refusals, a filter (at the back of each list while ordinary mana covers the
+        // cost) is never reached, and while fewer than m colours are paid a covered colour is still
+        // unpaid, so each of the first m - 1 X steps adds a colour. A sufficient condition, so
+        // conservative. Residuals: mana sources in hand, ProduceMana replacements, a tap trigger
+        // lethal to us (getAvailableManaSources drops that source), static mana-spending
+        // restrictions, a tapXType payment tapping a counted creature, target-dependent cost
+        // increases, a mana value that changes before resolution.
+        private static final class Colours {
+            private static final int ALL = MagicColor.WHITE | MagicColor.BLUE | MagicColor.BLACK
+                    | MagicColor.RED | MagicColor.GREEN;
+            final int[] o = new int[MagicColor.WUBRG.length]; // MagicColor.WUBRG order
+            int poisonMask;
+            int filterMask;
+            int filters;
+
+            static Colours scan(final Player ai, final SpellAbility sa) {
+                if (ai.getManaPool().totalMana() > 0) {
+                    return null;
+                }
+                final Colours col = new Colours();
+                Boolean stewardUnsafe = null;
+                for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                    final boolean held = isHeld(ai, src);
+                    int counted = 0, safe = 0, risky = 0;
+                    for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(src)) {
+                        final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                        if (mp == null) {
+                            continue;
+                        }
+                        ma.setActivatingPlayer(ai);
+                        if (!ma.canPlay() || !ma.metConditions()) {
+                            continue;                       // in no colour list
+                        }
+                        if (src.isCreature() && ComputerUtilMana.isStewardGrant(ma)) {
+                            if (stewardUnsafe == null) {
+                                stewardUnsafe = ComputerUtilMana.stewardGrantUnsafe(ai);
+                            }
+                            if (stewardUnsafe) {
+                                continue;                   // groupSourcesByManaColor skips it too
+                            }
+                        }
+                        if (mp.isSpecialMana()) {
+                            return null;
+                        }
+                        final boolean reflected = ma.getApi() == ApiType.ManaReflected;
+                        final int listed = listed(ma, mp, reflected);
+                        if (ComputerUtilMana.getGenericCostToActivate(ma) > 0) {
+                            col.filters++;
+                            col.filterMask |= listed;
+                            continue;
+                        }
+                        final AbilitySub sub = ma.getSubAbility();
+                        final Boolean kept = sub == null ? null : painKept(ai, src, sub);
+                        if (Boolean.FALSE.equals(kept)) {
+                            continue;                       // dropped from every list
+                        }
+                        final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                        final boolean restricted = !mp.meetsManaRestrictions(sa);
+                        if (!restricted && listed != 0 && made(mp, reflected, amount) >= 2) {
+                            return null;
+                        }
+                        if (!held && !restricted && amount > 0 && (sub == null || kept != null)
+                                && tapOrSelfSacrificeOnly(ma.getPayCosts())) {
+                            safe |= listed;
+                            if (!reflected) {
+                                counted |= listed;
+                            }
+                        } else {
+                            risky |= listed;
+                        }
+                    }
+                    for (int i = 0; i < col.o.length; i++) {
+                        if ((counted & MagicColor.WUBRG[i]) != 0) {
+                            col.o[i]++;
+                        }
+                    }
+                    col.poisonMask |= risky & ~safe;
+                }
+                return col;
+            }
+
+            boolean covers(final int m, final int need) {
+                if (o[0] < 1) {
+                    return false;                           // the {W} shard
+                }
+                if (need <= 1) {
+                    return true;                            // the {W} step alone, which skips refusals
+                }
+                if (o[0] < need) {
+                    return false;
+                }
+                int others = 0;
+                for (int i = 1; i < o.length; i++) {
+                    if (o[i] >= need) {
+                        others++;
+                    }
+                }
+                if (others < m - 1) {
+                    return false;
+                }
+                final int must = (poisonMask | filterMask) & ALL;
+                for (int i = 0; i < o.length; i++) {
+                    if ((must & MagicColor.WUBRG[i]) != 0 && o[i] < need) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            // the colour lists this ability lands in (groupSourcesByManaColor: canProduce, or the
+            // reflectable colours)
+            private static int listed(final SpellAbility ma, final forge.game.spellability.AbilityManaPart mp,
+                    final boolean reflected) {
+                int mask = 0;
+                final Set<String> reflectable = reflected ? CardUtil.getReflectableManaColors(ma) : null;
+                for (final byte c : MagicColor.WUBRG) {
+                    if (reflected ? reflectable.contains(MagicColor.toLongString(c))
+                            : mp.canProduce(MagicColor.toShortString(c), ma)) {
+                        mask |= c;
+                    }
+                }
+                return mask;
+            }
+
+            // mana one activation makes, as HonestMana reads it: Amount for a choice production,
+            // Amount times its symbols otherwise
+            private static int made(final forge.game.spellability.AbilityManaPart mp, final boolean reflected,
+                    final int amount) {
+                final String produced = mp.getOrigProduced().trim();
+                final boolean choice = reflected || produced.isEmpty() || mp.isComboMana()
+                        || mp.isAnyMana() || produced.contains("Chosen");
+                return choice ? amount : amount * produced.split(" ").length;
+            }
+
+            private static boolean tapOrSelfSacrificeOnly(final Cost cost) {
+                if (cost == null) {
+                    return false;
+                }
+                for (final CostPart part : cost.getCostParts()) {
+                    if (!(part instanceof CostTap) && !(part instanceof CostSacrifice && part.payCostFromSource())) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            // The payment keeps a mana ability with a sub only while the sub's chkDrawback agrees
+            // (groupSourcesByManaColor). For a painland's (DealDamage, not targeted, Defined$ You, a
+            // fixed amount, no AILogic, no further sub) that is DamageDealAi.damageChooseNontargeted:
+            // refused while the predicted damage is positive, we can lose life and that damage + 3
+            // reaches our life. TRUE kept, FALSE dropped from every list, null for any other sub.
+            private static Boolean painKept(final Player ai, final Card src, final AbilitySub sub) {
+                if (sub.getApi() != ApiType.DealDamage || sub.usesTargeting() || sub.getSubAbility() != null
+                        || sub.hasParam("AILogic") || sub.hasParam("AIExpectAmount")
+                        || !"You".equals(sub.getParam("Defined"))
+                        || !sub.hasParam("NumDmg") || "X".equals(sub.getParam("NumDmg"))) {
+                    return null;
+                }
+                final int dmg = AbilityUtils.calculateAmount(src, sub.getParam("NumDmg"), sub);
+                final int rest = ComputerUtilCombat.predictDamageTo(ai, dmg, src, false);
+                return !(rest > 0 && ai.canLoseLife() && rest + 3 >= ai.getLife());
+            }
+        }
+
+        // HonestMana.isHeld, copied (G2 is frozen and keeps it private): the sources
+        // ComputerUtilMana.isManaSourceReserved refuses, in the phases it refuses them.
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+    }
+
     // Prisoner's Dilemma
     // "Each opponent secretly chooses silence or snitch..." - Forge's chooser
     // (ChooseGenericAi.chooseSingleSpellAbility, no AILogic) always answers

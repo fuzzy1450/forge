@@ -160,6 +160,15 @@ public class ChangeZoneAi extends SpellAbilityAi {
             // Every other ChangeZone card takes the base check, as before.
             return SpecialCardAi.TitansPresence.conditionHolds(ai, sa);
         }
+        if (SpecialCardAi.PrismaticEnding.handles(sa)) {
+            // Its condition (target mana value <= Y = Count$Converge) reads the colours spent to
+            // cast it, none until payment (the castSA is the unpaid hand spell), so the base check
+            // compares the target's mana value to 0 and refuses every target of mana value 1 or
+            // more. Judge the target against the converge SpecialCardAi.PrismaticEnding.consider
+            // guaranteed instead: X + 1 colours. Every other ChangeZone card takes the base check,
+            // as before.
+            return SpecialCardAi.PrismaticEnding.conditionHolds(sa);
+        }
         return super.checkConditions(ai, sa);
     }
 
@@ -226,6 +235,23 @@ public class ChangeZoneAi extends SpellAbilityAi {
             // clear either, so a decline leaves no state. Every other ChangeZone card takes exactly
             // the path it took before this branch.
             return SpecialCardAi.VampiricTutor.consider(aiPlayer, sa);
+        }
+
+        if (SpecialCardAi.PrismaticEnding.handles(sa)) {
+            // Converge: the exile lands only when the colours spent reach the target's mana value,
+            // and X is the budget for them. The generic known-origin path below never announces X
+            // (isPreferredTarget sizes it only for TargetMin$ X), so the stock cast is {W} at
+            // Converge 1 against a target picked blind to the cap, behind useRemovalNow's MyRandom,
+            // and checkConditions then reads Converge 0 off the unpaid spell. AI:RemoveDeck:All
+            // stripped the card before any handler ran, so the stock path drew no random numbers
+            // for it; the evaluator picks the target and X together and is RNG-free. handles() is
+            // the root spell, by source, host or card-state name (Titan's Presence's idiom, so a
+            // face-down exiled cast is judged here too, from its caster's own mana). Play-effect
+            // casts and copies go through doTriggerNoCost and never reach checkApiLogic. Ahead of
+            // multipleCardsToChoose.clear(), as Long-Term Plans: in A the card never reached that
+            // clear either, so a decline leaves no state. Every other ChangeZone card takes exactly
+            // the path it took before this branch.
+            return SpecialCardAi.PrismaticEnding.consider(aiPlayer, sa);
         }
 
         cardsToChoose().clear();
