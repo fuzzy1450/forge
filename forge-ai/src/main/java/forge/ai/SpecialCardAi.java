@@ -36219,6 +36219,73 @@ public class SpecialCardAi {
         }
     }
 
+    // Reckless Barbarian (dead-card batch 3, row 111; extension 2026-10-15; Gruul Dragons 6c9a5c01)
+    // "Sacrifice Reckless Barbarian: Add {R}{R}." ({1}{R} Creature - Dragon Barbarian, 2/2; the printed
+    // Commander Legends: Battle for Baldur's Gate text and the Oracle agree.) AI:RemoveDeck:All dropped the
+    // owner's creature spell in AiController.getSpellAbilityToPlay's removeIf before any handler ran,
+    // so its owner never cast it (0 owner casts and 0 casts of any kind in 50 held games on
+    // 2.0.15+55e709fa6ba). The script keeps the hint. The -10 sort (ComputerUtilAbility.saEvaluator,
+    // which sortCreatureSpells keeps) makes it the last spell the AI evaluates in a phase: the
+    // leftover-mana slot. Unhinted, the creature priority cast it first and the payer then sacrificed
+    // it in the same Main 2 for a spell the lands paid for anyway (b3 probe 1368578). Every other
+    // isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) still refuses it, and its
+    // Mana ability stays off the list: the payer, which reads no hint, spends it as before, after
+    // every land and non-creature source.
+    // The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through: the owner's own
+    // creature spell from hand, not a Play-effect cast and not a copy, and only in a window where the
+    // stock path would cast it and real mana pays for it, so every other pass is the stock pass:
+    // - our own main phase with an empty stack (canCastTiming's window for a sorcery-speed
+    //   creature; PermanentCreatureAi's flash branches are never entered);
+    // - Main 2, or Main 1 when the stock PermanentAi.checkPhaseRestrictions would cast it there
+    //   (ComputerUtil.castPermanentInMain1: in the carrier, Traxos', Rising of the Day's, Orb of
+    //   Dragonkind's (Dragon) and Stingerback Terror's BuffedBy, and the haste of Fires of Yavimaya,
+    //   Rising of the Day and Stirring Bard's pump);
+    // - no live mana reservation (RemoveDeckFilter.noManaHeld);
+    // - G2 (HonestMana, held sources skipped) covers the engine's test-mode calculateManaCost in
+    //   total and in red, so a readmitted spell never reaches ComputerUtilCost.canPayCost, whose
+    //   test payment draws MyRandom per source it tries, in a window that cannot pay for it.
+    // Value floor: the body. A 2/2 Dragon for two has no ETB, upkeep cost or drawback, so there is
+    // no worthless or self-harming moment that the stock checks behind the filter miss. Those checks
+    // judge the rest: zero toughness, curses, damage on the cast. Draws nothing, holds nothing and
+    // remembers nothing; its only writes are setActivatingPlayer on a hand SA with no activator yet
+    // (as getOriginalAndAltCostAbilities does right after the filter) and on the mana abilities G2
+    // reads. Dawnglare Invoker's readmit (b3 row 21) with red for white; a private copy (B3-4).
+    public static class RecklessBarbarian {
+        public static final String NAME = "Reckless Barbarian";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || sa.isCopied() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // the {R}{R} ability, a theft, a Play-effect cast: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return false;
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ph.is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait, answered before the list sees the spell
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+    }
+
     // Reconstruct History (dead-card batch 3, row 47; precon:Lorehold Legacies (C21))
     // "Return up to one target artifact card, up to one target enchantment card, up to one target
     // instant card, up to one target sorcery card, and up to one target planeswalker card from your
@@ -36877,7 +36944,7 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // row 93, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird
+    // rows 93 and 111, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird
     // Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -36992,6 +37059,8 @@ public class SpecialCardAi {
                     return BenevolentOffering.readmit(ai, sa);
                 case Nethergoyf.NAME:                    // batch 3 extension, row 93 (W12)
                     return Nethergoyf.readmit(ai, sa);
+                case RecklessBarbarian.NAME:             // batch 3 extension, row 111 (W12)
+                    return RecklessBarbarian.readmit(ai, sa);
                 default:
                     return false;
             }
