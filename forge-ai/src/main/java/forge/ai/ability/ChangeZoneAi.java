@@ -681,6 +681,11 @@ public class ChangeZoneAi extends SpellAbilityAi {
             // its upkeep exile hands the card to the exiled card's controller (ControlGainAi
             // .chkDrawback approves that sub blindly): never taken, so never stacked either
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        } else if (SpecialCardAi.MarshalsAnthem.LOGIC.equals(aiLogic)) {
+            // Marshal's Anthem's enters return (dead-card batch 3, row 2): the cast-time probe
+            // (checkETBEffects, not mandatory) gets the stock answer, RNG-free; the trigger going on
+            // the stack (mandatory) takes the best live picks, up to the kicks paid
+            return SpecialCardAi.MarshalsAnthem.chooseReturns(aiPlayer, sa, mandatory);
         }
 
         if (!mandatory && SpecialCardAi.TitansPresence.handles(sa)) {

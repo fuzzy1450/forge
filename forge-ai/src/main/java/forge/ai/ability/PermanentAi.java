@@ -71,6 +71,18 @@ public class PermanentAi extends SpellAbilityAi {
             return SpecialCardAi.SacredMesa.considerCast(ai, sa);
         }
 
+        // Marshal's Anthem (dead-card batch 3, row 2) dropped AI:RemoveDeck:All. Its multikicker is
+        // chosen here, ahead of the stock loop below, which pays every affordable kick whatever the
+        // graveyard holds and draws MyRandom in each canPayManaCost test payment
+        // (ComputerUtilMana.isManaSourceReserved). The owner's (or a MayPlay caster's) paid cast is
+        // judged by SpecialCardAi.MarshalsAnthem; a Play-effect cast (Nathan Drake's attack trigger,
+        // Windbrisk Heights' hideaway) keeps the stock path it had while the hint was on the card,
+        // since the hint never filtered that path. Inert for every other card: a name test first.
+        if (SpecialCardAi.MarshalsAnthem.NAME.equals(source.getName()) && sa.isSpell()
+                && !sa.isCastFromPlayEffect()) {
+            return SpecialCardAi.MarshalsAnthem.considerCast(ai, sa);
+        }
+
         // check on legendary
         if (!source.ignoreLegendRule() && ai.isCardInPlay(source.getName())) {
             // TODO check the risk we'd lose the effect with bad timing

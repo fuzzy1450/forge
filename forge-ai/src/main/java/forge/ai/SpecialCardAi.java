@@ -22050,6 +22050,254 @@ public class SpecialCardAi {
         }
     }
 
+    // Marshal's Anthem (dead-card batch 3, row 2)
+    // {2}{W}{W} Enchantment. "Multikicker {1}{W}. Creatures you control get +1/+1. When Marshal's
+    // Anthem enters, return up to X target creature cards from your graveyard to the battlefield,
+    // where X is the number of times Marshal's Anthem was kicked." AI:RemoveDeck:All dropped the
+    // spell in AiController.getSpellAbilityToPlay's removeIf before any handler ran (held in 2271
+    // games on 2.0.15+55e709fa6ba, never cast from hand by its owner). Behind the hint the stock
+    // multikicker loop (PermanentAi.checkApiLogic) pays every affordable kick whatever the graveyard
+    // holds, each test payment drawing MyRandom, with no value floor. The script drops the hint; the
+    // owner's paid cast is routed here by name from PermanentAi.checkApiLogic's first statements
+    // (beside Sacred Mesa), and TrigReturn's AILogic$ MarshalsAnthem routes the enters return here
+    // from ChangeZoneAi.doTriggerNoCost.
+    // Floor, checked against the printed text (the returns are our own creature cards, "up to X"
+    // makes 0 targets legal, the anthem pumps the returns too and has no downside):
+    // - the anthem pumps at least MIN_BODIES creatures once it and its returns are in;
+    // - each {1}{W} kick buys one live return of mana value MIN_RETURN_MV or more, so a kick never
+    //   costs more than the card it brings back. Never returned: an AI:RemoveDeck:All card
+    //   (Phage-like enters), an end-of-turn leaver, a legend we control or a second card of one
+    //   legendary name (the legend rule bins one), a card a CantTarget static protects (Ground
+    //   Seal), a card that dies to a static P/T on arrival, a card whose own enters trigger
+    //   checkETBEffects vetoes (Hour of Eternity's live pick); best first by evaluateCreature, then
+    //   mana value;
+    // - the kick count is min(live picks, MAX_KICKS, what real mana pays): the cost of the base plus
+    //   k kicks as the engine prices it (test-mode calculateManaCost: taxes and reductions) against
+    //   HonestMana (G2, held sources skipped) in total and per coloured shard, a private copy of G1's
+    //   CommanderCastCeiling.affordable over an explicit Cost; then, on the accept path only, the
+    //   real test payment of base plus k (the stock loop's canPayManaCost), one pick fewer while it
+    //   fails: the kicks are not in the pay costs canPlayAndPayForFace re-checks, and G2 can
+    //   over-count;
+    // - no kick when an ETB-disabling static (Elesh Norn, Mother of Machines) stops the return;
+    // - 0 kicks is SET, never cleared: an absent amount makes
+    //   PlayerControllerAi.chooseNumberForKeywordCost pay every affordable kick at cast time.
+    // RNG parity: A never evaluated the card. Every decline before the picks draws nothing (zone
+    // counts, test-mode calculateManaCost, HonestMana, StaticAbilityDisableTriggers,
+    // canBeTargetedBy, wouldDieToStaticPT, evaluateCreature), and the candidate scan runs only once
+    // the mana bound buys a kick. Residuals: checkETBEffects on a pick with an enters trigger can
+    // draw (reached only when the floor already holds on the upper bound); the real test payment
+    // draws (accept path; a decline after it needs G2 to have over-counted); evaluateCreature
+    // builds a candidate's upkeep trigger ability once (a SpellAbility id). Nothing is held past a
+    // decline: the kick amount is cleared at entry. No static mutable state.
+    public static class MarshalsAnthem {
+        public static final String NAME = "Marshal's Anthem";
+        public static final String LOGIC = "MarshalsAnthem";
+        static final int MIN_BODIES = 2;     // creatures the anthem pumps once it and its returns are in
+        static final int MIN_RETURN_MV = 2;  // a {1}{W} kick buys a creature card worth what it paid
+        static final int MAX_KICKS = 10;     // the stock loop's bound (PermanentAi.checkApiLogic)
+        // the five coloured shards, in MagicColor.WUBRG order (G1's)
+        private static final forge.card.mana.ManaCostShard[] SHARDS = {
+                forge.card.mana.ManaCostShard.WHITE, forge.card.mana.ManaCostShard.BLUE,
+                forge.card.mana.ManaCostShard.BLACK, forge.card.mana.ManaCostShard.RED,
+                forge.card.mana.ManaCostShard.GREEN };
+
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            sa.clearOptionalKeywordAmount(); // nothing from an earlier consult survives a decline
+            final Card host = sa.getHostCard();
+            final forge.game.keyword.KeywordInterface ki = multikicker(host);
+            final Cost base = sa.getPayCosts();
+            if (ki == null || base == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int bodies = ai.getCreaturesInPlay().size();
+            // cheap precondition, O(graveyard), before any mana scan
+            int raw = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                if (c.isCreature() && c.getCMC() >= MIN_RETURN_MV) {
+                    raw++;
+                }
+            }
+            final int cap = Math.min(raw, MAX_KICKS);
+            if (bodies + cap < MIN_BODIES) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true); // G2, held sources skipped
+            if (!affordable(ai, sa, mana, base)) {               // {2}{W}{W} as the engine prices it
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // the mana-only kick bound, before any candidate scan
+            final Cost kick = new Cost(ki.getOriginal().split(":")[1], false);
+            int kMana = 0;
+            if (cap > 0 && kick.hasManaCost() && !returnDisabled(ai, host)) {
+                final Cost withKicks = base.copy();
+                while (kMana < cap) {
+                    withKicks.add(kick);
+                    if (!affordable(ai, sa, mana, withKicks)) {
+                        break;
+                    }
+                    kMana++;
+                }
+            }
+            List<Card> picks = new ArrayList<>();
+            if (kMana > 0) {
+                final List<Card> cands = candidates(ai, sa, true); // RNG-free, best first
+                final int kMax = Math.min(kMana, cands.size());
+                if (bodies + kMax < MIN_BODIES) {                  // RNG-free decline
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                // the first call that can draw: reached only in an affordable window whose floor
+                // already holds on the upper bound
+                picks = pick(ai, sa, cands, kMax);
+            }
+            if (bodies + picks.size() < MIN_BODIES) {             // residual: vetoed enters triggers
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the real payment of base plus k kicks, the stock loop's call (accept path only)
+            int k = picks.size();
+            while (k > 0 && !ComputerUtilMana.canPayManaCost(kicked(base, kick, k), sa, ai, 0, false)) {
+                k--; // the worst pick goes
+            }
+            if (bodies + k < MIN_BODIES) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // SET, never cleared, even at 0: an absent amount makes chooseNumberForKeywordCost pay
+            // every affordable kick at cast time
+            sa.setOptionalKeywordAmount(ki, k);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The enters return (TrigReturn, AILogic$ MarshalsAnthem). Not mandatory (the cast-time
+        // checkETBEffects probe, a Play-effect cast's saSideEffects included): the stock answer of
+        // ChangeZoneAi.isPreferredTarget for this script, exactly and RNG-free: yes when nothing is
+        // targetable and X is 0, else yes iff a targetable card survives the static P/T filter.
+        // Mandatory (the trigger going on the stack): the best live picks, up to X; none is a legal
+        // "up to X" choice.
+        public static AiAbilityDecision chooseReturns(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            final int x = sa.getMaxTargets(); // TimesKicked of the cast
+            final CardCollection targetable = CardLists.getTargetableCards(
+                    ai.getGame().getCardsIn(ZoneType.Graveyard), sa);
+            final CardCollection stock = CardLists.filter(targetable, c -> !ComputerUtilCard.wouldDieToStaticPT(c));
+            if (!mandatory) {
+                return (x <= 0 && targetable.isEmpty()) || !stock.isEmpty()
+                        ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                        : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (x > 0) {
+                final List<Card> live = new ArrayList<>(candidates(ai, sa, false));
+                live.retainAll(stock);
+                for (final Card c : pick(ai, sa, live, x)) {
+                    if (sa.canTarget(c)) {
+                        sa.getTargets().add(c);
+                    }
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // creature cards in our graveyard worth returning, best first (evaluateCreature, then mana
+        // value; a stable sort, so graveyard order breaks ties), each value computed once. Cheap
+        // filters first, wouldDieToStaticPT (an LKI copy and a static P/T pass) and evaluateCreature
+        // last. castTime adds the mana value floor a kick must buy.
+        static List<Card> candidates(final Player ai, final SpellAbility sa, final boolean castTime) {
+            final List<Card> cands = new ArrayList<>();
+            for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                if (!c.isCreature() || (castTime && c.getCMC() < MIN_RETURN_MV)
+                        || ComputerUtilCard.isCardRemAIDeck(c) || c.hasSVar("EndOfTurnLeavePlay")) {
+                    continue;
+                }
+                if (!c.ignoreLegendRule() && ai.isCardInPlay(c.getName())) {
+                    continue; // the legend rule would bin it (or ours) on arrival
+                }
+                if (!c.canBeTargetedBy(sa) || ComputerUtilCard.wouldDieToStaticPT(c)) {
+                    continue; // Ground Seal and kin; dead on arrival
+                }
+                cands.add(c);
+            }
+            final Map<Card, Integer> value = new HashMap<>();
+            for (final Card c : cands) {
+                value.put(c, ComputerUtilCard.evaluateCreature(c));
+            }
+            cands.sort((a, b) -> {
+                final int va = value.get(a);
+                final int vb = value.get(b);
+                return va != vb ? Integer.compare(vb, va) : Integer.compare(b.getCMC(), a.getCMC());
+            });
+            return cands;
+        }
+
+        // up to n candidates in rank order, skipping a second card of one legendary name and any
+        // card whose own enters trigger checkETBEffects vetoes (Hour of Eternity's veto, the only
+        // call here that can draw); none for a controller that is not the AI's
+        static List<Card> pick(final Player ai, final SpellAbility sa, final List<Card> cands, final int n) {
+            final List<Card> picks = new ArrayList<>();
+            if (n <= 0 || !(ai.getController() instanceof PlayerControllerAi)) {
+                return picks;
+            }
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            final Set<String> legends = new HashSet<>();
+            for (final Card c : cands) {
+                if (picks.size() >= n) {
+                    break;
+                }
+                if (!c.ignoreLegendRule() && !legends.add(c.getName())) {
+                    continue; // two cards of one legendary name: one would die
+                }
+                if (c.hasETBTrigger(false) && !aic.checkETBEffects(c, sa, null)) {
+                    continue;
+                }
+                picks.add(c);
+            }
+            return picks;
+        }
+
+        private static forge.game.keyword.KeywordInterface multikicker(final Card host) {
+            for (final forge.game.keyword.KeywordInterface k : host.getKeywords(Keyword.MULTIKICKER)) {
+                return k;
+            }
+            return null;
+        }
+
+        // the base cost plus k kicks, a fresh Cost (the spell's own pay costs are never touched)
+        private static Cost kicked(final Cost base, final Cost kick, final int k) {
+            final Cost cost = base.copy();
+            for (int i = 0; i < k; i++) {
+                cost.add(kick);
+            }
+            return cost;
+        }
+
+        // the enters return as it would trigger now: true when an ETB-disabling static (Elesh Norn,
+        // Mother of Machines) stops it, read as AiController.checkETBEffects reads it, on the
+        // script's own trigger (nothing copied, no ability built)
+        private static boolean returnDisabled(final Player ai, final Card host) {
+            for (final Trigger tr : host.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone
+                        || !ZoneType.Battlefield.toString().equals(tr.getParam("Destination"))) {
+                    continue;
+                }
+                final Map<forge.game.ability.AbilityKey, Object> runParams = forge.game.ability.AbilityKey.mapFromCard(host);
+                runParams.put(forge.game.ability.AbilityKey.Destination, ZoneType.Battlefield.name());
+                return forge.game.staticability.StaticAbilityDisableTriggers.disabled(ai.getGame(), tr, runParams);
+            }
+            return false;
+        }
+
+        // G1's affordable (CommanderCastCeiling), a private copy over an explicit Cost
+        private static boolean affordable(final Player ai, final SpellAbility sa, final HonestMana mana, final Cost cost) {
+            final ManaCostBeingPaid mcbp = ComputerUtilMana.calculateManaCost(cost, sa, ai, true, 0, false);
+            if (mana.total() < mcbp.getConvertedManaCost()) {
+                return false;
+            }
+            for (int i = 0; i < SHARDS.length; i++) {
+                if (mana.colour(MagicColor.WUBRG[i]) < mcbp.getUnpaidShards(SHARDS[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
     // Mass Diminish
     //
     // Until our next turn, creatures target player controls have base power and
