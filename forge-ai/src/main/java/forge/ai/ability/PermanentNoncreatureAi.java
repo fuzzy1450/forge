@@ -32,12 +32,26 @@ public class PermanentNoncreatureAi extends PermanentAi {
     // before canPlaySa's canPayCost, so every decline draws nothing. Reached via
     // AiController.canPlaySa (the cast path and its other public callers); a Play-effect cast
     // (Nathan Drake's attack trigger) never comes here and keeps A's stock approval.
+    //
+    // Embercleave keeps AI:RemoveDeck:All; G3 readmits only its owner's hand cast in its own
+    // declare-blockers step, payable by G2 against the attacker-reduced cost. That cast's value
+    // floor (SpecialCardAi.Embercleave.considerCast) is judged here, before super.canPlay and
+    // canPlaySa's canPayCost, so every decline draws nothing. The gate is the readmit's own key
+    // (isOwnHandCast and inWindow, rule B3-2): outside the window every hint-ignoring canPlaySa
+    // probe keeps the stock answer (skeptic A1), and a Play-effect theft (Silent-Blade Oni) goes
+    // PermanentAi.doTriggerNoCost -> checkApiLogic, never here.
     @Override
     protected AiAbilityDecision canPlay(final Player ai, final SpellAbility sa) {
         if (sa.isSpell() && SpecialCardAi.MisleadingSignpost.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             final AiAbilityDecision window = SpecialCardAi.MisleadingSignpost.consider(ai, sa);
             if (!window.willingToPlay()) {
                 return window;
+            }
+        }
+        if (SpecialCardAi.Embercleave.isOwnHandCast(ai, sa) && SpecialCardAi.Embercleave.inWindow(ai)) {
+            final AiAbilityDecision cleave = SpecialCardAi.Embercleave.considerCast(ai, sa);
+            if (!cleave.willingToPlay()) {
+                return cleave;
             }
         }
         final AiAbilityDecision decision = super.canPlay(ai, sa);

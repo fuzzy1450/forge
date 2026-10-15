@@ -11210,6 +11210,320 @@ public class SpecialCardAi {
         }
     }
 
+    // Embercleave (dead-card batch 3, row 28)
+    // "Flash. This spell costs {1} less to cast for each attacking creature you control. When
+    // Embercleave enters, attach it to target creature you control. Equipped creature gets +1/+1
+    // and has double strike and trample. Equip {3}." ({4}{R}{R} legendary artifact Equipment.)
+    // AI:RemoveDeck:All dropped its cast and its Equip in AiController.getSpellAbilityToPlay's
+    // removeIf before any handler ran, so its owner never cast it on any engine (every recorded cast
+    // is a Play-effect theft - Silent-Blade Oni, Locke - and Play effects never read the hint). The
+    // hint is KEPT, so the -10 sort (ComputerUtilAbility.saEvaluator) and every other
+    // isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) still refuse it.
+    // Behind the hint the stock path has no judge: PermanentAi approves the flash Equipment at the
+    // first priority outside our own Main 1 that pays all six (our upkeep, an opponent's turn),
+    // never using the reduction, and its enters trigger, which has no AILogic, attaches it to our
+    // WORST creature (AttachAi.attachGeneralAI -> chooseUnpreferred).
+    // The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly two abilities through, both its
+    // owner's:
+    // - the cast from the owner's own hand (isOwnHandCast: not a Play-effect cast, not a copy, not
+    //   face down), only in our own declare-blockers step (inWindow: blocks known, no combat damage
+    //   dealt yet, never the first-strike damage step, where the stock predictors double-count; an
+    //   empty stack; no Fog this turn), with no mana held (RemoveDeckFilter.noManaHeld) and G2
+    //   (HonestMana, held sources skipped) covering the engine's own test-mode calculateManaCost in
+    //   total and in red: CostAdjustment applies the card's ReduceCost static there, {1} less per
+    //   attacking creature we control. Granted in declare blockers, double strike makes the
+    //   first-strike damage step happen (CR 510.4);
+    // - the Equip {3} of an Embercleave it owns and controls on the battlefield: stock AttachAi.
+    // PermanentNoncreatureAi.canPlay judges the window's cast (considerCast) before super.canPlay
+    // and canPlaySa's canPayCost, under the readmit's own key (isOwnHandCast and inWindow, rule
+    // B3-2), so every decline draws nothing; outside the window that gate never fires and every
+    // hint-ignoring canPlaySa probe keeps A's stock answer (skeptic A1).
+    // Value floor (chooseAttacker): an attacker the sword stays on (keeps: ours and owned - a
+    // borrowed one would carry it back -, not a land or a Vehicle, which stop being creatures and
+    // drop it, not leaving at end of turn; skeptic A2), that the enters trigger can target and the
+    // sword can be attached to (shroud, protection from red or artifacts), and for which this combat
+    // pays, ranked:
+    //  3. lethal: unblocked, the extra damage kills a defending player who can lose;
+    //  2. a fight swing: blocked, it would die and lives with +1/+1 and double strike, worth
+    //     MIN_VALUE or more (AttachAi.acceptableChoice's creature floor), or its blockers that live
+    //     now die, worth MIN_VALUE or more together, each kill paid from the pumped attacker's
+    //     damage, cheapest first (Tower Defense's budget: the predictors judge one blocker at a
+    //     time with all of it);
+    //  1. extra damage: unblocked, MIN_EXTRA_DAMAGE or more to a player (any attacker of 1 power or
+    //     more without double strike).
+    // Neither 3 nor 1 is credited against a player this attack already kills (skeptic A5). Ties:
+    // the higher gain, then the higher evaluateCreature, then list order. Trample through blockers,
+    // commander damage and attacks on planeswalkers or battles are not counted (the safe side).
+    // AttachAi.attachGeneralAI asks chooseAttachTarget for its owner's own mandatory enters trigger
+    // (the attachment is the trigger's host: skeptic A3), so the sword lands on the attacker the
+    // cast priced; out of that window (Reshape, Whir of Invention, a reanimation) or with no priced
+    // attacker, on the best owned body double strike helps, never the stock worst creature.
+    // RNG: A never evaluated the card. The window, the mana count, canTarget, canBeAttached,
+    // damageIfUnblocked, evaluateCreature and getBestCreatureAI draw nothing; no lifeInDanger,
+    // AiBlockController or shouldPumpCard. Copy diet: an unblocked attacker's pumped damage is
+    // damageIfUnblocked's own formula with +1 and double strike (no LKI copy); a blocked attacker
+    // gets one getPumpedCreature copy and one Combat only when it dies now or one of its blockers
+    // lives now; the cast's stand-in for the enters trigger is an LKI copy (it keeps the trigger
+    // ability's id), built only once a candidate attacker exists (skeptic A4). Each pumped copy
+    // takes card timestamps A never took, so a held in-window consult that builds one can still
+    // move a game the card is not cast in (Tower Defense's accepted residual). Residual (skeptic
+    // A4): the combat predictors (attackerWouldBeDestroyed, blockerWouldBeDestroyed) reach
+    // ComputerUtil.canRegenerate, and with a Regenerate ability covering a combatant on the
+    // battlefield (River Boa) it runs canPayCost, which draws isManaSourceReserved rolls. Nothing
+    // is held or remembered; the only writes are setActivatingPlayer on a hand cast with no
+    // activator yet (as getOriginalAndAltCostAbilities does right after the filter), on the LKI
+    // stand-in and on the mana abilities G2 reads.
+    public static class Embercleave {
+        public static final String NAME = "Embercleave";
+        static final int MIN_EXTRA_DAMAGE = 3;   // an unblocked 1-power attacker: 2 * (1 + 1) - 1
+        static final int MIN_VALUE = 130;        // AttachAi.acceptableChoice's creature floor
+        static final List<String> KW = List.of("Double Strike", "Trample");
+
+        // the owner's own face-up hand cast: not a Play effect (those never meet the filter), not a copy
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && sa.isSpell() && !sa.isCastFromPlayEffect() && !sa.isCopied()
+                    && NAME.equals(host.getName()) && !host.isFaceDown() && host.isInZone(ZoneType.Hand)
+                    && ai.equals(host.getOwner());
+        }
+
+        // O(1): our own declare-blockers step (blocks known, no combat damage yet, never the
+        // first-strike damage step), an empty stack, our attack live, no Fog this turn
+        public static boolean inWindow(final Player ai) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            return ph.isPlayerTurn(ai) && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) && combat != null
+                    && ai.equals(combat.getAttackingPlayer()) && game.getStack().isEmpty()
+                    && !game.getReplacementHandler().isPreventCombatDamageThisTurn();
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return false;
+            }
+            if (sa.isEquip()) { // stock AttachAi judges the Equip; a thief's keeps the filter
+                return ai.equals(host.getOwner()) && ai.equals(host.getController())
+                        && host.isInZone(ZoneType.Battlefield);
+            }
+            if (!isOwnHandCast(ai, sa) || !inWindow(ai) || ai.isCardInPlay(NAME)
+                    || !RemoveDeckFilter.noManaHeld(ai, false)) {
+                return false; // a refusal only waits
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            return affordable(ai, sa);
+        }
+
+        // G2 against the engine's own test-mode price (CostAdjustment applies the ReduceCost static:
+        // {1} less per attacking creature we control), in total and in red for {R}{R}; judged on
+        // sa, never host.getFirstSpellAbility() (row 77)
+        static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // PermanentNoncreatureAi.canPlay, before super.canPlay, for isOwnHandCast in inWindow only
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (ai.isCardInPlay(NAME)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // the legend rule
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return chooseAttacker(ai, sa.getHostCard(), ai.getGame().getCombat(), null, null) != null
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.DoesntImpactCombat);
+        }
+
+        // a body the sword stays on (skeptic A2): ours and owned (a borrowed one carries it back to
+        // its owner), not a land or a Vehicle (an animated Wandering Fumarole or a crewed Vehicle
+        // stops being a creature and the sword falls off), not leaving at end of turn
+        static boolean keeps(final Player ai, final Card c) {
+            return c.isCreature() && ai.equals(c.getController()) && ai.equals(c.getOwner()) && !c.isLand()
+                    && !c.getType().hasSubtype("Vehicle") && !c.hasSVar("EndOfTurnLeavePlay");
+        }
+
+        // The attacker the cast prices and the enters trigger lands on, or null. etb is the real
+        // trigger (the AttachAi hook) or null (the cast: an LKI stand-in is built on first need);
+        // legal, when not null, is the trigger's targetable list. Shared by considerCast and the
+        // hook, so the trigger attaches where the cast was judged.
+        static Card chooseAttacker(final Player ai, final Card host, final Combat combat,
+                                   final Collection<Card> legal, SpellAbility etb) {
+            if (host == null || combat == null) {
+                return null;
+            }
+            // damage each defending player takes now from our unblocked attackers
+            final Map<Player, Integer> now = new HashMap<>();
+            for (final Card c : combat.getAttackers()) {
+                if (ai.equals(c.getController()) && !combat.isBlocked(c)
+                        && combat.getDefenderByAttacker(c) instanceof Player p) {
+                    now.merge(p, ComputerUtilCombat.damageIfUnblocked(c, p, combat, true), Integer::sum);
+                }
+            }
+            Card best = null;
+            int bestRank = 0;
+            int bestGain = 0;
+            int bestEval = 0;
+            for (final Card a : combat.getAttackers()) {
+                if (!keeps(ai, a) || (legal != null && !legal.contains(a))) {
+                    continue;
+                }
+                if (etb == null) {
+                    etb = enterAttach(ai, host);
+                    if (etb == null) {
+                        return null;
+                    }
+                }
+                if (!etb.canTarget(a) || !a.canBeAttached(host, etb)) {
+                    continue; // shroud (Lightning Greaves, Whispersilk Cloak), protection from red or artifacts
+                }
+                int rank;
+                int gain;
+                if (!combat.isBlocked(a)) {
+                    if (!(combat.getDefenderByAttacker(a) instanceof Player p) || a.hasKeyword(Keyword.INFECT)) {
+                        continue; // a planeswalker or battle; poison is not life
+                    }
+                    final int n = now.getOrDefault(p, 0);
+                    if (n >= p.getLife()) {
+                        continue; // this attack already kills that player (skeptic A5)
+                    }
+                    gain = pumpedDamageIfUnblocked(a, p, combat)
+                            - ComputerUtilCombat.damageIfUnblocked(a, p, combat, true);
+                    final boolean canDie = !p.cantLose() && !p.cantLoseForZeroOrLessLife() && p.canLoseLife();
+                    rank = canDie && n + gain >= p.getLife() ? 3 : gain >= MIN_EXTRA_DAMAGE ? 1 : 0;
+                } else {
+                    final boolean dies = !a.hasKeyword(Keyword.INDESTRUCTIBLE)
+                            && ComputerUtilCombat.attackerWouldBeDestroyed(ai, a, combat);
+                    final List<Card> survivors = new ArrayList<>(); // its blockers that live now
+                    for (final Card b : combat.getBlockers(a)) {
+                        if (!ComputerUtilCombat.blockerWouldBeDestroyed(b.getController(), b, combat)) {
+                            survivors.add(b);
+                        }
+                    }
+                    if (!dies && survivors.isEmpty()) {
+                        continue; // +1/+1 and double strike change nothing about its combat: no copy
+                    }
+                    final Card pumped = ComputerUtilCard.getPumpedCreature(ai, etb, a, 1, 1, KW);
+                    final Combat pc = pumpedCombat(combat, a, pumped);
+                    if (pc == null) {
+                        continue;
+                    }
+                    final int saved = dies && !ComputerUtilCombat.attackerWouldBeDestroyed(ai, pumped, pc)
+                            ? ComputerUtilCard.evaluateCreature(a) : 0;
+                    // its pumped damage is shared among its blockers: credit the cheapest kills it pays for
+                    int budget = pumped.getNetCombatDamage() * 2;
+                    int killed = 0;
+                    survivors.sort(Comparator.comparingInt(b -> ComputerUtilCombat.getDamageToKill(b, false)));
+                    for (final Card b : survivors) {
+                        if (!ComputerUtilCombat.blockerWouldBeDestroyed(b.getController(), b, pc)) {
+                            continue;
+                        }
+                        final int need = pumped.hasKeyword(Keyword.DEATHTOUCH) ? 1
+                                : ComputerUtilCombat.getDamageToKill(b, false);
+                        if (need > budget) {
+                            continue;
+                        }
+                        budget -= need;
+                        killed += ComputerUtilCard.evaluateCreature(b);
+                    }
+                    gain = saved + killed;
+                    // a pumped attacker that still dies passes on its kills alone
+                    rank = saved >= MIN_VALUE || killed >= MIN_VALUE ? 2 : 0;
+                }
+                if (rank == 0) {
+                    continue;
+                }
+                final int eval = ComputerUtilCard.evaluateCreature(a);
+                if (rank > bestRank
+                        || (rank == bestRank && (gain > bestGain || (gain == bestGain && eval > bestEval)))) {
+                    best = a;
+                    bestRank = rank;
+                    bestGain = gain;
+                    bestEval = eval;
+                }
+            }
+            return best;
+        }
+
+        // the enters trigger's Attach ability as an LKI stand-in for ai, for its canTarget and
+        // canBeAttached tests: copy(host, ai, true) keeps the ability's id, so no SpellAbility id
+        // is taken
+        private static SpellAbility enterAttach(final Player ai, final Card host) {
+            for (final Trigger t : host.getTriggers()) {
+                if (t.getMode() != TriggerType.ChangesZone
+                        || !ZoneType.Battlefield.toString().equals(t.getParam("Destination"))) {
+                    continue;
+                }
+                final SpellAbility ab = t.ensureAbility();
+                if (ab != null && ab.getApi() == ApiType.Attach && ab.usesTargeting()) {
+                    return ab.copy(host, ai, true);
+                }
+            }
+            return null;
+        }
+
+        // ComputerUtilCombat.damageIfUnblocked's own formula for a with +1/+1 and double strike
+        // (Tower Defense's pumpedDamageIfUnblocked shape): no LKI copy. getNetCombatDamage reads
+        // the toughness under a toughness-assigns-damage static, which gets the +1 too.
+        static int pumpedDamageIfUnblocked(final Card a, final Player p, final Combat combat) {
+            if (!p.canLoseLife() || a.hasKeyword(Keyword.INFECT) || a.assignNoCombatDamage()) {
+                return 0;
+            }
+            int damage = a.getNetCombatDamage() + 1;
+            if (ComputerUtilCombat.isCombatDamagePrevented(a, p, damage)) {
+                return 0;
+            }
+            damage += ComputerUtilCombat.predictPowerBonusOfAttacker(a, null, combat, true);
+            return ComputerUtilCombat.predictDamageTo(p, damage, a, true) * 2;
+        }
+
+        // TowerDefense.pumpedCombat's attacking side, copied (that one is private): the pumped
+        // attacker against the entity it attacks, with its own blockers
+        private static Combat pumpedCombat(final Combat combat, final Card a, final Card pumped) {
+            final GameEntity defender = combat.getDefenderByAttacker(a);
+            if (defender == null) {
+                return null;
+            }
+            final Combat pc = new Combat(combat.getAttackingPlayer());
+            pc.addAttacker(pumped, defender);
+            for (final Card b : combat.getBlockers(a)) {
+                pc.addBlocker(pumped, b);
+            }
+            return pc;
+        }
+
+        // AttachAi.attachGeneralAI's hook, for its owner's own mandatory enters trigger only: the
+        // attacker the cast priced; else, out of that window (Reshape, Whir of Invention, a
+        // reanimation) or with no priced attacker, the best body of ours the sword stays on that
+        // double strike helps (positive damage, can attack next turn), never the stock worst
+        // creature. Deterministic; null only when list holds no creature.
+        public static Card chooseAttachTarget(final Player ai, final SpellAbility sa, final List<Card> list) {
+            final Card host = sa.getHostCard();
+            final Game game = ai.getGame();
+            final Combat combat = game.getCombat();
+            if (combat != null && game.getPhaseHandler().isPlayerTurn(ai) && ai.equals(combat.getAttackingPlayer())) {
+                final Card pick = chooseAttacker(ai, host, combat, list, sa);
+                if (pick != null) {
+                    return pick;
+                }
+            }
+            final CardCollection keepers = CardLists.filter(list, c -> keeps(ai, c));
+            final CardCollection useful = CardLists.filter(keepers,
+                    c -> c.getNetCombatDamage() + 1 > 0 && ComputerUtilCombat.canAttackNextTurn(c));
+            return ComputerUtilCard.getBestCreatureAI(!useful.isEmpty() ? useful : !keepers.isEmpty() ? keepers : list);
+        }
+    }
+
     // Endless Evil
     // "Enchant creature you control. At the beginning of your upkeep, create a
     // token that's a copy of enchanted creature, except it's a 1/1." Routed
@@ -29451,8 +29765,8 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 16, 17, 19, 21, 23, 25, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 75, 79, 82, 83
-    // and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard,
+    // 16, 17, 19, 21, 23, 25, 27, 28, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 75, 79, 82,
+    // 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard,
     // a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -29533,6 +29847,8 @@ public class SpecialCardAi {
                     return Flickerform.readmit(ai, sa);
                 case BrassSquire.NAME:
                     return BrassSquire.readmit(ai, sa);
+                case Embercleave.NAME:
+                    return Embercleave.readmit(ai, sa);
                 default:
                     return false;
             }

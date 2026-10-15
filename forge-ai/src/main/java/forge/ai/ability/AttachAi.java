@@ -1663,6 +1663,23 @@ public class AttachAi extends SpellAbilityAi {
             }
         }
 
+        // Embercleave (dead-card batch 3, row 28): its enters trigger ("attach it to target
+        // creature you control", no AILogic) fell through to chooseUnpreferred, our WORST
+        // creature. On its owner's own mandatory trigger - the attachment is the trigger's host,
+        // so another card's trigger that moves an Embercleave keeps the stock path (skeptic A3) -
+        // attach it to the attacker the cast priced, else to the best owned body double strike
+        // helps (SpecialCardAi.Embercleave.chooseAttachTarget, deterministic). The non-mandatory
+        // checkETBEffects probe and a thief's trigger keep the stock path. After the prefList
+        // block, so choosePreferredDefenderPlayer's pod tiebreak still draws exactly as it did.
+        if (mandatory && attachSource != null && sa.isTrigger() && attachSource.equals(sa.getHostCard())
+                && SpecialCardAi.Embercleave.NAME.equals(attachSource.getName())
+                && ai.equals(attachSource.getOwner())) {
+            final Card pick = SpecialCardAi.Embercleave.chooseAttachTarget(ai, sa, list);
+            if (pick != null) {
+                return pick;
+            }
+        }
+
         final boolean keepsAttachedCardTapped = isAuraSpell(sa) && attachSource.getReplacementEffects()
                 .anyMatch(re -> re.getMode().equals(ReplacementType.Untap)
                         && re.getLayer().equals(ReplacementLayer.CantHappen));
