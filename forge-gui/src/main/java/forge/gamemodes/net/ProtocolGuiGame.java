@@ -1,7 +1,6 @@
 package forge.gamemodes.net;
 
 import forge.LobbyPlayer;
-import forge.game.GameState;
 import forge.deck.CardPool;
 import forge.game.GameEntityView;
 import forge.game.event.GameEvent;
@@ -16,6 +15,7 @@ import forge.game.spellability.SpellAbilityView;
 import forge.gamemodes.match.DrawOfferMessage;
 import forge.gamemodes.match.YieldUpdate;
 import forge.gamemodes.net.server.DeltaSyncManager;
+import forge.trackable.TrackableObject;
 import forge.util.IHasForgeLog;
 import forge.gui.control.GameEventForwarder;
 import forge.gui.interfaces.IGuiGame;
@@ -106,7 +106,6 @@ public class ProtocolGuiGame extends NetworkGuiGame implements IHasForgeLog {
      */
     public void resetForReconnect() {
         initialSyncSent = false;
-        objectsRegistered = false;
         fallbackLogged = false;
         syncManager.reset();
     }
@@ -372,11 +371,6 @@ public class ProtocolGuiGame extends NetworkGuiGame implements IHasForgeLog {
     }
 
     @Override
-    public GameState getGamestate() {
-        return null;
-    }
-
-    @Override
     public SpellAbilityView getAbilityToPlay(final CardView hostCard, final List<SpellAbilityView> abilities, final ITriggerEvent triggerEvent) {
         return syncAndSendAndWait(ProtocolMethod.getAbilityToPlay, hostCard, abilities, null/*triggerEvent*/); //someplatform don't have mousetriggerevent class or it will not allow them to click/tap
     }
@@ -454,9 +448,9 @@ public class ProtocolGuiGame extends NetworkGuiGame implements IHasForgeLog {
         return syncAndSendAndWait(ProtocolMethod.manipulateCardList, title, cards, manipulable, toTop, toBottom, toAnywhere);
     }
 
-    public void setHighlighted(final Iterable<GameEntityView> entities, final boolean value) {
-        super.setHighlighted(entities, value);
-        syncAndSend(ProtocolMethod.setHighlighted, entities, value);
+    public void setHighlighted(final Iterable<? extends TrackableObject> objects, final boolean value) {
+        super.setHighlighted(objects, value);
+        syncAndSend(ProtocolMethod.setHighlighted, objects, value);
     }
 
     @Override
@@ -467,6 +461,16 @@ public class ProtocolGuiGame extends NetworkGuiGame implements IHasForgeLog {
     @Override
     public void setSelectables(final Iterable<CardView> cards, final int min, final int max) {
         syncAndSend(ProtocolMethod.setSelectables, cards, min, max);
+    }
+
+    @Override
+    public boolean canPickStackTargets() {
+        return true;
+    }
+
+    @Override
+    public void setSelectableTargets(final Iterable<? extends TrackableObject> targets) {
+        syncAndSend(ProtocolMethod.setSelectableTargets, targets);
     }
 
     @Override
@@ -552,6 +556,13 @@ public class ProtocolGuiGame extends NetworkGuiGame implements IHasForgeLog {
                     break;
                 }
             }
+        }
+        // Undo rewinds the game in place and writes fields directly, bypassing the dirty tracking the delta
+        // sync relies on, so the client would never hear about most of the changes. Re-send the whole view
+        // (the same thing a checksum resync does) before the events that tell the client's GUI to rebuild.
+        if (useDeltaSync && initialSyncSent && objectsRegistered && events.stream()
+                .anyMatch(e -> e instanceof forge.game.event.GameEventSnapshotRestored r && !r.start())) {
+            sendFullState();
         }
         if (useDeltaSync && initialSyncSent && objectsRegistered) {
             // Bundle events with delta so they're applied atomically:
