@@ -2826,6 +2826,290 @@ public class SpecialCardAi {
         }
     }
 
+    // Brass Squire (dead-card batch 3, row 25; precon:Arm for Battle (CMR))
+    // "{T}: Attach target Equipment you control to target creature you control." ({3} 1/3 artifact
+    // creature Myr.) The script keeps AI:RemoveDeck:All, and with it the -10 sort and every other
+    // isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers, CopyPermanentAi's clone
+    // pick, ChangeZoneAi's Bribery-shaped fetch from an opponent's library). The hint dropped both of
+    // the card's spell abilities before any handler ran, and behind it neither half had a judge: the
+    // creature spell takes the stock PermanentCreatureAi path with no floor (a 1/3 for {3} in any
+    // Main 2), and the {T} ability can never run. PumpAi's 3-arg checkPhaseRestrictions vetoes a
+    // creature's tap Pump in every main phase and end step on an empty stack, its stock targeting
+    // picks an Equipment but never the creature, and AttachAi.chkDrawback refuses every non-trigger
+    // targeted Attach sub (CantPlayAi), which canPlayWithSubs turns into a veto of the whole ability.
+    // The G3 dispatcher (RemoveDeckFilter.readmit) lets two shapes through AiController's filter:
+    // - the cast (isOwnSpell, Goblin Cadets' key): the owner's own creature spell. A MayPlay thief
+    //   (Praetor's Grasp) stays filtered, and a Play-effect cast (Nathan Drake, Silent-Blade Oni)
+    //   never reaches the filter. PermanentCreatureAi.checkApiLogic declines that same shape (rule
+    //   B3-2), before canPayCost's test payment draws MyRandom, unless worthCasting: we control an
+    //   Equipment the Squire could move, and the spell as the engine prices it (test-mode
+    //   calculateManaCost: taxes and reductions) fits HonestMana (G2, held sources skipped) in total;
+    // - the activation (isActivation): the root activated ability carrying the script's
+    //   AILogic$ BrassSquire, for whoever controls the Squire (a thief's too: Goblin Archaeologist's
+    //   "owner's and a thief's alike"). An ability an Equipment grants the Squire (Heavy Arbalest's)
+    //   carries no such AILogic and stays filtered. The AILogic routes PumpAi's 4-arg
+    //   checkPhaseRestrictions to the base true (its super call is SpellAbilityAi's 3-arg, not
+    //   PumpAi's veto) and skips preventRunAwayActivations' roll; PumpAi.checkApiLogic calls
+    //   consider() for the same key (rule B3-2), so a copy granted to an unhinted host (Necrotic Ooze,
+    //   Mairsil, the Pretender), which carries the same AILogic and never met the filter, is judged
+    //   here too. AttachAi.chkDrawback approves the creature target consider() chose through an
+    //   identity mark set here and consumed there in the same canPlayWithSubs chain (Domineering
+    //   Will's JUDGED handshake: each consult runs on its own "Game AI Eval" thread, so a mark never
+    //   crosses threads, and a stale one is cleared by the next consider()). Every other Attach sub
+    //   finds no mark.
+    // Window: an opponent's end step right before our turn, empty stack. Combat is over, so the tap
+    // costs no block, and the Squire untaps in our untap step before it is needed again (never one
+    // that cannot untap). A main-1 window would cost the Squire's block for a whole turn cycle;
+    // combat tricks and moving an Equipment off a working carrier are out of scope.
+    // Floor: an idle Equipment whose cheapest printed Equip mana cost is {1} or more (what our next
+    // main phase would pay for it), onto a carrier.
+    // - Movable: an Equipment, not a creature (a reconfigure creature or an animated Equipment), no
+    //   DontEquip, not a curse Equipment (an Attach ability with IsCurse: Nahiri's predicate).
+    // - Idle: unattached, on a permanent an opponent controls or on a noncreature of ours, or on a
+    //   creature of ours that is useless or cannot attack next turn; never moved off a permanent of
+    //   ours while it carries an Unattached trigger (Captain's Hook, Grafted Wargear, Grafted
+    //   Exoskeleton and Stitcher's Graft destroy or sacrifice the old holder).
+    // - Carrier: a creature of ours that we also own (never one we control only until end of turn:
+    //   Word of Seizing, Domineering Will), that the sub can target and that can carry it, not its
+    //   holder, not useless, able to attack next turn, with positive power and toughness once the
+    //   Equipment's numeric bonus applies (bonus(): AttachAi.affectsAttached's reading, AttachedBy
+    //   included, integer literals only, an SVar counted as 0), and not already equipped by one of the
+    //   same name when it is NonStackingAttachEffect. EquipMe magnets first (Wyleth, Soul of Steel's
+    //   Multiple; Once only while unequipped), as AttachAi's Pump preference ranks them; else the best
+    //   creature by creatureEvaluator. The Equipment saving the most mana wins, then the highest mana
+    //   value, then the first in list order.
+    // RNG parity: A never evaluated the card (the hint dropped both abilities first), so every check
+    // here draws nothing: phase, stack, our battlefield, test-mode calculateManaCost, HonestMana (whose
+    // only write is setActivatingPlayer on mana abilities), canTarget, canBeAttached, canUntap,
+    // isUselessCreature, canAttackNextTurn and creatureEvaluator. The stock attach chooser is not
+    // reused: attachToCardAIPreferences writes ATTACHED_THIS_TURN and can reserve mana. The window is
+    // tested first, so every other consult answers AnotherTime at once. Targets are reset on entry and
+    // on every refusal; a decline holds nothing and writes no memory set. The new draws are only where
+    // the AI acts: the cast's canPayCost after the floor, and the activation's ({T} only: no mana
+    // source, no reservation roll).
+    public static class BrassSquire {
+        public static final String NAME = "Brass Squire";
+        public static final String LOGIC = "BrassSquire";
+        private static final ThreadLocal<SpellAbility> JUDGED = new ThreadLocal<>();
+
+        // the cast's key (Goblin Cadets' idiom): the owner's own creature spell
+        public static boolean isOwnSpell(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && sa.isSpell() && sa.getApi() == ApiType.PermanentCreature
+                    && ai.equals(host.getOwner());
+        }
+
+        // the activation's key: the root activated ability carrying the script's AILogic, for
+        // whoever controls it
+        public static boolean isActivation(final SpellAbility sa) {
+            return !(sa instanceof AbilitySub) && sa.isActivatedAbility() && LOGIC.equals(sa.getParam("AILogic"));
+        }
+
+        // RemoveDeckFilter.readmit's case; reads SA fields only: draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isOwnSpell(ai, sa) || isActivation(sa);
+        }
+
+        // consumed by AttachAi.chkDrawback in the same canPlayWithSubs chain
+        public static boolean takeJudged(final SpellAbility sub) {
+            if (sub == null || JUDGED.get() != sub) {
+                return false;
+            }
+            JUDGED.remove();
+            return true;
+        }
+
+        // Cast floor: an Equipment of ours the Squire could move, and the spell affordable now.
+        // `spell` is the creature Spell being judged (row 77: never host.getFirstSpellAbility()).
+        public static boolean worthCasting(final Player ai, final SpellAbility spell) {
+            boolean any = false;
+            for (final Card e : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (movable(e)) {
+                    any = true;
+                    break;
+                }
+            }
+            if (!any) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(spell.getPayCosts(), spell, ai, true, 0, false);
+            return HonestMana.of(ai, spell, true).total() >= cost.getConvertedManaCost();
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            JUDGED.remove();
+            final SpellAbility attach = sa.findSubAbilityByType(ApiType.Attach);
+            sa.resetTargets();
+            if (attach != null) {
+                attach.resetTargets();
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // 1. the window first (cheap): the end step before our turn, stack empty
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai) || !ai.equals(ph.getNextTurn())
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Card host = sa.getHostCard();
+            if (attach == null || host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 2. the tap is free only if the Squire untaps in our untap step
+            if (!host.canUntap(ai, true)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 3. the idle Equipment that saves the most mana, and its best carrier
+            Card bestE = null;
+            Card bestC = null;
+            int bestSaved = 0;
+            for (final Card e : CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa)) {
+                if (!movable(e) || !idle(ai, e)) {
+                    continue;
+                }
+                final int saved = equipCostSaved(e);
+                if (saved < 1) {
+                    continue; // an Equip {0} (or a non-mana Equip cost) gains nothing from the tap
+                }
+                final Card c = carrier(ai, attach, e);
+                if (c == null) {
+                    continue;
+                }
+                // saved >= 1 > bestSaved = 0 sets bestE before any tie compare
+                if (saved > bestSaved || (saved == bestSaved && e.getCMC() > bestE.getCMC())) {
+                    bestE = e;
+                    bestC = c;
+                    bestSaved = saved;
+                }
+            }
+            if (bestE == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(bestE);
+            attach.getTargets().add(bestC);
+            if (!sa.isTargetNumberValid() || !attach.isTargetNumberValid()) {
+                sa.resetTargets();
+                attach.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            JUDGED.set(attach);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // an Equipment, not a creature, not DontEquip, not a curse Equipment (Nahiri's predicate)
+        private static boolean movable(final Card e) {
+            return e.isEquipment() && !e.isCreature() && !e.hasSVar("DontEquip")
+                    && !e.getSpellAbilities().anyMatch(s -> s.getApi() == ApiType.Attach && s.isCurse());
+        }
+
+        // not working: unattached, on a permanent an opponent controls or a noncreature of ours, or
+        // on a creature of ours that is useless or cannot attack next turn; never off a permanent of
+        // ours while it carries an Unattached trigger (the old holder is destroyed or sacrificed)
+        private static boolean idle(final Player ai, final Card e) {
+            final Card h = e.getEquipping();
+            if (h == null || !ai.equals(h.getController())) {
+                return true;
+            }
+            if (hasUnattachedTrigger(e)) {
+                return false;
+            }
+            return !h.isCreature() || ComputerUtilCard.isUselessCreature(ai, h)
+                    || !ComputerUtilCombat.canAttackNextTurn(h);
+        }
+
+        private static boolean hasUnattachedTrigger(final Card e) {
+            for (final Trigger t : e.getTriggers()) {
+                if (t.getMode() == TriggerType.Unattached) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the cheapest printed Equip mana cost (what our next main phase would pay); the mana value
+        // (at least 1) when it has no Equip ability
+        private static int equipCostSaved(final Card e) {
+            int best = Integer.MAX_VALUE;
+            for (final SpellAbility s : e.getSpellAbilities()) {
+                if (s.isEquip() && s.getPayCosts() != null) {
+                    best = Math.min(best, s.getPayCosts().getTotalMana().getCMC());
+                }
+            }
+            return best == Integer.MAX_VALUE ? Math.max(1, e.getCMC()) : best;
+        }
+
+        // our own creature the sub may target and that can carry e: not e's holder, owned by us, not
+        // useless, able to attack next turn, positive power and toughness with e's numeric bonus, and
+        // (NonStackingAttachEffect) not already equipped by one of the same name. EquipMe magnets
+        // first (Multiple, or Once while unequipped), as AttachAi.attachAIPumpPreference ranks them;
+        // else the best creature by creatureEvaluator. null: no carrier.
+        private static Card carrier(final Player ai, final SpellAbility attach, final Card e) {
+            final Card holder = e.getEquipping();
+            final int[] bonus = bonus(e);
+            final boolean nonStacking = e.hasSVar("NonStackingAttachEffect");
+            final CardCollection ok = new CardCollection();
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (c.equals(holder) || !ai.equals(c.getOwner()) || !attach.canTarget(c)
+                        || !c.canBeAttached(e, attach)) {
+                    continue;
+                }
+                if (ComputerUtilCard.isUselessCreature(ai, c) || !ComputerUtilCombat.canAttackNextTurn(c)) {
+                    continue;
+                }
+                if (c.getNetPower() + bonus[0] <= 0 || c.getNetToughness() + bonus[1] <= 0) {
+                    continue;
+                }
+                if (nonStacking && c.isEquippedBy(e.getName())) {
+                    continue;
+                }
+                ok.add(c);
+            }
+            if (ok.isEmpty()) {
+                return null;
+            }
+            final CardCollection magnets = CardLists.filter(ok, c -> {
+                final String v = c.getSVar("EquipMe");
+                return "Multiple".equals(v) || ("Once".equals(v) && !c.isEquipped());
+            });
+            return ComputerUtilCard.getBestCreatureAI(magnets.isEmpty() ? ok : magnets);
+        }
+
+        // {power, toughness} from e's Continuous statics on the creature it equips, read as
+        // AttachAi.affectsAttached reads them for an Equipment (a private copy: the shared helper is
+        // not touched); integer literals only, an SVar or any other expression counts as 0
+        private static int[] bonus(final Card e) {
+            int power = 0;
+            int toughness = 0;
+            for (final StaticAbility st : e.getStaticAbilities()) {
+                if (!st.checkMode(StaticAbilityMode.Continuous) || !affectsEquipped(st)) {
+                    continue;
+                }
+                power += literal(st.getParam("AddPower"));
+                toughness += literal(st.getParam("AddToughness"));
+            }
+            return new int[] {power, toughness};
+        }
+
+        private static boolean affectsEquipped(final StaticAbility st) {
+            final String defined = st.getParam("AffectedDefined");
+            if (defined != null) {
+                return defined.equals("Equipped") || defined.startsWith("AttachedBy");
+            }
+            final String affected = st.getParam("Affected");
+            return affected != null && (affected.contains("EquippedBy") || affected.contains("AttachedBy"));
+        }
+
+        private static int literal(final String s) {
+            if (s == null) {
+                return 0;
+            }
+            try {
+                return Integer.parseInt(s.trim());
+            } catch (final NumberFormatException ex) {
+                return 0;
+            }
+        }
+    }
+
     // Brave the Elements (dead-card batch 2, row 54; precon:Forged in Stone (C14))
     // "Choose a color. White creatures you control gain protection from the chosen color until
     // end of turn." ({W} Instant. Printed text = Oracle: ONLY our white creatures, read from the
@@ -29167,8 +29451,9 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 16, 17, 19, 21, 23, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 75, 79, 82, 83 and 84,
-    // keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // 16, 17, 19, 21, 23, 25, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 75, 79, 82, 83
+    // and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard,
+    // a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -29246,6 +29531,8 @@ public class SpecialCardAi {
                     return MagusOfTheWheel.readmit(ai, sa);
                 case Flickerform.NAME:
                     return Flickerform.readmit(ai, sa);
+                case BrassSquire.NAME:
+                    return BrassSquire.readmit(ai, sa);
                 default:
                     return false;
             }

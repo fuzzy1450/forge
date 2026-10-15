@@ -248,6 +248,17 @@ public class PermanentCreatureAi extends PermanentAi {
             // keeps the stock path it took before. No random draw; see the class comment.
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
+        if (SpecialCardAi.BrassSquire.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
+                && SpecialCardAi.BrassSquire.isOwnSpell(ai, sa)
+                && !SpecialCardAi.BrassSquire.worthCasting(ai, sa)) {
+            // Dead-card batch 3, row 25. Value floor: the body is a 1/3 for {3}; its worth is the free
+            // re-equip. Cast it only while we control an Equipment it could move, and only when real
+            // mana (HonestMana, G2) covers the spell as the engine prices it (canPayCost's test payment
+            // draws MyRandom). Keyed as the G3 readmit is (rule B3-2: the owner's own creature spell);
+            // a Play-effect cast (Nathan Drake, Silent-Blade Oni) or a thief's keeps the stock path it
+            // took before. No random draw; see the class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
         if (SpecialCardAi.PatronOfTheNezumi.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
                 && !SpecialCardAi.PatronOfTheNezumi.canPayNow(ai, sa)) {
             // RNG-free affordability floor: refuse before canPlayAndPayForFace's canPayCost rolls

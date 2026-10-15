@@ -277,6 +277,19 @@ public class PumpAi extends PumpAiBase {
             // unhinted copy's (Copy Enchantment) ability keeps the code below, as does every other Pump
             // card.
             return SpecialCardAi.Flickerform.considerActivation(ai, sa);
+        } else if (SpecialCardAi.BrassSquire.LOGIC.equals(aiLogic) && SpecialCardAi.BrassSquire.isActivation(sa)) {
+            // Dead-card batch 3, row 25. A Pump targeting shell on our own Equipment (the real effect is
+            // the Attach sub, Object$ ParentTarget, onto a creature target): the stock targeting below
+            // picks an Equipment but never the creature, and AttachAi.chkDrawback refuses every
+            // non-trigger targeted Attach sub. The script's AILogic$ only routes the 4-arg
+            // checkPhaseRestrictions to the base true (no veto in the end step) and skips
+            // preventRunAwayActivations; the evaluator owns the window (an opponent's end step before
+            // our turn), both targets and the floor, draws no random numbers, and hands its creature
+            // target to AttachAi.chkDrawback through an identity mark. Keyed as the G3 readmit is (rule
+            // B3-2: the root activated ability carrying the AILogic, for whoever controls it). Only
+            // brass_squire.txt carries this AILogic; a copy of the ability (Rings of Brighthearth) goes
+            // through doTriggerNoCost, and every other Pump card takes exactly the path it took before.
+            return SpecialCardAi.BrassSquire.consider(ai, sa);
         } else if ("MoveCounter".equals(aiLogic)) {
             final SpellAbility moveSA = sa.findSubAbilityByType(ApiType.MoveCounter);
 

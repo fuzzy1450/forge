@@ -1051,6 +1051,17 @@ public class AttachAi extends SpellAbilityAi {
 
     @Override
     public AiAbilityDecision chkDrawback(final Player ai, final SpellAbility sa) {
+        if (SpecialCardAi.BrassSquire.takeJudged(sa)) {
+            // Dead-card batch 3, row 25. Brass Squire's creature target was chosen and floored a
+            // moment ago, in this same consult, by SpecialCardAi.BrassSquire.consider (routed from
+            // PumpAi.checkApiLogic's AILogic$ BrassSquire branch). The fallthrough below would refuse
+            // it (CantPlayAi: a targeted Attach sub that is not a trigger). The mark is identity-keyed:
+            // every other Attach sub, and this one on any other route, finds none and takes the stock
+            // path unchanged.
+            return sa.isTargetNumberValid() && !sa.getTargets().isEmpty()
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
         if (sa.isTrigger() && sa.usesTargeting()) {
             CardCollection targetables = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa);
             CardCollection source = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Object"), sa);
