@@ -22148,6 +22148,941 @@ public class SpecialCardAi {
         }
     }
 
+    // Jund Charm (dead-card batch 3, row 69; precon:Power Hungry (C13), Prossh, Skyraider of Kher)
+    // "Choose one - Exile all cards from target player's graveyard; or Jund Charm deals 2 damage to
+    // each creature; or put two +1/+1 counters on target creature." ({B}{R}{G} instant. Printed text
+    // = Oracle = script, mode by mode: the damage is symmetric and hits no player; the counters stay.)
+    // Never cast by its owner: AI:RemoveDeck:All dropped the owner's hand SA in
+    // AiController.getSpellAbilityToPlay's removeIf before any handler ran (G3's dispatcher had no
+    // case for it); its only casts were Nathan Drake, Planar Portal and Exit from Exile thefts, Play
+    // effects that never read the hint. Behind the hint the stock CharmAi shuffles the modes
+    // (MyRandom) and takes the first a stock handler passes: ChangeZoneAllAi exiles ANY non-empty
+    // opposing graveyard behind two coins at any timing, DamageAllAi weighs only the weakest opponent
+    // with no commander, death-trigger or card-count check, and CountersPutAi runs shouldPumpCard
+    // (it draws) and a generic end-step boon. So the hint is KEPT (G3): the -10 sort
+    // (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck reader (steal, copy, clone
+    // and tutor pickers) still refuse it.
+    // - readmit() is G3's case: the owner's own hand spell joins the list only while the RNG-free
+    //   plan below has a line.
+    // - routes() is CharmAi's gate: the readmit's own key (the owner's hand cast of this card, by the
+    //   host's paper name as the readmit switch reads it) inside the plan's O(1) window, never the
+    //   plan itself (skeptic amendment 4), so a plan that a higher-sorted spell's mana hold breaks
+    //   between the filter and the handler declines through an empty list, with no draw. Every other
+    //   evaluation (a copy, a Play-effect cast, a hand scan that ignores the hint outside the window)
+    //   keeps CharmAi's stock shuffle and chooser, draw for draw.
+    // The plan takes one mode, by window:
+    // A. An opponent's item on top of the stack whose chain holds a targeted ChangeZone from a
+    //    graveyard to the battlefield or a hand, aimed at a card an opponent owns in their graveyard
+    //    that is worth answering (a commander, a creature worth PREMIUM_VALUE, or for the
+    //    battlefield a nonland noncreature permanent card of MIN_PERMANENT_MV or more): exile that
+    //    graveyard, so the recursion fizzles. Never our own graveyard (the carrier's Reincarnation,
+    //    Restore, Foster), and never while an opposing permanent has a ChangesZone(All) trigger that a
+    //    card leaving a graveyard fires (skeptic amendment 1: Syr Konrad deals 1 per creature card,
+    //    Imotekh, Quintorius and Desecrated Tomb make tokens).
+    // B. Else, on that same item: our premium creature (a commander, or worth PREMIUM_VALUE) that a
+    //    damage or -X/-X item kills and +2/+2 saves (ComputerUtil.predictThreatenedObjects with the
+    //    PutCounter mode as the saviour; destroy, exile and bounce are never claimed for it), never
+    //    against a deathtouch source and never a divided item with more than one target (skeptic
+    //    amendment 5: the stock predictor reads the whole NumDmg on each target).
+    // C. An empty stack in our own main phase (Main 1 one-sided: nothing of ours may die, our doomed
+    //    creatures swing first) or an opponent's declare attackers with attackers at us: the sweep, at
+    //    Sudden Demise's floor (batch 2 row 116, the same carrier; private copies) fixed at 2 damage
+    //    and uncoloured. A kill is an opposing creature we do not own that dies to the 2
+    //    (getEnoughDamageToKill), that no activated Regenerate ability its controller controls
+    //    covers (skeptic amendment 6), with no active undying or persist, no SacMe and no harmless
+    //    own death trigger. No commander of ours dies; the kills are worth a card; never a card down
+    //    (killHalfCards >= max(2, ourNontokenLosses * 2 + 2)); creature value net of our losses >
+    //    MARGIN; no opposing death watcher sees a dying creature, no death trigger of ours pays a
+    //    dying opposing creature's controller (Fecundity), and no opposing noncombat damage-received
+    //    trigger matches a creature this spell damages; Toxic Deluge's lord check, a damage copy (a
+    //    dying lord of ours whose AddToughness anthem leaves a damaged follower to die); and in the
+    //    opponent's attack, when a creature of ours dies, the attackers at us that survive, all
+    //    unblocked, are not lethal in damage, poison or commander damage (skeptic amendment 2: never
+    //    sweep away the chump blockers that keep us alive).
+    // D. An empty stack in declare blockers (either turn; never the first-strike damage step, where
+    //    the stock predictors count first-strike damage twice), unless combat damage is prevented:
+    //    +2/+2 on a combatant of ours that makes an attack lethal (first), or that saves a premium
+    //    combatant or kills an opposing combatant worth PREMIUM_VALUE while the pumped creature
+    //    lives (the best saved plus killed value). An arithmetic pre-check runs before any copy, then
+    //    one getPumpedCreature copy and one Combat (Tower Defense's pumpedCombat, a private copy) are
+    //    confirmed by attackerWouldBeDestroyed / blockerWouldBeDestroyed. A combatant is skipped when
+    //    any combatant those predictors would ask about is covered by an activated Regenerate ability
+    //    its controller controls (skeptic amendment 3: ComputerUtil.canRegenerate's canPayCost probe
+    //    draws, whatever withoutAbilities says).
+    // Mana, after each line's O(1) window and cheap pre-check and before any board scan or copy:
+    // distinct B, R and G sources by Hall's condition, at least the engine's adjusted cost
+    // (UniteTheCoalition.surelyPays restricted to the {B, R, G} subsets, a private copy; the test-mode
+    // calculateManaCost sees taxes). Never getAvailableManaEstimate, and never G2 alone, which counts
+    // one tri-land toward each colour it makes (the carrier's Savage Lands, Jund Panorama, Command
+    // Tower).
+    // RNG: nothing here draws: the window tests, getTopSpellAbilityOnStack, the chain walk,
+    // predictThreatenedObjects, getEnoughDamageToKill, predictDamageTo, evaluateCreature, the trigger
+    // and static scans, the test-mode calculateManaCost and the Hall count, damageIfUnblocked without
+    // abilities (never sumDamageIfUnblocked, lifeThatWouldRemain or poisonIfUnblocked, whose power
+    // bonus probe pays), getPumpedCreature and the combat predictors on pairs no Regenerate ability
+    // covers. Never ComputerUtil.canRegenerate, shouldPumpCard, lifeInDanger or AiBlockController.
+    // Nothing is held or remembered. Its writes: the activator on a hand SA with none yet
+    // (ensureActivator; readmit runs before getOriginalAndAltCostAbilities sets it),
+    // setActivatingPlayer on the mana abilities the count reads, and in chooseModes the chosen mode's
+    // target (reset on every routed evaluation, set on approval only). Residual: line D's pumped copy
+    // takes card timestamps A never took (Tower Defense's residual), only after the arithmetic
+    // pre-check.
+    public static class JundCharm {
+        public static final String NAME = "Jund Charm";
+        static final int DMG = 2;                         // DBDmg NumDmg$ 2
+        static final int COUNTERS = 2;                    // DBPutCounter CounterNum$ 2
+        static final int MARGIN = WaveOfReckoning.MARGIN; // 200, Sudden Demise's sweep margin
+        static final int PREMIUM_VALUE = 200;             // Tower Defense / Cosmic Intervention's floor
+        static final int MIN_PERMANENT_MV = 4;
+        static final int POISON_LETHAL = 10;
+        static final int COMMANDER_LETHAL = 21;
+        private static final int BRG = (1 << 2) | (1 << 3) | (1 << 4); // B, R, G in MagicColor.WUBRG order
+
+        private enum Mode { EXILE, SWEEP, PUMP }
+
+        // the one mode the plan takes, with its target: the graveyard's owner (EXILE), our creature
+        // (PUMP), none (SWEEP)
+        private static final class Plan {
+            final Mode mode;
+            final GameEntity target;
+
+            Plan(final Mode mode, final GameEntity target) {
+                this.mode = mode;
+                this.target = target;
+            }
+        }
+
+        // the modes, found by shape: exile (a targeted ChangeZoneAll from a graveyard to exile), sweep
+        // (DamageAll) and pump (a targeted P1P1 PutCounter). makePossibleOptions drops a targeted mode
+        // with no candidate, and a drifted script may lose any: each may be null.
+        private static final class Parts {
+            AbilitySub exile;
+            AbilitySub sweep;
+            AbilitySub pump;
+
+            static Parts of(final List<AbilitySub> choices) {
+                final Parts p = new Parts();
+                for (final AbilitySub sub : choices) {
+                    final ApiType api = sub.getApi();
+                    if (api == ApiType.ChangeZoneAll && sub.usesTargeting()
+                            && "Graveyard".equals(sub.getParam("Origin")) && "Exile".equals(sub.getParam("Destination"))) {
+                        p.exile = sub;
+                    } else if (api == ApiType.DamageAll) {
+                        p.sweep = sub;
+                    } else if (api == ApiType.PutCounter && sub.usesTargeting()
+                            && "P1P1".equals(sub.getParam("CounterType"))) {
+                        p.pump = sub;
+                    }
+                }
+                return p;
+            }
+
+            boolean activatorUnset() {
+                return (exile != null && exile.getActivatingPlayer() == null)
+                        || (sweep != null && sweep.getActivatingPlayer() == null)
+                        || (pump != null && pump.getActivatingPlayer() == null);
+            }
+
+            void resetTargets() {
+                if (exile != null) {
+                    exile.resetTargets();
+                }
+                if (pump != null) {
+                    pump.resetTargets();
+                }
+            }
+        }
+
+        // a spell of this card, not a copy and not a Play-effect cast (Nathan Drake's, Planar Portal's
+        // and Exit from Exile's thefts keep the stock chooser, as the hint never covered them), keyed on
+        // the host's paper name: the key the readmit switch (RemoveDeckFilter.paperName) and
+        // isCardRemAIDeck read (rules B3-2, B3-3)
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // our own copy, cast from our own hand: the only cast the hint kept off the list
+        private static boolean ownHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Player activator = sa.getActivatingPlayer();
+            return host != null && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner())
+                    && (activator == null || ai.equals(activator));
+        }
+
+        // canTarget reads the activator; set it on a hand SA that has none yet, as
+        // getOriginalAndAltCostAbilities sets it right after the RemoveDeck filter. It trickles down to
+        // the Choices subs.
+        private static void ensureActivator(final Player ai, final SpellAbility sa, final Parts parts) {
+            if (sa.getActivatingPlayer() == null || parts.activatorUnset()) {
+                sa.setActivatingPlayer(ai);
+            }
+        }
+
+        // G3's readmit case (RemoveDeckFilter.readmit): the owner's hand spell joins the list only while
+        // the plan has a line. RNG-free; sets no target.
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return routes(ai, sa) && plan(ai, sa, Parts.of(sa.getAdditionalAbilityList("Choices"))) != null;
+        }
+
+        // CharmAi's gate: the readmit's own key inside the plan's window, never the plan itself
+        public static boolean routes(final Player ai, final SpellAbility sa) {
+            return handles(sa) && ownHandCast(ai, sa) && window(ai, sa);
+        }
+
+        // CharmAi's chooser behind routes(): the one mode the plan takes, with its target set; empty to
+        // decline (CantPlayAi). Draws nothing. The list is mutable: chainAbilities sorts it.
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa, final List<AbilitySub> choices) {
+            final List<AbilitySub> chosen = Lists.newArrayList();
+            final Parts parts = Parts.of(choices); // the offered modes, the same objects as Choices
+            parts.resetTargets(); // nothing stale from an earlier priority
+            final Plan plan = plan(ai, sa, parts);
+            if (plan == null) {
+                return chosen;
+            }
+            switch (plan.mode) {
+                case SWEEP:
+                    chosen.add(parts.sweep);
+                    break;
+                case EXILE:
+                    if (parts.exile != null && parts.exile.canTarget(plan.target)) {
+                        parts.exile.getTargets().add(plan.target);
+                        chosen.add(parts.exile);
+                    }
+                    break;
+                case PUMP:
+                    if (parts.pump != null && parts.pump.canTarget(plan.target)) {
+                        parts.pump.getTargets().add(plan.target);
+                        chosen.add(parts.pump);
+                    }
+                    break;
+                default:
+                    break;
+            }
+            return chosen;
+        }
+
+        // the plan's window, O(1): an opponent's item on top of the stack, or an empty stack in our own
+        // main phase, an opponent's declare attackers at us, or declare blockers. Nothing in it changes
+        // within a priority pass.
+        private static boolean window(final Player ai, final SpellAbility sa) {
+            if (!ai.getGame().getStack().isEmpty()) {
+                return opposingTop(ai, sa) != null;
+            }
+            return ownMain(ai) || opponentsAttack(ai) || afterBlocks(ai);
+        }
+
+        // the top item that is not this spell, unwrapped, when an opponent put it there
+        private static SpellAbility opposingTop(final Player ai, final SpellAbility sa) {
+            SpellAbility top = ComputerUtilAbility.getTopSpellAbilityOnStack(ai.getGame(), sa);
+            if (top != null && top.isWrapper()) {
+                top = ((WrappedAbility) top).getWrappedAbility();
+            }
+            if (top == null) {
+                return null;
+            }
+            final Player activator = top.getActivatingPlayer();
+            return activator != null && activator.isOpponentOf(ai) ? top : null;
+        }
+
+        private static boolean ownMain(final Player ai) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            return ph.isPlayerTurn(ai) && ph.getPhase().isMain();
+        }
+
+        private static boolean opponentsAttack(final Player ai) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            return !ph.isPlayerTurn(ai) && ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) && combat != null
+                    && !combat.getAttackersOf(ai).isEmpty();
+        }
+
+        private static boolean afterBlocks(final Player ai) {
+            return ai.getGame().getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS) && ai.getGame().getCombat() != null;
+        }
+
+        // the plan, cheapest first (the window, each line's pre-check, the mana, then the board); null
+        // to decline
+        static Plan plan(final Player ai, final SpellAbility sa, final Parts parts) {
+            if (parts.sweep == null) {
+                return null; // drift: the untargeted mode is always offered
+            }
+            ensureActivator(ai, sa, parts);
+            final Game game = ai.getGame();
+            final Card host = sa.getHostCard();
+            if (!game.getStack().isEmpty()) {
+                final SpellAbility top = opposingTop(ai, sa);
+                if (top == null) {
+                    return null;
+                }
+                Player gy = parts.exile == null ? null : recursionTarget(ai, parts.exile, top);
+                if (gy != null && graveyardLeavePunished(ai)) {
+                    gy = null; // amendment 1: Syr Konrad, Imotekh, Quintorius
+                }
+                final boolean threat = parts.pump != null && threatens(top);
+                if (gy == null && !threat) {
+                    return null;
+                }
+                if (!surelyPays(ai, sa)) {
+                    return null;
+                }
+                if (gy != null) {
+                    return new Plan(Mode.EXILE, gy);
+                }
+                final Card saved = bestSaved(ai, parts.pump);
+                return saved == null ? null : new Plan(Mode.PUMP, saved);
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean attack = opponentsAttack(ai);
+            if (ownMain(ai) || attack) {
+                if (!someOpposingCreatureCanDie(ai) || !surelyPays(ai, sa)) {
+                    return null;
+                }
+                final boolean oneSided = ph.isPlayerTurn(ai) && ph.getPhase().isBefore(PhaseType.MAIN2);
+                return sweepPays(ai, host, oneSided, attack ? combat : null) ? new Plan(Mode.SWEEP, null) : null;
+            }
+            if (afterBlocks(ai) && parts.pump != null && !game.getReplacementHandler().isPreventCombatDamageThisTurn()) {
+                if (!anyOfOursInCombat(ai, combat) || !surelyPays(ai, sa)) {
+                    return null;
+                }
+                final Card c = trickTarget(ai, parts.pump, combat);
+                return c == null ? null : new Plan(Mode.PUMP, c);
+            }
+            return null;
+        }
+
+        // A: the opponent whose graveyard holds a card worth answering that the top item's targeted
+        // recursion aims at (a chain walk and getTargets: no copy, no draw)
+        private static Player recursionTarget(final Player ai, final AbilitySub exile, final SpellAbility top) {
+            for (SpellAbility part = top; part != null; part = part.getSubAbility()) {
+                if (part.getApi() != ApiType.ChangeZone || !part.usesTargeting()
+                        || !listsZone(part.getParam("Origin"), "Graveyard")) {
+                    continue;
+                }
+                final String destination = part.getParam("Destination");
+                final boolean battlefield = "Battlefield".equals(destination);
+                if (!battlefield && !"Hand".equals(destination)) {
+                    continue;
+                }
+                for (final Card t : part.getTargets().getTargetCards()) {
+                    final Player p = t.getOwner();
+                    if (p == null || !t.isInZone(ZoneType.Graveyard) || !p.isOpponentOf(ai) || !exile.canTarget(p)) {
+                        continue;
+                    }
+                    if (worthAnswering(t, battlefield)) {
+                        return p;
+                    }
+                }
+            }
+            return null;
+        }
+
+        private static boolean worthAnswering(final Card t, final boolean battlefield) {
+            if (t.isCommander()) {
+                return true;
+            }
+            if (t.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(t) >= PREMIUM_VALUE;
+            }
+            return battlefield && t.isPermanent() && !t.isLand() && t.getCMC() >= MIN_PERMANENT_MV;
+        }
+
+        // amendment 1: an opposing permanent with a ChangesZone(All) trigger that a card leaving a
+        // graveyard fires: Origin names the graveyard, or any origin with a destination that exile meets
+        // (absent or Any counts). Parameter reads only; over-vetoing only costs a rare cast.
+        private static boolean graveyardLeavePunished(final Player ai) {
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (t.getMode() != TriggerType.ChangesZone && t.getMode() != TriggerType.ChangesZoneAll) {
+                        continue;
+                    }
+                    final String origin = t.getParam("Origin");
+                    final String destination = t.getParam("Destination");
+                    if (listsZone(origin, "Graveyard")
+                            || (anyZone(origin) && (anyZone(destination) || listsZone(destination, "Exile")))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // a comma list that names the zone itself
+        private static boolean listsZone(final String zones, final String zone) {
+            if (zones == null) {
+                return false;
+            }
+            for (final String z : zones.split(",")) {
+                if (z.trim().equals(zone)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // an absent zone parameter, or one that lists Any
+        private static boolean anyZone(final String zones) {
+            return zones == null || listsZone(zones, "Any");
+        }
+
+        // B's cheap pre-check: a damage or -X/-X item that +2/+2 can answer (amendment 5: never a
+        // deathtouch source, never a divided item with more than one target)
+        private static boolean threatens(final SpellAbility top) {
+            final ApiType api = top.getApi();
+            if (api != ApiType.DealDamage && api != ApiType.DamageAll && api != ApiType.Pump && api != ApiType.PumpAll) {
+                return false;
+            }
+            final Card source = top.getHostCard();
+            if (source != null && source.hasKeyword(Keyword.DEATHTOUCH)) {
+                return false;
+            }
+            return !top.isDividedAsYouChoose() || top.getTargets().size() <= 1;
+        }
+
+        // B: our best premium creature the top item kills and the counters save
+        private static Card bestSaved(final Player ai, final AbilitySub pump) {
+            Card best = null;
+            int bestEval = 0;
+            for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, pump, true)) {
+                if (!(o instanceof Card c) || !c.isCreature() || !ai.equals(c.getController())
+                        || !c.canReceiveCounters(CounterEnumType.P1P1) || !pump.canTarget(c)) {
+                    continue;
+                }
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                if (!c.isCommander() && eval < PREMIUM_VALUE) {
+                    continue;
+                }
+                if (best == null || eval > bestEval || (eval == bestEval && c.getId() < best.getId())) {
+                    best = c;
+                    bestEval = eval;
+                }
+            }
+            return best;
+        }
+
+        // C's cheap pre-check: an opposing creature we do not own that 2 damage can kill
+        private static boolean someOpposingCreatureCanDie(final Player ai) {
+            for (final Card c : ai.getOpponents().getCreaturesInPlay()) {
+                if (!c.hasKeyword(Keyword.INDESTRUCTIBLE) && !ai.equals(c.getOwner())
+                        && ComputerUtilCombat.getDamageToKill(c, false) <= DMG) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // C: Sudden Demise's scan and admissible() at a fixed X = DMG over every creature (no colour
+        // test), with the controller's regenerators read (amendment 6), Toxic Deluge's lord check and,
+        // in an opponent's attack, the survival check (amendment 2)
+        private static boolean sweepPays(final Player ai, final Card source, final boolean oneSided, final Combat attack) {
+            final CardCollection all = CardLists.filter(ai.getGame().getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES);
+            final int n = all.size();
+            final boolean[] dies = new boolean[n];
+            final boolean[] loss = new boolean[n];      // we control or own it
+            final boolean[] opposing = new boolean[n];  // an opponent controls it and we do not own it
+            final boolean[] noValue = new boolean[n];   // its own death trigger leaves nothing behind
+            for (int i = 0; i < n; i++) {
+                final Card c = all.get(i);
+                dies[i] = ComputerUtilCombat.getEnoughDamageToKill(c, DMG, source, false) <= DMG;
+                loss[i] = ai.equals(c.getController()) || ai.equals(c.getOwner());
+                opposing[i] = !loss[i] && ai.isOpponentOf(c.getController());
+            }
+            // Opponents' side: a death watcher that sees a dying creature, or a harmful own death,
+            // vetoes; a harmless own death is not a kill; a noncombat damage-received trigger that
+            // matches a creature this spell damages vetoes, dying or not.
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (WaveOfReckoning.isDeathTrigger(t)) {
+                        for (int i = 0; i < n; i++) {
+                            final Card d = all.get(i);
+                            if (!dies[i] || !t.matchesValidParam("ValidCard", d) || !t.matchesValidParam("ValidCards", d)) {
+                                continue;
+                            }
+                            if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                                return false;
+                            }
+                            noValue[i] = true;
+                        }
+                        continue;
+                    }
+                    final TriggerType mode = t.getMode();
+                    if ((mode != TriggerType.DamageDone && mode != TriggerType.DamageDoneOnce)
+                            || "True".equalsIgnoreCase(t.getParam("CombatDamage"))
+                            || !t.matchesValidParam("ValidSource", source)) {
+                        continue;
+                    }
+                    for (int i = 0; i < n; i++) {
+                        final Card c = all.get(i);
+                        if (t.matchesValidParam("ValidTarget", c) && ComputerUtilCombat.predictDamageTo(c, DMG, source, false) > 0) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            // Our side: a death trigger that pays the dying creature's controller turns an opposing
+            // kill into their card (Fecundity, in the carrier).
+            for (final Card h : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (!WaveOfReckoning.isDeathTrigger(t) || !paysDyingController(t)) {
+                        continue;
+                    }
+                    for (int i = 0; i < n; i++) {
+                        final Card d = all.get(i);
+                        if (opposing[i] && dies[i] && t.matchesValidParam("ValidCard", d) && t.matchesValidParam("ValidCards", d)) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            boolean anyKill = false;
+            boolean anyLoss = false;
+            boolean worthACard = false;
+            int killHalfCards = 0; // 2 per card, 1 per token
+            int ourCards = 0;      // 2 per nontoken lost
+            int net = 0;
+            for (int i = 0; i < n; i++) {
+                if (!dies[i]) {
+                    continue;
+                }
+                final Card c = all.get(i);
+                if (loss[i]) {
+                    if (c.isCommander()) {
+                        return false; // never a commander we control or own
+                    }
+                    anyLoss = true;
+                    net -= ComputerUtilCard.evaluateCreature(c); // no regeneration/undying credit for our own
+                    if (!c.isToken()) {
+                        ourCards += 2;
+                    }
+                } else if (opposing[i] && !noValue[i] && !mayRegenerate(c)
+                        && !ComputerUtilCard.hasActiveUndyingOrPersist(c) && !c.hasSVar("SacMe")) {
+                    anyKill = true;
+                    net += ComputerUtilCard.evaluateCreature(c);
+                    killHalfCards += c.isToken() ? 1 : 2;
+                    worthACard |= (!c.isToken() && c.getCMC() >= 2) || c.getNetPower() >= 3;
+                }
+            }
+            if (!anyKill || (oneSided && anyLoss)) {
+                return false;
+            }
+            // worth a card: a real body, or a swarm of at least two cards' worth
+            if (!worthACard && killHalfCards < 4) {
+                return false;
+            }
+            // never a card down (tokens half a card): ours lost + this card <= theirs
+            if (killHalfCards < Math.max(2, ourCards + 2)) {
+                return false;
+            }
+            if (net <= MARGIN || lordLeavesFollower(ai, all, dies)) {
+                return false;
+            }
+            return !anyLoss || attack == null || survivesUnblocked(ai, attack, source);
+        }
+
+        // amendment 2: with our dying creatures gone from the blocks, the attackers at us that survive
+        // the 2 damage, all unblocked, leave us alive: damage (damageIfUnblocked without abilities),
+        // poison (a private count) and each surviving commander's damage
+        private static boolean survivesUnblocked(final Player ai, final Combat combat, final Card source) {
+            int damage = 0;
+            int poison = ai.getPoisonCounters();
+            for (final Card a : combat.getAttackersOf(ai)) {
+                if (ComputerUtilCombat.getEnoughDamageToKill(a, DMG, source, false) <= DMG) {
+                    continue; // the sweep kills it before blocks
+                }
+                final int dmg = ComputerUtilCombat.damageIfUnblocked(a, ai, combat, true);
+                damage += dmg;
+                poison += poisonIfUnblocked(a, ai);
+                if (a.isCommander() && dmg + ai.getCommanderDamage(a) >= COMMANDER_LETHAL) {
+                    return false;
+                }
+            }
+            return damage < ai.getLife() && poison < POISON_LETHAL;
+        }
+
+        // the poison an unblocked infect attacker deals, without poisonIfUnblocked's power-bonus probe
+        // (it passes withoutAbilities false, which test-pays pump abilities)
+        private static int poisonIfUnblocked(final Card a, final Player p) {
+            if (!p.canReceiveCounters(CounterEnumType.POISON) || !a.isInfectDamage(p)) {
+                return 0;
+            }
+            final int pd = ComputerUtilCombat.predictDamageTo(p, a.getNetCombatDamage(), a, true);
+            return a.hasDoubleStrike() ? pd * 2 : pd;
+        }
+
+        // Toxic Deluge's lordLeavesFollower, a damage copy: a creature of ours that dies to the 2
+        // carries a Continuous static with AddToughness whose Affected matches a creature of ours that
+        // survives it; the damage stays marked, so the follower may die when the anthem ends.
+        // Conditions are not read: over-vetoing only costs a cast.
+        private static boolean lordLeavesFollower(final Player ai, final CardCollection all, final boolean[] dies) {
+            final int n = all.size();
+            for (int i = 0; i < n; i++) {
+                final Card lord = all.get(i);
+                if (!dies[i] || !ai.equals(lord.getController())) {
+                    continue;
+                }
+                for (final StaticAbility st : lord.getStaticAbilities()) {
+                    if (!st.checkMode(StaticAbilityMode.Continuous) || !st.hasParam("AddToughness")
+                            || !st.hasParam("Affected")) {
+                        continue;
+                    }
+                    for (int j = 0; j < n; j++) {
+                        final Card s = all.get(j);
+                        if (!dies[j] && ai.equals(s.getController()) && st.matchesValidParam("Affected", s)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Sudden Demise's paysDyingController, a private copy: a death trigger that hands the dying
+        // creature's controller (or owner) a choice, cards or tokens (Fecundity)
+        private static boolean paysDyingController(final Trigger t) {
+            if (namesDyingController(t.getParam("OptionalDecider"))) {
+                return true;
+            }
+            for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                if (namesDyingController(part.getParam("Defined")) || namesDyingController(part.getParam("TokenOwner"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean namesDyingController(final String s) {
+            return s != null && (s.contains("TriggeredCardController") || s.contains("TriggeredCardOwner"));
+        }
+
+        // ComputerUtil.canRegenerate's coverage test without its payment test, which draws MyRandom
+        // through ComputerUtilCost.canPayCost: any activated Regenerate ability on the controller's
+        // battlefield that covers the card (the same ValidTgts / Defined match), paid or not, plus
+        // canBeShielded (amendments 3 and 6). It only over-reads, so it only declines more.
+        private static boolean mayRegenerate(final Card card) {
+            if (!card.canBeShielded()) {
+                return false;
+            }
+            final Player controller = card.getController();
+            final Game game = controller.getGame();
+            for (final Card c : controller.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility s : c.getSpellAbilities()) {
+                    if (!s.isActivatedAbility() || s.getApi() != ApiType.Regenerate) {
+                        continue;
+                    }
+                    final forge.game.spellability.TargetRestrictions tgt = s.getTargetRestrictions();
+                    if (tgt != null ? CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield),
+                                tgt.getValidTgts(), controller, s.getHostCard(), s).contains(card)
+                            : AbilityUtils.getDefinedCards(s.getHostCard(), s.getParam("Defined"), s).contains(card)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean anyOfOursInCombat(final Player ai, final Combat combat) {
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (combat.isAttacking(c) || combat.isBlocking(c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // D: the attack the counters make lethal first, else the combatant whose counters save the most
+        // (its own value when premium and saved, plus the opposing combatants the pumped creature kills
+        // while it lives); null when nothing qualifies
+        private static Card trickTarget(final Player ai, final AbilitySub pump, final Combat combat) {
+            final Card lethal = lethalPump(ai, pump, combat);
+            if (lethal != null) {
+                return lethal;
+            }
+            Card best = null;
+            int bestScore = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                final boolean attacking = combat.isAttacking(c);
+                if ((!attacking && !combat.isBlocking(c)) || (attacking && !combat.isBlocked(c))
+                        || !c.canReceiveCounters(CounterEnumType.P1P1) || !pump.canTarget(c)) {
+                    continue; // an unblocked attacker counts only in the lethal line
+                }
+                final List<Card> opp = new ArrayList<>(attacking ? combat.getBlockers(c) : combat.getAttackersBlockedBy(c));
+                if (opp.isEmpty()) {
+                    continue;
+                }
+                // arithmetic pre-check, before any copy
+                final int toKill = ComputerUtilCombat.getDamageToKill(c, false);
+                int taken = 0;
+                for (final Card o : opp) {
+                    taken += ComputerUtilCombat.predictDamageTo(c, o.getNetCombatDamage(), o, true);
+                }
+                final boolean premium = isPremium(c);
+                final boolean saveable = !c.hasKeyword(Keyword.INDESTRUCTIBLE) && taken >= toKill && taken < toKill + COUNTERS;
+                boolean premiumKillable = false;
+                if (!c.hasKeyword(Keyword.DEATHTOUCH)) {
+                    for (final Card o : opp) {
+                        final int need = ComputerUtilCombat.getDamageToKill(o, false);
+                        if (!o.hasKeyword(Keyword.INDESTRUCTIBLE) && c.getNetCombatDamage() < need
+                                && c.getNetCombatDamage() + COUNTERS >= need
+                                && ComputerUtilCard.evaluateCreature(o) >= PREMIUM_VALUE) {
+                            premiumKillable = true;
+                            break;
+                        }
+                    }
+                }
+                if (!(saveable && premium) && !premiumKillable) {
+                    continue;
+                }
+                if (regenerationTouches(c, opp, combat)) {
+                    continue; // amendment 3: the predictors below would test-pay it
+                }
+                // confirmation: one pumped copy, one Combat
+                final Card pumped = ComputerUtilCard.getPumpedCreature(ai, pump, c, COUNTERS, COUNTERS, List.of());
+                final Combat pc = pumpedCombat(ai, combat, c, pumped, attacking);
+                if (pc == null) {
+                    continue;
+                }
+                final boolean pumpedLives = !(attacking ? ComputerUtilCombat.attackerWouldBeDestroyed(ai, pumped, pc)
+                                                        : ComputerUtilCombat.blockerWouldBeDestroyed(ai, pumped, pc));
+                if (!pumpedLives) {
+                    continue; // neither a save nor a kill that counts
+                }
+                final boolean saved = saveable && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat);
+                int score = saved ? ComputerUtilCard.evaluateCreature(c) : 0;
+                boolean premiumKill = false;
+                // the pumped damage is shared among its opponents: credit the cheapest kills it pays for
+                int budget = pumped.getNetCombatDamage() * (pumped.hasDoubleStrike() ? 2 : 1);
+                opp.sort(Comparator.comparingInt(o -> ComputerUtilCombat.getDamageToKill(o, false)));
+                for (final Card o : opp) {
+                    final Player p = o.getController();
+                    if (o.hasKeyword(Keyword.INDESTRUCTIBLE) || ComputerUtilCombat.combatantWouldBeDestroyed(p, o, combat)) {
+                        continue; // lives anyway, or dies anyway
+                    }
+                    if (!(attacking ? ComputerUtilCombat.blockerWouldBeDestroyed(p, o, pc)
+                                    : ComputerUtilCombat.attackerWouldBeDestroyed(p, o, pc))) {
+                        continue;
+                    }
+                    final int need = pumped.hasKeyword(Keyword.DEATHTOUCH) ? 1 : ComputerUtilCombat.getDamageToKill(o, false);
+                    if (need > budget) {
+                        continue;
+                    }
+                    budget -= need;
+                    final int v = ComputerUtilCard.evaluateCreature(o);
+                    score += v;
+                    premiumKill |= v >= PREMIUM_VALUE;
+                }
+                if (!(saved && premium) && !premiumKill) {
+                    continue;
+                }
+                if (best == null || score > bestScore || (score == bestScore && c.getId() < best.getId())) {
+                    best = c;
+                    bestScore = score;
+                }
+            }
+            return best;
+        }
+
+        // D's lethal line, our attack only: the unblocked attackers on an opponent who can lose deal
+        // less than their life now, and the counters on one of them reach it (damageIfUnblocked without
+        // abilities, and its own formula with +COUNTERS: no copy)
+        private static Card lethalPump(final Player ai, final AbilitySub pump, final Combat combat) {
+            if (!ai.equals(combat.getAttackingPlayer())) {
+                return null;
+            }
+            for (final Player p : ai.getOpponents()) {
+                if (p.cantLose() || p.cantLoseForZeroOrLessLife() || !p.canLoseLife()) {
+                    continue;
+                }
+                final CardCollection unblocked = CardLists.filter(combat.getAttackersOf(p),
+                        a -> !combat.isBlocked(a) && ai.equals(a.getController()));
+                if (unblocked.isEmpty()) {
+                    continue;
+                }
+                int now = 0;
+                for (final Card a : unblocked) {
+                    now += ComputerUtilCombat.damageIfUnblocked(a, p, combat, true);
+                }
+                final int life = p.getLife();
+                if (now >= life) {
+                    continue; // lethal already
+                }
+                for (final Card a : unblocked) {
+                    if (!a.canReceiveCounters(CounterEnumType.P1P1) || !pump.canTarget(a)) {
+                        continue;
+                    }
+                    final int extra = pumpedDamageIfUnblocked(a, p, combat) - ComputerUtilCombat.damageIfUnblocked(a, p, combat, true);
+                    if (now + extra >= life) {
+                        return a;
+                    }
+                }
+            }
+            return null;
+        }
+
+        // ComputerUtilCombat.damageIfUnblocked's own formula for c with +COUNTERS power (Tower Defense's
+        // pumpedDamageIfUnblocked, a private copy): no LKI copy, no ability probe
+        private static int pumpedDamageIfUnblocked(final Card c, final Player p, final Combat combat) {
+            if (!p.canLoseLife() || c.hasKeyword(Keyword.INFECT)) {
+                return 0;
+            }
+            int damage = c.getNetCombatDamage() + COUNTERS;
+            if (ComputerUtilCombat.isCombatDamagePrevented(c, p, damage)) {
+                return 0;
+            }
+            damage += ComputerUtilCombat.predictPowerBonusOfAttacker(c, null, combat, true);
+            final int sum = ComputerUtilCombat.predictDamageTo(p, damage, c, true);
+            return c.hasDoubleStrike() ? sum * 2 : sum;
+        }
+
+        // amendment 3: every combatant the confirmation's predictors ask ComputerUtil.canRegenerate
+        // about - c, its opposing combatants, and their own combat partners (the lives-now check on the
+        // real combat) - covered by no activated Regenerate ability of its controller
+        private static boolean regenerationTouches(final Card c, final List<Card> opp, final Combat combat) {
+            if (mayRegenerate(c)) {
+                return true;
+            }
+            for (final Card o : opp) {
+                if (mayRegenerate(o)) {
+                    return true;
+                }
+                for (final Card x : combat.isAttacking(o) ? combat.getBlockers(o) : combat.getAttackersBlockedBy(o)) {
+                    if (mayRegenerate(x)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Tower Defense's pumpedCombat, a private copy: our attacker against the entity it attacks, the
+        // attackers our blocker blocks against us
+        private static Combat pumpedCombat(final Player ai, final Combat combat, final Card c, final Card pumped,
+                                           final boolean attacking) {
+            final Combat pc = new Combat(combat.getAttackingPlayer());
+            if (attacking) {
+                final GameEntity defender = combat.getDefenderByAttacker(c);
+                if (defender == null) {
+                    return null;
+                }
+                pc.addAttacker(pumped, defender);
+                for (final Card b : combat.getBlockers(c)) {
+                    pc.addBlocker(pumped, b);
+                }
+            } else {
+                for (final Card a : combat.getAttackersBlockedBy(c)) {
+                    pc.addAttacker(a, ai);
+                    pc.addBlocker(a, pumped);
+                }
+            }
+            return pc;
+        }
+
+        private static boolean isPremium(final Card c) {
+            return c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= PREMIUM_VALUE;
+        }
+
+        // UniteTheCoalition.surelyPays, a private copy restricted to the B, R and G pips: distinct
+        // sources (each counted once, held sources skipped, floating mana one source per point), at
+        // least the engine's adjusted cost (the test-mode calculateManaCost: taxes seen), and Hall's
+        // condition over every subset of {B, R, G}. Draws nothing; its only write is
+        // setActivatingPlayer on the mana abilities it reads.
+        private static boolean surelyPays(final Player ai, final SpellAbility sa) {
+            final int mv = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false).getConvertedManaCost();
+            final List<Integer> masks = new ArrayList<>();
+            int coloured = 0;
+            for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                final int n = ai.getManaPool().getAmountOfColor(MagicColor.WUBRG[i]);
+                for (int k = 0; k < n; k++) {
+                    masks.add(1 << i);
+                }
+                coloured += n;
+            }
+            for (int k = coloured; k < ai.getManaPool().totalMana(); k++) {
+                masks.add(0); // floating colourless
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                boolean source = false;
+                int mask = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)
+                            || AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma) <= 0) {
+                        continue;
+                    }
+                    source = true;
+                    if (ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana()) {
+                        continue; // colourless here: the conservative side
+                    }
+                    mask |= colourMask(mp.isAnyMana() ? "W U B R G"
+                            : mp.isComboMana() ? mp.getComboColors(ma) : mp.getOrigProduced());
+                }
+                if (source) {
+                    masks.add(mask);
+                }
+            }
+            if (masks.size() < mv) {
+                return false;
+            }
+            for (int set = BRG; set > 0; set = (set - 1) & BRG) {
+                int meet = 0;
+                for (final int m : masks) {
+                    if ((m & set) != 0) {
+                        meet++;
+                    }
+                }
+                if (meet < Integer.bitCount(set)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // the W/U/B/R/G letters of a production, as bits in MagicColor.WUBRG order
+        private static int colourMask(final String letters) {
+            int mask = 0;
+            for (final String t : letters.trim().split(" ")) {
+                if (t.length() != 1) {
+                    continue;
+                }
+                final byte colour = MagicColor.fromName(t.charAt(0));
+                for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                    if (MagicColor.WUBRG[i] == colour) {
+                        mask |= 1 << i;
+                    }
+                }
+            }
+            return mask;
+        }
+
+        // the sources ComputerUtilMana.isManaSourceReserved refuses, in the phases it refuses them
+        // (UniteTheCoalition's isHeld, a private copy)
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+    }
+
     // Karplusan Minotaur
     // Its cumulative upkeep is paid in coin flips, and every lost flip deals 1
     // damage to a target of the opponent's choice. Stock SpellAbilityAi pays
@@ -32548,7 +33483,7 @@ public class SpecialCardAi {
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
     // 11, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58, 59, 60,
-    // 63, 68, 71, 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's
+    // 63, 68, 69, 71, 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's
     // row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -32643,6 +33578,8 @@ public class SpecialCardAi {
                     return BreathOfFury.readmit(ai, sa);
                 case MindsAglow.NAME:
                     return MindsAglow.readmit(ai, sa);
+                case JundCharm.NAME:
+                    return JundCharm.readmit(ai, sa);
                 default:
                     return false;
             }

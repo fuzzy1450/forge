@@ -107,6 +107,19 @@ public class CharmAi extends SpellAbilityAi {
             // ritual scan, hasReasonToPlayCardThisTurn, the Nykthos and Spectral Searchlight scanners)
             // outside the window; inside it such a scan meets this chooser instead (skeptic (d)).
             chosenList = SpecialCardAi.EvolutionCharm.chooseModes(ai, sa, choices);
+        } else if (SpecialCardAi.JundCharm.routes(ai, sa)) {
+            // AI:RemoveDeck:All keeps the owner's hand cast off the playable list; G3 readmits it only
+            // while JundCharm's RNG-free plan has a line, so A never reached the shuffle below for it
+            // there. routes() keys on that same owner's hand cast inside the plan's O(1) window (an
+            // opponent's item on top of the stack; or an empty stack in our own main phase, in an
+            // opponent's declare attackers at us, or in declare blockers), never on the plan, so a
+            // plan that a mana hold breaks between the filter and here declines through an empty
+            // list, with no draw. Every other evaluation keeps the stock shuffle and chooser below,
+            // draw for draw: copies, Play-effect casts (Nathan Drake, Planar Portal, Exit from
+            // Exile), and hand scans that ignore the hint (ManaAi's ritual scan,
+            // hasReasonToPlayCardThisTurn, the Nykthos and Spectral Searchlight scanners) outside the
+            // window; inside it such a scan meets this chooser instead (skeptic amendment 4).
+            chosenList = SpecialCardAi.JundCharm.chooseModes(ai, sa, choices);
         } else {
             // only randomize if not all possible together
             if (num < choices.size()) {
