@@ -94,6 +94,16 @@ public class EffectAi extends SpellAbilityAi {
             // this branch.
             return SpecialCardAi.ManifoldKey.considerUnblockable(ai, sa);
         }
+        if (SpecialCardAi.RiteOfHarmony.isPending(sa)) {
+            // Rite of Harmony, offered by AiController.getSpellAbilityToPlay in front of the spell
+            // the AI already chose (RiteOfHarmony.findPreCast). Only that consult, on the game
+            // thread, sees PENDING: it is a consult the stock engine never made, so it draws
+            // nothing. Every ordinary consult (the "Game AI Eval" thread, PENDING null), every
+            // direct canPlaySa caller and every Play-effect cast takes the stock path below
+            // unchanged: the randomReturn roll, then the no-AILogic CantPlayAi, the one draw the
+            // stock engine made for this unhinted card.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         final Game game = ai.getGame();
         final PhaseHandler phase = game.getPhaseHandler();
         boolean randomReturn = MyRandom.getRandom().nextFloat() <= .6667;

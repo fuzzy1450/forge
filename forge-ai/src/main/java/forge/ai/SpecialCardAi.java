@@ -34700,6 +34700,385 @@ public class SpecialCardAi {
         }
     }
 
+    // Rite of Harmony (dead-card batch 3, row 74)
+    // "Whenever a creature or enchantment you control enters this turn, draw a card." ({G}{W}
+    // Instant; flashback {2}{G}{W}.) The script has no hint and no AILogic$, so
+    // EffectAi.checkApiLogic drew its randomReturn roll and refused at the no-AILogic fallthrough at
+    // every consult, from hand and from the graveyard alike. An evaluator there would still lose to
+    // the sort (saList is ordered highest-CMC first, so a 2-mana enabler is reached only after the
+    // bodies it should ride in front of have resolved), so the card takes Ride the Avalanche's
+    // pre-cast hook (batch 1, row 59): AiController.getSpellAbilityToPlay, with its spell already
+    // chosen, asks findPreCast whether to slip a Rite SA (the hand cast or the flashback) in front
+    // of it, holds the chosen spell's own mana sources, and offers the Rite SA to canPlayAndPayFor
+    // with PENDING set. EffectAi answers WillPlay for that one consult, a consult the stock engine
+    // never made; every ordinary consult ("Game AI Eval" thread, PENDING null), every direct
+    // canPlaySa caller and every Play-effect cast keeps the stock roll-then-decline. No AILogic$ is
+    // added: an unknown one would fall through to EffectAi's randomReturn WillPlay.
+    // Floor: MIN_DRAWS (2) or more creatures or enchantments enter under our control this turn from
+    // the chosen spell, plus at most one more creature or enchantment spell from hand whose
+    // adjusted cost fits the same mana. The hand cast is then at least +1 card for {G}{W}, the
+    // flashback +2 for {2}{G}{W}. findPreCast's refusals, in order (nothing before step 9 draws):
+    // 1. the chosen spell: a spell the AI chose itself (not a copy, not a Play-effect cast, not a
+    //    mutate cast, which merges instead of entering, no Announce param: the Adversaries'
+    //    NumTimes test-pays ten times inside calculateManaCost) of API PermanentCreature,
+    //    PermanentNoncreature or Token, with no X and no sacrifice in its cost;
+    // 2. window: our own main phase, an empty stack;
+    // 3. a Rite SA still on offer this pass, the first in saList, not hosted by the chosen card;
+    // 4. the draws are ours: canDraw(MIN_DRAWS) (an opposing Narset allows one), and no opposing
+    //    draw thief or punisher (drawsStolenOrPunished);
+    // 5. the chosen spell alone brings a body (entering >= 1);
+    // 6. mana: the engine's test-mode costs of Rite and the chosen spell (calculateManaCost: taxes
+    //    and reductions) against G2's count with held sources skipped, in total and in green and
+    //    white pips (a hybrid pip is left to step 9);
+    // 7. below MIN_DRAWS, the cheapest extra from hand (isExtra) whose test-mode cost fits what
+    //    step 6 left, or no cast;
+    // 8. the library: bodies x (1 + our Rite effects already in the command zone, each of which
+    //    draws again) + LIBRARY_MARGIN, uncapped;
+    // 9. a real-mana test payment of everything at once (canPayManaCost on the chosen spell's copy
+    //    with the combined cost: test mode sets castFrom, so its tax and reducers are in, Ride's
+    //    step 8). The only step that draws (isManaSourceReserved's roll per source tried).
+    // Residuals: the extra is forecast, never asked (its canPlaySa would draw), so the worst miss
+    // is one draw (the hand cast replaces itself); a randomized handler may flip the chosen spell
+    // after Rite resolves (Ride's residual); a colour conflict that G2's per-source counts hide is
+    // refused at step 9, after it drew.
+    public static class RiteOfHarmony {
+        public static final String NAME = "Rite of Harmony";
+        public static final int MIN_DRAWS = 2;       // the hand cast costs a card: 2 draws = +1 card
+        public static final int LIBRARY_MARGIN = 5;  // Hunter's Insight's
+        // Token script names: a creature token is <colours>_<power>_<toughness>_..., an enchantment
+        // token <colours>_e_... . TokenInfo.getProtoType is never called: it writes the game's
+        // token-edition pins.
+        private static final Pattern CREATURE_TOKEN = Pattern.compile("[a-z]+_(\\d+|x)_(\\d+|x)_.*");
+        private static final Pattern ENCHANTMENT_TOKEN = Pattern.compile("[a-z]+_e_.*");
+        // The SA findPreCast is offering, set on the game thread by AiController and read by
+        // EffectAi on that same thread. The ordinary evaluation loop runs on the "Game AI Eval"
+        // thread, where it is always null.
+        public static final ThreadLocal<SpellAbility> PENDING = new ThreadLocal<>();
+
+        public static boolean isPending(final SpellAbility sa) {
+            return sa != null && PENDING.get() == sa;
+        }
+
+        // Returns the Rite of Harmony SA to cast in front of chosenSa, or null.
+        public static SpellAbility findPreCast(final Player ai, final SpellAbility chosenSa,
+                final List<SpellAbility> saList) {
+            // 1. the follow-up: a spell the AI chose itself that puts permanents onto our battlefield
+            if (chosenSa == null || !chosenSa.isSpell() || chosenSa.isCopied() || chosenSa.isCastFromPlayEffect()
+                    || chosenSa.isMutate() || chosenSa.hasParam("Announce")) {
+                return null;
+            }
+            final ApiType api = chosenSa.getApi();
+            if (api != ApiType.PermanentCreature && api != ApiType.PermanentNoncreature && api != ApiType.Token) {
+                return null;
+            }
+            final Card chosenHost = chosenSa.getHostCard();
+            final Cost chosenCosts = chosenSa.getPayCosts();
+            if (chosenHost == null || chosenCosts == null || chosenCosts.getTotalMana().countX() > 0
+                    || chosenCosts.hasSpecificCostType(CostSacrifice.class)) {
+                return null; // X (Martial Coup) and sacrifice costs: decisions re-taken a pass later
+            }
+            // 2. our own main phase, an empty stack (top == null at the call site already)
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return null;
+            }
+            // 3. a Rite SA still on offer this pass: the hand cast or the flashback, the root SA itself
+            SpellAbility rite = null;
+            for (final SpellAbility ab : saList) {
+                if (ab.isSpell() && !ab.isSkip() && !ab.isCopied() && ab.getPayCosts() != null
+                        && ab.getHostCard() != null && !ab.getHostCard().equals(chosenHost)
+                        && NAME.equals(ComputerUtilAbility.getAbilitySourceName(ab))) {
+                    rite = ab;
+                    break;
+                }
+            }
+            if (rite == null) {
+                return null;
+            }
+            rite.setActivatingPlayer(ai);
+            // 4. the draws are ours: we can draw two, and no opponent steals or punishes them
+            if (!ai.canDraw(MIN_DRAWS) || drawsStolenOrPunished(ai)) {
+                return null;
+            }
+            // 5. bodies the follow-up alone brings
+            int bodies = entering(chosenSa);
+            if (bodies < 1) {
+                return null; // e.g. an Equipment with no token trigger
+            }
+            // 6. RNG-free mana screen: test-mode costs (taxes, reducers; no draw) against HonestMana
+            // (G2), held sources skipped -- never getAvailableManaEstimate
+            final ManaCostBeingPaid riteCost = ComputerUtilMana.calculateManaCost(rite.getPayCosts(), rite, ai, true, 0, false);
+            final ManaCostBeingPaid chosenCost = ComputerUtilMana.calculateManaCost(chosenCosts, chosenSa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, rite, true);
+            final int budget = mana.total() - riteCost.getConvertedManaCost() - chosenCost.getConvertedManaCost();
+            final int green = riteCost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN)
+                    + chosenCost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+            final int white = riteCost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)
+                    + chosenCost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
+            if (budget < 0 || mana.colour(MagicColor.GREEN) < green || mana.colour(MagicColor.WHITE) < white) {
+                return null;
+            }
+            // 7. one more body from hand when the follow-up alone is one: the cheapest extra whose
+            // test-mode cost fits the budget left after Rite and the follow-up
+            SpellAbility extra = null;
+            if (bodies < MIN_DRAWS) {
+                int bestCmc = Integer.MAX_VALUE;
+                for (final SpellAbility ab : saList) {
+                    if (!isExtra(ai, ab, chosenSa, chosenHost, rite.getHostCard())) {
+                        continue;
+                    }
+                    ab.setActivatingPlayer(ai);
+                    final int cmc = ComputerUtilMana.calculateManaCost(ab.getPayCosts(), ab, ai, true, 0, false)
+                            .getConvertedManaCost();
+                    if (cmc <= budget && cmc < bestCmc) {
+                        extra = ab;
+                        bestCmc = cmc;
+                    }
+                }
+                if (extra == null) {
+                    return null;
+                }
+                bodies += entering(extra);
+                if (bodies < MIN_DRAWS) {
+                    return null;
+                }
+            }
+            // 8. the library survives every draw: each Rite effect of ours already in the command
+            // zone draws again for every body (a flashback after a hand cast this turn)
+            int effects = 1;
+            for (final Card eff : ai.getCardsIn(ZoneType.Command)) {
+                final Card src = eff.getEffectSource();
+                if (src != null && NAME.equals(src.getName())) {
+                    effects++;
+                }
+            }
+            if (ai.getCardsIn(ZoneType.Library).size() < (long) bodies * effects + LIBRARY_MARGIN) {
+                return null;
+            }
+            // 9. real mana for all of it at once -- the only step that draws
+            ManaCost total = ManaCost.combine(rite.getPayCosts().getTotalMana(), chosenCosts.getTotalMana());
+            if (extra != null) {
+                total = ManaCost.combine(total, extra.getPayCosts().getTotalMana());
+            }
+            if (!ComputerUtilMana.canPayManaCost(chosenSa.copyWithDefinedCost(new Cost(total, false)), ai, 0, false)) {
+                return null;
+            }
+            return rite;
+        }
+
+        // The creatures and enchantments one spell puts onto our battlefield, uncapped: the
+        // permanent itself (its type read from the SA's own card state; an enchantment creature
+        // counts once), every unconditional self-ETB Token link of a permanent spell, and every
+        // unconditional Token part of the spell's own chain (Hop to It). Triggers are read without
+        // building them (links). Optional costs (offspring, squad) are not counted: an undercount.
+        static int entering(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return 0;
+            }
+            final CardState state = sa.getCardState() != null ? sa.getCardState() : host.getCurrentState();
+            int bodies = 0;
+            if (sa.getApi() == ApiType.PermanentCreature || sa.getApi() == ApiType.PermanentNoncreature) {
+                if (state.getType().isCreature() || state.getType().isEnchantment()) {
+                    bodies++;
+                }
+                for (final Trigger t : state.getTriggers()) {
+                    if (!isSelfEtb(t) || conditional(t.getMapParams())) {
+                        continue;
+                    }
+                    for (final Link link : links(t)) {
+                        bodies += tokens(host, link);
+                    }
+                }
+            }
+            for (SpellAbility part = sa; part != null; part = part.getSubAbility()) {
+                bodies += tokens(host, new Link(part.getApi() == null ? "" : part.getApi().name(),
+                        part.getMapParams(), part));
+            }
+            return bodies;
+        }
+
+        // An extra body the AI casts this turn without being asked: from hand, a creature spell
+        // (PermanentCreature, a creature by the SA's own card state) without Flash or AmbushAI (the
+        // Default profile's advanced flash logic holds those for the opponent's turn), or a
+        // non-Aura enchantment spell (PermanentNoncreature) with no targeted self-ETB trigger and no
+        // OblivionRing SVar (Journey to Nowhere, Banishing Light: no opposing target, no cast).
+        // Never a copy, a mutate cast, an Announce SA, an X or sacrifice cost, the chosen card or
+        // Rite itself, or a legend already on our battlefield.
+        private static boolean isExtra(final Player ai, final SpellAbility ab, final SpellAbility chosenSa,
+                final Card chosenHost, final Card riteHost) {
+            final Card c = ab.getHostCard();
+            final CardState state = ab.getCardState();
+            if (c == null || state == null || ab == chosenSa || !ab.isSpell() || ab.isSkip() || ab.isCopied()
+                    || ab.isMutate() || ab.hasParam("Announce") || c.equals(chosenHost) || c.equals(riteHost)
+                    || !c.isInZone(ZoneType.Hand)) {
+                return false;
+            }
+            final Cost cost = ab.getPayCosts();
+            if (cost == null || cost.getTotalMana().countX() > 0 || cost.hasSpecificCostType(CostSacrifice.class)) {
+                return false;
+            }
+            final forge.card.CardTypeView type = state.getType();
+            if (ab.getApi() == ApiType.PermanentCreature) {
+                if (!type.isCreature() || c.hasKeyword(Keyword.FLASH) || c.hasSVar("AmbushAI")) {
+                    return false;
+                }
+            } else if (ab.getApi() == ApiType.PermanentNoncreature) {
+                if (!type.isEnchantment() || type.isAura() || c.hasSVar("OblivionRing") || targetedSelfEtb(state)) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+            return !type.isLegendary() || CardLists.filter(ai.getCardsIn(ZoneType.Battlefield),
+                    CardPredicates.nameEquals(state.getName())).isEmpty();
+        }
+
+        // fires when this permanent spell resolves: ValidCard$ Card.Self, Destination$ Battlefield,
+        // from any zone or the stack
+        private static boolean isSelfEtb(final Trigger t) {
+            final String origin = t.getParamOrDefault("Origin", "Any");
+            return t.getMode() == TriggerType.ChangesZone && "Card.Self".equals(t.getParam("ValidCard"))
+                    && "Battlefield".equals(t.getParam("Destination"))
+                    && ("Any".equals(origin) || origin.contains("Stack"));
+        }
+
+        // an enters trigger of this card (any ValidCard naming Self) with a link that targets
+        private static boolean targetedSelfEtb(final CardState state) {
+            for (final Trigger t : state.getTriggers()) {
+                if (t.getMode() != TriggerType.ChangesZone
+                        || !t.getParamOrDefault("ValidCard", "").contains("Self")
+                        || !t.getParamOrDefault("Destination", "").contains("Battlefield")) {
+                    continue;
+                }
+                for (final Link link : links(t)) {
+                    if (link.params().containsKey("ValidTgts")) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // a trigger or link that may not happen: Condition*, Check* (CheckSVar and its kin),
+        // IsPresent*, or an optional trigger (OptionalDecider)
+        private static boolean conditional(final Map<String, String> params) {
+            for (final String key : params.keySet()) {
+                if (key.startsWith("Condition") || key.startsWith("Check") || key.startsWith("IsPresent")
+                        || "OptionalDecider".equals(key)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private record Link(String api, Map<String, String> params, forge.game.CardTraitBase trait) {}
+
+        // A trigger's Execute chain, read without building it (ToxicDeluge.chainDrain's walk, a
+        // private copy): the overriding ability and its subs when already built, else the Execute
+        // SVar text and its SubAbility chain, because building an ability allocates a SpellAbility
+        // id. A text link's amounts are read through the trigger, whose SVars are the card's.
+        private static List<Link> links(final Trigger t) {
+            final List<Link> out = new ArrayList<>();
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                for (SpellAbility part = built; part != null; part = part.getSubAbility()) {
+                    out.add(new Link(part.getApi() == null ? "" : part.getApi().name(), part.getMapParams(), part));
+                }
+                return out;
+            }
+            final Set<String> seen = new HashSet<>();
+            String svar = t.getParam("Execute");
+            while (svar != null && seen.add(svar)) {
+                final String text = t.getSVar(svar);
+                if (text == null || text.isEmpty()) {
+                    break;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                String api = params.get("DB");
+                if (api == null) {
+                    api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+                }
+                out.add(new Link(api == null ? "" : api, params, t));
+                svar = params.get("SubAbility");
+            }
+            return out;
+        }
+
+        // The bodies one Token link makes for us: 0 unless it is an unconditional Token whose
+        // TokenOwner is absent or You; each script in TokenScript that names a creature or an
+        // enchantment token, never a Vehicle, times the amount.
+        private static int tokens(final Card host, final Link link) {
+            final Map<String, String> p = link.params();
+            if (!ApiType.Token.name().equals(link.api()) || conditional(p) || !p.containsKey("TokenScript")
+                    || (p.containsKey("TokenOwner") && !"You".equals(p.get("TokenOwner")))) {
+                return 0;
+            }
+            int kinds = 0;
+            for (final String s : p.get("TokenScript").split(",")) {
+                final String name = s.trim();
+                if (!name.contains("vehicle")
+                        && (CREATURE_TOKEN.matcher(name).matches() || ENCHANTMENT_TOKEN.matcher(name).matches())) {
+                    kinds++;
+                }
+            }
+            return kinds == 0 ? 0 : kinds * amount(host, p.getOrDefault("TokenAmount", "1"), link.trait());
+        }
+
+        // A token amount: a number, or a Count$ or Number$ value through AbilityUtils.calculateAmount
+        // (RNG-free), never Count$Random (AbilityUtils draws for it). Anything else (a triggered,
+        // remembered or targeted object, which does not exist before the cast) counts 0, the
+        // conservative side. Never below 0.
+        private static int amount(final Card host, final String amount, final forge.game.CardTraitBase trait) {
+            final String s = amount.trim();
+            if (s.matches("\\d{1,6}")) {
+                return Integer.parseInt(s);
+            }
+            String value = s.indexOf('$') > 0 ? s : trait.getSVar(s);
+            if (value == null || value.isEmpty()) {
+                value = host.getSVar(s);
+            }
+            if (value == null) {
+                return 0;
+            }
+            if (value.matches("\\d{1,6}")) {
+                return Integer.parseInt(value);
+            }
+            if (value.startsWith("Count$Random") || !(value.startsWith("Count$") || value.startsWith("Number$"))) {
+                return 0;
+            }
+            return Math.max(0, AbilityUtils.calculateAmount(host, s, trait));
+        }
+
+        // HuntersInsight.opponentPunishesDraws, a private copy: an opponent's Draw/DrawCards
+        // replacement not limited to its own controller (ValidPlayer other than exactly You), or a
+        // Drawn trigger whose ValidCard is not limited to its own controller's cards (no
+        // YouCtrl/YouOwn): Notion Thief, Hullbreacher, Orcish Bowmasters, Sheoldred.
+        private static boolean drawsStolenOrPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield, ZoneType.Command)) {
+                    for (final ReplacementEffect re : c.getReplacementEffects()) {
+                        if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                                && !"You".equals(re.getParam("ValidPlayer"))) {
+                            return true;
+                        }
+                    }
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() != TriggerType.Drawn) {
+                            continue;
+                        }
+                        final String valid = t.hasParam("ValidCard") ? t.getParam("ValidCard") : "";
+                        if (!valid.contains("YouCtrl") && !valid.contains("YouOwn")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Roots of Wisdom (dead-card batch 2, row 124)
     // "Mill three cards, then return a land card or Elf card from your graveyard to your hand. If
     // you can't, draw a card." ({1}{G} Sorcery.) MillAi.checkPhaseRestrictions allows a Defined$ You

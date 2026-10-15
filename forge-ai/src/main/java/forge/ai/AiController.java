@@ -1698,6 +1698,27 @@ public class AiController {
                     SpecialCardAi.RideTheAvalanche.PENDING.remove();
                 }
             }
+            // Rite of Harmony (dead-card batch 3, row 74): the same pre-cast idiom for a "draw per
+            // creature or enchantment entering this turn" instant, with one difference. The chosen
+            // spell's own sources are held with no exception (null, not the pre-cast): Rite's {G}{W}
+            // and a one- or two-drop follow-up pick the same lowest-scored basics, so Ride's
+            // except-set would empty the follow-up's holds and refuse after its test payments had
+            // drawn. Rite then pays from what is left. Inert and RNG-free unless a Rite of Harmony
+            // SA is in saList and the chosen spell puts a creature or enchantment onto our battlefield.
+            SpellAbility rite = SpecialCardAi.RiteOfHarmony.findPreCast(player, chosenSa, saList);
+            if (rite != null) {
+                SpecialCardAi.RiteOfHarmony.PENDING.set(rite);
+                try {
+                    if (reserveManaSourcesForNextSpell(chosenSa, null)) {
+                        if (canPlayAndPayFor(rite) == AiPlayDecision.WillPlay) {
+                            return rite;
+                        }
+                        memory.clearMemorySet(AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+                    }
+                } finally {
+                    SpecialCardAi.RiteOfHarmony.PENDING.remove();
+                }
+            }
         }
 
         return chosenSa;
