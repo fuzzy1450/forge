@@ -14,17 +14,17 @@ import java.util.List;
 import org.testng.annotations.Test;
 
 /**
- * CardType keeps its "Saga", "Adventure", "Omen", "Aura", "Plains", "Island", "Swamp", "Mountain" and "Forest"
- * lookups, which isSaga, isAdventure, isOmen, isAura and hasBasicLandType answer from, until its subtypes change.
- * These pin that the nine answers are hasSubtype's for types built every way, and that every method changing the
- * subtypes after the answers were asked drops them, so that the next answers see the change. Every expectation holds
- * whether or not the type lists are loaded: the types are incomplete (which sanisfySubtypes leaves alone) wherever a
- * change would otherwise run it with a core type.
+ * CardType keeps its "Saga", "Adventure", "Omen", "Aura", "Plains", "Island", "Swamp", "Mountain", "Forest" and
+ * "Vengeance" lookups, which isSaga, isAdventure, isOmen, isAura, hasBasicLandType and isVengeance answer from, until
+ * its subtypes change. These pin that the ten answers are hasSubtype's for types built every way, and that every
+ * method changing the subtypes after the answers were asked drops them, so that the next answers see the change. Every
+ * expectation holds whether or not the type lists are loaded: the types are incomplete (which sanisfySubtypes leaves
+ * alone) wherever a change would otherwise run it with a core type.
  */
 public class CardTypeRuleSubtypesTest {
 
     private static final String[] NAMES = {"Saga", "Adventure", "Omen", "Aura", "Plains", "Island", "Swamp", "Mountain",
-            "Forest"};
+            "Forest", "Vengeance"};
     private static final MagicColor.Color[] LAND_COLORS = {MagicColor.Color.WHITE, MagicColor.Color.BLUE,
             MagicColor.Color.BLACK, MagicColor.Color.RED, MagicColor.Color.GREEN};
 
@@ -32,7 +32,7 @@ public class CardTypeRuleSubtypesTest {
         return new boolean[] {t.isSaga(), t.isAdventure(), t.isOmen(), t.isAura(),
                 t.hasBasicLandType(MagicColor.Color.WHITE), t.hasBasicLandType(MagicColor.Color.BLUE),
                 t.hasBasicLandType(MagicColor.Color.BLACK), t.hasBasicLandType(MagicColor.Color.RED),
-                t.hasBasicLandType(MagicColor.Color.GREEN)};
+                t.hasBasicLandType(MagicColor.Color.GREEN), t.isVengeance()};
     }
 
     /** The kept answers are hasSubtype's, which reads the sets every time. */
@@ -86,6 +86,7 @@ public class CardTypeRuleSubtypesTest {
         types.add(CardType.parse("Basic Land Plains", false));
         types.add(CardType.parse("Land Island Swamp", false));
         types.add(CardType.parse("Land Mountain Forest", false));
+        types.add(CardType.parse("Sorcery Vengeance", false));
         types.add(CardType.parse("Land Creature Forest Dryad", false));
         types.add(CardType.parse("Legendary Creature Giant", false));
         types.add(CardType.parse("Kindred Instant Elf", false));
@@ -109,6 +110,7 @@ public class CardTypeRuleSubtypesTest {
                     EnumSet.noneOf(RemoveType.class))));
             derived.add(changed(t, new WordChangedType("Saga", "Adventure")));
             derived.add(changed(t, new WordChangedType("Forest", "Island")));
+            derived.add(changed(t, new WordChangedType("Omen", "Vengeance")));
         }
         types.addAll(derived);
         for (final CardType t : types) {

@@ -154,13 +154,13 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
 
     private boolean incomplete = false;
     private transient String calculatedType = null;
-    // Whether subtypes holds "Saga", "Adventure" or "Omen", which every replacement effect rebuild asks of every card,
-    // and "Aura" and the five basic land types, which every spell ability rebuild asks: the nine lookups are kept, in
-    // the nine bits above the one saying they are known, until subtypes next changes. The bits above those count the
-    // changes: each change to subtypes is followed by resetRuleSubtypes(), which counts it and forgets the lookups,
-    // and a lookup is kept only by a compareAndSet against the count it read before reading subtypes. So a lookup
-    // made on another thread (an AI thread that outlived its timeout) from subtypes as they were before a change is
-    // never kept past it
+    // Whether subtypes holds "Saga", "Adventure", "Omen" or "Vengeance", which every replacement effect rebuild asks of
+    // every card, and "Aura" and the five basic land types, which every spell ability rebuild asks: the ten lookups are
+    // kept, in the ten bits above the one saying they are known, until subtypes next changes. The bits above those
+    // count the changes: each change to subtypes is followed by resetRuleSubtypes(), which counts it and forgets the
+    // lookups, and a lookup is kept only by a compareAndSet against the count it read before reading subtypes. So a
+    // lookup made on another thread (an AI thread that outlived its timeout) from subtypes as they were before a
+    // change is never kept past it
     private transient volatile int ruleSubtypes;
     private static final AtomicIntegerFieldUpdater<CardType> RULE_SUBTYPES =
             AtomicIntegerFieldUpdater.newUpdater(CardType.class, "ruleSubtypes");
@@ -174,7 +174,8 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
     private static final int HAS_SWAMP = 128;
     private static final int HAS_MOUNTAIN = 256;
     private static final int HAS_FOREST = 512;
-    private static final int RULE_SUBTYPES_CHANGE = 1024;
+    private static final int HAS_VENGEANCE = 1024;
+    private static final int RULE_SUBTYPES_CHANGE = 2048;
 
     public CardType(boolean incomplete) {
         this.incomplete = incomplete;
@@ -619,6 +620,10 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
     public boolean isOmen() {
         return hasRuleSubtype("Omen", HAS_OMEN);
     }
+    @Override
+    public boolean isVengeance() {
+        return hasRuleSubtype("Vengeance", HAS_VENGEANCE);
+    }
 
     @Override
     public boolean hasBasicLandType(final MagicColor.Color color) {
@@ -638,7 +643,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         ruleSubtypes = (ruleSubtypes | (RULE_SUBTYPES_CHANGE - 1)) + 1;
     }
 
-    // hasSubtype for the nine subtypes kept in ruleSubtypes, with the same answer
+    // hasSubtype for the ten subtypes kept in ruleSubtypes, with the same answer
     private boolean hasRuleSubtype(final String subtype, final int bit) {
         int known = ruleSubtypes;
         if ((known & RULE_SUBTYPES_KNOWN) == 0) {
@@ -671,6 +676,9 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
             if (subtypes.contains("Forest")) {
                 known |= HAS_FOREST;
             }
+            if (subtypes.contains("Vengeance")) {
+                known |= HAS_VENGEANCE;
+            }
             // kept only if subtypes has not changed since; the answer below is this lookup's either way
             RULE_SUBTYPES.compareAndSet(this, changes, known);
         }
@@ -678,7 +686,7 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
             return true;
         }
         // not among the subtypes, so only hasCreatureType could still say yes, and only for a creature or kindred
-        // with all creature types (each of the nine names is its own mixed case)
+        // with all creature types (each of the ten names is its own mixed case)
         return allCreatureTypes && (isCreature() || isKindred()) && hasSubtype(subtype);
     }
 

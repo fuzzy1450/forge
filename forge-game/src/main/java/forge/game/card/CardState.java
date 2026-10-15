@@ -800,7 +800,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
             }
             result.add(omenRep);
         }
-        if (type.hasSubtype("Vengeance")) {
+        if (type.isVengeance()) {
             if (this.vengeanceRep == null) {
                 vengeanceRep = CardFactoryUtil.setupVengeanceAbility(this);
             }

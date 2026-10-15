@@ -811,7 +811,7 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
         return getCardStateName() == CardStateName.Secondary && getCardState().getType().hasSubtype("Omen");
     }
     public boolean isVengeance() {
-        return getCardStateName() == CardStateName.Secondary && getCardState().getType().hasSubtype("Vengeance");
+        return getCardStateName() == CardStateName.Secondary && getCardState().getType().isVengeance();
     }
 
     public final boolean isCurse() {

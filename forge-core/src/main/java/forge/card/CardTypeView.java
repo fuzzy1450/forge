@@ -67,6 +67,7 @@ public interface CardTypeView extends Serializable {
     boolean isContraption();
 
     boolean isSaga();
+    boolean isVengeance();
     boolean isHistoric();
     boolean isOutlaw();
     boolean isParty();
