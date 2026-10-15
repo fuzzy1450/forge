@@ -31,6 +31,14 @@ public class  DamageAllAi extends SpellAbilityAi {
             // first, so every other DamageAll card pays one string compare. RNG-free.
             return SpecialCardAi.Squallmonger.considerPing(ai, sa);
         }
+        if (SpecialCardAi.DisasterRadius.handles(sa)) {
+            // Dead-card batch 3, row 64: X is Revealed$CardManaCost, and the reveal's paid list is
+            // empty until the cost is paid, so the stock lists below saw X = 0 and declined every
+            // board. Judged at the X the payment will reveal, which AiCostDecision.visit(CostReveal)
+            // then pays with the same chooser. Name first: every other DamageAll card pays three
+            // string compares and takes its old path. RNG-free.
+            return SpecialCardAi.DisasterRadius.consider(ai, sa, false);
+        }
         if (SpecialCardAi.UltimateMagicMeteor.isMeteor(sa)
                 && !SpecialCardAi.UltimateMagicMeteor.canAfford(ai, sa)) {
             // Its DestroyAll sub now passes (the script's AILogic$ Always), so a floor pass below
@@ -276,6 +284,14 @@ public class  DamageAllAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        if (!mandatory && SpecialCardAi.DisasterRadius.handles(sa)) {
+            // Dead-card batch 3, row 64: a thief's optional Play-effect cast or a copy of Disaster
+            // Radius. The lists below read X = Revealed$CardManaCost before any reveal is paid (X = 0,
+            // nothing killable on either side), so the WillPlay at the bottom approved a whiff on every
+            // board; judge it at the X its reveal (or the copied original's paid reveal) gives.
+            // Mandatory calls keep the stock path. RNG-free.
+            return SpecialCardAi.DisasterRadius.consider(ai, sa, true);
+        }
         final Card source = sa.getHostCard();
         final String validP = sa.getParamOrDefault("ValidPlayers", "");
 

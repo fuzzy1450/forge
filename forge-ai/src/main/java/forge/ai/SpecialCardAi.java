@@ -9572,6 +9572,223 @@ public class SpecialCardAi {
         }
     }
 
+    // Disaster Radius (dead-card batch 3, row 64)
+    // {5}{R}{R} Sorcery. "As an additional cost to cast this spell, reveal a creature card from your
+    // hand. Disaster Radius deals X damage to each creature your opponents control, where X is the
+    // revealed card's mana value." (The printed text is the Oracle: one-sided, no creature of ours and
+    // no player is dealt damage, and the revealed card stays in hand.)
+    // AI:RemoveDeck:All dropped its owner's hand cast in AiController.getSpellAbilityToPlay's removeIf
+    // before any handler ran, so its owner never hand-cast it (0 owner casts in 330 carrier rows on
+    // 2.0.15+55e709fa6ba; its casts there were Nathan Drake, Grand Larceny and Planar Portal thefts,
+    // Play effects, which never read the hint). Behind the hint the stock DamageAllAi read X =
+    // Revealed$CardManaCost from the reveal cost's paid list, which stays empty until the cost is
+    // paid: X = 0, nothing killable, and the 200 margin declined every board; and the stock reveal
+    // payment (getCardsToDiscard) shows the worst creature. The hint is gone. This judges the sweep at
+    // the X the payment will reveal -- the highest mana value among the creature cards in hand, weakly
+    // dominant because only the opponents' creatures are hit -- and AiCostDecision.visit(CostReveal)
+    // pays the reveal with the same chooser, so the sweep judged is the sweep cast (batch-1 row 82
+    // Calamity of the Titans, batch-2 row 70 Titan's Presence). A copy of the spell (Reverberate,
+    // Wild Ricochet, Dualcaster Mage: SpellAbility.copy keeps the paid hash) reveals nothing: its X is
+    // the original's revealed mana value, read through the root's Revealed list, and it is judged as
+    // free, from the copier's side.
+    // Reached from DamageAllAi.checkApiLogic (the owner's hand cast, a thief's mayPlay cast, the
+    // canPlaySa probes) and from DamageAllAi.doTriggerNoCost when not mandatory (a thief's Play-effect
+    // cast, a copy); a mandatory Play effect keeps the stock path.
+    // Mana: a hand or mayPlay cast must fit real mana first: G2 (HonestMana, held sources skipped)
+    // against the engine's own test-mode calculateManaCost (taxes and reductions applied), in total and
+    // in red (row 106's canAfford, a private copy), never getAvailableManaEstimate, which counts the
+    // words of Produced$ and approves windows canPayCost then fails after drawing (row 159's re-roll).
+    // HonestMana skips mana abilities with mana in their cost, so the Signets are under-counted: the
+    // safe side. A Play-effect caller prices the payment itself; a copy pays nothing.
+    // Kills (Mob Verdict's predicate, batch-2 row 58): an opposing creature that is not indestructible,
+    // has no shield counter, is not SacMe and is dealt at least its damage to kill (predictDamageTo:
+    // prevention, protection from red and Gisela's doubling are read). One we own, or one with an
+    // unspent undying or persist, dies but is worth nothing.
+    // Floor: the kills are worth more than DamageAllAi's own margin for a spell (200) and worth a card:
+    // a commander, a nontoken of mana value 2+ or power 3+, or two cards' worth of bodies with a token
+    // counted as half (Sudden Demise's rider, stricter: a power-3 token does not count alone). A free
+    // Play-effect cast (WithoutManaCost) or a copy needs only a kill worth something, since a decline
+    // there only replaces a whiff.
+    // Vetoes, after the floor so a held consult rarely reaches them, on every path (private copies of
+    // Mob Verdict's scans): an opposing creature that punishes being dealt damage (Phyrexian
+    // Obliterator, Brash Taunter, Stuffy Doll, Boros Reckoner, enrage) and is dealt any, killed or
+    // not; and a kill that sets off an opposing death trigger that drains, damages or edicts us
+    // (Butcher of Malakir, Grave Pact, Blood Artist, Zulaport Cutthroat, Syr Konrad).
+    // RNG: draws nothing. getCreaturesInPlay, getValidCards, getWorstCreatureAI, HonestMana,
+    // calculateManaCost in test mode, predictDamageTo, getDamageToKill, evaluateCreature and trigger
+    // params (ensureAbility only on a watcher that matches a kill) are reads. No
+    // ComputerUtil.canRegenerate (its canPayCost probe draws) and no lifeInDanger. A decline sets no
+    // target, no X and no memory; its only writes are setActivatingPlayer on the mana abilities G2
+    // reads.
+    public static class DisasterRadius {
+        public static final String NAME = "Disaster Radius";
+        public static final int MARGIN = 200;     // DamageAllAi.evaluateDamageAll's minGain for a spell
+        static final int MIN_HALF_BODIES = 4;     // two cards' worth of bodies, a token counted as half
+
+        // the source, host or card-state name: a card cast face down from exile (Gonti) reads "" from
+        // getAbilitySourceName (Titan's Presence's idiom, row 106's isMeteor)
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        /** The card to reveal: the highest mana value, ties keeping the worst creature. Null if none. */
+        public static Card chooseReveal(final Player ai, final SpellAbility sa, final CostReveal reveal) {
+            final Card host = sa.getHostCard();
+            if (reveal == null || host == null) {
+                return null;
+            }
+            final CardCollection hand = new CardCollection(ai.getCardsIn(reveal.getRevealFrom()));
+            hand.remove(host); // can't pay for itself (CostReveal.getMaxAmountX)
+            final CardCollection valid = CardLists.getValidCards(hand, reveal.getType().split(";"), ai, host, sa);
+            if (valid.isEmpty()) {
+                return null;
+            }
+            int best = Integer.MIN_VALUE;
+            for (final Card c : valid) {
+                best = Math.max(best, c.getCMC());
+            }
+            final int mv = best;
+            return ComputerUtilCard.getWorstCreatureAI(CardLists.filter(valid, c -> c.getCMC() == mv));
+        }
+
+        // UltimateMagicMeteor.canAfford (row 106), a private copy: the root's cost as canPayCost will
+        // price it, against G2, in total and in red
+        private static boolean canAfford(final Player ai, final SpellAbility sa) {
+            if (sa.getPayCosts() == null) {
+                return true;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean fromEffect) {
+            final Card host = sa.getHostCard();
+            final CardCollection theirs = ai.getOpponents().getCreaturesInPlay();
+            if (host == null || theirs.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // a copy keeps the original's paid hash (SpellAbility.copy): its X is already revealed
+            final CardCollection paid = sa.getRootAbility().getPaidList("Revealed", true);
+            final boolean copy = paid != null && !paid.isEmpty();
+            final int x;
+            if (copy) {
+                x = AbilityUtils.calculateAmount(host, "X", sa);
+            } else {
+                final Cost cost = sa.getPayCosts();
+                final Card shown = chooseReveal(ai, sa, cost == null ? null : cost.getCostPartByType(CostReveal.class));
+                x = shown == null ? 0 : shown.getCMC();
+            }
+            if (x <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // a hand or mayPlay cast pays from real mana: refuse what canPayCost would refuse after
+            // drawing; a Play-effect caller prices the payment itself, and a copy pays nothing
+            if (!fromEffect && !copy && !canAfford(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final CardCollection killed = new CardCollection();
+            int value = 0;
+            int halfBodies = 0; // 2 per nontoken, 1 per token
+            boolean worthACard = false;
+            for (final Card c : theirs) {
+                if (c.hasKeyword(Keyword.INDESTRUCTIBLE) || c.getCounters(CounterEnumType.SHIELD) > 0
+                        || c.hasSVar("SacMe")
+                        || ComputerUtilCombat.predictDamageTo(c, x, host, false)
+                                < ComputerUtilCombat.getDamageToKill(c, false)) {
+                    continue;
+                }
+                killed.add(c);
+                if (ai.equals(c.getOwner()) || ComputerUtilCard.hasActiveUndyingOrPersist(c)) {
+                    continue; // it dies, but is worth nothing to us
+                }
+                value += ComputerUtilCard.evaluateCreature(c);
+                halfBodies += c.isToken() ? 1 : 2;
+                worthACard |= c.isCommander() || (!c.isToken() && (c.getCMC() >= 2 || c.getNetPower() >= 3));
+            }
+            if (value <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // a free Play-effect cast or a copy: a decline only replaces a whiff
+            final boolean free = copy || (fromEffect && sa.hasParam("WithoutManaCost"));
+            if (!free && (value <= MARGIN || !(worthACard || halfBodies >= MIN_HALF_BODIES))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final Card c : theirs) {
+                if (punishesDamage(c, host) && ComputerUtilCombat.predictDamageTo(c, x, host, false) > 0) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // dealt damage, killed or not
+                }
+            }
+            final List<Trigger> watchers = deathWatchers(ai); // once per consult, past the floor
+            for (final Card c : killed) {
+                if (punishesDeath(watchers, c)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // MobVerdict.punishesDamage, copied (never share a predicate with an accepted card):
+        // damage dealt to the creature punishes us.
+        private static boolean punishesDamage(final Card c, final Card source) {
+            for (final Trigger t : c.getTriggers()) {
+                final TriggerType mode = t.getMode();
+                if ((mode == TriggerType.DamageDone || mode == TriggerType.DamageDoneOnce)
+                        && t.hasParam("ValidTarget") && t.matchesValidParam("ValidTarget", c)
+                        && t.matchesValidParam("ValidSource", source)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // MobVerdict.deathWatchers, copied: every opposing permanent's ChangesZone(All) trigger that
+        // may fire on a creature going from the battlefield to the graveyard, scanned once per consult.
+        private static List<Trigger> deathWatchers(final Player ai) {
+            final List<Trigger> out = new ArrayList<>();
+            for (final Card host : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : host.getTriggers()) {
+                    if (t.getMode() != TriggerType.ChangesZone && t.getMode() != TriggerType.ChangesZoneAll) {
+                        continue;
+                    }
+                    final String origin = t.getParamOrDefault("Origin", "Any");
+                    final String destination = t.getParamOrDefault("Destination", "Any");
+                    if (("Any".equals(origin) || origin.contains("Battlefield"))
+                            && ("Any".equals(destination) || destination.contains("Graveyard"))) {
+                        out.add(t);
+                    }
+                }
+            }
+            return out;
+        }
+
+        // MobVerdict.punishesDeath, copied: the creature's death drains, damages or edicts us - a
+        // watcher that matches it and whose chain loses life, deals damage or sacrifices;
+        // over-excluding only costs a cast
+        private static boolean punishesDeath(final List<Trigger> watchers, final Card c) {
+            for (final Trigger t : watchers) {
+                if (!t.matchesValidParam(t.getMode() == TriggerType.ChangesZone ? "ValidCard" : "ValidCards", c)) {
+                    continue;
+                }
+                for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    if (api == ApiType.LoseLife || api == ApiType.DealDamage || api == ApiType.DamageAll
+                            || api == ApiType.Sacrifice || api == ApiType.SacrificeAll) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Dispatch (dead-card batch 2, row 20)
     // "Tap target creature. Metalcraft - If you control three or more artifacts, exile that
     // creature." ({W} Instant.) A lone tap is not worth a card, so the AI casts it only as the

@@ -554,6 +554,13 @@ public class AiCostDecision extends CostDecisionMakerBase {
             return c == null ? null : PaymentDecision.card(c);
         }
 
+        if (source != null && SpecialCardAi.DisasterRadius.handles(ability)) {
+            // Reveal the card the cast was judged on (SpecialCardAi.DisasterRadius), not the discard
+            // heuristic's pick: the revealed mana value is the damage (dead-card batch 3, row 64).
+            final Card c = SpecialCardAi.DisasterRadius.chooseReveal(player, ability, cost);
+            return c == null ? null : PaymentDecision.card(c);
+        }
+
         if (cost.getRevealFrom().size() == 2 && cost.getRevealFrom().containsAll(Arrays.asList(ZoneType.Hand, ZoneType.Battlefield))) { // RevealOrChoose
             String aiLogic = ability.getParamOrDefault("AILogic", "");
             hand = CardLists.getValidCards(hand, type.split(";"), player, source, ability);
