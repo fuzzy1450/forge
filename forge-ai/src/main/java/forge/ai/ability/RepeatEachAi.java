@@ -20,6 +20,14 @@ public class RepeatEachAi extends SpellAbilityAi {
      */
     @Override
     protected AiAbilityDecision canPlay(Player aiPlayer, SpellAbility sa) {
+        // Alliance of Arms (dead-card batch 3, row 30): its owner's own paid cast from hand only, under
+        // the G3 readmit's own key (rule B3-2: canPlaySa's direct callers skip the RemoveDeck filter).
+        // A thief's ReplaySpell probe (targetPlayableSpellCard on our graveyard) and a copy keep the
+        // stock WillPlay below; effect casts never reach canPlay (doTriggerNoCost -> checkApiLogic).
+        if (SpecialCardAi.AllianceOfArms.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && SpecialCardAi.AllianceOfArms.readmit(aiPlayer, sa)) {
+            return SpecialCardAi.AllianceOfArms.consider(aiPlayer, sa);
+        }
         String logic = sa.getParam("AILogic");
 
         if ("PriceOfProgress".equals(logic)) {

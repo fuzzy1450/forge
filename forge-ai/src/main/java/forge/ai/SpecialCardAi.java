@@ -873,6 +873,414 @@ public class SpecialCardAi {
         }
     }
 
+    // Alliance of Arms (dead-card batch 3, row 30)
+    // "Join forces - Starting with you, each player may pay any amount of mana. Each player creates X
+    // 1/1 white Soldier creature tokens, where X is the total amount of mana paid this way." ({W}
+    // sorcery.) AI opponents announce 0 (PlayerControllerAi.announceRequirements), so X is our own
+    // payment, and in a duel the gift is symmetric: X 1/1 Soldiers a side. The cast earns its card
+    // only where OUR table makes our Soldiers worth more than theirs: an entering-counters trigger
+    // (Sigil Captain: each of ours a 3/3 while theirs stay 1/1), an entering-destroy trigger (Aura
+    // Shards: each of ours a Disenchant of theirs), or an active side-named P/T static. Behind
+    // AI:RemoveDeck:All the stock RepeatEachAi.canPlay answered WillPlay on any board, in any main
+    // phase. The hint is KEPT: G3 (readmit) lets only the owner's own paid cast from hand through,
+    // and RepeatEachAi.canPlay asks consider() under that same key (rule B3-2), so a thief's
+    // ReplaySpell probe (Arcane Heist's targetPlayableSpellCard on our graveyard), every effect cast
+    // (doTriggerNoCost -> checkApiLogic never reaches canPlay) and every other isCardRemAIDeck reader
+    // keep the stock answer.
+    // X is not chosen here. The stock announcement is determineLeftoverMana, which test-pays the
+    // root's cost again on top of i: X = the mana left after the cast less the cost once more, and 0
+    // with no second white source. The floor models exactly that (rule B3-8).
+    // Each floor declines under its own reason, for a print-only census:
+    // - a duel only (CantPlayAi); our Main 2 on an empty stack (WaitForMain2);
+    // - mana: x = HonestMana(skipHeld) - 2 x the adjusted cost >= X_MIN, two white (CantAffordX);
+    // - our edge at x below NET_FLOOR (DoesntImpactGame);
+    // - their payoff: a token doubler for their half, an entering or dying trigger of theirs a
+    //   Soldier can match, a sacrifice outlet of theirs a Soldier can feed (BadEtbEffects);
+    // - their edge: any active side-named P/T static of theirs (CantPlayAi);
+    // - life: their creatures plus the most the stock announcement can pay (x plus our untapped
+    //   sources whose mana ability costs mana: G2 skips Signets and filter lands, the announcement's
+    //   test payment uses them, rule B3-6), all swinging, reaching our life (IncreasesLifeInDanger);
+    // - our board already lethal on theirs: no X chump blockers for the dying (ConditionsNotMet).
+    // RNG parity: A never evaluated this cast. Every check reads the board only - no random draw, no
+    // card id, no ability built (SVar text parsed as AbilityFactory.getMapParams does, never
+    // ensureAbility), no X set, nothing held or remembered.
+    public static class AllianceOfArms {
+        public static final String NAME = "Alliance of Arms";
+        public static final int X_MIN = 2;            // two Soldiers a side at least
+        public static final int NET_FLOOR = 100;      // evaluateCreature units, about a 1/1 token card
+        public static final int DESTROY_VALUE = 100;  // one opposing nontoken artifact or enchantment
+        private static final int P_WEIGHT = 15, T_WEIGHT = 10; // CreatureEvaluator's P/T weights
+        // what the type part of a ValidCard, Affected or sacrifice alternative may be and still name a
+        // new 1/1 white Soldier token
+        private static final Set<String> SOLDIER_TYPES = Set.of("Card", "Creature", "Permanent", "Soldier");
+        // the properties an entering-trigger CREDIT may name (any other property: no credit)
+        private static final Set<String> SOLDIER_PROPS = Set.of("YouCtrl", "Other", "token", "White",
+                "nonLegendary", "powerEQ1", "toughnessEQ1");
+        // properties a new white Soldier token never has (soldierProps)
+        private static final Set<String> NOT_A_SOLDIER = Set.of("Self", "StrictlySelf", "nonCreature",
+                "nonSoldier", "nonWhite", "Blue", "Black", "Red", "Green", "Colorless", "MultiColor");
+        private static final List<ZoneType> TABLE = Arrays.asList(ZoneType.Battlefield, ZoneType.Command);
+
+        // The G3 readmit key and RepeatEachAi.canPlay's handler key (rule B3-2): the owner's own paid
+        // cast from hand, keyed on the paper name (rule B3-3). Copies, Play-effect casts, the subs
+        // (parent set) and every thief (Sen Triplets casting from our hand, Arcane Heist's graveyard
+        // probe) fail it and keep the stock answer. Reads zone, owner and controller only.
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && sa.isSpell() && sa.getParent() == null && !sa.isCopied() && !sa.isCastFromPlayEffect()
+                    && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner()) && ai.equals(host.getController());
+        }
+
+        // RepeatEachAi.canPlay's answer behind readmit, cheapest checks first
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            // DUEL: every opponent is handed X Soldiers; the floor is a two-player one
+            if (ai.getOpponents().size() != 1) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            final Player opp = ai.getOpponents().get(0);
+            // WINDOW: our Main 2 (the Soldiers could not attack this turn anyway; real spells first)
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return no(AiPlayDecision.WaitForMain2);
+            }
+            // MANA, RNG-free: the X the stock announcement pays (the cost, then the cost again), priced
+            // as the engine prices it (test-mode calculateManaCost: taxes and reductions, rule B3-5)
+            final int cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false)
+                    .getConvertedManaCost();
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int x = mana.total() - 2 * cost;
+            if (x < X_MIN || mana.colour(MagicColor.WHITE) < 2) {
+                return no(AiPlayDecision.CantAffordX);
+            }
+            // OUR EDGE at x, RNG-free and card-free
+            final boolean baseOneOne = !enlargedOnArrival(ai, game);
+            final int perSoldier = sideNamedEdge(ai, game) + entryCounterEdge(ai, game, baseOneOne);
+            final int destroys = Math.min(x * entryDestroyTriggers(ai, game, baseOneOne), destroyTargets(opp));
+            if (x * perSoldier + destroys * DESTROY_VALUE < NET_FLOOR) {
+                return no(AiPlayDecision.DoesntImpactGame);
+            }
+            // THEIR PAYOFF: a doubler for their half, an entering or dying trigger a Soldier can match,
+            // a sacrifice outlet a Soldier can feed (Attrition, Ashnod's Altar, Viscera Seer)
+            if (tableFavoursTheirHalf(ai, game) || hasSoldierSacOutlet(opp)) {
+                return no(AiPlayDecision.BadEtbEffects);
+            }
+            // THEIR EDGE: any active side-named P/T static (an anthem for theirs, a debuff of ours)
+            if (sideNamedEdge(opp, game) > 0) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            // LIFE: their creatures plus the most Soldiers the announcement can pay, all swinging, our
+            // blockers ignored (RNG-free on purpose: ComputerUtilCombat.lifeInDanger draws MyRandom)
+            if (!ai.cantLoseForZeroOrLessLife() && boardDamage(opp) + x + paidManaSources(ai) >= ai.getLife()) {
+                return no(AiPlayDecision.IncreasesLifeInDanger);
+            }
+            // CHUMPS: our board already threatens their life; X untapped blockers would absorb X attackers
+            if (boardDamage(ai) >= opp.getLife()) {
+                return no(AiPlayDecision.ConditionsNotMet);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision why) {
+            return new AiAbilityDecision(0, why);
+        }
+
+        // p's "whenever a creature you control enters, put N +1/+1 counters on it" (Sigil Captain),
+        // working here (zonesCheck), whose ValidCard matches a new 1/1 white Soldier under p and names
+        // p's side (YouCtrl: an unsided one fires for theirs too). A 1/1-only filter counts only while
+        // nothing would make the Soldier enter bigger (baseOneOne). Execute read as SVar text:
+        // PutCounter, CounterType P1P1, Defined TriggeredCard..., a numeric CounterNum. Anything else
+        // counts 0 (under-casts).
+        private static int entryCounterEdge(final Player p, final Game game, final boolean baseOneOne) {
+            int edge = 0;
+            for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    final Map<String, String> ex = enteringExecute(t, c, game, baseOneOne);
+                    if (ex == null) {
+                        continue;
+                    }
+                    final String num = ex.getOrDefault("CounterNum", "1");
+                    if ("PutCounter".equals(ex.get("DB")) && "P1P1".equals(ex.get("CounterType"))
+                            && ex.getOrDefault("Defined", "").startsWith("TriggeredCard") && num.matches("\\d+")) {
+                        edge += (P_WEIGHT + T_WEIGHT) * Integer.parseInt(num);
+                    }
+                }
+            }
+            return edge;
+        }
+
+        // p's "whenever a creature you control enters, (you may) destroy target artifact or
+        // enchantment" (Aura Shards): how many fire per Soldier of p's
+        private static int entryDestroyTriggers(final Player p, final Game game, final boolean baseOneOne) {
+            int n = 0;
+            for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    final Map<String, String> ex = enteringExecute(t, c, game, baseOneOne);
+                    if (ex == null) {
+                        continue;
+                    }
+                    final String tgts = ex.getOrDefault("ValidTgts", "");
+                    if ("Destroy".equals(ex.get("DB")) && (tgts.contains("Artifact") || tgts.contains("Enchantment"))) {
+                        n++;
+                    }
+                }
+            }
+            return n;
+        }
+
+        // the Execute SVar's params of a trigger on our own Soldiers entering (entersOnOurSide), parsed
+        // from its text as AbilityFactory.getMapParams does; null when it is not one or has no Execute
+        private static Map<String, String> enteringExecute(final Trigger t, final Card c, final Game game,
+                final boolean baseOneOne) {
+            if (!entersOnOurSide(t, c, game, baseOneOne)) {
+                return null;
+            }
+            final String text = c.getSVar(t.getParamOrDefault("Execute", ""));
+            return text == null || text.isEmpty() ? null : FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+        }
+
+        // the opponent's nontoken artifacts and enchantments a destroy can take
+        private static int destroyTargets(final Player opp) {
+            int n = 0;
+            for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                if ((c.isArtifact() || c.isEnchantment()) && !c.isToken()
+                        && !c.hasKeyword(Keyword.HEXPROOF) && !c.hasKeyword(Keyword.SHROUD)
+                        && !c.hasKeyword(Keyword.INDESTRUCTIBLE)) {
+                    n++;
+                }
+            }
+            return n;
+        }
+
+        // a ChangesZone trigger into the battlefield, working where its card is, with a ValidCard
+        // alternative that a new Soldier of its controller's matches: a Soldier type part, YouCtrl, and
+        // only properties from SOLDIER_PROPS (1/1-only ones while baseOneOne)
+        private static boolean entersOnOurSide(final Trigger t, final Card c, final Game game, final boolean baseOneOne) {
+            if (t.getMode() != TriggerType.ChangesZone || !t.zonesCheck(game.getZoneOf(c))
+                    || !t.getParamOrDefault("Destination", "").contains("Battlefield")) {
+                return false;
+            }
+            final String valid = t.getParam("ValidCard");
+            if (valid == null) {
+                return false;
+            }
+            for (final String alt : valid.split(",")) {
+                final String[] tp = alt.trim().split("\\.", 2);
+                if (!SOLDIER_TYPES.contains(tp[0]) || tp.length < 2) {
+                    continue;
+                }
+                final List<String> props = Arrays.asList(tp[1].split("\\+"));
+                if (props.contains("YouCtrl") && SOLDIER_PROPS.containsAll(props)
+                        && (baseOneOne || (!props.contains("powerEQ1") && !props.contains("toughnessEQ1")))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // One comma alternative of a ValidCard(s), Affected or sacrifice type, as its '+' properties,
+        // or null when it cannot name a new 1/1 white Soldier creature token: a type part outside
+        // SOLDIER_TYPES, or a property the token never has - its host only (Self, StrictlySelf),
+        // nontokens only (nonToken, !token), another creature type, a colour other than white
+        // (NOT_A_SOLDIER) - or, for a static's Affected (attachedOut), an attached card only
+        // (EquippedBy, EnchantedBy, AttachedBy: a new token enters unattached). Any other property
+        // counts as matching: an upper bound for a credit, the conservative side for a veto.
+        private static List<String> soldierProps(final String alt, final boolean attachedOut) {
+            final String[] tp = alt.trim().split("\\.", 2);
+            if (!SOLDIER_TYPES.contains(tp[0])) {
+                return null;
+            }
+            final List<String> props = tp.length < 2 ? List.of() : Arrays.asList(tp[1].split("\\+"));
+            for (final String prop : props) {
+                if (NOT_A_SOLDIER.contains(prop) || prop.equalsIgnoreCase("nonToken") || prop.equalsIgnoreCase("!token")
+                        || (!"Soldier".equals(prop) && CardType.isACreatureType(prop))
+                        || (attachedOut && (prop.startsWith("EquippedBy") || prop.startsWith("EnchantedBy")
+                                || prop.startsWith("AttachedBy")))) {
+                    return null;
+                }
+            }
+            return props;
+        }
+
+        // Sylvan Offering's reverted sideNamedEdge (3482c8b3130), one kind of token: p's active
+        // continuous P/T statics whose Affected names a side - YouCtrl (p's Soldiers) or OppCtrl (a
+        // debuff of the other side's) - in an alternative a new white Soldier token can match
+        // (soldierProps: not Self, not nontoken-only, not attached-only, no other creature type or
+        // colour). Abs values per Soldier, in evaluateCreature units: an upper bound.
+        private static int sideNamedEdge(final Player p, final Game game) {
+            int edge = 0;
+            for (final Card c : game.getCardsIn(TABLE)) {
+                if (!p.equals(c.getController())) {
+                    continue;
+                }
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (!isPtStatic(st)) {
+                        continue;
+                    }
+                    boolean sided = false;
+                    for (final String alt : st.getParam("Affected").split(",")) {
+                        final List<String> props = soldierProps(alt, true);
+                        if (props != null && (props.contains("YouCtrl") || props.contains("OppCtrl"))) {
+                            sided = true;
+                            break;
+                        }
+                    }
+                    if (!sided) {
+                        continue;
+                    }
+                    final int pw = st.hasParam("AddPower") ? Math.abs(AbilityUtils.calculateAmount(c, st.getParam("AddPower"), st)) : 0;
+                    final int tg = st.hasParam("AddToughness") ? Math.abs(AbilityUtils.calculateAmount(c, st.getParam("AddToughness"), st)) : 0;
+                    edge += P_WEIGHT * pw + T_WEIGHT * tg;
+                }
+            }
+            return edge;
+        }
+
+        // Whether any active continuous P/T static on the table, either controller's, sided or unsided,
+        // can reach a new white Soldier under ai (Field Marshal's Creature.Soldier, Crusade's
+        // Creature.White, Coat of Arms, an anthem of ours, a debuff of theirs): then our Soldiers may not
+        // enter 1/1 and a 1/1-only entering trigger (Sigil Captain) is not credited. A YouCtrl
+        // alternative reaches only its controller's, an OppCtrl one only the other side's. Any amount,
+        // zero included (Coat of Arms counts the Soldiers entering with it).
+        private static boolean enlargedOnArrival(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(TABLE)) {
+                final boolean ours = ai.equals(c.getController());
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (!isPtStatic(st)) {
+                        continue;
+                    }
+                    for (final String alt : st.getParam("Affected").split(",")) {
+                        final List<String> props = soldierProps(alt, true);
+                        if (props != null && !(props.contains("YouCtrl") && !ours)
+                                && !(props.contains("OppCtrl") && ours)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // an active continuous static (checkConditions: zones, IsPresent, Condition, CheckSVar - an
+        // unmet condition counts nothing) that adds power or toughness to the cards it Affects
+        private static boolean isPtStatic(final StaticAbility st) {
+            return st.checkConditions(StaticAbilityMode.Continuous) && st.hasParam("Affected")
+                    && (st.hasParam("AddPower") || st.hasParam("AddToughness"));
+        }
+
+        // Sylvan Offering's reverted tableFavoursTheirHalf (3482c8b3130): a CreateToken replacement of
+        // theirs, or one naming no side (Primal Vigor: it doubles their half too); an opponent's
+        // ChangesZone/ChangesZoneAll trigger, working where its card is (zonesCheck), on a new Soldier
+        // entering (their payoffs and punishers of ours alike: Impact Tremors, Essence Warden, their own
+        // Sigil Captain or Aura Shards) or dying (Blood Artist, Zulaport Cutthroat, Skullclamp's
+        // Card.EquippedBy).
+        private static boolean tableFavoursTheirHalf(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(TABLE)) {
+                final Player controller = c.getController();
+                final boolean theirs = controller != null && controller.isOpponentOf(ai);
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.CreateToken && re.zonesCheck(game.getZoneOf(c))) {
+                        final String valid = re.getParam("ValidToken");
+                        if (theirs || valid == null || !valid.contains("YouCtrl")) {
+                            return true;
+                        }
+                    }
+                }
+                if (!theirs) {
+                    continue;
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    final boolean all = t.getMode() == TriggerType.ChangesZoneAll;
+                    if ((t.getMode() != TriggerType.ChangesZone && !all) || !t.zonesCheck(game.getZoneOf(c))) {
+                        continue;
+                    }
+                    final String valid = t.getParam(all ? "ValidCards" : "ValidCard");
+                    final String origin = t.getParamOrDefault("Origin", "Any");
+                    final String destination = t.getParamOrDefault("Destination", "Any");
+                    if (destination.contains("Battlefield") && reachesNewSoldier(valid, false)) {
+                        return true; // a Soldier entering
+                    }
+                    if (("Any".equals(origin) || origin.contains("Battlefield"))
+                            && ("Any".equals(destination) || destination.contains("Graveyard"))
+                            && reachesNewSoldier(valid, true)) {
+                        return true; // a Soldier dying
+                    }
+                }
+            }
+            return false;
+        }
+
+        // 3482c8b3130's reachesNewToken narrowed to a white Soldier token: whether a ValidCard(s) or a
+        // sacrifice type can match one of the new Soldiers. An alternative is out when soldierProps
+        // rules it out (attached properties stay in: Skullclamp's equipped Soldier); a death trigger's
+        // must also name a creature (a Creature, Permanent or Soldier type part) or an equipped card. No
+        // filter matches any card entering, and names no creature for a death.
+        private static boolean reachesNewSoldier(final String valid, final boolean dying) {
+            if (valid == null) {
+                return !dying;
+            }
+            for (final String alt : valid.split(",")) {
+                final List<String> props = soldierProps(alt, false);
+                if (props == null) {
+                    continue;
+                }
+                if (dying && alt.trim().startsWith("Card") && !alt.contains("EquippedBy")) {
+                    continue;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // an activated ability of theirs, mana abilities included (Ashnod's Altar), whose cost
+        // sacrifices something a new Soldier can be (reachesNewSoldier: Sac<1/Creature>,
+        // Sac<1/Permanent>, a Soldier or token filter), not its own source (Attrition, Viscera Seer)
+        private static boolean hasSoldierSacOutlet(final Player opp) {
+            for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ab : c.getSpellAbilities()) {
+                    if (!ab.isActivatedAbility() || ab.getPayCosts() == null) {
+                        continue;
+                    }
+                    for (final CostPart part : ab.getPayCosts().getCostParts()) {
+                        if (part instanceof CostSacrifice && !part.payCostFromSource() && part.getType() != null
+                                && reachesNewSoldier(part.getType(), false)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // our untapped sources whose mana ability has mana in its own cost (Signets, filter lands): G2
+        // skips them, the stock announcement's test payment uses them (upstream's filter-ability
+        // payment, rule B3-6), each one more Soldier at most
+        private static int paidManaSources(final Player ai) {
+            int n = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isTapped()) {
+                    continue;
+                }
+                for (final SpellAbility ma : c.getManaAbilities()) {
+                    if (ma.getPayCosts() != null && ma.getPayCosts().hasManaCost()) {
+                        n++;
+                        break;
+                    }
+                }
+            }
+            return n;
+        }
+
+        // every creature of p's swinging, blockers ignored (pessimistic both ways it is used)
+        private static int boardDamage(final Player p) {
+            int dmg = 0;
+            for (final Card c : p.getCreaturesInPlay()) {
+                dmg += Math.max(0, c.getNetCombatDamage());
+            }
+            return dmg;
+        }
+    }
+
     // Anikthea, Hand of Erebos (dead-card batch 2, row 129; the commander of precon:Enduring
     // Enchantments (CMM))
     // "Whenever Anikthea enters or attacks, exile up to one target non-Aura enchantment card from
@@ -34889,9 +35297,9 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
-    // 7, 8, 10, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58, 59,
-    // 60, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row 68 (Trench
-    // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // 7, 8, 10, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58,
+    // 59, 60, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row 68
+    // (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -34997,6 +35405,8 @@ public class SpecialCardAi {
                     return CollectiveVoyage.readmit(ai, sa);
                 case InfernalOffering.NAME:
                     return InfernalOffering.readmit(ai, sa);
+                case AllianceOfArms.NAME:
+                    return AllianceOfArms.readmit(ai, sa);
                 default:
                     return false;
             }
