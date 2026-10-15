@@ -29824,6 +29824,151 @@ public class SpecialCardAi {
         }
     }
 
+    // Selvala's Stampede (dead-card batch 3, row 78)
+    // {4}{G}{G} Sorcery. "Council's dilemma - Starting with you, each player votes for wild or free.
+    // Reveal cards from the top of your library until you reveal a creature card for each wild
+    // vote. Put those creature cards onto the battlefield, then shuffle the rest into your library.
+    // You may put a permanent card from your hand onto the battlefield for each free vote." The
+    // script has no AILogic, so VoteAi.canPlay fell through to CantPlayAi at every priority (held
+    // 180 times on 2.0.15+55e709fa6ba by precon:Temur Roar (TDC), never cast from hand by its
+    // owner); VoteAi now routes the spell here by name. No AILogic is added (Truth or
+    // Consequences' reasoning): every voter's vote stays Aggregates.random, so the floor is taken
+    // over EVERY split. With V votes at the table (each player in the game: 1 + its mandatory
+    // extra votes; optional ones only add to every split), k wild and V-k free put onto the
+    // battlefield
+    //  - min(k, L) creature cards off the top, L = the creature cards we own in our library, each
+    //    valued at the library's mean creature mana value (the dig takes the next creature, so this
+    //    is an expectation, not a worst case), plus
+    //  - the first V-k picks of the stock free-vote chooser (ChangeZoneAi
+    //    .chooseCardToHiddenOriginChangeZone, Battlefield branch: ComputerUtilCard.getBestAI over
+    //    the hand's permanent cards, this card and a legend we control excluded), each worth its
+    //    mana value, exact. Auras are left out of the mirror, which can only lower the count;
+    //    lands stay in the pool, so the chooser's all-creature / mixed branch is the same, and add
+    //    0; a pick with an X in its cost enters with X = 0, so it is valued 0 but kept in the pool,
+    //    so the order still mirrors the chooser's.
+    // Every split must reach MIN_WORST_MV (the printed 6): exact for the free votes, the wild votes
+    // at the library's creature mean. In 1v1 the binding split is free-free (the chooser's two
+    // best hand permanents total 6 or more), never worse than casting that 6-drop.
+    // In order, every decline before any WillPlay:
+    //  - the cost as the engine prices it (test-mode calculateManaCost: taxes and reductions)
+    //    against HonestMana (G2) in total and in green, so a WillPlay never reaches canPayCost's
+    //    isManaSourceReserved draws in an unpayable window;
+    //  - the worst split's mana value;
+    //  - a creature or permanent card that enters without being cast is exiled or stopped
+    //    (Containment Priest's !wasCast exile; Grafdigger's Cage's and Weathered Runestone's
+    //    Prevent): a free vote would exile our best hand creature, a wild vote would find nothing.
+    // The stock fallthrough drew no random number and no decline here does either: the cost and
+    // G2 reads, zone scans, getBestAI (getBestCreatureAI / getMostExpensivePermanentAI, both
+    // deterministic; never asked of a pool without a nonland card, where it is getBestLandAI,
+    // whose Aggregates.random over nonbasic lands draws MyRandom) and replacement params. Nothing
+    // is held past a decline: no target, no X, no memory set, no vote chosen. Either main phase
+    // (sorcery timing): the carrier's Temur Ascendancy and Dragon Tempest give what enters haste.
+    public static class SelvalasStampede {
+        public static final String NAME = "Selvala's Stampede";
+        public static final int MIN_WORST_MV = 6; // the printed {4}{G}{G}
+
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && sa.isSpell() && !(sa instanceof AbilitySub)
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            // affordability first: a WillPlay goes on to canPayCost, whose test payment can draw
+            // MyRandom (ComputerUtilMana.isManaSourceReserved), so an unpayable window is refused
+            // here, judged on the root sa (never host.getFirstSpellAbility(): row 77)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.GREEN) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // the table's votes (a lower bound: optional votes only add to every split)
+            int votes = 0;
+            for (final Player p : game.getPlayers()) {
+                if (p.isInGame()) {
+                    votes += 1 + p.getAdditionalVotesAmount();
+                }
+            }
+            // wild: the creature cards we own in our library, at their mean mana value
+            int libCreatures = 0;
+            int libCreatureMv = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Library)) {
+                if (c.isCreature() && ai.equals(c.getOwner())) {
+                    libCreatures++;
+                    libCreatureMv += c.getCMC();
+                }
+            }
+            final double wildEach = libCreatures == 0 ? 0 : (double) libCreatureMv / libCreatures;
+            // free: the stock chooser's picks in its own order (lands stay in the pool, as in the
+            // chooser, so its all-creature / mixed branch is the same; a land adds 0)
+            final CardCollection pool = new CardCollection();
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c == host || !c.isPermanent() || c.isAura()
+                        || (c.getType().isLegendary() && ai.isCardInPlay(c.getName()))) {
+                    continue;
+                }
+                pool.add(c);
+            }
+            final int[] freeMv = new int[votes + 1]; // freeMv[j]: mana value of the first j picks
+            for (int j = 1; j <= votes; j++) {
+                // lands add 0, and getBestAI over an all-land pool is getBestLandAI, whose
+                // Aggregates.random(nonbasics) draws MyRandom: never ask it
+                if (!pool.anyMatch(CardPredicates.NON_LANDS)) {
+                    freeMv[j] = freeMv[j - 1];
+                    continue;
+                }
+                final Card pick = ComputerUtilCard.getBestAI(pool); // mixed or all-creature: no draw
+                if (pick == null) {
+                    freeMv[j] = freeMv[j - 1];
+                    continue;
+                }
+                // an X permanent enters with X = 0: its printed symbols are not value
+                freeMv[j] = freeMv[j - 1] + (pick.getManaCost().countX() > 0 ? 0 : pick.getCMC());
+                pool.remove(pick);
+            }
+            for (int k = 0; k <= votes; k++) {
+                if (Math.min(k, libCreatures) * wildEach + freeMv[votes - k] < MIN_WORST_MV) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            // last, the table scan
+            if (stopsUncastCreatures(game)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // A working Moved replacement into the battlefield whose valid card is a creature or a
+        // permanent and that prevents the move (Grafdigger's Cage: Origin Graveyard,Library,
+        // ValidLKI Creature.Other, Prevent; Weathered Runestone: ValidLKI Permanent.nonLand,
+        // Prevent) or reads wasCast (Containment Priest: Creature.!token+!wasCast -> exile). An
+        // enters-tapped or counters replacement (no Prevent, no wasCast in ValidCard) never
+        // matches, nor does a Card.Self one; a graveyard-only Prevent (Kunoros, Hound of Athreos;
+        // Soulless Jailer) is a harmless over-veto. A private predicate; reads params only.
+        private static boolean stopsUncastCreatures(final Game game) {
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() != ReplacementType.Moved || !re.zonesCheck(game.getZoneOf(c))) {
+                        continue;
+                    }
+                    final String dest = re.getParam("Destination");
+                    final String valid = re.hasParam("ValidCard") ? re.getParam("ValidCard") : re.getParam("ValidLKI");
+                    if (dest != null && dest.contains("Battlefield") && valid != null
+                            && (valid.startsWith("Creature") || valid.startsWith("Permanent"))
+                            && (re.hasParam("Prevent") || valid.contains("wasCast"))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Sevinne's Reclamation
     // "Return target permanent card with mana value 3 or less from your graveyard to the
     // battlefield. If this spell was cast from a graveyard, you may copy this spell and may

@@ -52,6 +52,14 @@ public class VoteAi extends SpellAbilityAi {
         if (SpecialCardAi.SailIntoTheWest.handles(sa)) {
             return SpecialCardAi.SailIntoTheWest.consider(aiPlayer, sa);
         }
+        // Selvala's Stampede has no AILogic either (held 180 times on 2.0.15+55e709fa6ba by
+        // precon:Temur Roar (TDC), never cast from hand by its owner on any engine). Its evaluator
+        // draws no random number before any decline; vote choice stays stock (ComputerUtil.vote
+        // with no AILogic), the free vote's pick stays ChangeZoneAi's, and Play-effect casts
+        // (Breaching Dragonstorm, a thief's Dazzling Sphinx) keep doTriggerNoCost.
+        if (SpecialCardAi.SelvalasStampede.handles(sa)) {
+            return SpecialCardAi.SelvalasStampede.consider(aiPlayer, sa);
+        }
         // TODO: add ailogic
         String logic = sa.getParam("AILogic");
         final Card host = sa.getHostCard();
