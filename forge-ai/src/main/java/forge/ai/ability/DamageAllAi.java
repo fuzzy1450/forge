@@ -39,6 +39,15 @@ public class  DamageAllAi extends SpellAbilityAi {
             // string compares and takes its old path. RNG-free.
             return SpecialCardAi.DisasterRadius.consider(ai, sa, false);
         }
+        if (SpecialCardAi.Firespout.routes(ai, sa)) {
+            // Dead-card batch 3, row 76: the owner's own hand cast, G3's readmit key. The lists below
+            // judge only the root's non-flyer half against the weakest opponent, while the half that
+            // resolves follows the colours spent: judged on both halves at the worst outcome its
+            // payment can produce, and that payment is made to spend {R} and {G} when distinct
+            // sources can (ComputerUtilMana.payManaCost). Name first: every other DamageAll card pays
+            // one string compare and takes its old path. RNG-free.
+            return SpecialCardAi.Firespout.consider(ai, sa);
+        }
         if (SpecialCardAi.UltimateMagicMeteor.isMeteor(sa)
                 && !SpecialCardAi.UltimateMagicMeteor.canAfford(ai, sa)) {
             // Its DestroyAll sub now passes (the script's AILogic$ Always), so a floor pass below
@@ -212,6 +221,14 @@ public class  DamageAllAi extends SpellAbilityAi {
             // Colour and X are chosen together instead. Every other DamageAll sub pays the name
             // test and takes exactly the old path.
             return SpecialCardAi.SuddenDemise.consider(ai, sa);
+        }
+        if (SpecialCardAi.Firespout.isJudgedHalf(ai, sa)) {
+            // Firespout (dead-card batch 3, row 76): its GPaid sub, the flyer half of the owner's own
+            // hand cast, which Firespout.consider already judged with the root half on the root's
+            // route. The stock lines below would veto on another line after checkConditions' {R}
+            // test payment had drawn: a WillPlay that drew and did not cast. Thefts, Play-effect
+            // casts and copies fail the root's key and keep them.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
         final Card source = sa.getHostCard();
         final String validP = sa.getParamOrDefault("ValidPlayers", "");

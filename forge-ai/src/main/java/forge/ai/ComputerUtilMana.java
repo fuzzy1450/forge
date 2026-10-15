@@ -633,6 +633,13 @@ public class ComputerUtilMana {
             AiCardMemory.clearMemorySet(ai, MemorySet.PAYS_SAC_COST);
         }
         adjustManaCostToAvoidNegEffects(cost, sa.getHostCard(), ai);
+        if (!test) {
+            // Firespout (dead-card batch 3, row 76): its halves follow the colours spent, so its
+            // owner's own hand cast pays {1}{R}{G} for {2}{R/G} whenever distinct untapped sources
+            // can (SpecialCardAi.Firespout.forceableNow, the predicate its consider judged). Name
+            // first: every other real payment pays one string compare; test payments are untouched.
+            SpecialCardAi.Firespout.forceBothHalves(cost, sa, ai);
+        }
 
         List<Mana> manaSpentToPay = test ? new ArrayList<>() : sa.getPayingMana();
         List<SpellAbility> paymentList = Lists.newArrayList();

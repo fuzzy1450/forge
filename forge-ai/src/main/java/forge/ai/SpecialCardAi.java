@@ -15567,6 +15567,477 @@ public class SpecialCardAi {
         }
     }
 
+    // Firespout (dead-card batch 3, row 76; Mirror Mastery)
+    // "Firespout deals 3 damage to each creature without flying if {R} was spent to cast this spell
+    // and 3 damage to each creature with flying if {G} was spent to cast this spell. (Do both if
+    // {R}{G} was spent.)" ({2}{R/G} Sorcery.) The root SP$ DamageAll (Creature.withoutFlying,
+    // ConditionManaSpent$ R) carries the GPaid sub (Creature.withFlying, ConditionManaSpent$ G), and
+    // resolution reads the colours actually spent (SpellAbilityCondition: the cast SA's paying
+    // colours), so a free cast or a copy resolves neither half. The script keeps AI:RemoveDeck:All:
+    // G3 (RemoveDeckFilter.readmit) puts back only its owner's own hand cast with no mana held, so
+    // every other consult's saList is A's. Behind the hint the stock DamageAllAi judged only the
+    // root's non-flyer half against the weakest opponent, its chkDrawback judged the flyer half on
+    // another line after checkConditions' {R} test payment had drawn, and the payer chose the
+    // hybrid's colour by source order (getNextShardToPay; ManaNeededToAvoidNegativeEffect is inert for
+    // a hybrid, which needsColor already counts as needing both), so the half that resolved was an
+    // accident. On the owner's own hand cast only (ownHandCast, the readmit's key: rule B3-2):
+    // - the real payment spends {R} and {G}: forceBothHalves, called from
+    //   ComputerUtilMana.payManaCost after adjustManaCostToAvoidNegEffects with test == false only,
+    //   turns {2}{R/G} into {1}{R}{G} whenever forceableNow holds: the adjusted cost still holds an
+    //   unpaid R/G hybrid and a generic, G2's total covers it, and {R} and {G} sit on distinct
+    //   untapped sources (Maelstrom Pulse's under-counting predicate, a private copy). consider and
+    //   the hook share that one predicate (skeptic A4), so the hook never forces a payment consider
+    //   would have called CantAfford, and never turns a payable cost into an unpayable one;
+    // - consider judges the WORST outcome the payment can produce: both halves when forceableNow
+    //   holds, else the minimum over every colour the payer could spend (mayMake, an over-count: the
+    //   pool and every activatable mana ability, filters included, reflected and Special as every
+    //   colour): {R} alone, {G} alone, or both;
+    // - DamageAllAi.chkDrawback passes the GPaid sub through (isJudgedHalf, skeptic A1): consider
+    //   judged both halves, and the stock sub veto fired after checkConditions' test payment had
+    //   drawn, a WillPlay that drew and did not cast.
+    // Value line (the printed text): each half kills, on every side, the creatures of its flying
+    // class that 3 damage kills (DamageAllAi.getKillableCreatures' predicate, a private copy: not
+    // indestructible, predictDamageTo >= getDamageToKill); the two classes are disjoint. A half's
+    // value is the opponents' dying creatures minus ours: evaluateCreature, plus COMMANDER_TAX for a
+    // commander (Riku of Two Reflections, a 2/2 the red half kills, costs us eval + 100); 0 for SacMe
+    // and for a creature that returns (hasActiveUndyingOrPersist). Floor: the worst outcome clears
+    // MARGIN / #opponents (Toxic Deluge's wrath margin; the stock DamageAll minGain in 1v1).
+    // Declines, in order: no opponent; an adjusted cost holding no R/G, {R} or {G} shard (skeptic
+    // A3: an alternative cost that spends neither colour resolves nothing); G2's total short of the
+    // adjusted cost, or no {R} or {G} at all (CantAfford); a half missing from the chain; the
+    // opponents' kills alone short of the floor in some outcome (before our side is listed); the
+    // floor; and the death drain (skeptic A2): life minus the opposing death-trigger drain of every
+    // creature the worst-case kill set kills (the union of the halves in the outcome set; Toxic
+    // Deluge's deathDrain, a private copy) below max(4, AI_IN_DANGER_MAX_THRESHOLD).
+    // RNG: readmit reads the host, zones and AiCardMemory. consider draws nothing: the test-mode
+    // calculateManaCost, HonestMana, the source walks, getValidCards, predictDamageTo,
+    // getDamageToKill, evaluateCreature and trigger params; its only write is G2's
+    // setActivatingPlayer on the mana abilities it reads. Nothing is held, remembered or targeted.
+    // Thefts, Play-effect casts and copies fail ownHandCast in the route, the pass-through and the
+    // hook alike, and keep the stock path and the stock payment.
+    public static class Firespout {
+        public static final String NAME = "Firespout";
+        private static final int MARGIN = 200;          // Toxic Deluge's MARGIN; DamageAllAi's minGain
+        private static final int COMMANDER_TAX = 100;   // the recast tax (Toxic Deluge, Black Sun's Zenith)
+        private static final int UNKNOWN_DRAIN = 3;     // Toxic Deluge: a death drain whose amount is not a number
+        private static final int R_ONLY = 1, G_ONLY = 2, BOTH = 4; // the outcome set's members
+
+        // The readmit's key, DamageAllAi's route and the GPaid pass-through's root: the root spell of
+        // its owner's own face-up hand cast, not a copy, not a Play-effect cast.
+        private static boolean ownHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && sa.isSpell() && sa.getParent() == null && sa.getApi() == ApiType.DamageAll
+                    && !sa.isCopied() && !sa.isCastFromPlayEffect() && !host.isFaceDown()
+                    && ai.equals(host.getOwner()) && host.isInZone(ZoneType.Hand);
+        }
+
+        // RemoveDeckFilter.readmit's case
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return ownHandCast(ai, sa) && RemoveDeckFilter.noManaHeld(ai, true);
+        }
+
+        // DamageAllAi.checkApiLogic's route (a thief's regular-list consult keeps the stock path)
+        public static boolean routes(final Player ai, final SpellAbility sa) {
+            return ownHandCast(ai, sa);
+        }
+
+        // DamageAllAi.chkDrawback's pass-through: a sub of the routed root (the GPaid flyer half),
+        // which consider has already judged
+        public static boolean isJudgedHalf(final Player ai, final SpellAbility sa) {
+            return sa.getParent() != null && ownHandCast(ai, sa.getRootAbility());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            final Card host = root.getHostCard();
+            final PlayerCollection opps = ai.getOpponents();
+            if (host == null || opps.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 1. the cost as the engine prices it (taxes and reductions; rule B3-5), before any list
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+            if (cost.getUnpaidShards(forge.card.mana.ManaCostShard.RG)
+                    + cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)
+                    + cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // A3: spends neither colour
+            }
+            final HonestMana hm = HonestMana.of(ai, root, true);
+            if (hm.total() < cost.getConvertedManaCost()
+                    || hm.colour(MagicColor.RED) + hm.colour(MagicColor.GREEN) < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // 2. each half on its own ValidCards and NumDmg (the root is {R}, GPaid is {G})
+            final SpellAbility red = half(root, "R");
+            final SpellAbility green = half(root, "G");
+            if (red == null || green == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int outcomes = outcomes(ai, root, cost, hm);
+            final int margin = MARGIN / opps.size();
+            // 3. the opponents' side first: no outcome clears the floor on less than its own kills
+            final CardCollection theirs = opps.getCardsIn(ZoneType.Battlefield);
+            final CardCollection theirR = killed(theirs, red, host);
+            final CardCollection theirG = killed(theirs, green, host);
+            final int oppR = value(theirR), oppG = value(theirG);
+            if (!clears(outcomes, oppR, oppG, margin)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollectionView ours = ai.getCardsIn(ZoneType.Battlefield);
+            final CardCollection ourR = killed(ours, red, host);
+            final CardCollection ourG = killed(ours, green, host);
+            if (!clears(outcomes, oppR - value(ourR), oppG - value(ourG), margin)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 4. A2: the death drain of the worst-case kill set, the union of the halves in O
+            final boolean redHits = (outcomes & (R_ONLY | BOTH)) != 0;
+            final boolean greenHits = (outcomes & (G_ONLY | BOTH)) != 0;
+            int drain = 0;
+            if (redHits) {
+                drain += drain(ai, theirR) + drain(ai, ourR);
+            }
+            if (greenHits) {
+                drain += drain(ai, theirG) + drain(ai, ourG);
+            }
+            final int safety = Math.max(4, AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD));
+            if (ai.getLife() - drain < safety) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // ComputerUtilMana.payManaCost, right after adjustManaCostToAvoidNegEffects, test == false only.
+        // On the stack the host's castFrom is the hand (GameAction.moveToStack sets it before
+        // CostPayment runs).
+        public static void forceBothHalves(final ManaCostBeingPaid cost, final SpellAbility sa, final Player ai) {
+            final Card host = sa == null ? null : sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())) {
+                return; // every other payment: one string compare
+            }
+            if (!sa.isSpell() || sa.getParent() != null || sa.isCopied() || sa.isCastFromPlayEffect()
+                    || host.isFaceDown() || !ai.equals(host.getOwner())
+                    || host.getCastFrom() == null || !host.getCastFrom().is(ZoneType.Hand)) {
+                return; // thefts, Play-effect and free casts, copies: the stock payment
+            }
+            if (forceableNow(ai, sa, cost, HonestMana.of(ai, sa, true))) {
+                force(cost);
+            }
+        }
+
+        // Skeptic A4: the one predicate outcomes() and the payment hook share. An unpaid R/G hybrid
+        // and a generic to trade, G2's total (filters excluded, held sources skipped) covering the
+        // cost, and the forced {R} and {G} on distinct untapped sources.
+        private static boolean forceableNow(final Player ai, final SpellAbility sa, final ManaCostBeingPaid cost,
+                final HonestMana hm) {
+            if (cost.getUnpaidShards(forge.card.mana.ManaCostShard.RG) < 1 || cost.getGenericManaAmount() < 1
+                    || hm.total() < cost.getConvertedManaCost()) {
+                return false;
+            }
+            final ManaCostBeingPaid forced = new ManaCostBeingPaid(cost);
+            force(forced);
+            return coloursOnDistinctSources(ai, sa, forced);
+        }
+
+        // {2}{R/G} -> {1}{R}{G}: what ManaNeededToAvoidNegativeEffect does for one colour, on the
+        // same object at the same call site
+        private static void force(final ManaCostBeingPaid cost) {
+            cost.decreaseShard(forge.card.mana.ManaCostShard.RG, 1);
+            cost.increaseShard(forge.card.mana.ManaCostShard.GREEN, 1);
+            cost.decreaseGenericMana(1);
+            cost.increaseShard(forge.card.mana.ManaCostShard.RED, 1);
+        }
+
+        // The colours the payment can end up spending: both when forceableNow holds (the hook makes
+        // it so), else every colour the payer could reach, over-counted.
+        private static int outcomes(final Player ai, final SpellAbility root, final ManaCostBeingPaid cost,
+                final HonestMana hm) {
+            if (forceableNow(ai, root, cost, hm)) {
+                return BOTH;
+            }
+            final boolean r = mayMake(ai, MagicColor.RED);
+            final boolean g = mayMake(ai, MagicColor.GREEN);
+            return (r ? R_ONLY : 0) | (g ? G_ONLY : 0) | (r && g ? BOTH : 0);
+        }
+
+        // the worst member of the outcome set clears the floor
+        private static boolean clears(final int outcomes, final int vR, final int vG, final int margin) {
+            int worst = Integer.MAX_VALUE;
+            if ((outcomes & R_ONLY) != 0) {
+                worst = Math.min(worst, vR);
+            }
+            if ((outcomes & G_ONLY) != 0) {
+                worst = Math.min(worst, vG);
+            }
+            if ((outcomes & BOTH) != 0) {
+                worst = Math.min(worst, vR + vG);
+            }
+            return worst != Integer.MAX_VALUE && worst >= margin;
+        }
+
+        // the DamageAll in root's own chain whose ConditionManaSpent is this colour
+        private static SpellAbility half(final SpellAbility root, final String colour) {
+            for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+                if (part.getApi() == ApiType.DamageAll && colour.equals(part.getParam("ConditionManaSpent"))) {
+                    return part;
+                }
+            }
+            return null;
+        }
+
+        // DamageAllAi.getKillableCreatures' predicate (a private copy), on the half's own ValidCards
+        // and NumDmg
+        private static CardCollection killed(final CardCollectionView cards, final SpellAbility half, final Card host) {
+            final String numDmg = half.getParam("NumDmg");
+            final int dmg = numDmg == null ? 0 : AbilityUtils.calculateAmount(host, numDmg, half);
+            if (dmg <= 0) {
+                return new CardCollection();
+            }
+            CardCollection list = CardLists.getValidCards(cards, half.getParamOrDefault("ValidCards", ""),
+                    host.getController(), host, half);
+            list = CardLists.getNotKeyword(list, Keyword.INDESTRUCTIBLE);
+            return CardLists.filter(list, c -> ComputerUtilCombat.predictDamageTo(c, dmg, host, false)
+                    >= ComputerUtilCombat.getDamageToKill(c, false));
+        }
+
+        private static int value(final CardCollection dying) {
+            int v = 0;
+            for (final Card c : dying) {
+                v += value(c);
+            }
+            return v;
+        }
+
+        private static int value(final Card c) {
+            if (c.hasSVar("SacMe") || ComputerUtilCard.hasActiveUndyingOrPersist(c)) {
+                return 0; // happy to die, or comes back
+            }
+            return ComputerUtilCard.evaluateCreature(c) + (c.isCommander() ? COMMANDER_TAX : 0);
+        }
+
+        // Over-count of the colours the payer could spend: the floating pool, and every mana ability
+        // of ours that canPlay(), filters included (Gruul, Izzet and Simic Signet), with Combo letters
+        // (getComboColors: ColorIdentity, Any, Chosen), Chosen as the chosen colour (every colour
+        // while none is chosen), and Any, reflected, Special or an empty production as every colour.
+        // Held sources are counted too: the readmit admits only with no mana held.
+        private static boolean mayMake(final Player ai, final byte colour) {
+            if (ai.getManaPool().getAmountOfColor(colour) > 0) {
+                return true;
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay()) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    if (ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana() || produced.isEmpty()
+                            || mp.isAnyMana()) {
+                        return true;
+                    }
+                    final String letters;
+                    if (mp.isComboMana()) {
+                        letters = mp.getComboColors(ma);
+                    } else if (produced.contains("Chosen")) {
+                        final String chosen = mp.getChosenColor(ma);
+                        if (chosen.isEmpty()) {
+                            return true;
+                        }
+                        letters = produced.replace("Chosen", chosen);
+                    } else {
+                        letters = produced;
+                    }
+                    for (final String s : letters.split(" ")) {
+                        if (s.length() == 1 && MagicColor.fromName(s.charAt(0)) == colour) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // MaelstromPulse.coloursOnDistinctSources, a private copy for {R} and {G} (accepted rows'
+        // predicates are not shared): the floating pool pays its own colours first; a source counts
+        // once, for the colours one activation of a counted ability can make, read as G2 reads them;
+        // it pays both pips at once only when one activation makes both with no choice ("R G").
+        // Counted abilities and held sources are G2's (canPlay, no mana in its own cost, conditions
+        // met, meetsManaRestrictions on sa). Under-counts, the safe side for the hook: choice
+        // abilities and multi-symbol single-colour sources pay one pip, filters are excluded.
+        private static boolean coloursOnDistinctSources(final Player ai, final SpellAbility sa,
+                final ManaCostBeingPaid cost) {
+            int needR = cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)
+                    - ai.getManaPool().getAmountOfColor(MagicColor.RED);
+            int needG = cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN)
+                    - ai.getManaPool().getAmountOfColor(MagicColor.GREEN);
+            int onlyR = 0, onlyG = 0, either = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (isHeld(ai, src)) {
+                    continue;
+                }
+                boolean r = false, g = false, both = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    if (AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma) <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean reflectedOrSpecial = ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana();
+                    final boolean choice = reflectedOrSpecial || produced.isEmpty() || mp.isComboMana()
+                            || mp.isAnyMana() || produced.contains("Chosen");
+                    final String letters;
+                    if (reflectedOrSpecial) {
+                        letters = "";
+                    } else if (mp.isComboMana()) {
+                        letters = mp.getComboColors(ma);
+                    } else if (mp.isAnyMana()) {
+                        letters = "W U B R G";
+                    } else if (produced.contains("Chosen")) {
+                        letters = produced.replace("Chosen", mp.getChosenColor(ma));
+                    } else {
+                        letters = produced;
+                    }
+                    boolean mr = false, mg = false;
+                    for (final String s : letters.split(" ")) {
+                        if (s.length() == 1) {
+                            final byte c = MagicColor.fromName(s.charAt(0));
+                            mr |= c == MagicColor.RED;
+                            mg |= c == MagicColor.GREEN;
+                        }
+                    }
+                    r |= mr;
+                    g |= mg;
+                    both |= !choice && mr && mg;
+                }
+                if (both && needR > 0 && needG > 0) {
+                    needR--;
+                    needG--;
+                } else if (r && g) {
+                    either++;
+                } else if (r) {
+                    onlyR++;
+                } else if (g) {
+                    onlyG++;
+                }
+            }
+            return Math.max(0, needR - onlyR) + Math.max(0, needG - onlyG) <= either;
+        }
+
+        // HonestMana.isHeld, copied (G2 is frozen and keeps it private): the sources
+        // ComputerUtilMana.isManaSourceReserved refuses, in the phases it refuses them.
+        private static boolean isHeld(final Player ai, final Card src) {
+            if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                return true;
+            }
+            final PhaseType phase = ai.getGame().getPhaseHandler().getPhase();
+            if (phase != PhaseType.COMBAT_DECLARE_BLOCKERS && phase != PhaseType.CLEANUP
+                    && (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                    || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK))) {
+                return true;
+            }
+            return phase != PhaseType.MAIN2 && phase != PhaseType.CLEANUP
+                    && AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        }
+
+        // ToxicDeluge.deathDrain, chainDrain and partDrain, private copies (skeptic A2): the life a
+        // death costs us, summed over every opposing battlefield trigger that may fire on it
+        // (ChangesZone ValidCard or ChangesZoneAll ValidCards, from the battlefield or Any to a
+        // graveyard or Any) and every part of its chain: LoseLife its LifeAmount, DealDamage and
+        // DamageAll their NumDmg, a non-numeric or missing amount UNKNOWN_DRAIN, Sacrifice and
+        // SacrificeAll 1. Parsed only, never calculateAmount, and never building a trigger's ability.
+        private static int drain(final Player ai, final CardCollection dying) {
+            int drain = 0;
+            for (final Card d : dying) {
+                drain += deathDrain(ai, d);
+            }
+            return drain;
+        }
+
+        private static int deathDrain(final Player ai, final Card d) {
+            int drain = 0;
+            for (final Card host : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : host.getTriggers()) {
+                    final String valid;
+                    if (t.getMode() == TriggerType.ChangesZone) {
+                        valid = "ValidCard";
+                    } else if (t.getMode() == TriggerType.ChangesZoneAll) {
+                        valid = "ValidCards";
+                    } else {
+                        continue;
+                    }
+                    final String origin = t.getParamOrDefault("Origin", "Any");
+                    final String destination = t.getParamOrDefault("Destination", "Any");
+                    if (!("Any".equals(origin) || origin.contains("Battlefield"))
+                            || !("Any".equals(destination) || destination.contains("Graveyard"))
+                            || !t.matchesValidParam(valid, d)) {
+                        continue;
+                    }
+                    drain += chainDrain(t);
+                }
+            }
+            return drain;
+        }
+
+        private static int chainDrain(final Trigger t) {
+            int drain = 0;
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                for (SpellAbility part = built; part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    drain += partDrain(api == null ? null : api.name(), part.getParam("LifeAmount"), part.getParam("NumDmg"));
+                }
+                return drain;
+            }
+            final Set<String> seen = new HashSet<>();
+            String svar = t.hasParam("Execute") ? t.getParam("Execute") : null;
+            while (svar != null && seen.add(svar)) {
+                final String text = t.getSVar(svar);
+                if (text.isEmpty()) {
+                    break;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                String api = params.get("DB");
+                if (api == null) {
+                    api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+                }
+                drain += partDrain(api, params.get("LifeAmount"), params.get("NumDmg"));
+                svar = params.get("SubAbility");
+            }
+            return drain;
+        }
+
+        private static int partDrain(final String api, final String lifeAmount, final String numDmg) {
+            if (ApiType.LoseLife.name().equals(api)) {
+                return amount(lifeAmount);
+            }
+            if (ApiType.DealDamage.name().equals(api) || ApiType.DamageAll.name().equals(api)) {
+                return amount(numDmg);
+            }
+            if (ApiType.Sacrifice.name().equals(api) || ApiType.SacrificeAll.name().equals(api)) {
+                return 1;
+            }
+            return 0;
+        }
+
+        private static int amount(final String s) {
+            if (s == null || !s.trim().matches("\\d{1,6}")) {
+                return UNKNOWN_DRAIN;
+            }
+            return Integer.parseInt(s.trim());
+        }
+    }
+
     // Flare of Fortitude (dead-card batch 3, row 22; Bird Brains, Rabbits, Rabbits, Rabbits)
     // "You may sacrifice a nontoken white creature rather than pay this spell's mana cost. Until end
     // of turn, your life total can't change, and permanents you control gain hexproof and
@@ -33531,7 +34002,7 @@ public class SpecialCardAi {
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
     // 11, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58, 59, 60,
-    // 63, 68, 69, 71, 73, 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger;
+    // 63, 68, 69, 71, 73, 75, 76, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger;
     // batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -33630,6 +34101,8 @@ public class SpecialCardAi {
                     return JundCharm.readmit(ai, sa);
                 case ShieldsOfVelisVel.NAME:
                     return ShieldsOfVelisVel.readmit(ai, sa);
+                case Firespout.NAME:
+                    return Firespout.readmit(ai, sa);
                 default:
                     return false;
             }
