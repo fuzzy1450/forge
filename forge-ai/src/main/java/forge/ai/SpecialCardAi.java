@@ -6419,6 +6419,170 @@ public class SpecialCardAi {
         }
     }
 
+    // Creeping Renaissance (dead-card batch 3, row 40; precon:Adaptive Enchantment (C18))
+    // "Choose a permanent type. Return all cards of the chosen type from your graveyard to your
+    // hand. Flashback {5}{G}{G}." ({3}{G}{G} sorcery.) Its owner never cast it: AI:RemoveDeck:All
+    // dropped it from the playable list (AiController.getSpellAbilityToPlay); behind the hint
+    // ChooseTypeAi answered MissingLogic (no AILogic); and the "Card" chooser fell to
+    // Aggregates.random at resolution, over 13 type names of which seven can never match a card.
+    // Routed by name from ChooseTypeAi.canPlay (the owner's hand cast, its flashback, a MayPlay
+    // thief's cast) and ComputerUtil.chooseSomeType's "Card" block (the pick);
+    // ChooseTypeAi.doTriggerNoCost (Play-effect casts) is untouched and keeps stock WillPlay. In
+    // order, every decline before any WillPlay:
+    // - the base class's restriction check, which the routing bypasses, else CantPlaySa;
+    // - our own Main 2 with an empty stack, else AnotherTime (combat deaths have landed by then,
+    //   and paying 5 or 7 leaves little to recast a return with in Main 1 anyway);
+    // - the cheap count: at least `min` countable cards in our graveyard at all, else CantPlayAi.
+    //   min = MIN_HAND_CAST for a cast from our hand (the card spent plus two), MIN_FLASHBACK for
+    //   any other cast (flashback spends no card from our hand): net +2 cards either way;
+    // - the hand room after the cast (returns past our own cleanup are discarded), at least
+    //   `min`, else CantPlayAi;
+    // - the cost as the engine prices it (test-mode calculateManaCost: taxes and reductions, the
+    //   G1 ceiling's call and DeadlyTempest.affordable's idiom) against G2 (HonestMana, held
+    //   sources skipped), in total and in green, else CantAfford. Never getAvailableManaEstimate;
+    // - the pick's counted returns, the top `room` by mana value, at least `min`, with summed mana
+    //   value (each at least 1) at least that adjusted cost, else CantPlayAi (Dance of the Manse's
+    //   line: the returns are worth the mana paid).
+    // Counted: a permanent card of the type that is not a land unless it is also a creature, not
+    // AI:RemoveDeck:All and not a legend we already control. A noncreature land never counts (one
+    // land drop a turn): Land is picked only at resolution, when no counted card is left.
+    // Every check is a read that draws nothing; nothing is targeted, held, remembered or
+    // announced. pick() is the one function consider and chooseType share, so the cast is judged
+    // on the type the resolution returns; chooseType never returns empty, so the random fallback
+    // is never reached for this card.
+    public static class CreepingRenaissance {
+        public static final String NAME = "Creeping Renaissance";
+        static final int MIN_HAND_CAST = 3;
+        static final int MIN_FLASHBACK = 2;
+        // tie order: more value, then more cards, then this order
+        static final String[] TYPES = {"Creature", "Enchantment", "Artifact", "Planeswalker", "Battle"};
+
+        // one type's counted returns kept by the hand room
+        static final class Pick {
+            final String type; // null: no counted card of any type
+            final int count;   // counted returns the hand keeps
+            final int value;   // their summed mana value, each at least 1
+
+            Pick(final String type, final int count, final int value) {
+                this.type = type;
+                this.count = count;
+                this.value = value;
+            }
+        }
+
+        static final Pick NONE = new Pick(null, 0, 0);
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Game game = ai.getGame();
+            // routing from ChooseTypeAi.canPlay bypasses the base class's restriction check
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            // cheapest first: outside our own Main 2 this is one phase test per pass
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
+            // a cast from our hand spends a card; flashback (or a cast from exile) does not
+            final int min = hand.contains(host) ? MIN_HAND_CAST : MIN_FLASHBACK;
+            final CardCollectionView gy = ai.getCardsIn(ZoneType.Graveyard);
+            if (CardLists.count(gy, CreepingRenaissance::countable) < min) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int room = room(ai, hand, host);
+            if (room < min) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the adjusted cost ({3}{G}{G}, or {5}{G}{G} by flashback, after every ReduceCost /
+            // RaiseCost static; RNG-free) against G2, in total and in green; this sa's own cost,
+            // never host.getFirstSpellAbility() (row 77)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int need = cost.getConvertedManaCost();
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < need
+                    || mana.colour(MagicColor.GREEN) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final Pick p = pick(ai, gy, room);
+            return p.count >= min && p.value >= need
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // Resolution (ComputerUtil.chooseSomeType, "Card"), for the resolving player's own
+        // graveyard and hand (the spell is on the stack now, so the room is the plain hand room):
+        // the pick consider judged the cast on; else Land when nothing counted is left but a land
+        // is (lands are still cards); else the first valid type in TYPES. Deterministic, never
+        // empty while validTypes is not, draws nothing.
+        public static String chooseType(final Player ai, final SpellAbility sa, final Collection<String> validTypes) {
+            final CardCollectionView gy = ai.getCardsIn(ZoneType.Graveyard);
+            final String t = pick(ai, gy, room(ai, ai.getCardsIn(ZoneType.Hand), sa.getHostCard())).type;
+            if (t != null && validTypes.contains(t)) {
+                return t;
+            }
+            if (validTypes.contains("Land") && gy.anyMatch(CardPredicates.LANDS)) {
+                return "Land";
+            }
+            for (final String s : TYPES) {
+                if (validTypes.contains(s)) {
+                    return s;
+                }
+            }
+            return validTypes.isEmpty() ? "Creature" : validTypes.iterator().next();
+        }
+
+        // The type whose counted returns, the top `room` by mana value, are worth most (then the
+        // most cards, then TYPES order); NONE when no type has a counted card. One pass of the five
+        // types over the graveyard. consider never asks below its min of 2; at resolution a hand
+        // already full still keeps the best return over its worst card at cleanup, so the ranking
+        // reads at least one card there.
+        static Pick pick(final Player ai, final CardCollectionView gy, final int room) {
+            final int cap = Math.max(1, room);
+            Pick best = NONE;
+            for (final String t : TYPES) {
+                final List<Integer> mvs = new ArrayList<>();
+                for (final Card c : gy) {
+                    if (counted(ai, c, t)) {
+                        mvs.add(Math.max(1, c.getCMC()));
+                    }
+                }
+                mvs.sort(Collections.reverseOrder());
+                final int count = Math.min(mvs.size(), cap);
+                int value = 0;
+                for (int i = 0; i < count; i++) {
+                    value += mvs.get(i);
+                }
+                // strict: a tie keeps the earlier type
+                if (value > best.value || (value == best.value && count > best.count)) {
+                    best = new Pick(t, count, value);
+                }
+            }
+            return best;
+        }
+
+        // any type: the cheap precondition (a permanent card, a land only when also a creature, no hint)
+        static boolean countable(final Card c) {
+            return c.getType().isPermanent() && (!c.isLand() || c.isCreature())
+                    && !ComputerUtilCard.isCardRemAIDeck(c);
+        }
+
+        // type t: the resolution's own ChosenType test (CardStateProperty, type.hasStringType), and
+        // not a legend we already control
+        static boolean counted(final Player ai, final Card c, final String t) {
+            return c.getType().hasStringType(t) && countable(c)
+                    && !(c.getType().isLegendary() && !c.ignoreLegendRule() && ai.isCardInPlay(c.getName()));
+        }
+
+        // the hand room after the cast: the host counted out only when it is in our hand
+        static int room(final Player ai, final CardCollectionView hand, final Card host) {
+            if (ai.isUnlimitedHandSize()) {
+                return Integer.MAX_VALUE / 2;
+            }
+            return ai.getMaxHandSize() - (hand.size() - (hand.contains(host) ? 1 : 0));
+        }
+    }
+
     // Crown of Doom
     // "Whenever a creature attacks you or a planeswalker you control, it gets +2/+0 until
     // end of turn. {2}: Target player other than Crown of Doom's owner gains control of it.

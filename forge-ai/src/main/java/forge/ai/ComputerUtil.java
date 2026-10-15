@@ -2541,6 +2541,11 @@ public class ComputerUtil {
                 // resolution (so a card lost in response is counted; a thief or a copier picks
                 // for its own library). Every other "Card" chooser keeps the branches below.
                 chosen = SpecialCardAi.WindingWay.chooseType(ai, validTypes);
+            } else if (SpecialCardAi.CreepingRenaissance.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // The pick SpecialCardAi.CreepingRenaissance.consider judged the cast on, made
+                // again at resolution for the resolving player's own graveyard and hand (a thief
+                // or a copier picks for its own); always a permanent type, never empty.
+                chosen = SpecialCardAi.CreepingRenaissance.chooseType(ai, sa, validTypes);
             } else if (game.getPhaseHandler().is(PhaseType.UNTAP) && logic == null) { // Storage Matrix
                 double amount = 0;
                 for (String type : validTypes) {

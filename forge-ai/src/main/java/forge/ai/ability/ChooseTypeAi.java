@@ -41,6 +41,13 @@ public class ChooseTypeAi extends SpellAbilityAi {
             // SpecialCardAi.PactOfTheSerpent. doTriggerNoCost (Play-effect casts) is untouched.
             return SpecialCardAi.PactOfTheSerpent.consider(aiPlayer, sa);
         }
+        if (SpecialCardAi.CreepingRenaissance.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // No AILogic (MissingLogic below). The cast floor and the permanent-type pick are
+            // judged together in SpecialCardAi.CreepingRenaissance; the ChangeZoneAll sub's
+            // chkDrawback is an unconditional WillPlay. doTriggerNoCost (Play-effect casts) is
+            // untouched: those keep stock WillPlay.
+            return SpecialCardAi.CreepingRenaissance.consider(aiPlayer, sa);
+        }
         String aiLogic = sa.getParamOrDefault("AILogic", "");
 
         if (aiLogic.isEmpty()) {
