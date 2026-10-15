@@ -26330,6 +26330,273 @@ public class SpecialCardAi {
         }
     }
 
+    // Pact of the Serpent (dead-card batch 3, row 15)
+    // "Choose a creature type. Target player draws X cards and loses X life, where X is the number
+    // of creatures they control of the chosen type." ({1}{B}{B} sorcery.) Its owner never cast it:
+    // AI:RemoveDeck:All dropped it from the playable list (AiController.getSpellAbilityToPlay);
+    // behind the hint ChooseTypeAi answered MissingLogic (no AILogic); DrawAi.targetAI and
+    // LifeLoseAi.chkDrawback read X as 0 (no target and no chosen type yet), so they approve any
+    // board; and the stock resolution pick (the most prominent type in the whole card pool)
+    // maximises X with no look at life, hand or library. Routed by name from ChooseTypeAi.canPlay
+    // (the cast) and ComputerUtil.chooseSomeType's "Creature" block (the pick);
+    // ChooseTypeAi.doTriggerNoCost (Play-effect casts: hideaway, thieves) is untouched. One line,
+    // self-targeted: our own Main 2 with an empty stack, the type whose USEFUL draws (X capped by
+    // the hand room and the draw-limit statics) are most among the types whose X stays inside the
+    // life and library caps, at least MIN_USEFUL, from real mana. In order, every decline before
+    // any WillPlay:
+    // - the base class's restriction check, which the routing bypasses, else CantPlaySa;
+    // - our own Main 2 with an empty stack, else AnotherTime (DrawAi's own "not before Main 2"; X
+    //   is counted after combat, as at resolution; a land drawn can still be played);
+    // - the Draw sub can target us and we can draw, else CantPlayAi;
+    // - the hand room after the cast (draw-limit statics included) and the library (X <=
+    //   library - 4, DrawAi.targetAI's margin) each leave MIN_USEFUL, else CantPlayAi;
+    // - the board gives some type MIN_USEFUL useful draws, else CantPlayAi (the common decline);
+    // - no opposing draw punisher or draw replacement (PromiseOfPower.drawPunished) and no opposing
+    //   "each end step" echo of the life lost this turn (lossEchoed: Archfiend of Despair and Wound
+    //   Reflection take X again at our own end step), else CantPlayAi;
+    // - a type whose X fits min(library - 4, lifeRoom) gives MIN_USEFUL useful draws, else
+    //   CantPlayAi. All of X is lost as life even when cleanup discards the overflow, so the cap
+    //   is on X and the floor on the useful draws; the pick may be a narrower type (Warrior inside
+    //   Elf Warriors) when the widest one would break the life floor;
+    // - the cost as the engine prices it (test-mode calculateManaCost: taxes and reductions)
+    //   against G2 (HonestMana, held sources skipped), in total and in black, else CantAfford.
+    // Then WillPlay: DrawAi.chkDrawback targets us and LifeLoseAi.chkDrawback passes, as stock.
+    // Every check is a read that draws nothing; nothing is targeted, held, remembered or announced
+    // here. The pick is made again at resolution on the board as it is then: a response only
+    // lowers X, and a pick for ourselves never passes the caps.
+    public static class PactOfTheSerpent {
+        public static final String NAME = "Pact of the Serpent";
+        static final int MIN_USEFUL = 2;      // X = 1 is a card-neutral {1}{B}{B} cycle
+        static final int LIBRARY_MARGIN = 3;  // DrawAi.targetAI's deck-out margin: X <= library - 4
+        static final int MIN_LIFE_AFTER = 10; // Promise of Power / Skeletal Scrying
+        static final String ECHO_X = "PlayerCountRemembered$LifeLostThisTurn";
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Game game = ai.getGame();
+            // routing from ChooseTypeAi.canPlay bypasses the base class's restriction check
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            // cheapest first: outside our own Main 2 this is one phase test per pass
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final SpellAbility draw = sa.findSubAbilityByType(ApiType.Draw);
+            if (draw == null || !draw.usesTargeting() || !draw.canTarget(ai) || !ai.canDraw()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
+            int room = ai.isUnlimitedHandSize() ? Integer.MAX_VALUE
+                    : ai.getMaxHandSize() - (hand.size() - (hand.contains(host) ? 1 : 0));
+            room = Math.min(room, StaticAbilityCantDraw.canDrawAmount(ai, Integer.MAX_VALUE));
+            final int libCap = ai.getCardsIn(ZoneType.Library).size() - LIBRARY_MARGIN - 1;
+            if (room < MIN_USEFUL || libCap < MIN_USEFUL) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Map<String, Integer> counts = typeCounts(ai); // one scan of our creatures
+            // no board at all: stop here, before the battlefield trigger scans
+            if (useful(counts, bestType(counts, room, Integer.MAX_VALUE), room) < MIN_USEFUL
+                    || PromiseOfPower.drawPunished(ai) || lossEchoed(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int lossCap = Math.min(libCap, lifeRoom(ai));
+            if (useful(counts, bestType(counts, room, lossCap), room) < MIN_USEFUL) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the adjusted cost ({1}{B}{B} after every ReduceCost/RaiseCost static; RNG-free)
+            // against G2, in total and in black -- never getAvailableManaEstimate
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLACK) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Resolution (ComputerUtil.chooseSomeType, "Creature"), for the player the Draw sub
+        // actually targets (the Pact is on the stack now, out of the hand):
+        // - us: the type consider judged on, the most useful draws whose X stays inside the life
+        //   and library caps; the least X when we cannot draw, a draw punisher or a life-loss echo
+        //   arrived since, or no type gives a useful draw;
+        // - an opponent (DrawAi's empty-library edge, a copy, a thief's target): a type that kills,
+        //   X >= their life when they can lose life and lose at 0, or X > their library when they
+        //   can lose to drawing from an empty one, the largest X first;
+        // - otherwise, or when nothing qualifies: the least X (a valid type none of their creatures
+        //   has, so X = 0 unless they control a creature with all creature types).
+        // Deterministic, never empty while validTypes is not, draws nothing.
+        public static String chooseType(final Player ai, final SpellAbility sa, final Collection<String> validTypes) {
+            final SpellAbility draw = sa.findSubAbilityByType(ApiType.Draw);
+            final Player tgt = draw == null ? null : draw.getTargets().getFirstTargetedPlayer();
+            final Player who = tgt == null ? ai : tgt;
+            final Map<String, Integer> counts = typeCounts(who);
+            counts.keySet().retainAll(validTypes);
+            if (ai.equals(who)) {
+                if (ai.canDraw() && !PromiseOfPower.drawPunished(ai) && !lossEchoed(ai)) {
+                    int room = ai.isUnlimitedHandSize() ? Integer.MAX_VALUE
+                            : ai.getMaxHandSize() - ai.getCardsIn(ZoneType.Hand).size();
+                    room = Math.min(room, StaticAbilityCantDraw.canDrawAmount(ai, Integer.MAX_VALUE));
+                    final int lossCap = Math.min(ai.getCardsIn(ZoneType.Library).size() - LIBRARY_MARGIN - 1,
+                            lifeRoom(ai));
+                    final String pick = bestType(counts, room, lossCap);
+                    if (useful(counts, pick, room) >= 1) {
+                        return pick;
+                    }
+                }
+            } else if (who.isOpponentOf(ai)) {
+                String kill = null;
+                int killX = 0;
+                for (final Map.Entry<String, Integer> e : counts.entrySet()) {
+                    final int x = e.getValue();
+                    final boolean lethal = (who.canLoseLife() && !who.cantLoseForZeroOrLessLife() && x >= who.getLife())
+                            || (x > who.getCardsIn(ZoneType.Library).size()
+                                && !who.cantLoseCheck(forge.game.player.GameLossReason.Milled));
+                    if (lethal && x > killX) {
+                        kill = e.getKey();
+                        killX = x;
+                    }
+                }
+                if (kill != null) {
+                    return kill;
+                }
+            }
+            return leastX(counts, validTypes);
+        }
+
+        // creature type -> X for that player: the creature types of every creature they control
+        // that does not have all creature types, each counted over all of their creatures with
+        // the test the engine resolves X with (CardStateProperty "ChosenType": hasStringType), so
+        // a changeling counts for each. Name order (TreeMap) breaks ties deterministically. When
+        // they control only creatures with all creature types, the map holds one type (the first
+        // of CardType.getAllCreatureTypes()) with that count; with no creature it is empty.
+        static Map<String, Integer> typeCounts(final Player p) {
+            final CardCollection creatures = p.getCreaturesInPlay();
+            final Set<String> seeds = new TreeSet<>();
+            boolean allTypes = false;
+            for (final Card c : creatures) {
+                if (c.getType().hasAllCreatureTypes()) {
+                    allTypes = true;
+                } else {
+                    seeds.addAll(c.getType().getCreatureTypes());
+                }
+            }
+            if (seeds.isEmpty() && allTypes) {
+                final Iterator<String> first = CardType.getAllCreatureTypes().iterator();
+                if (first.hasNext()) {
+                    seeds.add(first.next());
+                }
+            }
+            final Map<String, Integer> counts = new TreeMap<>();
+            for (final String t : seeds) {
+                int n = 0;
+                for (final Card c : creatures) {
+                    if (c.getType().hasStringType(t)) {
+                        n++;
+                    }
+                }
+                if (n > 0) {
+                    counts.put(t, n);
+                }
+            }
+            return counts;
+        }
+
+        // the type whose useful draws, min(X, room), are most among the types whose X is at most
+        // lossCap; ties to the smaller X (less life), then name order; null when none qualifies.
+        // Callers test useful() of the pick, never X (skeptic A3).
+        static String bestType(final Map<String, Integer> counts, final int room, final int lossCap) {
+            String best = null;
+            int bestUseful = 0;
+            int bestX = 0;
+            for (final Map.Entry<String, Integer> e : counts.entrySet()) {
+                final int x = e.getValue();
+                if (x > lossCap) {
+                    continue;
+                }
+                final int useful = Math.min(x, room);
+                if (best == null || useful > bestUseful || (useful == bestUseful && x < bestX)) {
+                    best = e.getKey();
+                    bestUseful = useful;
+                    bestX = x;
+                }
+            }
+            return best;
+        }
+
+        // the useful draws of a pick: min(X, room); 0 for no pick
+        static int useful(final Map<String, Integer> counts, final String type, final int room) {
+            return type == null ? 0 : Math.min(counts.get(type), room);
+        }
+
+        // the least X: the first valid type outside counts (X = their creatures with all creature
+        // types, the minimum), else the counted type with the smallest X (name order on ties)
+        static String leastX(final Map<String, Integer> counts, final Collection<String> validTypes) {
+            for (final String t : validTypes) {
+                if (!counts.containsKey(t)) {
+                    return t;
+                }
+            }
+            String least = null;
+            int leastCount = Integer.MAX_VALUE;
+            for (final Map.Entry<String, Integer> e : counts.entrySet()) {
+                if (e.getValue() < leastCount) {
+                    least = e.getKey();
+                    leastCount = e.getValue();
+                }
+            }
+            return least == null ? "" : least;
+        }
+
+        // A private copy of SkeletalScrying.lifeRoom (accepted, frozen): the life we can lose and
+        // keep at least MIN_LIFE_AFTER, and more than AI_IN_DANGER_MAX_THRESHOLD after every
+        // opponent's next-turn attackers connect unblocked. RNG-free.
+        static int lifeRoom(final Player ai) {
+            if (!ai.canLoseLife()) {
+                return Integer.MAX_VALUE;
+            }
+            int unblocked = 0;
+            for (final Player opp : ai.getOpponents()) {
+                unblocked += ComputerUtilCombat.sumDamageIfUnblocked(CardLists.filter(opp.getCreaturesInPlay(),
+                        c -> ComputerUtilCombat.canAttackNextTurn(c, ai)), ai);
+            }
+            final int threshold = AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD);
+            return Math.min(ai.getLife() - MIN_LIFE_AFTER, ai.getLife() - unblocked - threshold - 1);
+        }
+
+        // skeptic A1: an opponent's permanent that, at the beginning of EACH end step (ours
+        // included), makes us lose the life we lost this turn again: a Phase trigger at the end
+        // step with no ValidPlayer, on a card whose SVars read
+        // PlayerCountRemembered$LifeLostThisTurn. In cardsfolder that is exactly Archfiend of
+        // Despair and Wound Reflection; Warlock Class (and the other "your end step" echoes) carry
+        // ValidPlayer$ You and fire only on their controller's end step. Reads trigger params and
+        // SVar text only (never ensureAbility: a built ability takes an id). RNG-free.
+        static boolean lossEchoed(final Player ai) {
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (!c.getController().isOpponentOf(ai)) {
+                    continue;
+                }
+                boolean eachEndStep = false;
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Phase && !t.hasParam("ValidPlayer")
+                            && "End of Turn".equalsIgnoreCase(t.getParam("Phase"))) {
+                        eachEndStep = true;
+                        break;
+                    }
+                }
+                if (!eachEndStep) {
+                    continue;
+                }
+                for (final String v : c.getSVars().values()) {
+                    if (v != null && v.contains(ECHO_X)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Path of the Pyromancer
     // "Discard all the cards in your hand. Add {R} for each card discarded this
     // way, then draw that many cards plus one." Card-neutral by construction

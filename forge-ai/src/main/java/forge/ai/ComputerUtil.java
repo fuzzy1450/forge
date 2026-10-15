@@ -2574,7 +2574,13 @@ public class ComputerUtil {
                 chosen = validTypes.isEmpty() ? "Creature" : Aggregates.random(validTypes);
             }
         } else if (kindOfType.equals("Creature")) {
-            if (logic != null) {
+            if (SpecialCardAi.PactOfTheSerpent.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // The pick SpecialCardAi.PactOfTheSerpent.consider judged the cast on, made again
+                // at resolution for the player the Draw sub actually targets (a thief or a copier
+                // picks for its own target); on its own controller it never passes the life and
+                // library caps. Every other "Creature" chooser keeps the branches below.
+                chosen = SpecialCardAi.PactOfTheSerpent.chooseType(ai, sa, validTypes);
+            } else if (logic != null) {
                 if (logic.equals("MostProminentOnBattlefield")) {
                     chosen = ComputerUtilCard.getMostProminentType(game.getCardsIn(ZoneType.Battlefield), validTypes);
                 } else if (logic.equals("MostProminentComputerControls")) {

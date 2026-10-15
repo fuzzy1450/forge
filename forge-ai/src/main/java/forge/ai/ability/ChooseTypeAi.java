@@ -34,6 +34,13 @@ public class ChooseTypeAi extends SpellAbilityAi {
             // DigAi.chkDrawback (library > DigNum + 2, Main 2) after this returns.
             return SpecialCardAi.WindingWay.consider(aiPlayer, sa);
         }
+        if (SpecialCardAi.PactOfTheSerpent.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // No AILogic (MissingLogic below). X is fixed only at resolution, by the type picked
+            // there, and DrawAi/LifeLoseAi read it as 0 here: the window, the type, the life, hand
+            // and library caps and the value floor are judged together in
+            // SpecialCardAi.PactOfTheSerpent. doTriggerNoCost (Play-effect casts) is untouched.
+            return SpecialCardAi.PactOfTheSerpent.consider(aiPlayer, sa);
+        }
         String aiLogic = sa.getParamOrDefault("AILogic", "");
 
         if (aiLogic.isEmpty()) {
