@@ -26242,6 +26242,293 @@ public class SpecialCardAi {
         }
     }
 
+    // Minds Aglow (dead-card batch 3, row 38)
+    // "Join forces - Starting with you, each player may pay any amount of mana. Each player draws X
+    // cards, where X is the total amount of mana paid this way." ({U} sorcery.) AI:RemoveDeck:All is
+    // KEPT, so every other isCardRemAIDeck reader (the -10 sort, CopySpellAbilityAi, the steal,
+    // clone and tutor pickers, a thief's list) still refuses the card, and RepeatEachAi is
+    // untouched, so the canPlaySa probes and the Play-effect thefts (Fevered Suspicion, Diluvian
+    // Primordial, the Nathan Drake line) keep A's stock path. Behind the hint RepeatEachAi.canPlay
+    // approves any RepeatEach with no AILogic, so readmit IS the cast decision. At resolution the
+    // stock announcement is determineLeftoverMana(DBPay), which prices the root's own, already-paid
+    // {U} again on top of X: one mana short, 0 with no blue source left, and never capped at what
+    // we keep. AI opponents announce 0 for our spell, yet every player draws the TOTAL: in a duel
+    // the opponent draws exactly our X and our card is spent, so we net X - 1 cards and it nets X.
+    // readmit lets the owner's own hand cast through G3 only when, each refusal its own return in
+    // this order so a print-only overlay can count them by reason:
+    // - shape: the owner's own paid cast of the RepeatEach spell from hand (never a theft, a copy
+    //   or a Play effect);
+    // - window: our own Main 2 at sorcery speed with no mana held (RemoveDeckFilter.noManaHeld);
+    //   the hint's -10 and the CMC-1 sort judge it after every other castable spell;
+    // - room: drawCap's bound before its forced scan (which only lowers it) is MIN_PAY or more,
+    //   and we can draw MIN_PAY;
+    // - lands: every opponent has MIN_OPP_LANDS lands in play (a land-light grip keeps every land
+    //   it is given, so the whole gift goes live);
+    // - asymmetry at that bound: for every opponent, the X - 1 cards we net beat the cards of its
+    //   X it keeps through its own next cleanup (keeps). That is nondecreasing in X, so an
+    //   opponent that keeps too much at the bound keeps too much at every X below it;
+    // - mana: the engine's test-mode cost (taxes, reductions) within HonestMana (G2, held sources
+    //   skipped) in blue, with MIN_PAY or more spare after it;
+    // - draw: X = min(spare, drawCap) >= MIN_PAY and we can draw X. drawCap keeps every card we
+    //   draw: our hand room and our library above LIBRARY_MARGIN, both less the forced draws and
+    //   mills our and their battlefields put on us before our next main phase (Dreamborn Muse,
+    //   Howling Mine, Rites of Flourishing, Kynaios and Tiro), so the draw never decks us;
+    // - asymmetry at X;
+    // - fed: nothing turns the draws against us (drawsAreFed).
+    // At resolution PlayerControllerAi.announceRequirements asks choosePayment for our own payment
+    // (paysOwnJoinForces: our own Minds Aglow, cast by us, not a copy): the most generic mana a real
+    // test payment affords against DBStore, the spell's {U} already paid, up to drawCap. A thief's
+    // and a copier's announcements stay stock, and so do the opponents'. Every read before a true
+    // is a count, a zone, a param or SVar read, matchesValidParam, cantLose, test-mode
+    // calculateManaCost, HonestMana (its only write is setActivatingPlayer on mana abilities, as G2
+    // documents) or noManaHeld: no random number, no spell-ability id (trigger links are read as
+    // text), nothing held, so a false is exactly the old filter. The first new draw is canPayCost's
+    // for {U}, after a true, in a window G2 judged payable; choosePayment's test payments draw only
+    // at resolution, after the cast.
+    public static class MindsAglow {
+        public static final String NAME = "Minds Aglow";
+        static final int MIN_PAY = 3;        // the spent card back and two more (Commander's Insight's MIN_DRAW)
+        static final int LIBRARY_MARGIN = 3; // DrawAi's own deck-out margin
+        // an opponent's next turn frees its land drop and one spell (its natural draw counted against
+        // the land: one spell more conservative than the honest count, 1, the first loosening)
+        static final int OPP_SLACK = 2;
+        static final int MIN_OPP_LANDS = 4;  // below it an opponent keeps every land it is given
+        // the steps of our turn from our end step to our next draw step: a forced draw or mill there
+        // lands before our next main phase
+        private static final Set<PhaseType> BEFORE_NEXT_MAIN = EnumSet.of(PhaseType.END_OF_TURN,
+                PhaseType.CLEANUP, PhaseType.UNTAP, PhaseType.UPKEEP, PhaseType.DRAW);
+        // forced()'s slots: cards the forced draws and numeric mills take from our library; mills of
+        // a hand's size; cards drawn at our own end step, before our cleanup
+        private static final int FIXED = 0, HAND_MILLS = 1, END_STEP = 2;
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.RepeatEach || sa.isCopied()
+                    || sa.isCastFromPlayEffect() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getController()) || !ai.equals(host.getOwner())) {
+                return false; // shape: a theft, a copy, another zone: the filter, as in A
+            }
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // window: O(1) outside our own Main 2
+            }
+            final int hand = ai.getCardsIn(ZoneType.Hand).size() - 1; // the spell leaves the hand
+            final int bound = cap(ai, hand, new int[3]);
+            if (bound < MIN_PAY || !ai.canDraw(MIN_PAY)) {
+                return false; // room
+            }
+            for (final Player opp : ai.getOpponents()) {
+                if (opp.getLandsInPlay().size() < MIN_OPP_LANDS) {
+                    return false; // lands
+                }
+            }
+            if (!asymmetric(ai, bound)) {
+                return false; // asymmetry at the bound
+            }
+            // the cost as the engine prices it (test mode: taxes and Raise/ReduceCost, no MyRandom)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int spare = mana.total() - cost.getConvertedManaCost();
+            if (mana.colour(MagicColor.BLUE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE)
+                    || spare < MIN_PAY) {
+                return false; // mana
+            }
+            final int x = Math.min(spare, drawCap(ai, hand));
+            if (x < MIN_PAY || !ai.canDraw(x)) {
+                return false; // draw
+            }
+            if (!asymmetric(ai, x)) {
+                return false; // asymmetry at X
+            }
+            return !drawsAreFed(ai); // fed
+        }
+
+        // PlayerControllerAi.announceRequirements' gate: the join-forces number of a Minds Aglow we
+        // own and cast, not a copy (a copy is owned by its copier, CardFactory.copySpellHost). A
+        // thief's, a copier's and every opponent's announcement keep the stock line.
+        public static boolean paysOwnJoinForces(final Player ai, final SpellAbility ability) {
+            final Card host = ability.getHostCard();
+            return host != null && NAME.equals(host.getName()) && ability.hasParam("ChooseAnyNumber")
+                    && ai.equals(ability.getActivatingPlayer()) && ai.equals(host.getOwner())
+                    && !ability.getRootAbility().isCopied();
+        }
+
+        // The most generic mana we can pay (the spell's {U} is already paid) and still keep every
+        // card: drawCap with the spell on the stack, not in hand. Each step is a real test payment
+        // against DBStore, the unless cost's payer, as an effect (payCostToPreventEffect pays it so);
+        // those test payments draw MyRandom (isManaSourceReserved), but only here, at resolution,
+        // after the cast. Below MIN_PAY it still pays what it can: the card is spent either way.
+        public static int choosePayment(final Player ai, final SpellAbility ability) {
+            final SpellAbility payer = ability.getSubAbility() != null ? ability.getSubAbility() : ability;
+            final int cap = drawCap(ai, ai.getCardsIn(ZoneType.Hand).size());
+            int pay = 0;
+            for (int i = 1; i <= cap && ai.canDraw(i); i++) {
+                if (!ComputerUtilMana.canPayManaCost(new ManaCostBeingPaid(ManaCost.get(i)), payer, ai, true)) {
+                    break;
+                }
+                pay = i;
+            }
+            return pay;
+        }
+
+        // the most we can draw and keep, hand being our hand without the spell
+        static int drawCap(final Player ai, final int hand) {
+            return cap(ai, hand, forced(ai));
+        }
+
+        // The library above LIBRARY_MARGIN less the forced draws and mills f, and, with a maximum
+        // hand size, the hand room: on our own turn less our end-step draws, which come before our
+        // cleanup; +1 off our own turn, for the untap and land drop before our cleanup. A hand-size
+        // mill takes our maximum hand size, or, with no maximum (Venser's Journal), the hand we
+        // hold after the draw: x + mills * (hand + end-step draws + x) fits the library. With f all
+        // 0 this is drawCap's bound: the forced draws and mills only lower it.
+        private static int cap(final Player ai, final int hand, final int[] f) {
+            final int lib = ai.getCardsIn(ZoneType.Library).size() - LIBRARY_MARGIN - f[FIXED];
+            if (ai.isUnlimitedHandSize()) {
+                return Math.floorDiv(lib - f[HAND_MILLS] * (hand + f[END_STEP]), 1 + f[HAND_MILLS]);
+            }
+            final boolean ours = ai.getGame().getPhaseHandler().isPlayerTurn(ai);
+            final int room = ai.getMaxHandSize() - hand + (ours ? -f[END_STEP] : 1);
+            return Math.min(lib - f[HAND_MILLS] * ai.getMaxHandSize(), room);
+        }
+
+        // The forced draws and mills every battlefield puts on us before our next main phase: each
+        // Phase trigger whose ValidPlayer can be us (so it fires on our turn: Howling Mine and Rites
+        // of Flourishing at our draw step, Dreamborn Muse at our upkeep, our Kynaios and Tiro at our
+        // end step, an opponent's "each opponent's upkeep"), whose step lies in BEFORE_NEXT_MAIN and
+        // whose first Execute link is a Draw or a Mill, optional or conditional ones included. A
+        // draw takes its NumCards (1 when absent or not a number), and one at our own end step also
+        // fills our hand before cleanup; a mill takes its numeric NumCards (1 when absent), else it
+        // is a hand-size mill (Dreamborn Muse's cards in hand). Text reads only: matchesValidParam,
+        // PhaseType.parseRange of the Phase param (the trigger's own constructor parsed it) and the
+        // link read without building it.
+        private static int[] forced(final Player ai) {
+            final int[] f = new int[3];
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() != TriggerType.Phase || !t.matchesValidParam("ValidPlayer", ai)) {
+                        continue;
+                    }
+                    final String phase = t.getParam("Phase");
+                    final Set<PhaseType> steps = phase == null ? BEFORE_NEXT_MAIN : PhaseType.parseRange(phase);
+                    if (Collections.disjoint(steps, BEFORE_NEXT_MAIN)) {
+                        continue;
+                    }
+                    final Pair<String, Map<String, String>> link = executeLink(t);
+                    if (link == null) {
+                        continue;
+                    }
+                    final int n = numCards(link.getRight().get("NumCards"));
+                    if ("Draw".equals(link.getLeft())) {
+                        final int drawn = n < 0 ? 1 : n;
+                        f[FIXED] += drawn;
+                        if (steps.contains(PhaseType.END_OF_TURN)) {
+                            f[END_STEP] += drawn;
+                        }
+                    } else if ("Mill".equals(link.getLeft())) {
+                        if (n < 0) {
+                            f[HAND_MILLS]++;
+                        } else {
+                            f[FIXED] += n;
+                        }
+                    }
+                }
+            }
+            return f;
+        }
+
+        // a NumCards param as a number: 1 when absent, -1 when it is not a literal number (an SVar)
+        private static int numCards(final String num) {
+            if (num == null) {
+                return 1;
+            }
+            try {
+                return Integer.parseInt(num.trim());
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+        }
+
+        // The trigger's first Execute link as {API name, params}: the built overriding ability when
+        // there is one, else the Execute SVar's text, because building it (ensureAbility) would
+        // allocate a spell-ability id. A private copy of BenevolentOffering.executeLink. Null when
+        // there is no link.
+        private static Pair<String, Map<String, String>> executeLink(final Trigger tr) {
+            final SpellAbility built = tr.getOverridingAbility();
+            if (built != null) {
+                return Pair.of(built.getApi() == null ? "" : built.getApi().name(), built.getMapParams());
+            }
+            final String svar = tr.getParam("Execute");
+            final String text = svar == null ? "" : tr.getSVar(svar);
+            if (text.isEmpty()) {
+                return null;
+            }
+            final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+            String api = params.get("DB");
+            if (api == null) {
+                api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+            }
+            return Pair.of(api == null ? "" : api, params);
+        }
+
+        // for every opponent, the X - 1 cards we net beat the cards of its X it keeps
+        private static boolean asymmetric(final Player ai, final int x) {
+            for (final Player opp : ai.getOpponents()) {
+                if (x - 1 <= keeps(opp, x)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // The cards of an X-card gift opp keeps through its own next cleanup, from public counts:
+        // none when X empties its library and it can lose (it draws from an empty library, 704.5b);
+        // all X with no maximum hand size; else its hand room plus OPP_SLACK, never below 0. At our
+        // Main 2 it holds at most its maximum (it discarded at its own cleanup).
+        private static int keeps(final Player opp, final int x) {
+            if (x > opp.getCardsIn(ZoneType.Library).size() && !opp.cantLose()) {
+                return 0;
+            }
+            if (opp.isUnlimitedHandSize()) {
+                return x;
+            }
+            final int room = opp.getMaxHandSize() + OPP_SLACK - opp.getCardsIn(ZoneType.Hand).size();
+            return Math.min(x, Math.max(0, room));
+        }
+
+        // Anything that turns the symmetric draw against us: an opponent's Drawn trigger of any
+        // kind (on its own draws, as its Psychosis Crawler, or on ours: Nekusar, Orcish Bowmasters,
+        // Smothering Tithe), an opponent's Discarded or DiscardedAll trigger (the gift's excess
+        // discarded for value: Archfiend of Ifnir; their Waste Not when we discard), or a Draw or
+        // DrawCards replacement we do not control (Notion Thief, Hullbreacher, Alms Collector, an
+        // opposing Laboratory Maniac).
+        private static boolean drawsAreFed(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        final TriggerType mode = t.getMode();
+                        if (mode == TriggerType.Drawn || mode == TriggerType.Discarded
+                                || mode == TriggerType.DiscardedAll) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (ai.equals(c.getController())) {
+                    continue;
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Mirrorweave
     // "Each other creature becomes a copy of target nonlegendary creature until end of turn."
     // A fog by copy, judged first inside the window CloneAi.checkPhaseRestrictions opens for every
@@ -32260,9 +32547,9 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 11, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 41, 48, 49, 50, 52, 57, 58, 59, 60, 63,
-    // 68, 71, 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row
-    // 68 is Sunbird Standard, a readmit).
+    // 11, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58, 59, 60,
+    // 63, 68, 71, 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's
+    // row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -32354,6 +32641,8 @@ public class SpecialCardAi {
                     return BenevolentOffering.readmit(ai, sa);
                 case BreathOfFury.NAME:
                     return BreathOfFury.readmit(ai, sa);
+                case MindsAglow.NAME:
+                    return MindsAglow.readmit(ai, sa);
                 default:
                     return false;
             }

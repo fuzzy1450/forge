@@ -249,6 +249,12 @@ public class PlayerControllerAi extends PlayerController {
         if (ability.getApi() != null) {
             switch (ability.getApi()) {
                 case ChooseNumber:
+                    if (SpecialCardAi.MindsAglow.paysOwnJoinForces(player, ability)) {
+                        // Dead-card batch 3, row 38: our own Minds Aglow pays the most generic mana we
+                        // can and still keep every card it draws. The stock number below prices the
+                        // spell's already-paid {U} again and ignores our hand and library.
+                        return SpecialCardAi.MindsAglow.choosePayment(player, ability);
+                    }
                     Player payingPlayer = ability.getActivatingPlayer();
                     String logic = ability.getParamOrDefault("AILogic", "");
                     boolean anyController = logic.equals("MaxForAnyController");
