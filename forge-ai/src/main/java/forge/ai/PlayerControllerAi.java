@@ -255,6 +255,13 @@ public class PlayerControllerAi extends PlayerController {
                         // spell's already-paid {U} again and ignores our hand and library.
                         return SpecialCardAi.MindsAglow.choosePayment(player, ability);
                     }
+                    if (SpecialCardAi.SharedTrauma.paysOwnJoinForces(player, ability)) {
+                        // Dead-card batch 3, row 61: our own Shared Trauma pays every spare unit of
+                        // generic mana down to our library floor. The stock number below prices the
+                        // spell's already-paid {B} again (0 with no second black source) and is
+                        // never capped at our library.
+                        return SpecialCardAi.SharedTrauma.choosePayment(player, ability);
+                    }
                     Player payingPlayer = ability.getActivatingPlayer();
                     String logic = ability.getParamOrDefault("AILogic", "");
                     boolean anyController = logic.equals("MaxForAnyController");

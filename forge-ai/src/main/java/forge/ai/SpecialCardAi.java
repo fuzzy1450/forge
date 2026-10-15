@@ -38031,8 +38031,12 @@ public class SpecialCardAi {
     // floors never run for the root, so readmit IS the cast decision. At resolution the stock
     // announcement (PlayerControllerAi.announceRequirements -> ComputerUtilMana
     // .determineLeftoverMana(DBPay)) prices the root's own, already-paid {B} again on top of X: one
-    // mana short, 0 with no black source left, and never capped at our library. That is modelled
-    // here, not changed (rule B3-8: Minds Aglow's chooser is never widened). AI opponents announce
+    // mana short, 0 with no black source left, and never capped at our library. For our own cast
+    // announceRequirements asks choosePayment instead (paysOwnJoinForces: our own Shared Trauma,
+    // cast by us, not a copy, not a Play effect; a private twin of Minds Aglow's gate, whose
+    // chooser is never widened, rule B3-8): the most generic mana a real test payment affords
+    // against DBStore, the spell's {B} already paid, down to our library floor. A thief's and a
+    // copier's announcements stay stock, and so do the opponents'. AI opponents announce
     // 0 for our spell, yet every player mills the TOTAL: in a duel the opponent mills exactly what
     // we mill. What makes that worth a card is a graveyard engine of ours the milled cards feed (the
     // carrier counts creature cards in ALL graveyards: The Mimeoplasm, Lhurgoyf, Mortivore; its
@@ -38047,9 +38051,10 @@ public class SpecialCardAi {
     //   nothing else at sorcery speed wanted;
     // - library: more than MIN_MILL cards in our library;
     // - mana: the engine's test-mode cost c (taxes, reductions) against HonestMana (G2, held
-    //   sources skipped): twice its black shards in black (the cast's and the stock re-price's),
-    //   and the stock X, x = total - 2c, MIN_MILL or more. xHi = max(x, the mana estimate - c)
-    //   bounds the uncapped announcement from above (Signets and filter lands pay it too);
+    //   sources skipped): its black shards in black (the cast's own; choosePayment pays X in
+    //   generic mana), and choosePayment's X, x = total - c, MIN_MILL or more. xHi = max(x, the
+    //   mana estimate - c) bounds the payment from above (its test payments tap Signets and filter
+    //   lands too);
     // - winner: no opponent has a Draw replacement on its battlefield (Laboratory Maniac and Jace,
     //   Wielder of Mysteries win on a draw from an emptied library);
     // - W0, a true: our library outlasts xHi by MIN_MILL, some opponent still has a library, and
@@ -38064,7 +38069,8 @@ public class SpecialCardAi {
     //   power reads Count$ValidGraveyard (Lhurgoyf, Mortivore, Sewer Nemesis); D3 a commander in
     //   the command zone or a creature card in hand, castable by next turn, whose NeedsToPlayVar
     //   over Count$ValidGraveyard Creature is unmet now and met by the expected mill (The
-    //   Mimeoplasm GE2, Mortivore GE2);
+    //   Mimeoplasm GE2, Mortivore GE2); the commander is read live (Game.getCardState), because
+    //   Player.getCommanders() keeps the object of its first cast;
     // - graveyard: no replacement of ours exiles our own half (Rest in Peace), and no opponent
     //   feeds on graveyards or on the mill (usesGraveyard: a graveyard count, a trigger on cards
     //   put into a graveyard from the library, a play-from-graveyard static, a replacement that
@@ -38075,7 +38081,8 @@ public class SpecialCardAi {
     // setActivatingPlayer on mana abilities), calculateAmount on a Count$ValidGraveyard value or
     // noManaHeld: no random number, no spell-ability id (trigger links are read as text, never
     // built), nothing held or remembered, so a false is exactly the old filter. The first new draw
-    // is canPayCost's for {B}, after a true, in a window G2 judged payable.
+    // is canPayCost's for {B}, after a true, in a window G2 judged payable; choosePayment's test
+    // payments draw only at resolution, after the cast.
     public static class SharedTrauma {
         public static final String NAME = "Shared Trauma";
         static final int MIN_MILL = 3;                 // three cards from each library
@@ -38105,13 +38112,13 @@ public class SpecialCardAi {
             final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
             final int c = cost.getConvertedManaCost();
             final HonestMana mana = HonestMana.of(ai, sa, true);
-            // the stock resolution asks the spell's {B} again: a second black unit must survive the cast
-            final int x = mana.total() - 2 * c;
-            if (mana.colour(MagicColor.BLACK) < 2 * cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)
+            // choosePayment pays every spare unit in generic mana, the spell's {B} already paid
+            final int x = mana.total() - c;
+            if (mana.colour(MagicColor.BLACK) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)
                     || x < MIN_MILL) {
                 return false; // mana
             }
-            // the announcement is uncapped and may also tap Signets and filters: bound it from above
+            // the payment may also tap Signets and filters: bound it from above
             final int xHi = Math.max(x, ComputerUtilMana.getAvailableManaEstimate(ai, true) - c);
             for (final Player opp : ai.getOpponents()) {
                 if (winsOnEmptyLibrary(opp)) {
@@ -38140,6 +38147,53 @@ public class SpecialCardAi {
                 }
             }
             return true;
+        }
+
+        // PlayerControllerAi.announceRequirements' gate: the join-forces number of a Shared Trauma
+        // we own and cast ourselves, judged on the root spell: not a copy (a copy is owned by its
+        // copier, CardFactory.copySpellHost) and not a Play-effect cast. A thief's, a copier's, a
+        // Play effect's and every opponent's announcement keep the stock line. A private twin of
+        // MindsAglow.paysOwnJoinForces (rule B3-8: that chooser is never widened).
+        public static boolean paysOwnJoinForces(final Player ai, final SpellAbility ability) {
+            final Card host = ability.getHostCard();
+            if (host == null || !NAME.equals(host.getName()) || !ability.hasParam("ChooseAnyNumber")) {
+                return false;
+            }
+            final SpellAbility root = ability.getRootAbility();
+            return ai.equals(ability.getActivatingPlayer()) && ai.equals(host.getOwner())
+                    && root.isSpell() && !root.isCopied() && !root.isCastFromPlayEffect();
+        }
+
+        // The most generic mana we can pay (the spell's {B} is already paid), capped so our library
+        // keeps LIBRARY_FLOOR after two turns of forced mills (our hand now, the spell on the stack).
+        // W0 raises the cap: when every opponent can be decked and the deepest opposing library is
+        // non-empty and at most our library less MIN_MILL, the cap reaches that library. Each step
+        // is a real test payment against DBStore, the unless cost's payer, as an effect
+        // (payCostToPreventEffect pays it so); those test payments draw MyRandom
+        // (isManaSourceReserved), but only here, at resolution, after the cast. 0 when the cap is
+        // below 1: the card is spent either way.
+        public static int choosePayment(final Player ai, final SpellAbility ability) {
+            final SpellAbility payer = ability.getSubAbility() != null ? ability.getSubAbility() : ability;
+            final int lib = ai.getCardsIn(ZoneType.Library).size();
+            int cap = lib - LIBRARY_FLOOR - 2 * forcedMill(ai, ai.getCardsIn(ZoneType.Hand).size());
+            int deepest = 0;
+            boolean deckable = true;
+            for (final Player opp : ai.getOpponents()) {
+                deepest = Math.max(deepest, opp.getCardsIn(ZoneType.Library).size());
+                deckable &= opp.canDraw() && !opp.cantLose()
+                        && !opp.cantLoseCheck(forge.game.player.GameLossReason.Milled);
+            }
+            if (deckable && deepest > 0 && deepest <= lib - MIN_MILL) {
+                cap = Math.max(cap, deepest); // W0: the cap reaches every opposing library
+            }
+            int pay = 0;
+            for (int i = 1; i <= cap; i++) {
+                if (!ComputerUtilMana.canPayManaCost(new ManaCostBeingPaid(ManaCost.get(i)), payer, ai, true)) {
+                    break;
+                }
+                pay = i;
+            }
+            return pay;
         }
 
         // winner: a Draw replacement on opp's battlefield. Laboratory Maniac and Jace, Wielder of
@@ -38274,7 +38328,13 @@ public class SpecialCardAi {
             final double ours = (double) CardLists.count(ai.getCardsIn(ZoneType.Library), CardPredicates.CREATURES) / lib;
             final double expected = x * ours + x * OPP_CREATURE_SHARE * ai.getOpponents().size();
             final int nextTurnMana = ComputerUtilMana.getAvailableManaEstimate(ai, false) + 1;
-            for (final Card cmdr : ai.getCommanders()) {
+            for (final Card known : ai.getCommanders()) {
+                // the live card: getCommanders() keeps the object of the commander's first cast,
+                // whose zone reads Stack for good once it has been cast
+                final Card cmdr = ai.getGame().getCardState(known);
+                if (cmdr == null) {
+                    continue;
+                }
                 if (cmdr.isInZone(ZoneType.Command) && cmdr.getCMC() + 2 * ai.getCommanderCast(cmdr) <= nextTurnMana
                         && unlocks(cmdr, expected)) {
                     return true;
