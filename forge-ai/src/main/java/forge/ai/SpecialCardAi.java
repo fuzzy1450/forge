@@ -39435,12 +39435,13 @@ public class SpecialCardAi {
     // Jeleva) and the Forecast keep the stock path. Accept:
     // - WIN: the smallest X that makes every opponent draw from an empty library, each one able to
     //   lose to it (canBeDecked) and to draw that many under the draw-limit statics (A3);
-    // - REFILL: X = the largest X real mana pays, at most our hand room (no cleanup discard),
-    //   X >= MIN_X, and for every opponent the cards it can keep of its X under its own hand limit
-    //   (OPP_SLACK more for its next turn) are at least MIN_EDGE fewer than ours; an opponent that
-    //   cannot draw, or that the X decks, passes. Never into an opponent's Discarded or
-    //   DiscardedAll trigger (A2: Archfiend of Ifnir, Glint-Horn Buccaneer, Waste Not): the
-    //   refill's edge is their cleanup discard.
+    // - REFILL: X = the largest X real mana pays, at most our hand room under our maximum hand
+    //   size, even when we have no maximum (no cleanup discard), X >= MIN_X, and for every
+    //   opponent the cards it can keep of its X under its own hand limit (OPP_SLACK more for its
+    //   next turn) are at least MIN_EDGE fewer than ours; an opponent that cannot draw, or that
+    //   the X decks, passes. Never into an opponent's Discarded or DiscardedAll trigger (A2:
+    //   Archfiend of Ifnir, Glint-Horn Buccaneer, Waste Not): the refill's edge is their cleanup
+    //   discard.
     // X never exceeds the library cap: our library less LIBRARY_MARGIN and one, shared by the spell
     // and each copy a SpellCast trigger gives it (A1: Mirari, Swarm Intelligence, Double Vision;
     // the copy keeps X, so Mirari doubles the draw), and the draw-limit statics on us.
@@ -39535,7 +39536,12 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             // REFILL: the largest X we keep whole, against every opponent's keepable share
-            final int x = ai.isUnlimitedHandSize() ? xMana : Math.min(xMana, ai.getMaxHandSize() - hand);
+            // at most our room under the hand limit even when we have none (Reliquary Tower,
+            // Thought Vessel): the edge's premise is X <= maxHand - h, so an edge of MIN_EDGE beyond
+            // their keep forces them to hold at least three more cards than we do. Uncapped, X grew
+            // with our mana and passed against an empty-handed opponent (W10 1035338 t49: X = 11 at
+            // 4 life into 0 cards and 22 lands)
+            final int x = Math.min(xMana, ai.getMaxHandSize() - hand);
             if (x < MIN_X) {
                 return no(AiPlayDecision.CantPlayAi);
             }
