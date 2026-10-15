@@ -2164,6 +2164,416 @@ public class SpecialCardAi {
         }
     }
 
+    // Benevolent Offering (dead-card batch 3, row 11)
+    // "Choose an opponent. You and that player each create three 1/1 white Spirit creature tokens
+    // with flying. Choose an opponent. You gain 2 life for each creature you control and that player
+    // gains 2 life for each creature they control." ({3}{W} instant, C14.) The gift is symmetric: the
+    // tokens cancel and each side gains 2 x (its creatures + 3), counted after the tokens enter, so in
+    // a duel only OUR table (side-named statics, enters payoffs) and the life split tell the halves
+    // apart. A G3 readmit case: AI:RemoveDeck:All is KEPT, so every other isCardRemAIDeck reader (the
+    // copy, steal, tutor and random-play pickers, a thief's list, the -10 sort) still refuses the
+    // card, and ChoosePlayerAi is untouched, so effect casts (Nathan Drake's DB$ Play) and canPlaySa
+    // probes keep A's stock answer. Behind the hint ChoosePlayerAi.canPlay answers an unconditional
+    // WillPlay, so the readmit IS the cast decision. Each refusal is its own return, in this order, so
+    // a print-only overlay can count them by reason:
+    // - shape: the owner's own paid cast of the root spell from hand (never a theft, a copy or a Play
+    //   effect) of the reviewed script (a Token sub making three w_1_1_spirit_flying);
+    // - window: the opponent's end step before our turn, on an empty stack. Mana still untapped there
+    //   untaps unused next turn, and the hint's -10 sort keeps every other end-step action ahead of
+    //   it, so the card never takes mana a real spell wants (the per-mana objection that cut Sylvan
+    //   Offering's Main 2);
+    // - castable: the spell's own restrictions and CantBeCast statics (their Grand Abolisher). The
+    //   CantBeCast check writes the hand card's castSA, which the stock path only does on an LKI copy
+    //   (and getLKICopy would carry a leftover into every later LKI), so the prior value is put back;
+    // - mana: the engine's test-mode cost (taxes, reductions) within HonestMana (G2, held sources
+    //   skipped, restrictions read on sa), in total and with a real white source, because the stock
+    //   path's canPayCost draws isManaSourceReserved per source it tries;
+    // - reach: no opponent at or below the combat damage our non-Defender creatures deal next turn
+    //   (double strike twice): a winning race never hands them life and three chump-blocking fliers;
+    // - veto: no payoff of theirs for the gift (theirTablePays), nor an off-turn-cast curse;
+    // - better half: our new token alive on arrival and never smaller than theirs on either stat;
+    // - net: our three tokens over theirs (statics read as text), plus our enters payoffs (Cathars'
+    //   Crusade counters, Mentor of the Meek's paid draws), plus the life split capped at LIFE_CAP,
+    //   must beat every opponent by NET_FLOOR (a 1/1 token card, Sylvan Offering's reviewed floor).
+    // Every read is a param, a count, a zone or condition check, HonestMana or the test-mode cost: no
+    // random number, no card and no spell-ability id (trigger chains are read as text, Black Sun's
+    // Zenith's walk), nothing remembered or held, the castSA restored, so a false is exactly the old
+    // filter. The first new draw is canPayCost's, after a true, in a window G2 judged payable.
+    public static class BenevolentOffering {
+        public static final String NAME = "Benevolent Offering";
+        static final String TOKEN_SCRIPT = "w_1_1_spirit_flying";
+        static final int TOKENS = 3;           // TokenAmount$ 3, checked against the script below
+        static final int NET_FLOOR = 100;      // evaluateCreature units; a 1/1 token is 105
+        static final int LIFE_W = 5;           // per net life point
+        static final int LIFE_CAP = 50;        // the life split alone never clears the floor
+        static final int DRAW_CREDIT = 50;     // per enters-draw we can pay for (Mentor of the Meek)
+        static final int COUNTER_CREDIT = 25;  // a +1/+1 counter: 15 power + 10 toughness
+        static final String LIFE_TOTAL = "YourLifeTotal"; // Count$YourLifeTotal: a life-total threshold
+        private static final List<ZoneType> TABLE = Arrays.asList(ZoneType.Battlefield, ZoneType.Command);
+
+        // RemoveDeckFilter.readmit's case; cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getParent() != null || sa.isCastFromPlayEffect()
+                    || sa.isCopied() || !ai.equals(host.getOwner()) || !host.isInZone(ZoneType.Hand)) {
+                return false; // shape: a theft, a copy or an effect cast keeps the filter (A's path)
+            }
+            final AbilitySub tok = sa.getSubAbility();
+            if (sa.getApi() != ApiType.ChoosePlayer || tok == null || tok.getApi() != ApiType.Token
+                    || !TOKEN_SCRIPT.equals(tok.getParam("TokenScript"))
+                    || !String.valueOf(TOKENS).equals(tok.getParam("TokenAmount"))) {
+                return false; // shape: not the reviewed script
+            }
+            // WINDOW (O(1)): the opponent's end step before our turn, empty stack
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!game.getStack().isEmpty() || ph.isPlayerTurn(ai) || !ph.is(PhaseType.END_OF_TURN)
+                    || !ai.equals(ph.getNextTurn())) {
+                return false;
+            }
+            // CASTABLE NOW: the spell's restrictions and CantBeCast statics
+            if (!castableNow(ai, sa, host)) {
+                return false;
+            }
+            // MANA: the engine's own taxed cost against G2 (held sources skipped, restrictions on sa)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int need = cost.getConvertedManaCost();
+            if (mana.total() < need || mana.colour(MagicColor.WHITE)
+                    < Math.max(1, cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE))) {
+                return false;
+            }
+            // REACH: an opponent our creatures can already kill next turn gets no life and no blockers
+            final int reach = reach(ai);
+            for (final Player opp : ai.getOpponents()) {
+                if (opp.getLife() <= reach) {
+                    return false;
+                }
+            }
+            // VETO: a payoff of theirs for the gift, or a curse on off-turn casts
+            if (theirTablePays(ai, game)) {
+                return false;
+            }
+            // BETTER HALF and NET, against every opponent (the resolution's chooser takes the first)
+            final int[] ours = tokenStats(ai, game, false);
+            if (ours[1] < 1) {
+                return false; // a static debuff kills ours on arrival
+            }
+            final int ourC = ai.getCreaturesInPlay().size();
+            final int payoff = entersPayoff(ai, game, ours[0], ourC, mana.total() - need);
+            for (final Player opp : ai.getOpponents()) {
+                final int[] theirs = tokenStats(opp, game, true);
+                if (theirs[0] > ours[0] || theirs[1] > ours[1]) {
+                    return false; // never hand over the better half
+                }
+                final int theirC = opp.getCreaturesInPlay().size();
+                final int life = (ai.canGainLife() ? 2 * (ourC + TOKENS) : 0)
+                        - (opp.canGainLife() ? 2 * (theirC + TOKENS) : 0);
+                final int net = TOKENS * (value(ours) - value(theirs)) + payoff + Math.min(LIFE_CAP, LIFE_W * life);
+                if (net < NET_FLOOR) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // The spell's own restrictions, then CantBeCast statics. cantBeCastAbility's first line is
+        // card.setCastSA(spell), and nothing resets it: the stock path asks it only on an LKI copy
+        // (canPlaySa's checkRestrictions) and canPlayAndPayFor resets the host's castSA in a finally.
+        // So the hand card's prior castSA is put back, whatever the answer.
+        private static boolean castableNow(final Player ai, final SpellAbility sa, final Card host) {
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return false;
+            }
+            final SpellAbility prior = host.getCastSA();
+            try {
+                return !forge.game.staticability.StaticAbilityCantBeCast.cantBeCastAbility(sa, host, ai);
+            } finally {
+                host.setCastSA(prior);
+            }
+        }
+
+        // The combat damage our creatures can deal next turn: every creature without Defender, its
+        // net combat damage (never negative), twice with double strike. Pure reads, O(creatures):
+        // never ComputerUtilCombat.lifeInDanger (draws) or sumDamageIfUnblocked (prices pumps).
+        private static int reach(final Player ai) {
+            int reach = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (c.hasKeyword(Keyword.DEFENDER)) {
+                    continue;
+                }
+                final int dmg = Math.max(0, c.getNetCombatDamage());
+                reach += c.hasDoubleStrike() ? 2 * dmg : dmg;
+            }
+            return reach;
+        }
+
+        // {power, toughness, keyword value} of one new Spirit token under `ctrl`, from continuous statics
+        // whose conditions hold now. careful=false (OUR token): a filter the matcher cannot read adds
+        // no boost but keeps a debuff; careful=true (THEIR token): it adds the boost, drops the debuff.
+        // AffectedDefined statics (Equipment, Auras) are skipped: they boost existing creatures.
+        private static int[] tokenStats(final Player ctrl, final Game game, final boolean careful) {
+            int p = 1, t = 1;
+            final List<String> kws = new ArrayList<>();
+            for (final Card c : game.getCardsIn(TABLE)) {
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (!st.checkMode(StaticAbilityMode.Continuous) || !st.hasParam("Affected")
+                            || st.hasParam("AffectedDefined") || !st.checkConditions()) {
+                        continue;
+                    }
+                    final int m = match(st.getParam("Affected"), c.getController(), ctrl, -1);
+                    if (m == NO) {
+                        continue;
+                    }
+                    // maxto as the layer pass reads them (StaticAbilityContinuous's MODIFYPT layer)
+                    final int dp = st.hasParam("AddPower") ? AbilityUtils.calculateAmount(c, st.getParam("AddPower"), st, true) : 0;
+                    final int dt = st.hasParam("AddToughness") ? AbilityUtils.calculateAmount(c, st.getParam("AddToughness"), st, true) : 0;
+                    // per component: a sure match always counts; a MAYBE counts only on the side
+                    // that hurts us (their boosts, our debuffs)
+                    if (m == YES || (careful ? dp > 0 : dp < 0)) {
+                        p += dp;
+                    }
+                    if (m == YES || (careful ? dt > 0 : dt < 0)) {
+                        t += dt;
+                    }
+                    if (st.hasParam("AddKeyword") && (m == YES || careful)) {
+                        kws.addAll(Arrays.asList(st.getParam("AddKeyword").split(" & ")));
+                    }
+                }
+            }
+            return new int[] {p, t, kwValue(kws, Math.max(0, p), Math.max(0, t))};
+        }
+
+        // CreatureEvaluator's weights for a flying token (difference terms only: power 15 plus flying
+        // 10 per power, toughness 10), plus the granted keywords
+        private static int value(final int[] s) {
+            return 25 * Math.max(0, s[0]) + 10 * Math.max(0, s[1]) + s[2];
+        }
+
+        // CreatureEvaluator's values for the keywords an anthem or lord grants
+        private static int kwValue(final List<String> kws, final int p, final int t) {
+            int v = 0;
+            for (final String k : kws) {
+                switch (k.trim()) {
+                    case "Hexproof": v += 35; break;
+                    case "Shroud": v += 30; break;
+                    case "Indestructible": v += 70; break;
+                    case "Double Strike": v += 10 + 15 * p; break;
+                    case "First Strike": v += 10 + 5 * p; break;
+                    case "Lifelink": v += 10 * p; break;
+                    case "Vigilance": v += 5 * p + 5 * t; break;
+                    case "Deathtouch": v += 25; break;
+                    default: break; // unread keywords count nothing on either side
+                }
+            }
+            return v;
+        }
+
+        // Our triggers on a creature of ours entering (ChangesZone / ChangesZoneAll to the battlefield,
+        // from Any) whose filter surely matches our token, read as TEXT (no ability is built):
+        // - PutCounterAll P1P1 on "Creature.YouCtrl" (Cathars' Crusade): each firing puts CounterNum
+        //   counters on every creature we control, the three tokens included;
+        // - Draw (Mentor of the Meek): free, or paid from the mana left after the cast, N per draw.
+        // Anything else credits nothing (under-cast, the safe side).
+        private static int entersPayoff(final Player ai, final Game game, final int power, final int ourC, int spare) {
+            int credit = 0;
+            for (final Card c : ai.getCardsIn(TABLE)) {
+                for (final Trigger tr : c.getTriggers()) {
+                    final boolean all = tr.getMode() == TriggerType.ChangesZoneAll;
+                    if ((tr.getMode() != TriggerType.ChangesZone && !all) || !tr.zonesCheck(game.getZoneOf(c))
+                            || !tr.getParamOrDefault("Destination", "").contains("Battlefield")
+                            || !"Any".equals(tr.getParamOrDefault("Origin", "Any"))) {
+                        continue;
+                    }
+                    final String valid = tr.getParamOrDefault(all ? "ValidCards" : "ValidCard", "");
+                    if (match(valid, ai, ai, power) != YES) {
+                        continue;
+                    }
+                    final int fires = all ? 1 : TOKENS;
+                    final Pair<String, Map<String, String>> link = executeLink(tr); // the chain's first link, as text
+                    if (link == null) {
+                        continue;
+                    }
+                    final String api = link.getLeft();
+                    final Map<String, String> ex = link.getRight();
+                    if ("PutCounterAll".equals(api) && "P1P1".equals(ex.get("CounterType"))
+                            && "Creature.YouCtrl".equals(ex.get("ValidCards"))) {
+                        final int n = Math.max(1, AbilityUtils.calculateAmount(c, ex.getOrDefault("CounterNum", "1"), tr));
+                        credit += fires * (ourC + TOKENS) * COUNTER_CREDIT * n;
+                    } else if ("Draw".equals(api) && "You".equals(ex.getOrDefault("Defined", "You"))) {
+                        final String costText = ex.getOrDefault("Cost", "0").trim();
+                        if (!costText.matches("\\d+")) {
+                            continue; // a non-mana cost: not credited
+                        }
+                        final int each = Integer.parseInt(costText);
+                        final int draws = each == 0 ? fires : Math.min(fires, Math.max(0, spare) / each);
+                        spare -= draws * each;
+                        final int num = Math.max(1, AbilityUtils.calculateAmount(c, ex.getOrDefault("NumCards", "1"), tr));
+                        credit += draws * num * DRAW_CREDIT;
+                    }
+                }
+            }
+            return credit;
+        }
+
+        // Any payoff of an opponent's for a gift of creature tokens and life, read pessimistically
+        // (a filter the matcher cannot read counts as a match):
+        // - an AICurseEffect NonActive card of ANY controller (Price of Glory): saSideEffects'
+        //   checkCurseEffects refuses the off-turn cast anyway, so the readmit declines it here;
+        // - a CreateToken replacement of theirs, or one naming no side (Primal Vigor);
+        // - a GainLife replacement of theirs (Tainted Remedy; their own life doublers);
+        // - their trigger on a creature or token entering (Cathars' Crusade, Soul Warden, Suture
+        //   Priest, Impact Tremors), on one dying or leaving (Blood Artist, Zulaport Cutthroat;
+        //   Skullclamp's Card.EquippedBy), on tokens being created, or on life gained;
+        // - their trigger on their life TOTAL (LifeTotal$: Test of Endurance, Felidar Sovereign), or
+        //   their trigger, static or ability whose CheckSVar reads YourLifeTotal (Serra Ascendant,
+        //   Speaker of the Heavens): the gift's life can switch them on.
+        private static boolean theirTablePays(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(TABLE)) {
+                if ("NonActive".equals(c.getSVar("AICurseEffect"))) {
+                    return true;
+                }
+                final Player ctrl = c.getController();
+                final boolean theirs = ctrl != null && ctrl.isOpponentOf(ai);
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (!re.zonesCheck(game.getZoneOf(c))) {
+                        continue;
+                    }
+                    if (re.getMode() == ReplacementType.CreateToken
+                            && (theirs || !re.getParamOrDefault("ValidToken", "").contains("YouCtrl"))) {
+                        return true;
+                    }
+                    if (theirs && re.getMode() == ReplacementType.GainLife) {
+                        return true;
+                    }
+                }
+                if (!theirs) {
+                    continue;
+                }
+                for (final Trigger tr : c.getTriggers()) {
+                    if (!tr.zonesCheck(game.getZoneOf(c))) {
+                        continue;
+                    }
+                    final TriggerType mode = tr.getMode();
+                    if (mode == TriggerType.LifeGained || mode == TriggerType.TokenCreated
+                            || mode == TriggerType.TokenCreatedOnce) {
+                        return true;
+                    }
+                    if (tr.hasParam("LifeTotal") || readsLifeTotal(tr)) {
+                        return true;
+                    }
+                    if (mode == TriggerType.ChangesZone || mode == TriggerType.ChangesZoneAll) {
+                        final String valid = tr.getParamOrDefault(mode == TriggerType.ChangesZoneAll ? "ValidCards" : "ValidCard", "");
+                        final boolean enters = tr.getParamOrDefault("Destination", "").contains("Battlefield");
+                        final boolean leaves = tr.getParamOrDefault("Origin", "").contains("Battlefield");
+                        if ((enters || leaves) && match(valid, null, null, 1) != NO) {
+                            return true;
+                        }
+                    }
+                }
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (readsLifeTotal(st)) {
+                        return true;
+                    }
+                }
+                for (final SpellAbility ab : c.getSpellAbilities()) {
+                    if (readsLifeTotal(ab)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // a CheckSVar that names, or whose SVar text holds, YourLifeTotal (text reads only)
+        private static boolean readsLifeTotal(final forge.game.CardTraitBase trait) {
+            final String x = trait.getParam("CheckSVar");
+            return x != null && (x.contains(LIFE_TOTAL) || trait.getSVar(x).contains(LIFE_TOTAL));
+        }
+
+        // One Valid param (comma-separated alternatives) against a new 1/1 white flying Spirit creature
+        // token: YES when an alternative surely matches, MAYBE when one might, else NO. srcCtrl/tokenCtrl
+        // null = either side (the veto's reading: YouCtrl and OppCtrl both pass). power < 0 = unknown
+        // (power filters read MAYBE). A closed vocabulary; everything else reads MAYBE.
+        static final int NO = 0, MAYBE = 1, YES = 2;
+
+        private static int match(final String valid, final Player srcCtrl, final Player tokenCtrl, final int power) {
+            int best = NO;
+            for (final String alt : valid.split(",")) {
+                final String[] hr = alt.trim().split("\\.", 2);
+                if (!("Creature".equals(hr[0]) || "Spirit".equals(hr[0]) || "Card".equals(hr[0])
+                        || "Permanent".equals(hr[0]))) {
+                    continue; // Land, Enchantment, Elf, Soldier, Artifact, ... never a Spirit token
+                }
+                int r = YES;
+                if (hr.length > 1) {
+                    for (final String q : hr[1].split("\\+")) {
+                        r = Math.min(r, restriction(q, srcCtrl, tokenCtrl, power));
+                    }
+                }
+                best = Math.max(best, r);
+            }
+            return best;
+        }
+
+        private static int restriction(final String q, final Player src, final Player tok, final int power) {
+            switch (q) {
+                case "YouCtrl": return src == null || tok == null ? YES : (src.equals(tok) ? YES : NO);
+                case "OppCtrl": return src == null || tok == null ? YES : (src.isOpponentOf(tok) ? YES : NO);
+                case "Other": case "token": case "Token": case "White": case "Spirit": case "Creature":
+                case "withFlying": case "nonLand": case "nonArtifact": case "nonLegendary": case "nonHuman":
+                case "untapped": case "nonBlack": case "nonBlue": case "nonRed": case "nonGreen":
+                case "cmcEQ0":
+                    return YES;
+                case "nonToken": case "!token": case "Self": case "withoutFlying": case "nonWhite":
+                case "nonSpirit": case "tapped": case "attacking": case "blocking": case "nonCreature":
+                case "Colorless":
+                    return NO;
+                case "EquippedBy": case "EnchantedBy": case "AttachedBy":
+                    return src == null ? MAYBE : NO; // statics: an attachment never moves to a new token;
+                                                     // the veto: they can equip it (Skullclamp)
+                default:
+                    if (power >= 0 && q.startsWith("powerLE")) {
+                        return power <= parse(q, 7) ? YES : NO;
+                    }
+                    if (power >= 0 && q.startsWith("powerGE")) {
+                        return power >= parse(q, 7) ? YES : NO;
+                    }
+                    return MAYBE;
+            }
+        }
+
+        private static int parse(final String q, final int from) {
+            try {
+                return Integer.parseInt(q.substring(from));
+            } catch (NumberFormatException e) {
+                return Integer.MIN_VALUE;
+            }
+        }
+
+        // The trigger's first Execute link as {API name, params}: the built overriding ability when
+        // there is one (its getApi(), since a built ability's params need not carry the DB/AB key),
+        // else the Execute SVar's text, because building the ability (ensureAbility) would allocate a
+        // spell-ability id (BlackSunsZenith.chain's walk). Null when there is no link.
+        private static Pair<String, Map<String, String>> executeLink(final Trigger tr) {
+            final SpellAbility built = tr.getOverridingAbility();
+            if (built != null) {
+                return Pair.of(built.getApi() == null ? "" : built.getApi().name(), built.getMapParams());
+            }
+            final String svar = tr.getParam("Execute");
+            final String text = svar == null ? "" : tr.getSVar(svar);
+            if (text.isEmpty()) {
+                return null;
+            }
+            final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+            String api = params.get("DB");
+            if (api == null) {
+                api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+            }
+            return Pair.of(api == null ? "" : api, params);
+        }
+    }
+
     // Berserker's Frenzy (dead-card batch 2, row 80; precon:Draconic Rage (AFC))
     // "Cast this spell only before combat or during combat before blockers are declared. Roll two
     // d20 and ignore the lower roll. 1-14: Choose any number of creatures. They block this turn if
@@ -31048,8 +31458,8 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 16, 17, 19, 21, 23, 25, 27, 28, 32, 35, 36, 41, 48, 49, 50, 52, 57, 58, 59, 60, 63, 68, 71,
-    // 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is
+    // 11, 16, 17, 19, 21, 23, 25, 27, 28, 32, 35, 36, 41, 48, 49, 50, 52, 57, 58, 59, 60, 63, 68,
+    // 71, 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is
     // Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -31138,6 +31548,8 @@ public class SpecialCardAi {
                     return StaticOrb.isOwnHandCast(sa);
                 case ScrapMastery.NAME:
                     return ScrapMastery.readmit(ai, sa);
+                case BenevolentOffering.NAME:
+                    return BenevolentOffering.readmit(ai, sa);
                 default:
                     return false;
             }
