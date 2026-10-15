@@ -14260,13 +14260,14 @@ public class SpecialCardAi {
     //   behind, and no net-positive counters; our own Auras come back attached), and, last and lazily,
     //   AiController.checkETBEffects approves its enters triggers.
     // A value holder: not useless, face up, not transformed or cloned, no Echo (Karmic Guide would pay
-    // it again), no leaves-the-battlefield link (Fiend Hunter's prisoner), an enters trigger of its
-    // own, no enters chain that sacrifices, discards, sweeps (Bane of Progress would destroy
-    // Flickerform too) or moves anything from the battlefield (skeptic A1: Flickerwisp's blink aims at
-    // our own most expensive enters-trigger permanent first, ChangeZoneAi.isPreferredTarget, and keeps
-    // it out until the next end step; Stonecloaker bounces our own creature), and not the source of a
-    // live command-zone effect (skeptic A2: Dungeon Geists' AsLongAsControl lock would move to a worse,
-    // untapped creature).
+    // it again), no leaves-the-battlefield link (Fiend Hunter's prisoner; a graveyard its own enters
+    // trigger exiled, Angel of Finality's, is none), an enters trigger of its own, no enters chain
+    // that sacrifices, discards, sweeps (Bane of Progress would destroy Flickerform too) or moves
+    // anything from the battlefield (skeptic A1: Flickerwisp's blink aims at our own most expensive
+    // enters-trigger permanent first, ChangeZoneAi.isPreferredTarget, and keeps it out until the next
+    // end step; Stonecloaker bounces our own creature), and not the source of a live command-zone
+    // effect (skeptic A2: Dungeon Geists' AsLongAsControl lock would move to a worse, untapped
+    // creature).
     // RNG parity: A never evaluated the card (the hint dropped both abilities first), and every check
     // here draws nothing - shape, phase, noManaHeld, test-mode calculateManaCost, HonestMana (whose
     // only write is setActivatingPlayer on mana abilities), CreatureEvaluator, trigger and command-zone
@@ -14527,8 +14528,8 @@ public class SpecialCardAi {
                     && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
         }
 
-        // Private copies of GhostlyFlicker's freeToLeaveCombat, hasLeaveLink and hasOwnEtb (accepted
-        // predicates stay private).
+        // Private copies of GhostlyFlicker's freeToLeaveCombat, hasLeaveLink (adapted, below) and
+        // hasOwnEtb (accepted predicates stay private; GhostlyFlicker's own are untouched).
         // Taking this combatant out of combat costs nothing. A blocker must be the only blocker of its
         // one attacker, which has no trample and which it cannot kill (no trade undone). An attacker
         // must have no blocker it would kill.
@@ -14554,10 +14555,18 @@ public class SpecialCardAi {
         }
 
         // A Self trigger that fires on leaving for exile, cards exiled with it, or an until-it-leaves
-        // exile (Banisher Priest's Duration$ UntilHostLeavesPlay, which is no trigger).
+        // exile (Banisher Priest's Duration$ UntilHostLeavesPlay, which is no trigger). Adapted from
+        // GhostlyFlicker's (row 23's retry): a card its own enters trigger exiled from a graveyard is
+        // no link (exiledFromGraveyardByOwnEtb), so Angel of Finality stays a holder once it has
+        // resolved; every other exiled card still is one.
         private static boolean hasLeaveLink(final Card c) {
-            if (!c.getExiledCards().isEmpty() || !c.getUntilLeavesBattlefield().isEmpty()) {
+            if (!c.getUntilLeavesBattlefield().isEmpty()) {
                 return true;
+            }
+            for (final Card e : c.getExiledCards()) {
+                if (!exiledFromGraveyardByOwnEtb(c, e)) {
+                    return true;
+                }
             }
             for (final Trigger tr : c.getTriggers()) {
                 if (tr.getMode() != TriggerType.ChangesZone || !tr.hasParam("ValidCard")
@@ -14572,6 +14581,20 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+
+        // A card this holder's own enters trigger exiled from a graveyard (Angel of Finality's "exile
+        // target player's graveyard"): nothing comes back when the holder leaves, so a flicker loses no
+        // link. RNG-free: the card's exiledSA, its params and its trigger only. An exile from the
+        // battlefield, a hand or a library (Banisher Priest, Oblivion Ring, Hostage Taker, hideaway),
+        // or by any other card's effect, is still a link.
+        private static boolean exiledFromGraveyardByOwnEtb(final Card c, final Card e) {
+            final SpellAbility cause = e.getExiledSA();
+            if (cause == null || !c.equals(cause.getHostCard()) || !"Graveyard".equals(cause.getParam("Origin"))) {
+                return false;
+            }
+            final Trigger tr = cause.getRootAbility().getTrigger();
+            return tr != null && tr.getMode() == TriggerType.ChangesZone && "Battlefield".equals(tr.getParam("Destination"));
         }
 
         // An enters trigger of its own, evoke's sacrifice trigger aside.
