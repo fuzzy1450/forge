@@ -1990,6 +1990,11 @@ public class AiController {
             // fallthrough below answers Max (10), a number almost no opposing spell matches
             return SpecialCardAi.TalionTheKindlyLord.chooseNumber(player, sa, min, max);
         }
+        if (SpecialCardAi.WrathOfTheSkies.isWrath(sa)) {
+            // Dead-card batch 3, row 29: the stock "Max" below pays every {E} we have, sweeping our
+            // own commander and rocks with theirs
+            return SpecialCardAi.WrathOfTheSkies.chooseEnergy(player, sa, min, max);
+        }
         final Card source = sa.getHostCard();
         final String logic = sa.getParamOrDefault("AILogic", "Max");
         if ("GainLife".equals(logic)) {

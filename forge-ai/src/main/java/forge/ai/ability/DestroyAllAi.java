@@ -59,6 +59,13 @@ public class DestroyAllAi extends SpellAbilityAi {
                 return SpecialCardAi.HarshMercy.consider(aiPlayer, root);
             }
         }
+        if (SpecialCardAi.WrathOfTheSkies.isWrath(sa) && SpecialCardAi.WrathOfTheSkies.approvedCast(sa)) {
+            // Dead-card batch 3, row 29: the root's consider judged the whole spell at the
+            // threshold it will pay; doMassRemovalLogic below would read the chosen number as 0
+            // (a token-only sweep) before resolution. Effect casts and copies (no consider) take
+            // the stock path.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         return doMassRemovalLogic(aiPlayer, sa);
     }
 
@@ -218,6 +225,11 @@ public class DestroyAllAi extends SpellAbilityAi {
 
     @Override
     public boolean willPayUnlessCost(Player payer, SpellAbility sa, Cost cost, boolean alreadyPaid, FCollectionView<Player> payers) {
+        if (SpecialCardAi.WrathOfTheSkies.isWrath(sa)) {
+            // Dead-card batch 3, row 29: UnlessSwitched -- paying is what destroys. The stock body
+            // below refuses when none of ours dies (the one-sided sweep) and pays when some do.
+            return SpecialCardAi.WrathOfTheSkies.paySweep(payer, sa);
+        }
         final Card source = sa.getHostCard();
         if (payers.size() > 1) {
             if (alreadyPaid) {

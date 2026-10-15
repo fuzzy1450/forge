@@ -164,6 +164,15 @@ public class CountersPutAi extends CountersAi {
             // never drew.
             return SpecialCardAi.GrimoireOfTheDead.considerStudy(ai, sa);
         }
+        if (SpecialCardAi.WrathOfTheSkies.isWrath(sa)) {
+            // Dead-card batch 3, row 29. The root only gives us X {E}; the card is its DestroyAll
+            // sub. The PayEnergy branch below answers WillPlay with X unset (X = 0 paid), and the
+            // sub's stock judge reads the chosen number as 0 before resolution. The threshold and
+            // X are chosen in SpecialCardAi.WrathOfTheSkies.consider. Only a regular cast comes
+            // here: effect casts and copies go through doTriggerNoCost and keep the stock sub
+            // judge. Every other PutCounter card takes exactly the path it took before this branch.
+            return SpecialCardAi.WrathOfTheSkies.consider(ai, sa);
+        }
         final String[] types;
         if (sa.hasParam("CounterType")) {
             // TODO some cards let you choose types, should check each

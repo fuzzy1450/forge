@@ -41854,6 +41854,353 @@ public class SpecialCardAi {
         }
     }
 
+    // Wrath of the Skies (dead-card batch 3, row 29)
+    // "{X}{W}{W} Sorcery. You get X {E}, then you may pay any amount of {E}. Destroy each artifact,
+    // creature, and enchantment with mana value less than or equal to the amount of {E} paid this
+    // way." Behind AI:RemoveDeck:All: CountersPutAi's PayEnergy branch answered WillPlay with X
+    // unset, the DestroyAll sub's stock judge read the chosen number as 0 before resolution, the
+    // stock chooseNumber paid every {E} ("Max"), and DestroyAllAi.willPayUnlessCost answered the
+    // switched cost backwards (no payment when none of ours dies). The script swaps the hint for
+    // SVar:AINoCopy:True (Black Sun's Zenith's swap: an AI copier refuses it one branch before the
+    // hint did) and sorts it with SVar:AIPriorityModifier:9, so the wipe is judged before our own
+    // deployments. Here T, the {E} to pay, is chosen among the opposing mana values the {E} can
+    // reach -- banked {E} plus whatever real mana pays for X -- on Gaze of Granite's floor (batch 1
+    // row 41, the same "mana value T or less" shape), as a private copy: at least one opposing
+    // permanent dies; net >= MIN_NET on the stock CMC+1 scale (commander +2, a mutated pile per
+    // piece, a zero-MV noncreature token 0); never a card down (a creature token half a card, this
+    // card the +1); never our better creature board for theirs. Two amendments on top: an opposing
+    // card one of our dying permanents holds in exile until it leaves (Static Prison's Duration$
+    // UntilHostLeavesPlay) comes back, so it counts on our side, its CMC+1 and a card; and Black
+    // Sun's Zenith's death scan, a private copy, refuses a T whose dying permanents, either side,
+    // drain us below max(4, AI_IN_DANGER_MAX_THRESHOLD) through opposing death triggers, or fire
+    // an edict while a creature of ours survives T. Best net, smaller T on ties; X = max(0, T -
+    // banked {E}). The same floor picks T again at resolution (chooseEnergy, on the live board)
+    // and decides the switched payment (paySweep), so a declined sweep pays nothing and keeps
+    // every {E}.
+    // RNG parity: the hint kept A from ever judging the card on the main-phase path. Every
+    // decline before the mana clamp is RNG-free: zone and counter reads, calculateManaCost in
+    // test mode, HonestMana (G2, held sources skipped), the board scans, CreatureEvaluator, the
+    // until-leaves reads and the trigger walk, which reads a trigger's chain without building it.
+    // determineLeftoverMana's test payments draw (isManaSourceReserved), so they run only when the
+    // best admissible T needs X > 0 -- a window an approval would draw in anyway (canPayCost).
+    // X is null on every decline. Holds nothing, writes no AiCardMemory.
+    public static class WrathOfTheSkies {
+        public static final String NAME = "Wrath of the Skies";
+        private static final int MIN_NET = 4;       // DestroyAllAi's own margin: opp > ai + 3
+        private static final int MIN_OPP_CARDS = 2; // below LONE_NET: at least a 2-for-1 (counting this card)
+        private static final int LONE_NET = 6;      // ...or a swing this big (a bomb, a token swarm)
+        private static final int UNKNOWN_DRAIN = 3; // a death drain whose amount is not a number
+        private static final int DRAIN = 0, EDICTS = 1; // deathScan's slots
+
+        // getAbilitySourceName reads "" for a face-down exiled cast: also read the host's name and
+        // the card state's name (HourOfEternity.isHour, row 106)
+        public static boolean isWrath(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            final Card host = sa.getHostCard();
+            if (host == null || host.isInZone(ZoneType.Stack)) {
+                // a re-entry with this spell already on the stack: never touch its X. Copy probes
+                // never come here (they take CountersPutAi.doTriggerNoCost); approvedCast refuses
+                // them on its own
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            root.setXManaCostPaid(null); // no X left over from an approval canPayCost then declined
+            if (root.getPayCosts() == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // cheapest refusal first: nothing of theirs this card can destroy
+            int oppTop = -1;
+            for (final Card c : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                if (affected(c)) {
+                    oppTop = Math.max(oppTop, c.getCMC());
+                }
+            }
+            if (oppTop < 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // G2 on THIS SA's X = 0 cost (W W plus any tax), a white source per white pip; never
+            // getAvailableManaEstimate (it counts the words of Produced$)
+            final ManaCostBeingPaid base = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, root, true);
+            if (mana.total() < base.getConvertedManaCost()
+                    || mana.colour(MagicColor.WHITE) < base.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int energy = ai.getCounters(CounterEnumType.ENERGY);
+            final int xCap = root.costHasManaX() ? mana.total() - base.getConvertedManaCost() : 0;
+            final TreeMap<Integer, Integer> admissible = admissible(ai, Math.min(oppTop, energy + xCap), new HashMap<>());
+            if (admissible.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // X already null
+            }
+            int payable = 0;
+            if (best(admissible, Integer.MAX_VALUE) > energy) {
+                // only now, and only when the preferred T needs mana: the test payments draw
+                // MyRandom (isManaSourceReserved). Root X is null, so each prices exactly X W W
+                payable = ComputerUtilMana.determineLeftoverMana(root, ai, false);
+            }
+            final int t = best(admissible, energy + payable);
+            if (t < 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX); // X still null
+            }
+            root.setXManaCostPaid(Math.max(0, t - energy));
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // DestroyAllAi.chkDrawback: the root's consider approved this consult (it sets X only on
+        // WillPlay and nulls it on entry). Effect casts never reach consider; a copy carries the
+        // original's X (SpellAbility.copy clones it) and is asked with the host on the stack, so
+        // neither can pass for an approval.
+        public static boolean approvedCast(final SpellAbility sub) {
+            final SpellAbility root = sub.getRootAbility();
+            final Card host = root.getHostCard();
+            return !root.isCastFromPlayEffect() && !root.isCopied()
+                    && host != null && !host.isInZone(ZoneType.Stack) // a copy probe: copies carry X
+                    && root.getXManaCostPaid() != null;
+        }
+
+        // AiController.chooseNumber at resolution: max is our {E} now (this spell's X included).
+        // The best admissible T on the live board, else min (0) -- which paySweep then refuses.
+        public static int chooseEnergy(final Player ai, final SpellAbility sa, final int min, final int max) {
+            final int t = best(admissible(ai, max, new HashMap<>()), max);
+            return t >= min ? t : min;
+        }
+
+        // DestroyAllAi.willPayUnlessCost (UnlessSwitched: paying destroys): pay only for a T that
+        // passes the floor on the live board. A chooser that found none returned 0, and 0 is then
+        // not admissible either, so nothing is paid and nothing is destroyed.
+        public static boolean paySweep(final Player payer, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Integer chosen = host == null ? null : host.getChosenNumber();
+            return netAt(payer, chosen == null ? 0 : chosen, new HashMap<>()) != null;
+        }
+
+        // the sub's ValidCards (Artifact/Creature/Enchantment; the MV bound applied by the
+        // caller) and DestroyAllAi's private destroyable predicate (:20)
+        private static boolean affected(final Card c) {
+            return (c.isArtifact() || c.isCreature() || c.isEnchantment())
+                    && !(c.hasKeyword(Keyword.INDESTRUCTIBLE) || c.getCounters(CounterEnumType.SHIELD) > 0 || c.hasSVar("SacMe"));
+        }
+
+        // T -> net, over the opposing mana values <= tCap (between two of them only our side
+        // grows, so no other T can be better). deaths caches each dying card's death scan.
+        private static TreeMap<Integer, Integer> admissible(final Player ai, final int tCap, final Map<Card, int[]> deaths) {
+            final TreeSet<Integer> ts = new TreeSet<>();
+            for (final Card c : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                if (affected(c) && c.getCMC() <= tCap) {
+                    ts.add(c.getCMC());
+                }
+            }
+            final TreeMap<Integer, Integer> out = new TreeMap<>();
+            for (final int t : ts) {
+                final Integer net = netAt(ai, t, deaths);
+                if (net != null) {
+                    out.put(t, net);
+                }
+            }
+            return out;
+        }
+
+        // Gaze of Granite's floor at threshold t, with the until-leaves hand-backs on our side and,
+        // lazily once the floor passes, the death scan; null when t is not admissible
+        private static Integer netAt(final Player ai, final int t, final Map<Card, int[]> deaths) {
+            final CardCollection opp = CardLists.filter(ai.getOpponents().getCardsIn(ZoneType.Battlefield),
+                    c -> affected(c) && c.getCMC() <= t);
+            if (opp.isEmpty()) {
+                return null;
+            }
+            final CardCollection mine = CardLists.filter(ai.getCardsIn(ZoneType.Battlefield),
+                    c -> affected(c) && c.getCMC() <= t);
+            final int[] back = handedBack(ai, mine);
+            final int net = value(opp) - value(mine) - back[0];
+            if (net < MIN_NET) {
+                return null;
+            }
+            final int oppCards = cards(opp) + CardLists.count(opp, CardPredicates.TOKEN.and(CardPredicates.CREATURES)) / 2;
+            if (oppCards < Math.max(net >= LONE_NET ? 1 : MIN_OPP_CARDS, cards(mine) + back[1] + 1)) {
+                return null; // never a card down
+            }
+            if (ComputerUtilCard.evaluateCreatureList(CardLists.filter(mine, CardPredicates.CREATURES))
+                    > ComputerUtilCard.evaluateCreatureList(CardLists.filter(opp, CardPredicates.CREATURES))) {
+                return null; // never our better creature board for theirs
+            }
+            // every dying artifact, creature and enchantment, both sides, against opposing death
+            // triggers (Diregraf Captain, Blood Artist, Disciple of the Vault, Grave Pact)
+            final int[] sum = new int[2];
+            addDeaths(ai, opp, deaths, sum);
+            addDeaths(ai, mine, deaths, sum);
+            if (sum[DRAIN] > 0 && ai.getLife() - sum[DRAIN]
+                    < Math.max(4, AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD))) {
+                return null; // no death-trigger drain into danger
+            }
+            if (sum[EDICTS] > 0 && anySurvivor(ai, t)) {
+                return null; // no edict that takes a creature of ours
+            }
+            return net;
+        }
+
+        // An opposing card one of our dying permanents holds in exile until it leaves the
+        // battlefield (Duration$ UntilHostLeavesPlay: Static Prison, Banisher Priest) returns to
+        // its owner: [0] its CMC+1 (commander +2), [1] a card they regain. Our own cards coming
+        // back are a benefit, not counted, as is anything an opposing dying exiler frees.
+        private static int[] handedBack(final Player ai, final CardCollection mine) {
+            final int[] back = new int[2];
+            for (final Card c : mine) {
+                for (final Card e : c.getUntilLeavesBattlefield()) {
+                    final Card now = ai.getGame().getCardState(e);
+                    if (now.isInZone(ZoneType.Exile) && !ai.equals(now.getOwner())) {
+                        back[0] += (now.getCMC() + 1) + (now.isCommander() ? 2 : 0);
+                        back[1]++;
+                    }
+                }
+            }
+            return back;
+        }
+
+        private static void addDeaths(final Player ai, final CardCollection dying, final Map<Card, int[]> deaths, final int[] sum) {
+            for (final Card d : dying) {
+                final int[] r = deaths.computeIfAbsent(d, c -> deathScan(ai, c));
+                sum[DRAIN] += r[DRAIN];
+                sum[EDICTS] += r[EDICTS];
+            }
+        }
+
+        // a creature of ours an edict can still take: one this T does not destroy
+        private static boolean anySurvivor(final Player ai, final int t) {
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!affected(c) || c.getCMC() > t) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static int best(final TreeMap<Integer, Integer> admissible, final int cap) {
+            int bestT = -1;
+            int bestNet = Integer.MIN_VALUE;
+            for (final Map.Entry<Integer, Integer> e : admissible.entrySet()) {
+                if (e.getKey() > cap) {
+                    break; // ascending
+                }
+                if (e.getValue() > bestNet) { // strict: ties keep the smaller T
+                    bestNet = e.getValue();
+                    bestT = e.getKey();
+                }
+            }
+            return bestT;
+        }
+
+        private static int pieces(final Card c) { // a mutated pile dies as every card in it
+            return c.hasMergedCard() ? Math.max(1, c.getMergedCards().size()) : 1;
+        }
+
+        private static int value(final Iterable<Card> list) {
+            int v = 0;
+            for (final Card c : list) {
+                if (CardPredicates.TOKEN.test(c) && !c.isCreature() && c.getCMC() == 0) {
+                    continue; // Treasure/Clue/Food: destroyed, but not a reason to cast
+                }
+                v += (c.getCMC() + 1) * pieces(c) + (c.isCommander() ? 2 : 0); // commander: + recast tax
+            }
+            return v;
+        }
+
+        private static int cards(final Iterable<Card> list) { // nontoken cards lost, piles counted whole
+            int n = 0;
+            for (final Card c : list) {
+                if (!CardPredicates.TOKEN.test(c)) {
+                    n += pieces(c);
+                }
+            }
+            return n;
+        }
+
+        // What a death of d costs us, read off every opposing battlefield trigger that may fire on
+        // it (BlackSunsZenith.deathScan, a private copy without its -1/-1 counter clause and its
+        // steal slot: ChangesZone ValidCard or ChangesZoneAll ValidCards, from the battlefield or
+        // Any to a graveyard or Any, YouCtrl resolved against the trigger's host), summed over
+        // triggers and parts: [DRAIN] LoseLife its LifeAmount, DealDamage and DamageAll their NumDmg
+        // (a non-numeric or missing amount UNKNOWN_DRAIN); [EDICTS] each Sacrifice or SacrificeAll
+        // part. Over-matching only costs a cast.
+        private static int[] deathScan(final Player ai, final Card d) {
+            final int[] r = new int[2];
+            for (final Card host : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : host.getTriggers()) {
+                    final String valid;
+                    if (t.getMode() == TriggerType.ChangesZone) {
+                        valid = "ValidCard";
+                    } else if (t.getMode() == TriggerType.ChangesZoneAll) {
+                        valid = "ValidCards";
+                    } else {
+                        continue;
+                    }
+                    final String origin = t.getParamOrDefault("Origin", "Any");
+                    final String destination = t.getParamOrDefault("Destination", "Any");
+                    if (!("Any".equals(origin) || origin.contains("Battlefield"))
+                            || !("Any".equals(destination) || destination.contains("Graveyard"))) {
+                        continue;
+                    }
+                    if (!t.matchesValidParam(valid, d)) {
+                        continue;
+                    }
+                    chain(t, r);
+                }
+            }
+            return r;
+        }
+
+        // The trigger's chain is read without building it (BlackSunsZenith.chain, a private copy):
+        // the overriding ability when already built, else the Execute SVar text and its
+        // SubAbility chain, because building an ability allocates a SpellAbility id.
+        private static void chain(final Trigger t, final int[] r) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                for (SpellAbility part = built; part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    part(api == null ? null : api.name(), part.getParam("LifeAmount"), part.getParam("NumDmg"), r);
+                }
+                return;
+            }
+            final Set<String> seen = new HashSet<>();
+            String svar = t.hasParam("Execute") ? t.getParam("Execute") : null;
+            while (svar != null && seen.add(svar)) {
+                final String text = t.getSVar(svar);
+                if (text.isEmpty()) {
+                    break;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                String api = params.get("DB");
+                if (api == null) {
+                    api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+                }
+                part(api, params.get("LifeAmount"), params.get("NumDmg"), r);
+                svar = params.get("SubAbility");
+            }
+        }
+
+        private static void part(final String api, final String lifeAmount, final String numDmg, final int[] r) {
+            if (ApiType.LoseLife.name().equals(api)) {
+                r[DRAIN] += amount(lifeAmount);
+            } else if (ApiType.DealDamage.name().equals(api) || ApiType.DamageAll.name().equals(api)) {
+                r[DRAIN] += amount(numDmg);
+            } else if (ApiType.Sacrifice.name().equals(api) || ApiType.SacrificeAll.name().equals(api)) {
+                r[EDICTS]++;
+            }
+        }
+
+        private static int amount(final String s) {
+            if (s == null || !s.trim().matches("\\d{1,6}")) {
+                return UNKNOWN_DRAIN;
+            }
+            return Integer.parseInt(s.trim());
+        }
+    }
+
     // Yawgmoth's Bargain
     public static class YawgmothsBargain {
         public static boolean consider(final Player ai, final SpellAbility sa) {
