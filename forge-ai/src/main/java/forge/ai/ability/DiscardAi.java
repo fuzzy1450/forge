@@ -141,6 +141,20 @@ public class DiscardAi extends SpellAbilityAi {
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 
+    @Override
+    protected boolean willPayCosts(final Player payer, final SpellAbility sa, final Cost cost, final Card source) {
+        if (SpecialCardAi.MagusOfTheWheel.isOwnWheel(payer, sa)) {
+            // Dead-card batch 3, row 82: checkSacrificeCost refuses to sacrifice any creature host
+            // worth more than 150 unless it is predicted to die; the readmit floor that let this
+            // activation onto the list priced the body as the card the wheel costs, and carries
+            // checkSacrificeCost's own-Aura and aiInDanger refusals. Keyed as the readmit is (the
+            // owner-controller's battlefield Magus), so every other Discard ability, a thief's
+            // Magus and a Clone of it get super. RNG-free.
+            return SpecialCardAi.MagusOfTheWheel.worthWheel(payer, sa);
+        }
+        return super.willPayCosts(payer, sa, cost, source);
+    }
+
     private boolean discardTargetAI(final Player ai, final SpellAbility sa) {
         final PlayerCollection opps = ai.getOpponents();
         Collections.shuffle(opps, MyRandom.getRandom());

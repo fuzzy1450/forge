@@ -20790,6 +20790,207 @@ public class SpecialCardAi {
         }
     }
 
+    // Magus of the Wheel (dead-card batch 3, row 82)
+    // "{1}{R}, {T}, Sacrifice Magus of the Wheel: Each player discards their hand, then draws seven
+    // cards." ({2}{R} creature, 3/3 Human Wizard.) AI:RemoveDeck:All dropped both of its spell
+    // abilities in AiController.getSpellAbilityToPlay's removeIf, so its owner never cast it from
+    // hand (its owner casts on 2.0.15+55e709fa6ba are hideaway Play-effect casts of an undrawn copy,
+    // its other casts Nathan Drake, Gonti and Aminatou thefts: Play effects never read the hint),
+    // and never activated the wheel. The hint is KEPT, so the -10 sort
+    // (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck reader (steal, exchange,
+    // copy, clone and tutor pickers) still refuse it, and the G3 dispatcher
+    // (RemoveDeckFilter.readmit) lets exactly two abilities through, for the player who both owns
+    // and controls the Magus:
+    // - the creature spell from our own hand (not a Play-effect cast, not a copy), in our own Main 2
+    //   at sorcery speed, with no mana held and {2}{R} within G2: the stock PermanentCreatureAi path
+    //   then casts a vanilla 3/3 on the floor every creature has;
+    // - the wheel (isOwnWheel), only in the end step of the opponent whose turn is right before
+    //   ours, on an empty stack (the cards arrive for our untap; the {1}{R} was idle), and only for
+    //   a real refill (worthWheel): our hand at most MAX_OWN_HAND; our seven beating every
+    //   opponent's refill by MIN_EDGE (the sacrificed body is the one card the wheel costs, so a
+    //   2-card edge nets one card; a tie is refused, Imposing Grandeur's ruling); all seven
+    //   reaching us with MIN_LIBRARY_LEFT behind them; no Aura of ours on the Magus and our life
+    //   above AI_IN_DANGER_THRESHOLD (the two RNG-free refusals of
+    //   ComputerUtilCost.checkSacrificeCost the override below replaces); {1}{R} within G2 with no
+    //   mana held; and nothing at the table profiting from the fourteen draws, the discards or the
+    //   sacrifice (KnollspineDragon's scan for our side, called unchanged; opponentsProfit for
+    //   theirs).
+    // DiscardAi.willPayCosts answers the self-sacrifice from the same floor, under the readmit's own
+    // key (isOwnWheel: rule B3-2): checkSacrificeCost lets a creature sacrifice itself only when it
+    // is predicted to die, or at the end step before our turn when it is worth 150 or less, and a
+    // nontoken 3/3 with an ability is worth about 200.
+    // A thief's Play-effect cast and a thief's control of the Magus fail the owner test and keep
+    // the filter (and the stock willPayCosts); a Clone of it reads Clone's rules and keeps the stock
+    // path. Reads counts, phases, statics, the profile and trigger/replacement params: no random
+    // number, nothing held or remembered, so a refusal leaves the list exactly as the hint left it.
+    // Its only writes are setActivatingPlayer on the mana abilities G2 reads.
+    public static class MagusOfTheWheel {
+        public static final String NAME = "Magus of the Wheel";
+        static final int DRAW = 7;               // the script's NumCards$ 7
+        static final int MAX_OWN_HAND = 2;       // Wheel of Fortune / Reforge the Soul: NeedsToPlayVar LE2
+        static final int MIN_EDGE = 2;           // per opponent: our refill minus theirs (the body is 1)
+        static final int MIN_LIBRARY_LEFT = 10;  // Slate of Ancestry's margin
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getController()) || !ai.equals(host.getOwner())) {
+                return false; // a theft keeps the filter
+            }
+            if (sa.isSpell()) {
+                if (sa.getApi() != ApiType.PermanentCreature || sa.isCastFromPlayEffect() || sa.isCopied()
+                        || !host.isInZone(ZoneType.Hand)) {
+                    return false;
+                }
+                if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                        || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                    return false;
+                }
+                return fits(ai, sa);
+            }
+            return isOwnWheel(ai, sa) && worthWheel(ai, sa);
+        }
+
+        // the root activation on a battlefield host whose PAPER card is the Magus (a Clone copying it
+        // reads Clone's rules: unhinted, stock path, stock sacrifice refusal, as before), owned and
+        // controlled by ai: the readmit's key, which the DiscardAi.willPayCosts override carries too
+        public static boolean isOwnWheel(final Player ai, final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || !sa.isActivatedAbility() || sa.getApi() != ApiType.Discard) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && host.isInPlay() && ai.equals(host.getController()) && ai.equals(host.getOwner())
+                    && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        public static boolean worthWheel(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // 1. the window, O(1): AtOppEOT, empty stack, the Magus able to tap
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai) || !ai.equals(ph.getNextTurn())
+                    || !game.getStack().isEmpty() || !host.isUntapped() || host.isSick()) {
+                return false;
+            }
+            // checkSacrificeCost's own refusals, which the override replaces (skeptic A1)
+            if (!CardLists.filterControlledBy(host.getEnchantedBy(), ai).isEmpty()) {
+                return false; // our own Aura would go with it
+            }
+            if (ai.getLife() <= AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_THRESHOLD)
+                    && ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife()) {
+                return false; // stock aiInDanger: keep the body
+            }
+            // 2. the hands (public counts); an opponent keeps at most its maximum hand size past cleanup
+            final int ours = ai.getCardsIn(ZoneType.Hand).size();
+            if (ours > MAX_OWN_HAND) {
+                return false;
+            }
+            for (final Player opp : ai.getOpponents()) {
+                int kept = opp.getCardsIn(ZoneType.Hand).size();
+                if (!opp.isUnlimitedHandSize()) {
+                    kept = Math.min(kept, opp.getMaxHandSize());
+                }
+                final int theirs = StaticAbilityCantDraw.canDrawAmount(opp, DRAW) - kept;
+                if ((DRAW - ours) - theirs < MIN_EDGE) {
+                    return false;
+                }
+            }
+            // 3. all seven reach us (Narset, Leovold, Spirit of the Labyrinth) and the library survives
+            if (!ai.canDraw() || StaticAbilityCantDraw.canDrawAmount(ai, DRAW) < DRAW
+                    || ai.getCardsIn(ZoneType.Library).size() - DRAW < MIN_LIBRARY_LEFT) {
+                return false;
+            }
+            // 4. {1}{R} as the engine prices it, within G2, nothing held
+            if (!RemoveDeckFilter.noManaHeld(ai, false) || !fits(ai, sa)) {
+                return false;
+            }
+            // 5. our seven and our discards (batch 1's scan, unchanged), then theirs
+            return !KnollspineDragon.drawOrDiscardIsPunished(ai, host) && !opponentsProfit(ai, host);
+        }
+
+        // An opponent's payoff on its OWN seven or its OWN discards, on the battlefield or in the
+        // Command zone and working where it sits (zonesCheck): a Draw/DrawCards replacement for that
+        // opponent (Alhammarret's Archive), or a Drawn, Discarded or DiscardedAll trigger for that
+        // opponent whose ValidCard names its own cards (namesOwnCards: Psychosis Crawler, Niv-Mizzet,
+        // Archfiend of Ifnir's Card.Other+YouOwn, Anje's Card.YouCtrl+withMadness, a "whenever you
+        // discard" engine; the Card.OppOwn payoffs, Bowmasters and Nekusar, are KnollspineDragon's,
+        // run on our hand). Then (skeptic A2) any ChangesZone(All) trigger that can see a card go
+        // from a hand to a graveyard (Syr Konrad: each creature card either hand loses, and the
+        // Magus), and (skeptic A3) a Sacrificed trigger that matches us sacrificing the Magus itself
+        // (Tergrid takes it, Mayhem Devil pings): there the host IS the sacrificed card, so the
+        // ValidCard test is exact. Over-declines (Curator of Mysteries' scry, Horror of the Broken
+        // Lands' pump, any "from anywhere" graveyard trigger) only wait.
+        private static boolean opponentsProfit(final Player ai, final Card host) {
+            final Game game = ai.getGame();
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player opp = c.getController();
+                if (opp == null || !opp.isOpponentOf(ai)) {
+                    continue;
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.zonesCheck(game.getZoneOf(c)) && re.matchesValidParam("ValidPlayer", opp)) {
+                        return true;
+                    }
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (!t.zonesCheck(game.getZoneOf(c))) {
+                        continue;
+                    }
+                    final TriggerType mode = t.getMode();
+                    if ((mode == TriggerType.Drawn || mode == TriggerType.Discarded || mode == TriggerType.DiscardedAll)
+                            && t.matchesValidParam("ValidPlayer", opp) && namesOwnCards(t.getParam("ValidCard"))) {
+                        return true; // Psychosis Crawler, Archfiend of Ifnir, Magmakin Artillerist, Bone Miser
+                    }
+                    if ((mode == TriggerType.ChangesZone || mode == TriggerType.ChangesZoneAll)
+                            && reachesGraveyardFromHand(t)) {
+                        return true; // Syr Konrad: every creature card either hand loses, and the Magus
+                    }
+                    if (mode == TriggerType.Sacrificed && t.matchesValidParam("ValidPlayer", ai)
+                            && t.matchesValidParam("ValidCard", host)) {
+                        return true; // Tergrid, Mayhem Devil: the Magus itself is the sacrificed card
+                    }
+                }
+            }
+            return false;
+        }
+
+        // ValidCard absent, or any alternative not about the opponent's opponents' cards
+        // (Card.OppOwn / Creature.OppCtrl are KnollspineDragon's, run on our hand) and not Self
+        private static boolean namesOwnCards(final String valid) {
+            if (valid == null) {
+                return true;
+            }
+            for (final String alt : valid.split(",")) {
+                final String a = alt.trim();
+                if (!a.contains("Opp") && !"Card.Self".equals(a)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean reachesGraveyardFromHand(final Trigger t) {
+            final String dest = t.getParamOrDefault("Destination", "Any");
+            final String origin = t.getParamOrDefault("Origin", "Any");
+            return (dest.contains("Graveyard") || "Any".equals(dest))
+                    && ("Any".equals(origin) || origin.contains("Hand"));
+        }
+
+        // Shaper Parasite's fits (a private copy, per the frozen-infrastructure rule), red for blue:
+        // the cost in test mode (CostAdjustment only) within G2, held sources skipped
+        private static boolean fits(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int total = cost.getConvertedManaCost();
+            final int red = cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+            if (total <= 0 && red <= 0) {
+                return true; // free: nothing to count
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= total && mana.colour(MagicColor.RED) >= red;
+        }
+    }
+
     // Manascape Refractor (dead-card batch 2, row 60)
     // "Manascape Refractor enters tapped. Manascape Refractor has all activated abilities of all
     // lands on the battlefield. You may spend mana as though it were mana of any color to pay the
@@ -27947,7 +28148,7 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 16, 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 75, 79, 83 and 84, keepOff
+    // 16, 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 75, 79, 82, 83 and 84, keepOff
     // for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -28022,6 +28223,8 @@ public class SpecialCardAi {
                     return AdNauseam.readmit(ai, sa);
                 case VampiricTutor.NAME:
                     return VampiricTutor.readmit(ai, sa);
+                case MagusOfTheWheel.NAME:
+                    return MagusOfTheWheel.readmit(ai, sa);
                 default:
                     return false;
             }
