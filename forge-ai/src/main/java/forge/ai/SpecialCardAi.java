@@ -35297,8 +35297,8 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
-    // 7, 8, 10, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58,
-    // 59, 60, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row 68
+    // 7, 8, 10, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52, 57,
+    // 58, 59, 60, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row 68
     // (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -35407,6 +35407,8 @@ public class SpecialCardAi {
                     return InfernalOffering.readmit(ai, sa);
                 case AllianceOfArms.NAME:
                     return AllianceOfArms.readmit(ai, sa);
+                case Skyscribing.NAME:
+                    return Skyscribing.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -39242,6 +39244,243 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+    }
+
+    // Skyscribing (dead-card batch 3, row 39; precon:Mind Seize (C13), precon:Political Puppets (CMD))
+    // "{X}{U}{U} sorcery: Each player draws X cards. Forecast - {2}{U}, Reveal Skyscribing from your
+    // hand: Each player draws a card. (Activate only during your upkeep and only once each turn.)"
+    // AI:RemoveDeck:All kept both abilities off AiController.getSpellAbilityToPlay's list, so its
+    // owner never considered it. Behind the hint the spell is Prosperity (DrawAi.targetAI's xPaid
+    // path casts any X >= 1 in Main 2, blind to every opponent drawing X too), and the Forecast,
+    // whose built ActivationPhases$ Upkeep skips DrawAi's Main-2 wait, would give every player a
+    // card each upkeep. The hint stays (the -10 sort and every other isCardRemAIDeck reader
+    // unchanged). G3 re-admits exactly one ability: the owner's own hard cast from hand
+    // (isOwnHandCast), in our Main 2 at sorcery speed with no mana held, when {MIN_X}{U}{U} as the
+    // engine prices it fits G2. DrawAi.checkApiLogic then judges that same shape here (handles: the
+    // readmit's own key, rule B3-2); a thief's cast, a copy, a Play-effect cast (Nathan Drake,
+    // Jeleva) and the Forecast keep the stock path. Accept:
+    // - WIN: the smallest X that makes every opponent draw from an empty library, each one able to
+    //   lose to it (canBeDecked) and to draw that many under the draw-limit statics (A3);
+    // - REFILL: X = the largest X real mana pays, at most our hand room (no cleanup discard),
+    //   X >= MIN_X, and for every opponent the cards it can keep of its X under its own hand limit
+    //   (OPP_SLACK more for its next turn) are at least MIN_EDGE fewer than ours; an opponent that
+    //   cannot draw, or that the X decks, passes. Never into an opponent's Discarded or
+    //   DiscardedAll trigger (A2: Archfiend of Ifnir, Glint-Horn Buccaneer, Waste Not): the
+    //   refill's edge is their cleanup discard.
+    // X never exceeds the library cap: our library less LIBRARY_MARGIN and one, shared by the spell
+    // and each copy a SpellCast trigger gives it (A1: Mirari, Swarm Intelligence, Double Vision;
+    // the copy keeps X, so Mirari doubles the draw), and the draw-limit statics on us.
+    // Veto, both lines: an opponent's Drawn trigger or Draw replacement, or a symmetric one of ours
+    // (a private copy of TradeSecrets.tableStealsOrPunishesDraws).
+    // RNG parity: A never evaluated the card for its owner. readmit and consider read state only
+    // (no setMaxXValue, no lifeInDanger, no memory write, no ability built); the only random draws
+    // are canPayCost's, after a WillPlay whose X the honest count already pays. Every decline
+    // leaves X null.
+    public static class Skyscribing {
+        public static final String NAME = "Skyscribing";
+        static final int MIN_X = 3;          // X <= 2 is a 4-mana cycle that gives each opponent as much
+        static final int MIN_EDGE = 2;       // kept cards we gain beyond each opponent's (their selection)
+        static final int OPP_SLACK = 1;      // their next turn: one card more fits under their cleanup
+        static final int LIBRARY_MARGIN = 3; // DrawAi.targetAI's own deck-out margin
+
+        // the readmit's own key: the owner's own hard cast from its own hand. Never the Forecast (an
+        // activated ability), a theft, a copy or a Play-effect cast.
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && sa.isSpell() && !(sa instanceof AbilitySub)
+                    && !sa.isCastFromPlayEffect() && !sa.isCopied()
+                    && ai.equals(host.getOwner()) && ai.equals(host.getController())
+                    && host.isInZone(ZoneType.Hand);
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa)) {
+                return false;
+            }
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            return fits(ai, sa, HonestMana.of(ai, sa, true), MIN_X);
+        }
+
+        // DrawAi.checkApiLogic's gate: the host's paper name (rule B3-3) and the readmit's own key
+        public static boolean handles(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && isOwnHandCast(ai, sa);
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final SpellAbility root = sa.getRootAbility();
+            root.setXManaCostPaid(null); // no stale X from an earlier window
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                // not WaitForMain2, which hasReasonToPlayCardThisTurn reads as a reason to play
+                return no(AiPlayDecision.AnotherTime);
+            }
+            if (!ai.canDraw() || tableStealsOrPunishesDraws(ai, game)) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            final Card host = sa.getHostCard();
+            int hand = ai.getCardsIn(ZoneType.Hand).size();
+            if (host.isInZone(ZoneType.Hand)) {
+                hand--; // the Skyscribing itself is spent
+            }
+            // A1: the spell and each copy a SpellCast trigger gives it each draw X from our library
+            int libCap = (ai.getCardsIn(ZoneType.Library).size() - LIBRARY_MARGIN - 1)
+                    / (1 + castCopies(ai, game, host));
+            libCap = Math.min(libCap, StaticAbilityCantDraw.canDrawAmount(ai, Integer.MAX_VALUE));
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            // the largest X real mana pays (the engine's price at X = k: Nightscape Familiar, taxes);
+            // the cost is k + 2 less a few generic reductions, so mana.total() bounds the loop
+            int xMana = 0;
+            for (int k = Math.min(libCap, mana.total()); k >= 1; k--) {
+                if (fits(ai, sa, mana, k)) {
+                    xMana = k;
+                    break;
+                }
+            }
+            if (xMana < 1) {
+                return no(AiPlayDecision.CantAffordX);
+            }
+            // WIN: every opponent decked by the smallest X that does it (hand room is moot)
+            int xWin = 0;
+            boolean all = !ai.getOpponents().isEmpty();
+            for (final Player opp : ai.getOpponents()) {
+                final int library = opp.getCardsIn(ZoneType.Library).size();
+                if (!canBeDecked(opp) || !opp.canDraw(library + 1)) { // A3: Narset, Spirit of the Labyrinth
+                    all = false;
+                    break;
+                }
+                xWin = Math.max(xWin, library + 1);
+            }
+            if (all && xWin >= 1 && xWin <= xMana) {
+                root.setXManaCostPaid(xWin);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            // REFILL: the largest X we keep whole, against every opponent's keepable share
+            final int x = ai.isUnlimitedHandSize() ? xMana : Math.min(xMana, ai.getMaxHandSize() - hand);
+            if (x < MIN_X) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            if (opponentFeedsOnDiscards(ai, game)) { // A2
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.canDraw() || (canBeDecked(opp) && x > opp.getCardsIn(ZoneType.Library).size())) {
+                    continue; // draws nothing, or loses to the draw
+                }
+                final int theirDraw = Math.min(x, StaticAbilityCantDraw.canDrawAmount(opp, x));
+                final int keep = opp.isUnlimitedHandSize() ? theirDraw : Math.min(theirDraw,
+                        Math.max(0, opp.getMaxHandSize() - opp.getCardsIn(ZoneType.Hand).size() + OPP_SLACK));
+                if (x - keep < MIN_EDGE) {
+                    return no(AiPlayDecision.CantPlayAi);
+                }
+            }
+            root.setXManaCostPaid(x);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // they draw, and drawing from an empty library loses them the game (Laboratory Maniac and
+        // Jace, Wielder of Mysteries are Draw replacements: vetoed before this is asked)
+        private static boolean canBeDecked(final Player opp) {
+            return opp.canDraw() && !opp.cantLose()
+                    && !opp.cantLoseCheck(forge.game.player.GameLossReason.Milled);
+        }
+
+        // the engine's price at X = k (test-mode calculateManaCost, the G1 call: no MyRandom, the SA's
+        // own X untouched; k >= 1, so the stale-X read at extraMana 0 never happens) against G2, in
+        // total and in blue (UU from blue sources, Combo letters read)
+        private static boolean fits(final Player ai, final SpellAbility sa, final HonestMana mana, final int k) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, k, false);
+            return cost.getConvertedManaCost() <= mana.total()
+                    && cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE) <= mana.colour(MagicColor.BLUE);
+        }
+
+        // A1: the copies a SpellCast trigger working where it is will make of this cast: its
+        // ValidCard takes the card, its ValidActivatingPlayer takes us, and its Execute SVar's text
+        // copies the TriggeredSpellAbility (Mirari, Swarm Intelligence, Double Vision; an opponent's
+        // Hive Mind too, whose copy makes every player draw X again). Read as text, never built (Hour
+        // of Eternity's leavesOnItsOwn idiom: building takes a SpellAbility id). Optional and
+        // conditional copies (Mirari's {3}, Double Vision's first spell) count: the safe side.
+        private static int castCopies(final Player ai, final Game game, final Card host) {
+            int copies = 0;
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() != TriggerType.SpellCast || !t.hasParam("Execute")
+                            || !t.zonesCheck(game.getZoneOf(c))
+                            || !t.matchesValidParam("ValidCard", host)
+                            || !t.matchesValidParam("ValidActivatingPlayer", ai)) {
+                        continue;
+                    }
+                    final String text = t.getSVar(t.getParam("Execute"));
+                    if (text.contains("CopySpellAbility") && text.contains("TriggeredSpellAbility")) {
+                        copies++;
+                    }
+                }
+            }
+            return copies;
+        }
+
+        // A2, REFILL only: an opponent's Discarded or DiscardedAll trigger working where it is, on the
+        // battlefield or in the Command zone (Archfiend of Ifnir, Glint-Horn Buccaneer, Bone Miser,
+        // Waste Not, Megrim, Nath of the Gilt-Leaf). The refill's edge is their cleanup discard, and
+        // every card they discard would feed it. Ours pass: our Megrim on their discards is an upside.
+        private static boolean opponentFeedsOnDiscards(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                if (controller == null || !controller.isOpponentOf(ai)) {
+                    continue;
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if ((t.getMode() == TriggerType.Discarded || t.getMode() == TriggerType.DiscardedAll)
+                            && t.zonesCheck(game.getZoneOf(c))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // TradeSecrets.tableStealsOrPunishesDraws, copied (never share a predicate with an accepted
+        // card): draw thieves and draw punishers on the battlefield or in the Command zone, counted
+        // only where they work (zonesCheck). Any opponent's Drawn trigger or Draw replacement is a
+        // veto: each of them draws X too, and our X can feed a Bowmasters or a Notion Thief. One of
+        // ours (or an emblem we own) is a veto when it is symmetric (Spiteful Visions: X damage to us
+        // as well; Chains of Mephistopheles). Our own payoffs still pass (Nekusar, the Mindrazer,
+        // Psychosis Crawler, Notion Thief).
+        private static boolean tableStealsOrPunishesDraws(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                final boolean theirs = controller != null && controller.isOpponentOf(ai);
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Drawn && t.zonesCheck(game.getZoneOf(c))
+                            && (theirs || (!namesASide(t.getParam("ValidCard")) && !namesASide(t.getParam("ValidPlayer"))))) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.zonesCheck(game.getZoneOf(c))) {
+                        final String validPlayer = re.getParam("ValidPlayer");
+                        if (theirs || validPlayer == null || !validPlayer.contains("Opp")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean namesASide(final String valid) {
+            return valid != null && (valid.contains("You") || valid.contains("Opp"));
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision why) {
+            return new AiAbilityDecision(0, why);
         }
     }
 

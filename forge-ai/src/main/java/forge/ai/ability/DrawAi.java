@@ -109,6 +109,14 @@ public class DrawAi extends SpellAbilityAi {
             // through doTriggerNoCost and keeps its stock path.
             return SpecialCardAi.ReadTheRunes.consider(ai, sa);
         }
+        if (SpecialCardAi.Skyscribing.handles(ai, sa)) {
+            // "Each player draws X": the stock xPaid path spends every leftover mana and never sees
+            // that each opponent draws X too. Only the owner's own hard cast from hand (G3's readmit
+            // key, rule B3-2) is judged whole there: window, veto, X from honest mana, a refill edge
+            // or a decking win. A thief's cast, a copy, a Play-effect cast (Nathan Drake, Jeleva:
+            // doTriggerNoCost) and the Forecast keep the stock path.
+            return SpecialCardAi.Skyscribing.consider(ai, sa);
+        }
 
         Card hostCard = sa.getHostCard();
         PhaseHandler ph = ai.getGame().getPhaseHandler();
