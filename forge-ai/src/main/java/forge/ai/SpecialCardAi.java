@@ -22718,6 +22718,233 @@ public class SpecialCardAi {
         }
     }
 
+    // Intellectual Offering (dead-card batch 3, row 12)
+    // {4}{U} instant: "Choose an opponent. You and that player each draw three cards. Choose an
+    // opponent. Untap all nonland permanents you control and all nonland permanents that player
+    // controls." AI:RemoveDeck:All kept it off AiController.getSpellAbilityToPlay's list, so its
+    // owner never considered it; the script drops that hint (AI:RemoveDeck:Random, deck generation
+    // only, stays). Behind it ChoosePlayerAi.canPlay answered an unconditional WillPlay and all
+    // three subs approve in chkDrawback, so the stock path would fire this symmetric gift at the
+    // first window it could pay for: our upkeep, draw step or Main 1 (untapping the attackers the
+    // opponent swung with last turn, to block ours) or the opponent's turn (their attackers untap
+    // to block us, while ours would untap anyway). consider() casts it only in our own Main 2 on an
+    // empty stack: after our combat our tapped attackers untap to block on their turn and our
+    // tapped rocks refund mana now, while their untapped creatures can no longer block us this
+    // turn. Both ChoosePlayers resolve to the stock chooser's first opponent (ChoosePlayerAi.
+    // chooseSinglePlayer, no AILogic), so both halves are judged on that player. In order, every
+    // decline before the WillPlay:
+    //   1. outside our own Main 2 on an empty stack, WaitForMain2: O(1) and first, since an instant
+    //      is asked at every priority;
+    //   2. FLOOR 1, Secret Rendezvous's (batch 2 row 21), CantPlayAi: our library keeps more than
+    //      DRAW + LIBRARY_MARGIN cards; our hand (the spell excluded) takes the three without a
+    //      cleanup discard this turn unless our hand size is unlimited; our whole hand (the spell
+    //      included) is not already over our maximum, even when it is unlimited (U2: the DBDraw
+    //      sub's own drawback refusal in DrawAi.targetAI, which never reads isUnlimitedHandSize, so
+    //      no approval dies in a sub); and the draw-limit statics let us draw all three;
+    //   3. the engine's price (calculateManaCost in test mode: taxes, reductions, Sapphire
+    //      Medallion) not covered by G2 (HonestMana, held sources skipped) in total and in blue,
+    //      CantAfford, so no unpayable WillPlay reaches canPayCost's isManaSourceReserved roll;
+    //   4. no opponent among ChoosePlayerEffect's choices, or the first one (the stock chooser's
+    //      pick) has Laboratory Maniac, TargetingFailed;
+    //   5. FLOOR 2, a draw thief or draw punisher at the table (a private copy of
+    //      TradeSecrets.tableStealsOrPunishesDraws), CurseEffects;
+    //   6. when that opponent can draw: a library under DRAW it cannot survive decking from is a
+    //      mill kill, WillPlay at once; a library of DRAW or less is never handed over as a grip
+    //      (FLOOR 4), TargetingFailed; else they must already hold max(our hand + HAND_GAP,
+    //      MIN_OPP_HAND) cards or more (FLOOR 3, the refill guard), DoesntImpactGame;
+    //   7. U1, a tapped nonland permanent of theirs that their next untap step would not untap
+    //      (exert, Frost Titan's and Lorthos's "doesn't untap during your next untap step", a
+    //      CantHappen Untap replacement: Card.canUntap(opp, true)), CantPlayAi: the untap would free
+    //      it for good, and a lock is usually ours, chosen on purpose that turn;
+    //   8. FLOOR U, the untap half is the bigger gift, AnotherTime: their tapped nonland mana
+    //      sources and tap-ability permanents (what the untap lets them use before their own untap
+    //      step; their creatures can no longer block us this turn) outnumber our tapped nonland
+    //      creatures (blockers on their turn), mana sources (a refund now) and tap-ability
+    //      permanents. The sources about to pay for the spell are still untapped here and are not
+    //      counted: an unmodelled refund, the safe side;
+    //   9. else WillPlay 100.
+    // RNG parity: A dropped the card at the RemoveDeck filter and never evaluated it for its
+    // owner. Every step reads state only: the phase and stack, zone sizes, StaticAbilityCantDraw,
+    // the test-mode cost (calculateManaCost restores the castFrom it sets), HonestMana (its only
+    // write is setActivatingPlayer on the mana abilities it reads), getDefinedPlayers, trigger and
+    // replacement params with zonesCheck, tapped flags, ability costs and Card.canUntap's
+    // CantHappen check: no MyRandom, no card, no SpellAbility id, no target, nothing remembered or
+    // held. canPayCost's draws follow a WillPlay only. Effect casts (Nathan Drake's attack
+    // trigger, Jeleva) keep the stock WillPlay: isRootCast fails a Play-effect cast, and
+    // ChoosePlayerAi.doTriggerNoCost answers the stock WillPlay for this card before canPlay. An AI
+    // thief's MayPlay cast from exile is a root cast, judged here with the thief as ai.
+    public static class IntellectualOffering {
+        public static final String NAME = "Intellectual Offering";
+        static final String CHOICES = "Player.Opponent"; // the script's Choices$, both ChoosePlayers
+        static final int DRAW = 3;           // each side's draw
+        static final int LIBRARY_MARGIN = 3; // DrawAi's own "never draw within 3 of an empty library"
+        static final int HAND_GAP = 1;       // their hand minus ours (the spell excluded)
+        static final int MIN_OPP_HAND = 3;   // never refill an opponent in topdeck mode
+        private static final int LOCKED = -1;
+
+        // ChoosePlayerAi.canPlay's gate: this card's own root spell wherever it is cast from (our
+        // hand, an AI thief's MayPlay from exile, a canPlaySa probe's copy); never the DBChoose sub
+        // (parent set) or a Play-effect cast
+        public static boolean isRootCast(final SpellAbility sa) {
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) && sa.isSpell()
+                    && sa.getParent() == null && !sa.isCastFromPlayEffect();
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // 1. the window, O(1): almost every consult ends here
+            if (!ph.isPlayerTurn(ai) || !ph.is(PhaseType.MAIN2) || !game.getStack().isEmpty()) {
+                return no(AiPlayDecision.WaitForMain2);
+            }
+            final Card host = sa.getHostCard();
+            if (host == null) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            final int fullHand = ai.getCardsIn(ZoneType.Hand).size();
+            final int hand = host.isInZone(ZoneType.Hand) ? fullHand - 1 : fullHand; // the spell is spent
+            // 2. FLOOR 1: our three are whole, safe and kept
+            if (ai.getCardsIn(ZoneType.Library).size() <= DRAW + LIBRARY_MARGIN) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            if (!ai.isUnlimitedHandSize() && hand + DRAW > ai.getMaxHandSize()) {
+                return no(AiPlayDecision.CantPlayAi); // a cleanup discard this very turn
+            }
+            if (fullHand > ai.getMaxHandSize()) {
+                return no(AiPlayDecision.CantPlayAi); // U2: the DBDraw sub would refuse (Reliquary Tower)
+            }
+            // draw-limit statics (Narset, Parter of Veils) count the draws already made this turn
+            if (!ai.canDraw() || StaticAbilityCantDraw.canDrawAmount(ai, DRAW) < DRAW) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            // 3. the engine's price against real mana
+            if (!affordable(ai, sa)) {
+                return no(AiPlayDecision.CantAfford);
+            }
+            // 4. the opponent both ChoosePlayers resolve to: ChoosePlayerEffect's choices, the stock
+            //    chooser's first
+            final PlayerCollection choices = AbilityUtils.getDefinedPlayers(host, CHOICES, sa);
+            final Player opp = choices.isEmpty() ? null : choices.get(0);
+            if (opp == null || opp.isCardInPlay("Laboratory Maniac")) {
+                return no(AiPlayDecision.TargetingFailed);
+            }
+            // 5. FLOOR 2: no draw thief or punisher; our own payoffs pass
+            if (tableStealsOrPunishesDraws(ai, game)) {
+                return no(AiPlayDecision.CurseEffects);
+            }
+            // 6. their three
+            if (opp.canDraw()) {
+                final int library = opp.getCardsIn(ZoneType.Library).size();
+                if (library < DRAW && !opp.cantLoseCheck(forge.game.player.GameLossReason.Milled)) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // they deck out and lose
+                }
+                if (library <= DRAW) {
+                    return no(AiPlayDecision.TargetingFailed); // FLOOR 4: never their last library as a grip
+                }
+                // FLOOR 3, the refill guard: they already hold more than we do and are not topdecking
+                if (opp.getCardsIn(ZoneType.Hand).size() < Math.max(hand + HAND_GAP, MIN_OPP_HAND)) {
+                    return no(AiPlayDecision.DoesntImpactGame);
+                }
+            } // else we draw three and they draw none
+            // 7-8. the untap half: never a lock of theirs freed (U1), never the bigger gift (FLOOR U)
+            final int gift = untapGift(opp);
+            if (gift == LOCKED) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            if (gift > untapGain(ai)) {
+                return no(AiPlayDecision.AnotherTime);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // ours, in our Main 2: a tapped nonland creature (a blocker on their coming turn), mana
+        // source (a refund now) or tap-ability permanent
+        private static int untapGain(final Player ai) {
+            int n = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isTapped() && !c.isLand()
+                        && (c.isCreature() || !c.getManaAbilities().isEmpty() || hasTapAbility(c))) {
+                    n++;
+                }
+            }
+            return n;
+        }
+
+        // theirs, in our Main 2: LOCKED on a tapped nonland permanent their next untap step would not
+        // untap (U1: the spell's untap frees it); else their tapped nonland mana sources and
+        // tap-ability permanents, usable before their own untap step (their creatures cannot block
+        // us any more this turn, and would untap in their untap step anyway)
+        private static int untapGift(final Player opp) {
+            int n = 0;
+            for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isTapped() || c.isLand()) {
+                    continue;
+                }
+                if (!c.canUntap(opp, true)) {
+                    return LOCKED;
+                }
+                if (!c.getManaAbilities().isEmpty() || hasTapAbility(c)) {
+                    n++;
+                }
+            }
+            return n;
+        }
+
+        private static boolean hasTapAbility(final Card c) {
+            for (final SpellAbility a : c.getNonManaAbilities()) {
+                if (a.isActivatedAbility() && a.getPayCosts() != null && a.getPayCosts().hasTapCost()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the cost as the engine prices it, on this spell's own cost, against real mana (Infernal
+        // Offering's idiom, in blue)
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLUE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+
+        // TradeSecrets.tableStealsOrPunishesDraws, copied (never share a predicate with an accepted
+        // card): draw thieves and draw punishers on the battlefield or in the Command zone, counted
+        // only where they work (zonesCheck). Any opponent's Drawn trigger or Draw replacement is a
+        // veto; one of ours (or an emblem we own) is a veto when it is symmetric (Spiteful Visions,
+        // Chains of Mephistopheles). Our own payoffs still pass (Psychosis Crawler, Notion Thief).
+        private static boolean tableStealsOrPunishesDraws(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                final boolean theirs = controller != null && controller.isOpponentOf(ai);
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Drawn && t.zonesCheck(game.getZoneOf(c))
+                            && (theirs || (!namesASide(t.getParam("ValidCard")) && !namesASide(t.getParam("ValidPlayer"))))) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.zonesCheck(game.getZoneOf(c))) {
+                        final String validPlayer = re.getParam("ValidPlayer");
+                        if (theirs || validPlayer == null || !validPlayer.contains("Opp")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean namesASide(final String valid) {
+            return valid != null && (valid.contains("You") || valid.contains("Opp"));
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision why) {
+            return new AiAbilityDecision(0, why);
+        }
+    }
+
     // Invert Polarity
     // Cast only in response to an opponent's spell in Commandeer's window
     // (untargeted anywhere in the chain, no "...All" api, CMC floor): winning

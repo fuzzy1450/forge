@@ -42,6 +42,14 @@ public class ChoosePlayerAi extends SpellAbilityAi {
             // the stock answer.
             return SpecialCardAi.InfernalOffering.consider(ai, sa);
         }
+        if (SpecialCardAi.IntellectualOffering.isRootCast(sa)) {
+            // Dead-card batch 3, row 12: the card's own root cast (its hint is dropped, so there is no
+            // readmit key: a hand cast, an AI thief's MayPlay cast from exile, a canPlaySa probe's
+            // copy). The stock WillPlay below fires the 5-mana symmetric draw-and-untap at the first
+            // window it can pay for (AI:RemoveDeck:All hid that). The DBChoose sub (parent set) and
+            // effect casts (doTriggerNoCost below) keep the stock answer.
+            return SpecialCardAi.IntellectualOffering.consider(ai, sa);
+        }
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 
@@ -55,6 +63,11 @@ public class ChoosePlayerAi extends SpellAbilityAi {
         if (SpecialCardAi.InfernalOffering.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             // Dead-card batch 3, row 8: effect casts (Nathan Drake's thefts, Prosper, cascade) keep the
             // stock answer, never the paid-cast evaluator
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+        if (SpecialCardAi.IntellectualOffering.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dead-card batch 3, row 12: effect casts (Nathan Drake's thefts, Jeleva) keep the stock
+            // answer, never the root-cast evaluator
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
         return canPlay(ai, sa);
