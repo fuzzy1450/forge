@@ -6043,6 +6043,316 @@ public class SpecialCardAi {
         }
     }
 
+    // Collective Voyage (dead-card batch 3, row 7)
+    // "Join forces - Starting with you, each player may pay any amount of mana. Each player searches
+    // their library for up to X basic land cards, where X is the total amount of mana paid this way,
+    // puts them onto the battlefield tapped, then shuffles." ({G} sorcery.) AI:RemoveDeck:All is
+    // KEPT, so every other isCardRemAIDeck reader (the -10 sort, CopySpellAbilityAi, the steal,
+    // clone and tutor pickers, PlayEffect's random cast, a thief's list) still refuses the card,
+    // and RepeatEachAi is untouched, so the canPlaySa probes and the Play-effect thefts (the
+    // Nathan Drake line, Grand Larceny, Planar Portal, Mind Seize) keep A's stock path. Behind the
+    // hint RepeatEachAi.canPlay approves any RepeatEach with no AILogic, so readmit IS the cast
+    // decision. At resolution the stock announcement (PlayerControllerAi.announceRequirements ->
+    // ComputerUtilMana.determineLeftoverMana(DBPay)) prices the root's own, already-paid {G} again on
+    // top of X: one mana short, 0 with no green source left. That is modelled here, not changed (rule
+    // B3-8: Minds Aglow's chooser is never widened). AI opponents announce 0 for our spell, yet every
+    // player searches for the TOTAL (each fetcher decides its own search, and the AI takes basics):
+    // in a duel the opponent gets exactly our X lands, and untaps first.
+    // readmit lets the owner's own hand cast through G3 only when, each refusal its own return in
+    // this order so a print-only overlay can count them by reason:
+    // - shape: the owner's own paid cast of the RepeatEach spell from hand (never a theft, a copy or
+    //   a Play effect);
+    // - window: our own Main 2 at sorcery speed with no mana held (RemoveDeckFilter.noManaHeld); the
+    //   hint's -10 and the CMC-1 sort judge it after every other castable spell, so X is mana nothing
+    //   else wanted;
+    // - hands: every opponent's effective hand is MAX_OPP_HAND or less: its hand, plus the graveyard
+    //   cards it can cast or unearth from there (flashback, escape, unearth, retrace, jump-start),
+    //   plus its foretold and adventuring exiled cards. Its next turn is then that card and its draw;
+    // - library: MIN_LANDS basics or more in our library, and LIBRARY_MARGIN other cards left once
+    //   every basic is fetched (the real X can exceed the model: Signets and filter lands pay it);
+    // - mana: the engine's test-mode cost c (taxes, reductions) against HonestMana (G2, held sources
+    //   skipped): twice its green shards in green (the cast's and the stock re-price's), and the
+    //   stock X, x = min(total - 2c, basics), MIN_LANDS or more;
+    // - ramp: our hand or commander needs the mana (needsRamp, row 61 Lavabrink Floodgates' demand
+    //   rule, a private copy);
+    // - search: the search is ours to make and nobody profits from it (canSearchLibraryWith,
+    //   LimitSearchLibrary and searchPunished, row 87 Long-Term Plans' check, a private copy);
+    // - landfall: no opposing battlefield or graveyard card has a live trigger on a land entering the
+    //   battlefield: their landfall on their X basics (Rampaging Baloths, Avenger of Zendikar, Omnath,
+    //   Bloodghast from the graveyard) and their punishers on ours (Tunnel Ignus, Zo-Zu, Ankh of
+    //   Mishra, Archaeomancer's Map) alike;
+    // - gift: no opponent can use the lands (cannotUseGift): no commander of theirs waits in the
+    //   command zone beyond its board's mana and a land drop, and no permanent of theirs turns spare
+    //   mana into value.
+    // Every read before a true is a count, a zone, a keyword, a param, a trigger or static mode,
+    // matchesValidParam, zonesCheck, canSearchLibraryWith, test-mode calculateManaCost, HonestMana,
+    // the two board-mana counts (their only write, like G2's, is setActivatingPlayer on mana
+    // abilities) or noManaHeld: no random number, nothing held or remembered, so a false is exactly
+    // the old filter. The first new draw is canPayCost's for {G}, after a true, in a window G2 judged
+    // payable with four mana or more.
+    public static class CollectiveVoyage {
+        public static final String NAME = "Collective Voyage";
+        // two basics onto the battlefield, Explosive Vegetation's two, for {G} and the spare mana
+        static final int MIN_LANDS = 2;
+        // an opponent's next turn is then at most two plays: the card it holds and its draw
+        static final int MAX_OPP_HAND = 1;
+        // cards left in our library once every basic is fetched (Stalwart Unity draws heavily)
+        static final int LIBRARY_MARGIN = 8;
+        // a ValidCard type a basic land answers to (compared in lower case)
+        private static final Set<String> LAND_TYPES = Set.of("land", "plains", "island", "swamp", "mountain",
+                "forest", "card", "permanent");
+        // repeatable mana-only abilities that turn every extra land into value
+        private static final Set<ApiType> SINKS = EnumSet.of(ApiType.Pump, ApiType.PutCounter, ApiType.Token,
+                ApiType.Draw, ApiType.Dig, ApiType.DealDamage);
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.RepeatEach || sa.isCopied()
+                    || sa.isCastFromPlayEffect() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getController()) || !ai.equals(host.getOwner())) {
+                return false; // shape: a theft, a copy, another zone: the filter, as in A
+            }
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // window: O(1) outside our own Main 2
+            }
+            for (final Player opp : ai.getOpponents()) {
+                if (effectiveHand(opp) > MAX_OPP_HAND) {
+                    return false; // hands
+                }
+            }
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            final int basics = CardLists.count(library, CardPredicates.BASIC_LANDS);
+            if (basics < MIN_LANDS || library.size() - basics < LIBRARY_MARGIN) {
+                return false; // library
+            }
+            // the cost as the engine prices it (test mode: taxes and Raise/ReduceCost, no MyRandom)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int c = cost.getConvertedManaCost();
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            // the stock resolution asks the spell's {G} again: a second green unit must survive the cast
+            if (mana.colour(MagicColor.GREEN) < 2 * cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN)
+                    || Math.min(mana.total() - 2 * c, basics) < MIN_LANDS) {
+                return false; // mana
+            }
+            if (!needsRamp(ai, host)) {
+                return false; // ramp
+            }
+            if (!ai.canSearchLibraryWith(sa, ai) || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)) {
+                return false; // search
+            }
+            for (final Player opp : ai.getOpponents()) {
+                if (landfallPayoff(opp)) {
+                    return false; // landfall
+                }
+            }
+            for (final Player opp : ai.getOpponents()) {
+                if (!cannotUseGift(opp)) {
+                    return false; // gift
+                }
+            }
+            return true;
+        }
+
+        // Public counts only: the hand's size, plus each graveyard card the player may cast or unearth
+        // from there, plus each of its exiled cards that is foretold or on an adventure.
+        private static int effectiveHand(final Player opp) {
+            int n = opp.getCardsIn(ZoneType.Hand).size();
+            for (final Card c : opp.getCardsIn(ZoneType.Graveyard)) {
+                if (c.hasKeyword(Keyword.FLASHBACK) || c.hasKeyword(Keyword.ESCAPE) || c.hasKeyword(Keyword.UNEARTH)
+                        || c.hasKeyword(Keyword.RETRACE) || c.hasKeyword(Keyword.JUMP_START)) {
+                    n++;
+                }
+            }
+            for (final Card c : opp.getCardsIn(ZoneType.Exile)) {
+                if (c.isForetold() || c.isOnAdventure()) {
+                    n++;
+                }
+            }
+            return n;
+        }
+
+        // Row 61's demand rule (LavabrinkFloodgates.consider, a private copy; predicates of accepted
+        // cards are not shared): an X spell in hand passes; otherwise the other nonland cards in hand
+        // plus each of our commanders in the command zone (with tax) must cost more than next turn's
+        // mana.
+        private static boolean needsRamp(final Player ai, final Card host) {
+            int demand = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c == host || c.isLand()) {
+                    continue;
+                }
+                if (c.getManaCost() != null && c.getManaCost().countX() > 0) {
+                    return true; // more mana, a bigger X
+                }
+                demand += c.getCMC();
+            }
+            for (final Card cmdr : ai.getCommanders()) {
+                if (cmdr.isInZone(ZoneType.Command)) {
+                    demand += cmdr.getCMC() + 2 * ai.getCommanderCast(cmdr);
+                }
+            }
+            return demand > boardMana(ai) + (ai.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.LANDS) ? 1 : 0);
+        }
+
+        // A player's mana next turn from its board (LavabrinkFloodgates.nextTurnMana's loop, a private
+        // copy, without its land-in-hand term, which the caller adds for us and an opponent's hidden
+        // hand cannot give): every battlefield mana source it controls, tapped and summoning-sick ones
+        // included, at its best mana ability with no mana in its own cost - Amount times the symbols
+        // of a plain production, Amount once for a choice production (Combo, Any, Chosen,
+        // ColorIdentity, a reflected, Special or empty one). RNG-free.
+        private static int boardMana(final Player p) {
+            int supply = 0;
+            for (final Card src : p.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null || ma.getPayCosts().hasManaCost()) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(p);
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean choice = produced.isEmpty() || ma.getApi() == ApiType.ManaReflected
+                            || mp.isSpecialMana() || mp.isComboMana() || mp.isAnyMana()
+                            || produced.contains("Chosen") || produced.contains("ColorIdentity");
+                    best = Math.max(best, choice ? amount : amount * produced.split(" ").length);
+                }
+                supply += best;
+            }
+            return supply;
+        }
+
+        // LongTermPlans.searchPunished, a private copy: an opposing permanent that triggers on our
+        // search or takes it over, or a permanent on any battlefield whose Shuffled trigger our own
+        // shuffle fires (an absent ValidPlayer matches: a conservative decline). Parameter reads only.
+        private static boolean searchPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.SearchedLibrary) {
+                            return true;
+                        }
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (st.hasParam("ControlOpponentsSearchingLibrary")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Shuffled && t.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // A card of opp's, on its battlefield or in its graveyard, with a ChangesZone or ChangesZoneAll
+        // trigger into the battlefield (or with no Destination) that is live where the card sits (the
+        // engine's own zonesCheck reads its TriggerZones: Bloodghast fires from the graveyard, a dead
+        // Rampaging Baloths does not) and whose ValidCard (ValidCards) a basic land can match: their
+        // landfall on their X basics and their punishers on ours alike. Origin is not read (a
+        // conservative decline). Parameter reads only.
+        private static boolean landfallPayoff(final Player opp) {
+            final Game game = opp.getGame();
+            for (final ZoneType zone : new ZoneType[] {ZoneType.Battlefield, ZoneType.Graveyard}) {
+                for (final Card c : opp.getCardsIn(zone)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        final String valid;
+                        if (t.getMode() == TriggerType.ChangesZone) {
+                            valid = t.getParam("ValidCard");
+                        } else if (t.getMode() == TriggerType.ChangesZoneAll) {
+                            valid = t.getParam("ValidCards");
+                        } else {
+                            continue;
+                        }
+                        final String dest = t.getParam("Destination");
+                        if (dest != null && !dest.contains("Battlefield") && !dest.contains("Any")) {
+                            continue;
+                        }
+                        if (t.zonesCheck(game.getZoneOf(c)) && landCanMatch(valid)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // A ValidCard text one of the basics can match: absent (every card, as the trigger reads it),
+        // or a comma alternative typed Land, a basic land type, Card or Permanent, unless its
+        // properties name Self (the host's own entering: a fetched land is never the host; 5,121
+        // alternatives of scripted enters triggers are Card with Self) or nonLand.
+        private static boolean landCanMatch(final String valid) {
+            if (valid == null) {
+                return true;
+            }
+            for (final String alt : valid.split(",")) {
+                final String[] parts = alt.trim().split("\\.", 2);
+                if (!LAND_TYPES.contains(parts[0].toLowerCase(Locale.ROOT))) {
+                    continue;
+                }
+                boolean excluded = false;
+                if (parts.length > 1) {
+                    for (final String prop : parts[1].split("\\+")) {
+                        if ("Self".equals(prop) || "nonLand".equalsIgnoreCase(prop)) {
+                            excluded = true;
+                            break;
+                        }
+                    }
+                }
+                if (!excluded) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Public information only (the hands were checked first): every commander of opp's waiting in
+        // its command zone (with tax) is castable from its board's mana and a land drop, so the gift
+        // unlocks none of them, and no permanent of opp's turns spare mana into value: an activated
+        // non-mana ability with X in its cost (hydras, Helix Pinnacle), or a repeatable one paid in
+        // mana alone (no tap, sacrifice or counter removal; no ActivationLimit or
+        // GameActivationLimit) of API Pump, PutCounter, Token, Draw, Dig or DealDamage
+        // (firebreathing, shades, a mana-only card or token maker). Equip (Attach) passes.
+        private static boolean cannotUseGift(final Player opp) {
+            final int supply = boardMana(opp);
+            for (final Card cmdr : opp.getCommanders()) {
+                if (cmdr.isInZone(ZoneType.Command) && cmdr.getCMC() + 2 * opp.getCommanderCast(cmdr) > supply + 1) {
+                    return false;
+                }
+            }
+            for (final Card p : opp.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility a : p.getSpellAbilities()) {
+                    if (!a.isActivatedAbility() || a.isManaAbility()) {
+                        continue;
+                    }
+                    final Cost cost = a.getPayCosts();
+                    if (cost == null) {
+                        continue;
+                    }
+                    final ManaCost mana = cost.getTotalMana();
+                    if (mana.countX() > 0) {
+                        return false; // an X mana sink turns every land into value
+                    }
+                    if (SINKS.contains(a.getApi()) && cost.isOnlyManaCost() && mana.getCMC() > 0
+                            && !a.hasParam("ActivationLimit") && !a.hasParam("GameActivationLimit")) {
+                        return false; // a repeatable mana-only sink, the same
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
     // Sudden Spoiling, Polymorphist's Jest, Flatline
     // A combat trick for "until end of turn, creatures target player controls lose all abilities
     // and have base power and toughness N/M". Cast only after blocks are locked in (declare-blockers
@@ -33823,8 +34133,8 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
-    // 10, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58, 59, 60,
-    // 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row 68 (Trench
+    // 7, 10, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58, 59,
+    // 60, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row 68 (Trench
     // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -33927,6 +34237,8 @@ public class SpecialCardAi {
                     return DjinnOfInfiniteDeceits.readmit(ai, sa);
                 case SylvanOffering.NAME:
                     return SylvanOffering.isOwnHandCast(ai, sa);
+                case CollectiveVoyage.NAME:
+                    return CollectiveVoyage.readmit(ai, sa);
                 default:
                     return false;
             }
