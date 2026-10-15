@@ -1719,6 +1719,24 @@ public class AiController {
                     SpecialCardAi.RiteOfHarmony.PENDING.remove();
                 }
             }
+            // Benevolent Offering (dead-card batch 3, row 11, W11): in our own Main 2 the Offering may take
+            // the place of the play the AI just chose (SpecialCardAi.BenevolentOffering.findHoist): H2 when
+            // its three Spirit tokens make that creature spell cheap enough for both this turn, H1 when its
+            // value beats that creature's by half a card. Inert (one hand scan by paper name) unless an
+            // owner's Offering is in hand in our Main 2 on an empty stack; a decline draws nothing, holds
+            // nothing and returns chosenSa unchanged. On H2 the chosen spell's off-white sources are held
+            // for the next spell (Ride the Avalanche's idiom, chosen deterministically) so paying the
+            // Offering cannot strand it; canPlayAndPayFor is the cast's own check and draw.
+            SpecialCardAi.BenevolentOffering.Hoist hoist = SpecialCardAi.BenevolentOffering.findHoist(player, chosenSa, saList);
+            if (hoist != null && hoist.pick) {
+                for (Card c : hoist.hold) {
+                    memory.rememberCard(c, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+                }
+                if (canPlayAndPayFor(hoist.offering) == AiPlayDecision.WillPlay) {
+                    return hoist.offering;
+                }
+                memory.clearMemorySet(AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+            }
         }
 
         return chosenSa;
