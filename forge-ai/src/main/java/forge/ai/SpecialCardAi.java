@@ -33130,6 +33130,245 @@ public class SpecialCardAi {
         }
     }
 
+    // Not Dead After All (dead-card batch 3, row 88)
+    // {B} Instant. "Until end of turn, target creature you control gains 'When this creature dies,
+    // return it to the battlefield tapped under its owner's control, then create a Wicked Role token
+    // attached to it.'" (The Role gives +1/+1; when it goes to a graveyard each opponent loses 1 life.)
+    // Time Lord Regeneration's shape (batch 1, row 39): a targeted SP$ Animate that grants only a dies
+    // trigger, routed here from AnimateAi.canPlay for the same two gates (checkPhaseRestrictions
+    // closes every response and declare-blockers window; animateTgtAI falls through to CantPlayAi).
+    // The card is unhinted: A considered and declined it at every priority it was castable.
+    // Never proactive, no mana held. Two windows, each on the AI's own death predictors (the pair
+    // RegenerateAi relies on and TimeLordRegeneration uses):
+    // - RESPONSE: an opponent's object on top of the stack whose chain, per
+    //   predictThreatenedObjects(ai, null, true), kills our creature (destroy, lethal damage, -X/-X,
+    //   a wrath included), the whole chain rejected when any part exiles, bounces or otherwise moves
+    //   from the battlefield, gains control, attaches, or replaces the death (killsWithoutReplacing);
+    // - BLOCKS: the declare-blockers step on an empty stack, either turn, with combat damage not
+    //   prevented: our combatant that combatantWouldBeDestroyed says dies and
+    //   combatantCantBeDestroyed does not save (a chump block, a losing trade, a deathtouch block).
+    // The return is a new object "under its owner's control", so a candidate must come back as itself
+    // (returns): a nontoken creature card we own and control, not face down, not our commander (it
+    // goes to the command zone before the trigger resolves: PermanentAi.confirmAction, CR 903.9a), not
+    // already returning by undying or persist (ComputerUtilCard.hasActiveUndyingOrPersist), and under
+    // no card-local death replacement. Floor: the candidate is worth a real card, CreatureEvaluator
+    // MIN_EVAL or more. Skeptic F1: opposing graveyard hate turns a cast into a waste, so a candidate
+    // is dropped when a working Moved replacement on an opponent's battlefield or command zone
+    // replaces its death (Dauthi Voidwalker, Leyline of the Void, Rest in Peace, Kalitas, Anafenza,
+    // Cry of the Carnarium's turn effect) or prevents its return from the graveyard (Grafdigger's
+    // Cage). The target is getBestCreatureAI of the rest. Worst case: {B} and the card for a 2/2 that
+    // comes back tapped with a +1/+1 Role, card-neutral against removal and never a board loss.
+    // Mana (B3-5): G2 (HonestMana, held sources skipped) against the engine's test-mode
+    // calculateManaCost, in total and in black, before any predictor (Flare of Fortitude's form);
+    // skipped for a Play-effect cast or a copy, whose callers price the payment.
+    // RNG: AnimateAi keeps the stock path on a Sacrifice-topped stack, the one state where A drew;
+    // everywhere else every decline here is a read: the restriction mirror, resetTargets, the
+    // window, killsWithoutReplacing, calculateManaCost in test mode, HonestMana, returns,
+    // getTargetableCards, predictThreatenedObjects on the top object, the combat predictors,
+    // evaluateCreature, the replacement scan and getBestCreatureAI. The first draw is canPayCost's,
+    // after an approval. Residuals (Time Lord Regeneration's and Flare of Fortitude's): the combat
+    // predictors reach ComputerUtil.canRegenerate, which test-pays a Regenerate ability covering a
+    // combatant; a Count$Random NumDmg on an opposing stack object draws inside
+    // predictThreatenedObjects; HonestMana can count a source canPayCost then refuses. Nothing is
+    // targeted, held, remembered or reserved on a decline.
+    // Not covered, each a hold: our own wraths (AiController's own-stack return), edicts (the stock
+    // path is kept), activated removal (the stack copy's original has cleared targets), fights, -1/-1
+    // counters. A rare waste: Containment Priest (its !wasCast reads the current object).
+    // killsWithoutReplacing and deathIsReplaced are private verbatim copies of TimeLordRegeneration's
+    // (accepted helpers stay private, B3-4).
+    public static class NotDeadAfterAll {
+        public static final String NAME = "Not Dead After All";
+        // TitansPresence's MIN_EVAL (Oubliette's): a non-token vanilla 2/2 for 2. A 1/1 for 1 is 130,
+        // Town Greeter 135, Satyr Wayfinder 145, Ornithopter 120: card-neutral saves of chaff.
+        static final int MIN_EVAL = 160;
+
+        // Snakeform's three-name idiom (a card cast face down from exile reads "" from
+        // getAbilitySourceName), on an Animate root only, never an AbilitySub
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || sa.getApi() != ApiType.Animate) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            // The router bypasses the base class's restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            sa.resetTargets(); // nothing held past a decline
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean response = !game.getStack().isEmpty();
+
+            // 1. the window, O(1): nearly every consult ends here
+            if (response) {
+                final SpellAbility top = game.getStack().peekAbility();
+                if (top == null || top.getActivatingPlayer() == null
+                        || !top.getActivatingPlayer().isOpponentOf(ai) || !killsWithoutReplacing(top)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+                }
+            } else if (combat == null || !ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || game.getReplacementHandler().isPreventCombatDamageThisTurn()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+
+            // 2. mana (B3-5): G2 against the engine's test-mode cost, in total and in black
+            if (!sa.isCastFromPlayEffect() && !sa.isCopied() && !affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+
+            // 3. our creatures that come back as themselves (the card reads before canTarget, so a
+            // token-heavy board never reaches the targeting checks)
+            final CardCollection ours = CardLists.getTargetableCards(
+                    CardLists.filter(ai.getCreaturesInPlay(), c -> returns(ai, c)), sa);
+            if (ours.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // 4. the ones that die now (TimeLordRegeneration's predictors)
+            final CardCollection dying = new CardCollection();
+            if (response) {
+                // A null saviour opens every threat branch; an Animate-typed saviour would skip the
+                // destroy and -X/-X branches.
+                final List<GameObject> threatened = ComputerUtil.predictThreatenedObjects(ai, null, true);
+                for (final Card c : ours) {
+                    if (threatened.contains(c)) {
+                        dying.add(c);
+                    }
+                }
+            } else {
+                for (final Card c : ours) {
+                    // combatantWouldBeDestroyed first: it returns at once for a creature outside
+                    // combat, so the regeneration scan in combatantCantBeDestroyed only runs for our
+                    // combatants.
+                    if (ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                            && !ComputerUtilCombat.combatantCantBeDestroyed(ai, c)) {
+                        dying.add(c);
+                    }
+                }
+            }
+
+            // 5. the floor: a returned body worth a real card
+            final CardCollection worth = CardLists.filter(dying,
+                    c -> ComputerUtilCard.evaluateCreature(c) >= MIN_EVAL);
+            if (worth.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            // 6. skeptic F1: no opposing replacement exiles it instead or keeps it in the graveyard
+            final CardCollection saved = CardLists.filter(worth, c -> !opposingReplaced(ai, c));
+            if (saved.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+
+            final Card best = ComputerUtilCard.getBestCreatureAI(saved);
+            if (best == null || !sa.canTarget(best)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // "return it to the battlefield ... under its OWNER's control": a stolen creature would go
+        // home; a token ceases to exist in the graveyard; a face-down card returns as whatever it is;
+        // our commander goes to the command zone first (PermanentAi.confirmAction, CR 903.9a), so the
+        // trigger finds nothing; undying and persist already return it.
+        private static boolean returns(final Player ai, final Card c) {
+            return c.isCreature() && ai.equals(c.getOwner()) && !c.isToken() && !c.isFaceDown()
+                    && !c.isCommander() && !ComputerUtilCard.hasActiveUndyingOrPersist(c)
+                    && !deathIsReplaced(c);
+        }
+
+        // FlareOfFortitude.affordable's form, in black: G2 with held sources skipped against the
+        // engine's test-mode cost (taxes and reductions applied), judged on sa, never
+        // host.getFirstSpellAbility() (row 77). Never getAvailableManaEstimate.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLACK) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK);
+        }
+
+        // Skeptic F1. A working Moved replacement (zonesCheck, the stopsUncastCreatures idiom) on an
+        // opponent's battlefield or command zone that matches c through ValidCard and ValidLKI (absent
+        // = match) and either replaces its death (Destination Graveyard, Origin absent or Battlefield:
+        // Dauthi Voidwalker, Leyline of the Void, Rest in Peace, Kalitas, Anafenza, Cry of the
+        // Carnarium's effect) or prevents its return (Destination Battlefield, Origin Graveyard:
+        // Grafdigger's Cage). Opposing ETB replacements and enters-tapped lands (Destination
+        // Battlefield, no Origin) never match, and our own replacements are not read. Missed:
+        // Containment Priest (Creature.!token+!wasCast reads the current object, no Origin). Reads
+        // params and card properties only; reached only on the approval path.
+        private static boolean opposingReplaced(final Player ai, final Card c) {
+            final Game game = ai.getGame();
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card host : opp.getCardsIn(ZoneType.Battlefield, ZoneType.Command)) {
+                    for (final ReplacementEffect re : host.getReplacementEffects()) {
+                        if (re.getMode() != ReplacementType.Moved || re.getHostCard() == c
+                                || !re.zonesCheck(game.getZoneOf(host))) {
+                            continue;
+                        }
+                        final String origin = re.getParam("Origin");
+                        final String destination = re.getParamOrDefault("Destination", "");
+                        final boolean deathReplaced = destination.contains("Graveyard")
+                                && (origin == null || origin.contains("Battlefield"));
+                        final boolean returnPrevented = destination.contains("Battlefield")
+                                && origin != null && origin.contains("Graveyard");
+                        if ((deathReplaced || returnPrevented) && re.matchesValidParam("ValidCard", c)
+                                && re.matchesValidParam("ValidLKI", c)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // TimeLordRegeneration.killsWithoutReplacing, copied verbatim (accepted helpers stay private,
+        // B3-4). predictThreatenedObjects(ai, null, ...) unions every threat branch of the chain.
+        // Reject any chain that could remove our creature WITHOUT it dying (exile / bounce / steal /
+        // attach) or that replaces the death, so whatever it still flags came from a destroy,
+        // lethal-damage or -X/-X branch.
+        private static boolean killsWithoutReplacing(final SpellAbility top) {
+            for (SpellAbility part = top; part != null; part = part.getSubAbility()) {
+                if (part.hasParam("ReplaceDyingDefined") || part.hasParam("ReplaceDyingValid")) {
+                    return false;
+                }
+                final ApiType api = part.getApi();
+                if (api == ApiType.GainControl || api == ApiType.Attach) {
+                    return false;
+                }
+                if ((api == ApiType.ChangeZone || api == ApiType.ChangeZoneAll)
+                        && ("Exile".equals(part.getParam("Destination"))
+                            || part.getParamOrDefault("Origin", "").contains("Battlefield"))) {
+                    return false;
+                }
+                if (api == ApiType.Effect && part.hasParam("ReplacementEffects")) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // TimeLordRegeneration.deathIsReplaced, copied verbatim (B3-4). A card-local "moved from the
+        // battlefield (or from anywhere) -> somewhere other than the graveyard" replacement means the
+        // creature never "dies".
+        private static boolean deathIsReplaced(final Card c) {
+            for (final ReplacementEffect re : c.getReplacementEffects()) {
+                if (re.getMode() == ReplacementType.Moved
+                        && (!re.hasParam("Origin") || re.getParam("Origin").contains("Battlefield"))
+                        && (!re.hasParam("Destination") || re.getParam("Destination").contains("Graveyard"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Null Brooch
     public static class NullBrooch {
         public static boolean consider(final Player ai, final SpellAbility sa) {

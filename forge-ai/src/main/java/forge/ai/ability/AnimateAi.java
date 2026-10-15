@@ -94,6 +94,28 @@ public class AnimateAi extends SpellAbilityAi {
             // took before.
             return SpecialCardAi.Snakeform.consider(ai, sa);
         }
+        if (SpecialCardAi.NotDeadAfterAll.handles(sa)) {
+            // Not Dead After All (dead-card batch 3, row 88), judged whole in
+            // SpecialCardAi.NotDeadAfterAll.consider, for Time Lord Regeneration's two reasons:
+            // checkPhaseRestrictions closes every response window and every declare-blockers window for
+            // an instant-speed end-of-turn Animate, and animateTgtAI has no branch for a grant that is
+            // only a trigger (no Types$, no Power$, no AILogic, no AITgts) and falls through to
+            // CantPlayAi. The card is unhinted, so A reached this handler at every priority. With a
+            // Sacrifice on top of the stack the stock path is kept, as for Time Lord Regeneration:
+            // there checkPhaseRestrictions may run a test payment (random draws) and build an animated
+            // copy, and checkApiLogic writes AiCardMemory, so that state stays exactly as it was (an
+            // edict is not a window this card answers). Everywhere else every decline through consider
+            // is RNG-free (see there). Play-effect casts and copies (doTriggerNoCost) do not come
+            // through here and keep the stock path; scans that call canPlaySa
+            // (targetPlayableSpellCard, hasReasonToPlayCardThisTurn, ManaAi's ritual look-ahead) now
+            // meet consider instead of the stock refusal. Every other Animate card takes the path it
+            // took before.
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty() && game.getStack().peekAbility().getApi() == ApiType.Sacrifice) {
+                return super.canPlay(ai, sa);
+            }
+            return SpecialCardAi.NotDeadAfterAll.consider(ai, sa);
+        }
         if (sa.isPwAbility()
                 && SpecialCardAi.GideonChampionOfJustice.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             // Gideon, Champion of Justice's 0 (dead-card batch 2, row 102), judged whole in
