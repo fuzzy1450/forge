@@ -252,6 +252,13 @@ public class PermanentCreatureAi extends PermanentAi {
             // not reach canPayCost's MyRandom mana probe; see the class comment.
             return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
         }
+        if (SpecialCardAi.FaramirPrinceOfIthilien.NAME.equals(card.getName())
+                && !SpecialCardAi.FaramirPrinceOfIthilien.castAffordable(ai, sa)) {
+            // Dead-card batch 3, row 85. RNG-free commander cast ceiling (G1 + Anikthea's Hall
+            // check): an unpayable window must not reach canPayCost's MyRandom mana probe; see the
+            // class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
         if (SpecialCardAi.GoblinArchaeologist.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
                 && !SpecialCardAi.GoblinArchaeologist.worthCasting(ai, card, sa)) {
             // Value floor: the body is a 1/2; its worth is the artifact-killing flip. Cast it only

@@ -16636,6 +16636,33 @@ public class SpecialCardAi {
         }
     }
 
+    // Faramir, Prince of Ithilien (dead-card batch 3, row 85; the commander of Azorius Politics
+    // Soldiers 6d7a7fa4)
+    // "At the beginning of your end step, choose an opponent. At the beginning of that player's next
+    // end step, you draw a card if they didn't attack you that turn. Otherwise, create three 1/1
+    // white Human Soldier creature tokens." {2}{W}{U} 3/3. AI:RemoveDeck:All (since the 2023 LTR
+    // script, no reason recorded) kept the command-zone and hand spells out of every playable list
+    // (AiController.getSpellAbilityToPlay's removeIf); the hint is dropped. Behind it the stock
+    // creature path casts it in our own Main 2 and both triggers are mandatory (the opponent choice is
+    // ChoosePlayerAi's first-opponent default, moot in two-player games), so the only addition is
+    // the cast ceiling: CommanderCastCeiling (G1), then AniktheaHandOfErebos.coloursOnSeparateMana
+    // (Hall's condition: one Glacial Fortress, Lake-town or Talisman of Progress must not stand for
+    // both W and U), both called as they are, before canPayCost's MyRandom probe (ComputerUtilMana
+    // .isManaSourceReserved). Talion's shape (row 1). A Play-effect cast skips it and stays stock.
+    // Draws nothing and holds nothing.
+    public static class FaramirPrinceOfIthilien {
+        public static final String NAME = "Faramir, Prince of Ithilien";
+
+        // The RNG-free cast ceiling, for a paid cast only: true sends the cast on to the stock
+        // checks, false is the caller's CantAfford.
+        public static boolean castAffordable(final Player ai, final SpellAbility sa) {
+            if (!sa.isSpell() || sa.isCastFromPlayEffect()) {
+                return true;
+            }
+            return CommanderCastCeiling.affordable(ai, sa) && AniktheaHandOfErebos.coloursOnSeparateMana(ai, sa);
+        }
+    }
+
     // Fateful Tempest (dead-card batch 3, row 54)
     // {2}{R} Sorcery. "Council's dilemma - Starting with you, each player votes for past or present.
     // You mill a card for each past vote, then Fateful Tempest deals damage to each opponent equal
