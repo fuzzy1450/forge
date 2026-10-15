@@ -52,6 +52,14 @@ public class CopyPermanentAi extends SpellAbilityAi {
                 // the value floor there; every other DuplicatePerms card is unchanged.
                 return SpecialCardAi.CloneLegion.consider(aiPlayer, sa, false);
             }
+            if (SpecialCardAi.FaceYourself.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                // Clone Legion's shape (Defined$ Valid Creature.TargetedPlayerCtrl, ValidTgts$ Player): the
+                // count below is empty until a player is targeted, and the player branch would target us.
+                // Face Yourself's copies are hasty and, with no planeswalker of ours, sacrificed at the next
+                // end step, so it has its own window and floors on top of Clone Legion's. Every other
+                // DuplicatePerms card is unchanged.
+                return SpecialCardAi.FaceYourself.consider(aiPlayer, sa, false);
+            }
             final List<Card> valid = AbilityUtils.getDefinedCards(source, sa.getParam("Defined"), sa);
             if (valid.size() < 2) {
                 return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
@@ -131,6 +139,12 @@ public class CopyPermanentAi extends SpellAbilityAi {
         if ("Clone Legion".equals(sourceName) && sa.usesTargeting()) {
             // Free-cast path: the card-target loop below cannot target a player.
             return SpecialCardAi.CloneLegion.consider(aiPlayer, sa, mandatory);
+        }
+
+        if (SpecialCardAi.FaceYourself.NAME.equals(sourceName) && sa.usesTargeting()) {
+            // Lorehold's miracle {2}, Glamdring's free cast, cascade-likes: the card-target loop below
+            // cannot target a player and returned TargetingFailed even when mandatory.
+            return SpecialCardAi.FaceYourself.consider(aiPlayer, sa, mandatory);
         }
 
         if (sa.usesTargeting()) {

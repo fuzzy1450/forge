@@ -16636,6 +16636,131 @@ public class SpecialCardAi {
         }
     }
 
+    // Face Yourself (dead-card batch 3, row 112; carrier Boros Miracle Spells 73ed3acd, an upload, not an
+    // anchor). {5}{R}{R} Sorcery: "For each creature target player controls, create a token that's a copy
+    // of that creature, except it has haste and 'At the beginning of the end step, if you don't control a
+    // planeswalker, sacrifice this creature.'" Clone Legion's shape, so stock refused it on every route:
+    // the DuplicatePerms count in CopyPermanentAi.checkApiLogic read a target nobody had chosen, and the
+    // card-target loop of CopyPermanentAi.doTriggerNoCost cannot target a player (Lorehold's miracle,
+    // Glamdring, cascade-likes). Two regimes, read from the board:
+    //   - we control a planeswalker: the copies stay, so it is Clone Legion with haste, judged by
+    //     CloneLegion.consider unchanged (rule B3-4: its harm veto, floor, target and mandatory fallback);
+    //   - we do not: the copies are one turn's hasty attackers. Window, O(1): our own turn before combat
+    //     (UNTAP..MAIN1; a hand cast is Main 1, a miracle comes on our draw step); else AnotherTime.
+    //     Then CloneLegion.consider picks the target and applies its floor, and the copies of that board
+    //     that can attack must carry MIN_HASTY_POWER base power.
+    // The script grants every copy EndOfTurnLeavePlay, which makes each effective copy a forced attacker
+    // (AiAttackController.declareAttackers), added before the Revenge of Ravens and Kazuul screens, which
+    // see only the attackers left over. So in both regimes, before the price, attackPunished declines on
+    // an opposing attack punisher or attack tax (AnotherTime): the skeptic's required amendment.
+    // Both regimes then price the SA being cast (test-mode calculateManaCost against G2, total and red,
+    // B3-5; a free cast skips it), so a WillPlay is payable. A mandatory cast is CloneLegion's fallback.
+    // RNG parity: stock's refusals drew nothing; neither does any refusal here (phase, zone scans, the
+    // trigger and static parameter scan, the test-mode price, HonestMana, CloneLegion's board pass, the
+    // power sum). Draws begin after a WillPlay, in canPayCost, as for Clone Legion. Nothing is held past a
+    // decline: targets are reset, no X, no memory.
+    public static class FaceYourself {
+        public static final String NAME = "Face Yourself";
+        public static final int MIN_HASTY_POWER = 8; // two 4/4s: CloneLegion.MIN_COPY_VALUE's own scale
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            if (mandatory) {
+                return CloneLegion.consider(ai, sa, true);
+            }
+            final boolean copiesStay = CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.PLANESWALKERS) > 0;
+            if (!copiesStay) {
+                final PhaseHandler ph = ai.getGame().getPhaseHandler();
+                if (!ph.isPlayerTurn(ai) || !ph.getPhase().isBefore(PhaseType.COMBAT_BEGIN)) {
+                    sa.resetTargets();
+                    return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+                }
+            }
+            // first in the planeswalker regime, right after the window in the other
+            if (attackPunished(ai)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!affordable(ai, sa)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final AiAbilityDecision pick = CloneLegion.consider(ai, sa, false);
+            if (copiesStay || !pick.willingToPlay()) {
+                return pick;
+            }
+            final Player target = sa.getTargets().getFirstTargetedPlayer();
+            if (target == null || hastyPower(ai, target) < MIN_HASTY_POWER) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            return pick;
+        }
+
+        // EndOfTurnLeavePlay makes every effective copy a forced attacker (AiAttackController), added before
+        // the Revenge of Ravens / Kazuul screens, which only see the rest. So the punishers and taxes those
+        // screens would have weighed are checked here, before buying: an opposing Attacks trigger on
+        // creatures attacking that player (Kazuul, Revenge of Ravens, Hissing Miasma, Marchesa's Decree,
+        // Blood Reckoning) and an opposing AttackRestrict or non-Self CantAttackUnless static (Propaganda,
+        // Ghostly Prison, Windborn Muse, Sphere of Safety, Norn's Annex, Archangel of Tithes, Baird, Silent
+        // Arbiter, Crawlspace). It can only over-decline (Archangel of Tithes while tapped; a defender-side
+        // Attacks trigger that merely helps the defender). Moat and Peacekeeper (CantAttack) are left out.
+        // Reads trigger and static parameters only: no ability is built, nothing is drawn.
+        private static boolean attackPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        final String valid = t.getParamOrDefault("ValidCard", "");
+                        if (t.getMode() == TriggerType.Attacks && t.getParamOrDefault("Attacked", "").contains("You")
+                                && !valid.contains("Self") && !valid.contains("YouCtrl")) {
+                            return true;
+                        }
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (st.checkMode(StaticAbilityMode.AttackRestrict)
+                                || (st.checkMode(StaticAbilityMode.CantAttackUnless)
+                                    && !st.getParamOrDefault("ValidCard", "").contains("Self"))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // the SA being cast, as the engine prices it (taxes, reductions), against G2 with held sources
+        // skipped, judged on sa, never host.getFirstSpellAbility() (row 77): {5}{R}{R} from hand, {2} by
+        // Lorehold's miracle, nothing for a free cast
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final Cost pay = sa.getPayCosts();
+            if (pay == null || !pay.hasManaCost() || pay.getTotalMana().isZero()) {
+                return true;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(pay, sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // base power of the copies that can attack this turn: a copy has the printed P/T plus the haste,
+        // none of the original's counters, auras or anthems. CloneLegion.worthCopying's exclusions
+        // (private there; a private copy here, B3-4), plus Defender and power <= 0.
+        private static int hastyPower(final Player ai, final Player target) {
+            int power = 0;
+            for (final Card c : target.getCreaturesInPlay()) {
+                if (c.getBaseToughness() <= 0 || c.getBasePower() <= 0 || c.hasKeyword(Keyword.DEFENDER)
+                        || ComputerUtilCard.isCardRemAIDeck(c)) {
+                    continue;
+                }
+                if (c.getType().isLegendary() && (ai.equals(c.getController())
+                        || CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.nameEquals(c.getName())) > 0)) {
+                    continue;
+                }
+                power += c.getBasePower();
+            }
+            return power;
+        }
+    }
+
     // Faramir, Prince of Ithilien (dead-card batch 3, row 85; the commander of Azorius Politics
     // Soldiers 6d7a7fa4)
     // "At the beginning of your end step, choose an opponent. At the beginning of that player's next
