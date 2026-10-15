@@ -40805,6 +40805,108 @@ public class SpecialCardAi {
         }
     }
 
+    // Wild Endeavor (dead-card batch 3, row 34; precon:Draconic Rage (AFC))
+    // "Roll two d4 and choose one result. Create a number of 3/3 green Beast creature tokens equal
+    // to that result. Then search your library for a number of basic land cards equal to the other
+    // result, put them onto the battlefield tapped, then shuffle." ({4}{G}{G} sorcery.) Never cast
+    // by its owner (0 in 568 held games under 2.0.15+55e709fa6ba): no hint, but RollDiceAi's
+    // mana-cost default accepts only at the opponent's end step, which sorcery timing excludes
+    // (rows 80 and 96's gate). Routed from RollDiceAi.checkApiLogic on AILogic WildEndeavor,
+    // carried by wild_endeavor.txt alone (after row 96's router); the result is chosen by
+    // chooseResult from AiController.chooseNumber's RollDice case on this name.
+    //
+    // Value floor: the printed card's own, except a punished search. Each of the 16 ordered rolls
+    // makes at least one 3/3 and fetches at least one basic while the library holds one; with
+    // chooseResult the Beasts take the higher die (mean 3.125) and the lands the lower (mean
+    // 1.875). No roll loses value for its caster on an ordinary board, so consider() declines only:
+    // 1. on the mana, CantAfford: the cost as the engine prices it (calculateManaCost in test mode,
+    //    the G1 ceiling's and rows 80/96's call; taxes and reductions included) against G2
+    //    (HonestMana, held sources skipped, restrictions read on sa), in total and in green -- never
+    //    getAvailableManaEstimate, which counts the words of Produced$ (Command Tower, Arcane
+    //    Signet, Commander's Sphere and Path of Ancestry 2 each in the carrier). G2 skips the
+    //    mana-costed Gruul Signet and Mossfire Valley that canPayCost now pays with (upstream
+    //    #12149/#12179): an under-count, so the cast at worst waits a turn;
+    // 2. on a punished search, CantPlayAi: the land half's search is printed and mandatory (the
+    //    other die is 1 or more on every roll), so an opposing permanent with a SearchedLibrary
+    //    trigger is paid on every resolution: River Song (precon:Paradox Power (WHO), an anchor the
+    //    carrier meets; she grows and deals her power to us), Ob Nixilis, Unshackled (a creature and
+    //    10 life). searchPunished is a private copy of Long-Term Plans' first check (row 87;
+    //    accepted predicates are not shared), deliberately without its
+    //    ControlOpponentsSearchingLibrary and Shuffled checks: Long-Term Plans' whole value is the
+    //    search, this card's is the Beasts.
+    // Otherwise WillPlay 100, in either own main phase (row 96's default): the Beasts are
+    // summoning-sick and the lands enter tapped either way, and a Main 2 wait would let Main 1
+    // spend the six mana elsewhere (batch 2's Sylvan Offering, reverted in W15 with WaitForMain2
+    // its commonest decline).
+    // Residuals, accepted: Suture Priest (a life per Beast entering, lethal only at 4 life or less;
+    // a guard would need spawnToken, which takes a card id: the Witch's Mark rule), Opposition
+    // Agent (the found basics, the low die, are exiled for its controller), Widespread Panic (the
+    // shuffle puts a card from our hand on top).
+    //
+    // RNG: the stock evaluation drew nothing (RollDiceAi has no MyRandom), and both declines read
+    // only G2 (its one write is setActivatingPlayer on the mana abilities it reads), calculateManaCost
+    // in test mode and the trigger modes of opposing permanents: RNG-free. Only a WillPlay goes on
+    // to the subs' chkDrawback (ChangeZoneAi.hiddenOriginPlayDrawbackAI's
+    // choosePreferredDefenderPlayer draws with two or more opponents) and canPayCost's test payment
+    // (W12). Holds nothing, writes no SVar, remembers nothing. Per consult: one HonestMana scan and
+    // one test-mode calculateManaCost, then, only when affordable, one pass over the opponents'
+    // permanents' triggers; no spawnToken, no simulation.
+    public static class WildEndeavor {
+        public static final String NAME = "Wild Endeavor";
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (searchPunished(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // the land half's search is mandatory
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // RollDiceEffect: the chosen result sets X (the Beasts), "other" sets Y (the basics): the
+        // first roll after rolls.get(0) that differs from the chosen one, else rolls.get(0). The
+        // highest roll as the chosen one leaves the lowest as "other" for any list. A 3/3 is worth
+        // more than a tapped basic to a player who just paid six, so the Beasts take the high die.
+        // Reads the roll list only; draws nothing.
+        public static int chooseResult(final List<Integer> rolls) {
+            int best = rolls.get(0);
+            for (final int r : rolls) {
+                if (r > best) {
+                    best = r;
+                }
+            }
+            return best;
+        }
+
+        // The cost after CostAdjustment (calculateManaCost in test mode: no MyRandom, nothing
+        // written to the SA) against G2's total and green: two green sources (or floating green)
+        // for {G}{G}. Row 96's ValiantEndeavor.affordable with GREEN for WHITE; a private copy, so
+        // the accepted row-96 class is not refactored.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.GREEN) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+
+        // LongTermPlans.searchPunished's first check, a private copy (an accepted helper is not
+        // shared): an opposing permanent that triggers on a library search (River Song, Ob Nixilis,
+        // Unshackled, Archivist of Oghma). Parameter reads only.
+        private static boolean searchPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.SearchedLibrary) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Wild Ricochet
     // "You may choose new targets for target instant or sorcery spell. Then copy that
     // spell. You may choose new targets for the copy." Cast only in response to an

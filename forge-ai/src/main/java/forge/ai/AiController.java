@@ -2102,10 +2102,16 @@ public class AiController {
             case RollDice:
                 // Dead-card batch 2, row 96: Valiant Endeavor's chosen die sets the destroy threshold
                 // and the other die the Knight count; the default below always took the first die as
-                // the threshold. Every other dice card (Arcane, Grave, Reckless and Wild Endeavor
-                // among them) keeps that default.
+                // the threshold. Every other dice card (Arcane, Grave and Reckless Endeavor among
+                // them) keeps that default.
                 if (SpecialCardAi.ValiantEndeavor.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
                     return SpecialCardAi.ValiantEndeavor.chooseResult(player, sa, options);
+                }
+                // Dead-card batch 3, row 34: Wild Endeavor's chosen die is its Beast count and the
+                // other die its basic-land count. RollDiceEffect sorts the rolls ascending before
+                // asking, so the default below gave the Beasts the lower die.
+                if (SpecialCardAi.WildEndeavor.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                    return SpecialCardAi.WildEndeavor.chooseResult(options);
                 }
                 return options.get(0);
             default:

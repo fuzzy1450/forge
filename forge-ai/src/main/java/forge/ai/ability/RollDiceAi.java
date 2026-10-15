@@ -40,6 +40,14 @@ public class RollDiceAi extends SpellAbilityAi {
         if ("ValiantEndeavor".equals(logic)) {
             return SpecialCardAi.ValiantEndeavor.consider(aiPlayer, sa);
         }
+        // Dead-card batch 3, row 34: wild_endeavor.txt is the only script with this logic. The same
+        // mana-cost default refuses this sorcery on every pass (sorcery timing never reaches the
+        // opponent's end step). As for rows 80 and 96, RollDiceAi draws no RNG on any path and every
+        // decline in the evaluator is RNG-free, so the router's position is parity-neutral;
+        // Play-effect casts (doTriggerNoCost) never reach checkApiLogic.
+        if ("WildEndeavor".equals(logic)) {
+            return SpecialCardAi.WildEndeavor.consider(aiPlayer, sa);
+        }
 
         if (logic.equals("Combat")) {
             boolean result = ph.inCombat() && ((game.getCombat().isAttacking(source) && game.getCombat().isUnblocked(source)) || game.getCombat().isBlocking(source));
