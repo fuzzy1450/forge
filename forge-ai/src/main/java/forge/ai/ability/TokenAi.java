@@ -303,6 +303,15 @@ public class TokenAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
         Card actualToken = spawnToken(ai, sa);
+        // The Rani (dead-card batch 3, row 81): "create a red Aura token named Mark of the Rani
+        // attached to another target creature" as it enters and as it attacks. The branch below
+        // targets only players, so the cast gate's non-mandatory consult always failed (AiController
+        // BadEtbEffects), and at resolution it found no player it could target and the trigger was
+        // dropped. Answered after the stock spawnToken, so every consult allocates the card id it
+        // did; draws no random numbers (SpecialCardAi.TheRani).
+        if (SpecialCardAi.TheRani.handles(sa)) {
+            return SpecialCardAi.TheRani.chooseTarget(ai, sa, mandatory);
+        }
 
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {

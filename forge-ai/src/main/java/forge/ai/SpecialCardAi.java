@@ -42321,6 +42321,172 @@ public class SpecialCardAi {
         }
     }
 
+    // The Rani (dead-card batch 3, row 81; precon:Masters of Evil (WHO))
+    // "Whenever The Rani enters or attacks, create a red Aura enchantment token named Mark of the
+    // Rani attached to another target creature. That token has enchant creature and 'Enchanted
+    // creature gets +2/+2 and is goaded.'" (TrigToken: DB$ Token | TokenScript$ mark_of_the_rani |
+    // AttachedTo$ Targeted | ValidTgts$ Creature.Other, on a ChangesZone and an Attacks trigger).
+    // The script has no AI hint, so the stock engine considered the creature spell and declined it:
+    // saSideEffects test-runs the enters trigger non-mandatorily (AiController.checkETBEffects ->
+    // doTrigger(exSA, false)), and TokenAi.doTriggerNoCost's non-Role branch targets only players:
+    // sa.canTarget(ai) is false for Creature.Other and the probe is not mandatory, so it answered
+    // TargetingFailed and the cast was BadEtbEffects. The lack-of-targets rescue in
+    // checkETBEffectsPreparedCard (no other targetable creature and life in danger) made its two
+    // stored casts. At resolution the forced branch filters the opponents with
+    // PlayerPredicates.isTargetableBy (sa::canTarget, never true for a player against
+    // Creature.Other), so it answered TargetingFailed too, prepareSingleSa returned false and
+    // orderAndPlaySimultaneousSa dropped the trigger: no Mark was ever made, the rescue casts
+    // included, and the attack trigger never made one either.
+    // In a game of two (every carrier game) a goaded creature of OURS must attack each combat
+    // (AttackRequirement) and attacks the opponent (CombatUtil: a non-goader if able); the goader is
+    // the Mark's controller, us, and IsGoaded reads Card.isGoaded, so the Mark on our own creature
+    // is +2/+2 and a Clue per connecting hit. On an opposing creature it is +2/+2 aimed at us. In
+    // multiplayer the printed line, an opposing creature goaded into someone else, is the better one.
+    // - Cast gate (canPlaySa's LKI copy, not mandatory): first the RNG-free ceiling,
+    //   AniktheaHandOfErebos.castAffordable on the spell being judged (host.getCastSA(): G1 over G2
+    //   HonestMana on the engine's adjusted cost, then Hall's condition over U, B and R on separate
+    //   mana; a Play-effect cast skips it), else CantAfford. It must stay ahead of the zero-target
+    //   approval below: an approval goes on to canPayCost, whose test payment draws MyRandom
+    //   (ComputerUtilMana.isManaSourceReserved), and an unaffordable window must decline drawing
+    //   nothing, as the stock veto did (row 159's re-roll).
+    // - Then a target the AI wants: one of ours (an attacker now on the attack trigger, else the best
+    //   that can attack next turn, never a useless one or one leaving at end of turn while another is
+    //   left); in multiplayer an opposing creature GoadAi would goad (not useless, not goaded by us,
+    //   able to attack another opponent next turn), never one that can block The Rani in this combat.
+    //   With no legal target at all the trigger leaves the stack unused and the 3/4 body is the value
+    //   (Anikthea's floor): approve. In a game of two with only opposing creatures targetable, a
+    //   non-mandatory consult never volunteers one: TargetingFailed, the stock answer.
+    // - Forced (the enters or attack trigger at resolution): ours first as above, then the
+    //   multiplayer goad pick, else the least harmful creature, one that cannot block The Rani in
+    //   this combat, else ComputerUtilCard.getWorstCreatureAI (GoadAi's forced fallback).
+    //   AiAttackController.shouldAttack keeps The Rani home in a game of two when its attack trigger
+    //   could only mark an opposing creature (markWouldGoToOpponent).
+    // Answered from TokenAi.doTriggerNoCost after the stock spawnToken, so every consult allocates
+    // the card id it did. Draws no random numbers and holds nothing: targets are written only on the
+    // SA being judged (checkETBEffects' throwaway copy at the cast gate).
+    public static class TheRani {
+        public static final String NAME = "The Rani";
+        private static final String TOKEN = "mark_of_the_rani";
+
+        public static boolean handles(final SpellAbility sa) {
+            return TOKEN.equals(sa.getParam("TokenScript"))
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        // TokenAi.doTriggerNoCost: the cast gate (not mandatory, through checkETBEffects), any other
+        // non-mandatory consult (a Play effect, another card's checkETBEffects), and the enters or
+        // attack trigger at resolution (mandatory).
+        public static AiAbilityDecision chooseTarget(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            final Card host = sa.getHostCard();
+            if (!mandatory && atCastGate(host)) {
+                // The ceiling, ahead of the zero-target approval below (keep this order): an
+                // approval reaches canPayCost, whose test payment draws MyRandom, so a window that
+                // cannot pay declines here, drawing nothing, as the stock veto did.
+                final SpellAbility cast = host.getCastSA(); // the LKI copy's copy of the spell judged
+                if (cast != null && !AniktheaHandOfErebos.castAffordable(ai, cast)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            final CardCollection legal = CardLists.getTargetableCards(
+                    ai.getGame().getCardsIn(ZoneType.Battlefield), sa);
+            if (legal.isEmpty()) {
+                // nothing to mark: the trigger leaves the stack unused and the 3/4 body is the value;
+                // a forced trigger with no target cannot be put on the stack
+                return mandatory ? new AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+                        : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            final Card pick = pick(ai, host, legal, mandatory);
+            if (pick == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed); // the stock answer
+            }
+            sa.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // null only when not mandatory: a game of two with opposing creatures alone (never pump one
+        // by choice), or a multiplayer game with no opposing creature worth goading
+        private static Card pick(final Player ai, final Card host, final CardCollection legal, final boolean mandatory) {
+            final Game game = ai.getGame();
+            final Combat combat = game.getCombat();
+            final boolean attacking = combat != null && host.isInPlay() && combat.isAttacking(host);
+
+            // 1. ours: +2/+2, must attack the opponent, a Clue per hit
+            final CardCollection ours = CardLists.filterControlledBy(legal, ai);
+            if (!ours.isEmpty()) {
+                CardCollection pool = CardLists.filter(ours, c -> !ComputerUtilCard.isUselessCreature(ai, c)
+                        && !c.hasSVar("EndOfTurnLeavePlay"));
+                if (pool.isEmpty()) {
+                    pool = ours;
+                }
+                if (attacking) { // the attack trigger: pump an attacker now
+                    final CardCollection inCombat = CardLists.filter(pool, c -> combat.isAttacking(c));
+                    if (!inCombat.isEmpty()) {
+                        return ComputerUtilCard.getBestCreatureAI(inCombat);
+                    }
+                }
+                final CardCollection canAttack = CardLists.filter(pool, c -> ComputerUtilCombat.canAttackNextTurn(c));
+                return ComputerUtilCard.getBestCreatureAI(canAttack.isEmpty() ? pool : canAttack);
+            }
+            // 2. multiplayer: the printed line, GoadAi's filter (attacks another opponent), and never
+            //    a creature that can block The Rani in this combat
+            if (game.getPlayers().size() > 2) {
+                final CardCollection theirs = CardLists.filterControlledBy(legal, ai.getOpponents());
+                final CardCollection goadable = CardLists.filter(theirs, c -> !ComputerUtilCard.isUselessCreature(ai, c)
+                        && !c.isGoadedBy(ai)
+                        && !(attacking && CombatUtil.canBlock(host, c, combat))
+                        && ai.getOpponents().anyMatch(o -> !o.equals(c.getController())
+                                && ComputerUtilCombat.canAttackNextTurn(c, o)));
+                if (!goadable.isEmpty()) {
+                    return ComputerUtilCard.getBestCreatureAI(goadable);
+                }
+            }
+            if (!mandatory) {
+                return null;
+            }
+            // 3. forced: the least harmful creature -- one that cannot block The Rani now, else the worst
+            if (attacking) {
+                final CardCollection cannotBlock = CardLists.filter(legal, c -> !CombatUtil.canBlock(host, c, combat));
+                if (!cannotBlock.isEmpty()) {
+                    return ComputerUtilCard.getWorstCreatureAI(cannotBlock);
+                }
+            }
+            return ComputerUtilCard.getWorstCreatureAI(legal);
+        }
+
+        // AiAttackController.shouldAttack, first statement (skeptic A1): true when, in a game of two,
+        // no creature of ours but the attacker is on the battlefield and an opponent controls a
+        // creature, so the attack trigger could only mark an opposing creature. The stock attack AI
+        // does not price that trigger (HasAttackEffect:TRUE makes The Rani an effective attacker
+        // unconditionally): on an empty board the cast approves a lone 3/4 (no target, the body is
+        // the value), the opponent plays a 2/2, The Rani attacks into it, the forced Mark makes it a
+        // 4/4 that blocks and kills The Rani and stays +2/+2 and goaded at us. Targetability is
+        // ignored: an opposing creature with hexproof or shroud still vetoes (the conservative side),
+        // and a shrouded creature of ours still counts as ours. Must-attack requirements (a goaded
+        // Rani) are answered before shouldAttack, so they still attack. RNG-free.
+        public static boolean markWouldGoToOpponent(final Player ai, final Card attacker) {
+            final Game game = ai.getGame();
+            if (game.getPlayers().size() > 2) {
+                return false;
+            }
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!c.equals(attacker)) {
+                    return false;
+                }
+            }
+            return !CardLists.filterControlledBy(
+                    CardLists.filter(game.getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES),
+                    ai.getOpponents()).isEmpty();
+        }
+
+        // TheMasterFormedAnew.atCastGate, copied (private there): canPlaySa's LKI copy of the
+        // spell's host has no zone of its own and the Stack as its last known zone; at resolution
+        // the host is the real card, whose getZone() is the Stack or the Battlefield.
+        private static boolean atCastGate(final Card host) {
+            return host.getZone() == null && host.isInZone(ZoneType.Stack);
+        }
+    }
+
     // The Scarab God
     public static class TheScarabGod {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {

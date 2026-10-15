@@ -1572,6 +1572,15 @@ public class AiAttackController {
      * @return a boolean.
      */
     public final boolean shouldAttack(final Card attacker, final List<Card> defenders, final Combat combat, final GameEntity defender) {
+        // The Rani (dead-card batch 3, row 81): in a game of two with no other creature of ours, its
+        // attack trigger must put the +2/+2 goad Mark on an opposing creature, which may then block
+        // and kill it; HasAttackEffect:TRUE makes it an effective attacker unconditionally, so it
+        // stays home instead (SpecialCardAi.TheRani.markWouldGoToOpponent). Name-gated, RNG-free;
+        // must-attack requirements (a goaded Rani) are answered before shouldAttack.
+        if (SpecialCardAi.TheRani.NAME.equals(attacker.getName())
+                && SpecialCardAi.TheRani.markWouldGoToOpponent(ai, attacker)) {
+            return false;
+        }
         // Is it a creature that has a more valuable ability with a tap cost than what it can do by attacking?
         if (attacker.hasSVar("NonCombatPriority") && !attacker.hasKeyword(Keyword.VIGILANCE)) {
             // For each level of priority, enemy has to have life as much as the creature's power
