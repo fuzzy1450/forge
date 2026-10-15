@@ -124,6 +124,18 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.DawnsReflection.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.Flickerform.NAME.equals(source.getName())
+                && SpecialCardAi.Flickerform.isOwnHandCast(ai, sa)) {
+            // Dead-card batch 3, row 23. Judged whole in SpecialCardAi.Flickerform: the Aura grants
+            // nothing, so the stock Pump preference has no floor and enchants the best attacker (the
+            // commander, whose flicker strands the Aura in exile) and writes ATTACHED_THIS_TURN on a
+            // decline. Only the G3 readmit's shape comes here (our hand, not a Play effect or a copy),
+            // and so does a direct canPlaySa probe of that hand copy (hasReasonToPlayCardThisTurn); a
+            // Play-effect cast or a thief's comes through doTriggerNoCost, never here, and keeps the
+            // stock path.
+            return SpecialCardAi.Flickerform.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {

@@ -13190,6 +13190,378 @@ public class SpecialCardAi {
         }
     }
 
+    // Flickerform (dead-card batch 3, row 23; Evasive Maneuvers (C13))
+    // "Enchant creature. {2}{W}{W}: Exile enchanted creature and all Auras attached to it. At the
+    // beginning of the next end step, return that card to the battlefield under its owner's control.
+    // If you do, return the other cards exiled this way to the battlefield under their owners'
+    // control attached to that creature." ({1}{W} Aura.) The script keeps AI:RemoveDeck:All, and with
+    // it the -10 sort and every other isCardRemAIDeck reader (steal, exchange, copy and tutor
+    // pickers). Behind the hint neither half had a judge. The Aura grants nothing, so AttachAi's Pump
+    // preference has no floor and enchants the best attacker: the commander, whose flicker sends it to
+    // the command zone (CR 903.9a; PermanentAi.confirmAction always says yes) and strands the Aura in
+    // exile ("If you do"). The ability is a +0/+0 Pump shell whose real effect is its ChangeZoneAll
+    // exile sub: PumpAi's 3-arg checkPhaseRestrictions vetoes it in every main phase and end step,
+    // canPumpAgainstRemoval reads it as a saviour that saves nothing, and the combat branch scores it
+    // at nothing.
+    // The G3 dispatcher (RemoveDeckFilter.readmit) lets two shapes through AiController's filter:
+    // - the cast (isOwnHandCast, Gift of Doom's key): our Aura spell from our hand, not a Play effect,
+    //   not a copy, in our own Main 2 with no mana held (RemoveDeckFilter.noManaHeld), when {1}{W} as
+    //   the engine prices it (test-mode calculateManaCost) fits HonestMana (G2) in total and in white.
+    //   AttachAi.checkApiLogic calls consider() for that same shape: it enchants our best value holder,
+    //   only when the mana base can ever pay the activation, and prices the cast again with the target
+    //   in place;
+    // - the activation (isOwnActivation): the root {2}{W}{W} ability of the paper Flickerform on the
+    //   battlefield, enchanting something, owned and controlled by the deciding AI (a thief's stays
+    //   filtered), in one of its windows. The script's AILogic$ Flickerform routes PumpAi's 4-arg
+    //   checkPhaseRestrictions to the base true (its super call is SpellAbilityAi's 3-arg, not
+    //   PumpAi's veto) and skips preventRunAwayActivations' roll; PumpAi.checkApiLogic calls
+    //   considerActivation() for the same isOwnActivation key (rule B3-2).
+    // Windows (window()): STACK, an opponent's object on top of the stack; COMBAT, declare blockers
+    // with an empty stack and the holder attacking or blocking; VALUE, an opponent's Main 2 with an
+    // empty stack (the creature returns at that player's end step, ready for our turn, with mana that
+    // already sat through their combat as a rescue). Never our own turn's empty stack outside combat,
+    // never an end step's (the return would wait a whole turn).
+    // In every window, before any approval: the holder is ours to own and control, a card (a token
+    // never comes back), never a commander, able to re-enter (isETBprevented); no mana is held and the
+    // ability's cost as the engine prices it fits G2 in total and in white, so an unpayable window
+    // never reaches canPayCost's isManaSourceReserved draws (row 159). Then:
+    // - STACK: predictThreatenedObjects on the top object with no saviour (PumpAi's Aristocrat idiom:
+    //   the threat as it is, not as a +0/+0 Pump faces it) marks the holder, sweepers included (the
+    //   return is at the end step), or marks the Aura alone and the flicker loses nothing and ends no
+    //   live effect of the holder's (skeptic A3); and the holder is not useless;
+    // - COMBAT: the holder is not useless, has no shield, would be destroyed, and leaving combat costs
+    //   nothing (GhostlyFlicker's freeToLeaveCombat, a private copy);
+    // - VALUE: the holder is still a value holder and loses nothing (no Equipment of ours, which stays
+    //   behind, and no net-positive counters; our own Auras come back attached), and, last and lazily,
+    //   AiController.checkETBEffects approves its enters triggers.
+    // A value holder: not useless, face up, not transformed or cloned, no Echo (Karmic Guide would pay
+    // it again), no leaves-the-battlefield link (Fiend Hunter's prisoner), an enters trigger of its
+    // own, no enters chain that sacrifices, discards, sweeps (Bane of Progress would destroy
+    // Flickerform too) or moves anything from the battlefield (skeptic A1: Flickerwisp's blink aims at
+    // our own most expensive enters-trigger permanent first, ChangeZoneAi.isPreferredTarget, and keeps
+    // it out until the next end step; Stonecloaker bounces our own creature), and not the source of a
+    // live command-zone effect (skeptic A2: Dungeon Geists' AsLongAsControl lock would move to a worse,
+    // untapped creature).
+    // RNG parity: A never evaluated the card (the hint dropped both abilities first), and every check
+    // here draws nothing - shape, phase, noManaHeld, test-mode calculateManaCost, HonestMana (whose
+    // only write is setActivatingPlayer on mana abilities), CreatureEvaluator, trigger and command-zone
+    // scans, predictThreatenedObjects and the combat predictors - except checkETBEffects, whose
+    // handlers can roll: it runs last, in VALUE only. Residuals: a VALUE window that passes every
+    // RNG-free check and is declined there can re-roll a game where Flickerform only sits on the
+    // battlefield; the combat predictors reach ComputerUtil.canRegenerate, which test-pays a
+    // regeneration ability covering a combatant, on boards that already diverged. A decline targets
+    // nothing, holds nothing and writes no memory set.
+    public static class Flickerform {
+        public static final String NAME = "Flickerform";
+        public static final String LOGIC = "Flickerform";
+        // {2}{W}{W} must be payable on some turn: mana permanents of ours, and white ones among them
+        static final int MIN_MANA_PERMANENTS = 4;
+        static final int MIN_WHITE_PERMANENTS = 2;
+
+        private enum Window { NONE, STACK, COMBAT, VALUE }
+
+        // the cast's key: our Aura spell, in our hand, not a Play effect, not a copy
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && ai.equals(host.getController()) && sa.isSpell()
+                    && sa.getApi() == ApiType.Attach && !sa.isCastFromPlayEffect() && !sa.isCopied()
+                    && host.isInZone(ZoneType.Hand);
+        }
+
+        // the activation's key: the root ability carrying the script's AILogic, on the paper card
+        // (rule B3-3: never getAbilitySourceName, so a granted ability or an unhinted copy such as
+        // Copy Enchantment keeps the stock path), on the battlefield and enchanting something, owned
+        // and controlled by ai (skeptic A4)
+        public static boolean isOwnActivation(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && !(sa instanceof AbilitySub) && sa.isActivatedAbility()
+                    && LOGIC.equals(sa.getParam("AILogic"))
+                    && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && host.isInPlay() && ai.equals(host.getController()) && ai.equals(host.getOwner())
+                    && host.getEnchantingCard() != null;
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (isOwnHandCast(ai, sa)) {
+                // our Main 2 only: every Main-2 permanent spell sorts ahead of it (the hint's -10) and
+                // claims the mana first
+                if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                        || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                    return false;
+                }
+                return affordable(ai, sa); // {1}{W} now
+            }
+            return isOwnActivation(ai, sa) && window(ai, sa.getHostCard().getEnchantingCard()) != Window.NONE;
+        }
+
+        // O(1) but for the stack peek
+        private static Window window(final Player ai, final Card c) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!game.getStack().isEmpty()) {
+                final SpellAbility top = game.getStack().peekAbility();
+                return top != null && top.getActivatingPlayer() != null
+                        && top.getActivatingPlayer().isOpponentOf(ai) ? Window.STACK : Window.NONE;
+            }
+            final Combat combat = game.getCombat();
+            if (ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) && combat != null && c != null
+                    && (combat.isAttacking(c) || combat.isBlocking(c))) {
+                return Window.COMBAT;
+            }
+            if (ph.is(PhaseType.MAIN2) && ph.getPlayerTurn() != null && ph.getPlayerTurn().isOpponentOf(ai)) {
+                return Window.VALUE;
+            }
+            return Window.NONE;
+        }
+
+        // AttachAi.checkApiLogic's name gate: enchant our best value holder, or don't cast
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card aura = sa.getHostCard();
+            sa.resetTargets();
+            if (!canEverActivate(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            Card best = null;
+            int bestValue = Integer.MIN_VALUE;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!isHolder(ai, c) || c.isEnchantedBy(NAME) || !c.canBeAttached(aura, sa) || !sa.canTarget(c)
+                        || !isValueHolder(ai, c)) {
+                    continue;
+                }
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                if (v > bestValue) { // the first in list order wins a tie
+                    best = c;
+                    bestValue = v;
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            if (!affordable(ai, sa)) { // priced with the target in place (Shielded by Faith)
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // PumpAi.checkApiLogic's AILogic dispatch, for isOwnActivation only: rescue (STACK, COMBAT)
+        // or an enters re-buy (VALUE). Nothing before checkETBEffects draws a random number.
+        public static AiAbilityDecision considerActivation(final Player ai, final SpellAbility sa) {
+            final Card aura = sa.getHostCard();
+            final Card c = aura == null ? null : aura.getEnchantingCard();
+            if (c == null || !c.isCreature() || !isHolder(ai, c) || ComputerUtil.isETBprevented(c)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Window w = window(ai, c);
+            if (w == Window.NONE) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, false) || !affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford); // before any canPayCost roll
+            }
+            final boolean worth = !ComputerUtilCard.isUselessCreature(ai, c);
+            switch (w) {
+                case STACK: {
+                    if (!worth) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                    // the top object only; sweepers count, since the return waits for the end step
+                    final List<GameObject> threatened = ComputerUtil.predictThreatenedObjects(ai, null, true);
+                    final boolean saves = threatened.contains(c)
+                            || (threatened.contains(aura) && !losesSomething(ai, c)
+                                && !sourcesLiveEffect(ai.getGame(), c)); // skeptic A3: the Aura alone
+                    return saves ? new AiAbilityDecision(100, AiPlayDecision.ResponseToStackResolve)
+                                 : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                case COMBAT: {
+                    final Combat combat = ai.getGame().getCombat();
+                    return worth && c.getShieldCount() == 0
+                            && ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)
+                            && freeToLeaveCombat(ai, c, combat)
+                            ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                            : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                default: { // VALUE
+                    if (!isValueHolder(ai, c) || losesSomething(ai, c)) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                    }
+                    final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+                    return aic.checkETBEffects(c, sa, null) // last, lazily: its handlers can roll
+                            ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                            : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+        }
+
+        // ours to own and control, a card (a token ceases to exist in exile), never a commander
+        // (CR 903.9a sends it to the command zone and strands the Aura in exile)
+        private static boolean isHolder(final Player ai, final Card c) {
+            return c.isInPlay() && !c.isToken() && !c.isCommander()
+                    && ai.equals(c.getController()) && ai.equals(c.getOwner());
+        }
+
+        // An enters trigger of its own worth re-buying; RNG-free
+        private static boolean isValueHolder(final Player ai, final Card c) {
+            if (ComputerUtilCard.isUselessCreature(ai, c) || c.isFaceDown() || c.isTransformed()
+                    || c.isCloned() || c.hasKeyword(Keyword.ECHO) || hasLeaveLink(c) || !hasOwnEtb(c)
+                    || sourcesLiveEffect(ai.getGame(), c)) {
+                return false;
+            }
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone || !"Battlefield".equals(tr.getParam("Destination"))
+                        || tr.isKeyword(Keyword.EVOKE)) {
+                    continue;
+                }
+                for (SpellAbility part = tr.ensureAbility(); part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    if (api == ApiType.Sacrifice || api == ApiType.SacrificeAll || api == ApiType.Discard
+                            || api == ApiType.DestroyAll || api == ApiType.DamageAll) {
+                        return false; // Bane of Progress would also destroy Flickerform
+                    }
+                    // skeptic A1: anything that moves cards off the battlefield, targeted or not
+                    // (Flickerwisp's blink, Stonecloaker's own bounce, a ChangeZoneAll sweep)
+                    if ((api == ApiType.ChangeZone || api == ApiType.ChangeZoneAll)
+                            && part.getParamOrDefault("Origin", "").contains("Battlefield")) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // skeptic A2: a live command-zone effect this creature is the source of (Dungeon Geists'
+        // AsLongAsControl lock registers no until-leaves link). Over-refuses its permanent effects,
+        // which only skips a window.
+        private static boolean sourcesLiveEffect(final Game game, final Card c) {
+            for (final Card e : game.getCardsIn(ZoneType.Command)) {
+                final Card src = e.getEffectSource();
+                if (src != null && src.equals(c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // what a flicker throws away: Equipment of ours (it stays behind) and net-positive counters
+        // (GhostlyFlicker.losesNothing's counter rule). Auras are no loss: they come back attached.
+        private static boolean losesSomething(final Player ai, final Card c) {
+            for (final Card attached : c.getAttachedCards()) {
+                if (attached.isEquipment() && ai.equals(attached.getController())) {
+                    return true;
+                }
+            }
+            int total = 0;
+            int negative = 0;
+            for (final CounterType type : c.getCounters().elementSet()) {
+                final int n = c.getCounters().count(type);
+                total += n;
+                if (ComputerUtil.isNegativeCounter(type, c)) {
+                    negative += n;
+                }
+            }
+            return total > 0 && negative * 2 <= total;
+        }
+
+        // MIN_MANA_PERMANENTS of ours with a mana ability, MIN_WHITE_PERMANENTS of them able to make W;
+        // tap state ignored (the activation is for a later turn). Structural only, never a mana total.
+        // Abilities with mana in their own cost are left out (aiPlayableManaNoManaCost), as G2 leaves
+        // them out of the activation's own cost check: a Signet would admit a cast whose activation G2
+        // never approves.
+        private static boolean canEverActivate(final Player ai) {
+            int sources = 0;
+            int white = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                final List<SpellAbility> abilities = aiPlayableManaNoManaCost(src);
+                if (abilities.isEmpty()) {
+                    continue;
+                }
+                sources++;
+                for (final SpellAbility ma : abilities) {
+                    ma.setActivatingPlayer(ai);
+                    if (ma.canProduce("W")) {
+                        white++;
+                        break;
+                    }
+                }
+                if (sources >= MIN_MANA_PERMANENTS && white >= MIN_WHITE_PERMANENTS) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Gift of Doom's test: the cost as the engine prices it (test-mode calculateManaCost: taxes and
+        // reductions, no MyRandom) against G2 with held sources skipped, in total and in white. Judged
+        // on sa, never host.getFirstSpellAbility() (row 77): the {1}{W} spell or the {2}{W}{W} ability.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
+        }
+
+        // Private copies of GhostlyFlicker's freeToLeaveCombat, hasLeaveLink and hasOwnEtb (accepted
+        // predicates stay private).
+        // Taking this combatant out of combat costs nothing. A blocker must be the only blocker of its
+        // one attacker, which has no trample and which it cannot kill (no trade undone). An attacker
+        // must have no blocker it would kill.
+        private static boolean freeToLeaveCombat(final Player ai, final Card c, final Combat combat) {
+            if (combat.isBlocking(c)) {
+                final CardCollection attackers = combat.getAttackersBlockedBy(c);
+                if (attackers.size() != 1) {
+                    return false;
+                }
+                final Card attacker = attackers.getFirst();
+                return combat.getBlockers(attacker).size() == 1 && !attacker.hasKeyword(Keyword.TRAMPLE)
+                        && !ComputerUtilCombat.canDestroyAttacker(ai, attacker, c, combat, false);
+            }
+            if (combat.isAttacking(c)) {
+                for (final Card blocker : combat.getBlockers(c)) {
+                    if (ComputerUtilCombat.canDestroyBlocker(ai, blocker, c, combat, false)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // A Self trigger that fires on leaving for exile, cards exiled with it, or an until-it-leaves
+        // exile (Banisher Priest's Duration$ UntilHostLeavesPlay, which is no trigger).
+        private static boolean hasLeaveLink(final Card c) {
+            if (!c.getExiledCards().isEmpty() || !c.getUntilLeavesBattlefield().isEmpty()) {
+                return true;
+            }
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() != TriggerType.ChangesZone || !tr.hasParam("ValidCard")
+                        || !tr.getParam("ValidCard").contains("Self")) {
+                    continue;
+                }
+                final String origin = tr.hasParam("Origin") ? tr.getParam("Origin") : "";
+                final String destination = tr.hasParam("Destination") ? tr.getParam("Destination") : "";
+                if (origin.contains("Battlefield") && (destination.isEmpty()
+                        || destination.contains("Any") || destination.contains("Exile"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // An enters trigger of its own, evoke's sacrifice trigger aside.
+        private static boolean hasOwnEtb(final Card c) {
+            for (final Trigger tr : c.getTriggers()) {
+                if (tr.getMode() == TriggerType.ChangesZone && "Battlefield".equals(tr.getParam("Destination"))
+                        && !tr.isKeyword(Keyword.EVOKE)
+                        && (!tr.hasParam("ValidCard") || tr.getParam("ValidCard").contains("Self"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Follow the Bodies (dead-card batch 2, row 110)
     // "Gravestorm (When you cast this spell, copy it for each permanent put into a graveyard from
     // the battlefield this turn.) Investigate." ({2}{U} Sorcery.) InvestigateAi.canPlay approves
@@ -28663,8 +29035,8 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 16, 17, 19, 21, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 75, 79, 82, 83 and 84, keepOff
-    // for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // 16, 17, 19, 21, 23, 27, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 75, 79, 82, 83 and 84,
+    // keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -28740,6 +29112,8 @@ public class SpecialCardAi {
                     return VampiricTutor.readmit(ai, sa);
                 case MagusOfTheWheel.NAME:
                     return MagusOfTheWheel.readmit(ai, sa);
+                case Flickerform.NAME:
+                    return Flickerform.readmit(ai, sa);
                 default:
                     return false;
             }

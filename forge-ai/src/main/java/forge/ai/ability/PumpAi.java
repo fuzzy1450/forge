@@ -264,6 +264,19 @@ public class PumpAi extends PumpAiBase {
             // never choose a spell; the evaluator chooses and floors the target itself. Every exit there
             // is RNG-free, and doTriggerNoCost (Play-effect casts, copies) does not reach this branch.
             return SpecialCardAi.RefuseBurn.consider(ai, sa);
+        } else if (SpecialCardAi.Flickerform.LOGIC.equals(aiLogic)
+                && SpecialCardAi.Flickerform.isOwnActivation(ai, sa)) {
+            // Dead-card batch 3, row 23. A Pump shell (+0/+0, no keywords) whose real effect is its
+            // ChangeZoneAll exile sub: canPumpAgainstRemoval below reads it as a saviour that grants
+            // nothing, so it never saved the creature, and the empty-stack branches never fire. The
+            // script's AILogic$ only routes the 4-arg checkPhaseRestrictions to the base true (its super
+            // call is SpellAbilityAi's 3-arg, not PumpAi's veto) and skips preventRunAwayActivations; the
+            // evaluator owns the windows, the floor and the cost, with no random draw before
+            // checkETBEffects. Keyed as the G3 readmit is (rule B3-2: the paper card on the battlefield,
+            // enchanting something, asked by its owner-controller), so a thief's, a granted or an
+            // unhinted copy's (Copy Enchantment) ability keeps the code below, as does every other Pump
+            // card.
+            return SpecialCardAi.Flickerform.considerActivation(ai, sa);
         } else if ("MoveCounter".equals(aiLogic)) {
             final SpellAbility moveSA = sa.findSubAbilityByType(ApiType.MoveCounter);
 
