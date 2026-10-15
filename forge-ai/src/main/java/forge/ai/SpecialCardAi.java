@@ -22209,6 +22209,13 @@ public class SpecialCardAi {
     //    any combatant those predictors would ask about is covered by an activated Regenerate ability
     //    its controller controls (skeptic amendment 3: ComputerUtil.canRegenerate's canPayCost probe
     //    draws, whatever withoutAbilities says).
+    // E. An empty stack at the end step of the opponent whose next turn is ours, once the card has
+    //    sat in our hand for PATIENCE_ROUNDS rounds (ph.getTurn() - getTurnInZone() >= 2 x players:
+    //    the stock CountersPutAi boon's patience, made deterministic): the counters on our commander
+    //    (the best, with two), else on our best non-Defender creature worth PREMIUM_VALUE; never a
+    //    useless one (isUselessCreature). The mana is idle there and untaps before our turn. It
+    //    spends the card that A-D would wait for (a 5/5 flying Prossh kills on commander damage in
+    //    three hits instead of five): commit 2 of row 69, judged on its own.
     // Mana, after each line's O(1) window and cheap pre-check and before any board scan or copy:
     // distinct B, R and G sources by Hall's condition, at least the engine's adjusted cost
     // (UniteTheCoalition.surelyPays restricted to the {B, R, G} subsets, a private copy; the test-mode
@@ -22236,6 +22243,7 @@ public class SpecialCardAi {
         static final int MIN_PERMANENT_MV = 4;
         static final int POISON_LETHAL = 10;
         static final int COMMANDER_LETHAL = 21;
+        static final int PATIENCE_ROUNDS = 2;             // line E: CountersPutAi's boon, 2 x players turns held
         private static final int BRG = (1 << 2) | (1 << 3) | (1 << 4); // B, R, G in MagicColor.WUBRG order
 
         private enum Mode { EXILE, SWEEP, PUMP }
@@ -22366,13 +22374,13 @@ public class SpecialCardAi {
         }
 
         // the plan's window, O(1): an opponent's item on top of the stack, or an empty stack in our own
-        // main phase, an opponent's declare attackers at us, or declare blockers. Nothing in it changes
-        // within a priority pass.
+        // main phase, an opponent's declare attackers at us, declare blockers, or the end step before
+        // our turn. Nothing in it changes within a priority pass.
         private static boolean window(final Player ai, final SpellAbility sa) {
             if (!ai.getGame().getStack().isEmpty()) {
                 return opposingTop(ai, sa) != null;
             }
-            return ownMain(ai) || opponentsAttack(ai) || afterBlocks(ai);
+            return ownMain(ai) || opponentsAttack(ai) || afterBlocks(ai) || endStepBeforeOurs(ai);
         }
 
         // the top item that is not this spell, unwrapped, when an opponent put it there
@@ -22403,6 +22411,11 @@ public class SpecialCardAi {
 
         private static boolean afterBlocks(final Player ai) {
             return ai.getGame().getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS) && ai.getGame().getCombat() != null;
+        }
+
+        private static boolean endStepBeforeOurs(final Player ai) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            return ph.is(PhaseType.END_OF_TURN) && !ph.isPlayerTurn(ai) && ai.equals(ph.getNextTurn());
         }
 
         // the plan, cheapest first (the window, each line's pre-check, the mana, then the board); null
@@ -22453,7 +22466,42 @@ public class SpecialCardAi {
                 final Card c = trickTarget(ai, parts.pump, combat);
                 return c == null ? null : new Plan(Mode.PUMP, c);
             }
+            if (endStepBeforeOurs(ai) && parts.pump != null
+                    && ph.getTurn() - host.getTurnInZone() >= PATIENCE_ROUNDS * game.getPlayers().size()) {
+                final Card c = boonTarget(ai, parts.pump);
+                return c != null && surelyPays(ai, sa) ? new Plan(Mode.PUMP, c) : null;
+            }
             return null;
+        }
+
+        // E: our commander (the best, with two), else our best non-Defender creature worth
+        // PREMIUM_VALUE; only one the counters can reach, never a useless one (isUselessCreature:
+        // detained, unable to attack or block, tapped for good)
+        private static Card boonTarget(final Player ai, final AbilitySub pump) {
+            Card commander = null;
+            int commanderEval = 0;
+            Card best = null;
+            int bestEval = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!c.canReceiveCounters(CounterEnumType.P1P1) || !pump.canTarget(c)
+                        || ComputerUtilCard.isUselessCreature(ai, c)) {
+                    continue;
+                }
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                if (c.isCommander() && ai.equals(c.getOwner())) {
+                    if (commander == null || eval > commanderEval
+                            || (eval == commanderEval && c.getId() < commander.getId())) {
+                        commander = c;
+                        commanderEval = eval;
+                    }
+                } else if (!c.hasKeyword(Keyword.DEFENDER) && eval >= PREMIUM_VALUE) {
+                    if (best == null || eval > bestEval || (eval == bestEval && c.getId() < best.getId())) {
+                        best = c;
+                        bestEval = eval;
+                    }
+                }
+            }
+            return commander != null ? commander : best;
         }
 
         // A: the opponent whose graveyard holds a card worth answering that the top item's targeted
