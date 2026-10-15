@@ -35842,9 +35842,10 @@ public class SpecialCardAi {
     // at least MARGIN more untaps per untap step than we do (upstream's Smoke and Damping Field
     // rule, NeedsToPlayVar CountOpps GTCountMe, made exact for a cap of two). loss(p) is p's untap
     // demand above CAP, after the caps p already lives under. The demand is the permanents p would
-    // want back each untap step that CAN untap in it (Card.canUntap(p, true): every land under
-    // Hokori and "doesn't untap" cards drop out; the replacement is compared against the step's
-    // player):
+    // want back each untap step that CAN untap in it (untapsLater: Card.canUntap(p, true)'s
+    // CantHappen check without its one-step blocks, so every land under Hokori and standing
+    // "doesn't untap" cards drop out while an exerted card or a Vorinclex-tapped land stays; the
+    // replacement is compared against the step's player):
     // - lands;
     // - creatures with power that are neither defenders nor vigilant;
     // - nonland permanents with a {T} ability they can use again (rocks, utility). Never a
@@ -35915,7 +35916,7 @@ public class SpecialCardAi {
                 if (n >= COUNT_LIMIT) {
                     break;
                 }
-                if (!wantsUntap(c) || capFull(c, p, caps, used) || !c.canUntap(p, true)) {
+                if (!wantsUntap(c) || capFull(c, p, caps, used) || !untapsLater(c, p)) {
                     continue;
                 }
                 for (final Map.Entry<String, Integer> e : caps.entrySet()) {
@@ -35926,6 +35927,17 @@ public class SpecialCardAi {
                 n++;
             }
             return Math.max(0, n - CAP);
+        }
+
+        // c.canUntap(p, true) without its two one-step blocks: an exerted card, and the hidden
+        // "This card doesn't untap during your next untap step." (Vorinclex, Voice of Hunger's
+        // tapped lands, Frost Breath), which Untap.doUntap removes after one step. The Orb stays
+        // for every step after it, so such a card is still demand; a standing CantHappen
+        // replacement (Hokori, Dust Drinker's lands) still takes it out.
+        static boolean untapsLater(final Card c, final Player p) {
+            final Map<forge.game.ability.AbilityKey, Object> runParams = forge.game.ability.AbilityKey.mapFromAffected(c);
+            runParams.put(forge.game.ability.AbilityKey.Player, p);
+            return !c.getGame().getReplacementHandler().cantHappenCheck(ReplacementType.Untap, runParams);
         }
 
         // c matches a cap whose budget the scan has already spent: it would stay tapped anyway
