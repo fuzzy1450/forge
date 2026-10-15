@@ -36876,8 +36876,9 @@ public class SpecialCardAi {
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
-    // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's
-    // row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
+    // row 93, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird
+    // Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -36989,6 +36990,8 @@ public class SpecialCardAi {
                     return SharedTrauma.readmit(ai, sa);
                 case BenevolentOffering.NAME:            // batch 3, row 11 (W11)
                     return BenevolentOffering.readmit(ai, sa);
+                case Nethergoyf.NAME:                    // batch 3 extension, row 93 (W12)
+                    return Nethergoyf.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -51277,6 +51280,70 @@ public class SpecialCardAi {
         // a zone parameter is a comma-separated list
         private static boolean zoneListed(final String zones, final String zone) {
             return zones != null && Arrays.asList(zones.split(",")).contains(zone);
+        }
+    }
+
+    // Nethergoyf (dead-card batch 3 extension, row 93)
+    // "Nethergoyf's power is equal to the number of card types among cards in your graveyard and
+    // its toughness is equal to that number plus 1. Escape-{2}{B}, Exile any number of other cards
+    // from your graveyard with four or more card types among them." ({B} Creature - Lhurgoyf
+    // */1+*.) AI:RemoveDeck:All dropped both of its spell abilities - the creature spell in hand
+    // and the Escape alternative from the graveyard - in AiController.getSpellAbilityToPlay's
+    // removeIf before any handler ran, so its owner never cast it (0 owner casts in 447 carrier
+    // rows on 2.0.15+55e709fa6ba; the one cast there was a theft). The hint is KEPT: Escape's exile
+    // is a non-mana X (Count$xPaid) the AI never announces, and AiCostDecision.visit(CostExile) has
+    // no withTypesGE chooser, so a readmitted escape would pay {2}{B} and exile nothing (or the
+    // wrong cards). The -10 sort (ComputerUtilAbility.saEvaluator; sortCreatureSpells re-deals the
+    // creature slots by EvaluateCreatureSpellComparator, which carries the same -10 before the body
+    // term, so it ranks below nearly every unhinted creature spell: B3x-2) and every other
+    // isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers, ChangeZoneAi's fetch
+    // list) still apply. The G3 dispatcher (RemoveDeckFilter.readmit) lets through only the owner's
+    // own creature spell from hand - never Escape (graveyard), a Play-effect cast, a copy or a
+    // face-down cast - in our own Main 2 on an empty stack (where PermanentAi's Main-2 wait casts
+    // it), with no mana held (RemoveDeckFilter.noManaHeld), at least MIN_TYPES card types among the
+    // cards in our graveyard (the CDA's own count: it enters as a 2/3 or better for {B}), and the
+    // engine's test-mode cost (taxes and reductions) within HonestMana (G2, held sources skipped)
+    // in total and in black: VisceraSeer.readmitCast's shape, verbatim, plus the Escape guard and
+    // the floor. The stock PermanentCreatureAi path then judges it (Tarmogoyf's path in the same
+    // deck). No handler gate, so no canPlaySa caller (rule B3-2) changes path. RNG-free: phase,
+    // zone, owner, AiCardMemory, a graveyard type count and HonestMana only; a refusal is the old
+    // filter.
+    public static class Nethergoyf {
+        public static final String NAME = "Nethergoyf";
+        // two types: a 2/3 for {B}; below it a 0/1 or a 1/2 waits (a discard or a mill under Disa
+        // puts it onto the battlefield for free)
+        public static final int MIN_TYPES = 2;
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isEscape() || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || sa.isCastFaceDown() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // Escape, a thief's, Play-effect or face-down cast keeps the filter
+            }
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai) || !ai.canCastSorcery()
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // outside our own Main 2 the list stays exactly A's
+            }
+            if (graveyardTypes(ai) < MIN_TYPES) {
+                return false; // a 0/1 or a 1/2: hold it
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int total = cost.getConvertedManaCost();
+            final int black = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK);
+            if (total <= 0 && black <= 0) {
+                return true; // a reduction ate the {B}
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= total && mana.colour(MagicColor.BLACK) >= black;
+        }
+
+        // Count$ValidGraveyard Card.YouOwn$CardTypes, through the CDA's own counter: our own cards
+        // only ever sit in our graveyard, and the host is in hand, so it never counts itself
+        static int graveyardTypes(final Player ai) {
+            return AbilityUtils.countCardTypesFromList(ai.getCardsIn(ZoneType.Graveyard), false);
         }
     }
 
