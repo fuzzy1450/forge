@@ -111,6 +111,14 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.SunbirdStandard.consider(ai, sa);
         }
 
+        // Static Orb keeps AI:RemoveDeck:All; G3 lets only its own hand cast through, and that cast
+        // is judged here (own Main 2, or Main 1 via castPermanentInMain1, PermanentAi:54). The gate
+        // is the readmit's own key (rule B3-2): a Play-effect cast (Fevered Suspicion), an exile
+        // MayPlay (Gonti, Dream-Thief's Bandana) and every other host keep the stock answer.
+        if (SpecialCardAi.StaticOrb.isOwnHandCast(sa)) {
+            return SpecialCardAi.StaticOrb.consider(ai, sa);
+        }
+
         // Lavabrink Floodgates dropped AI:RemoveDeck:All. Its own cast is judged here, after the
         // stock approval (own Main 2 in practice, PermanentAi.checkPhaseRestrictions); a Play-effect
         // cast (Etali's free cast, Nathan Drake's attack trigger) keeps the stock answer, as in A.

@@ -30831,8 +30831,8 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 16, 17, 19, 21, 23, 25, 27, 28, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 63, 68, 71, 75, 79,
-    // 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird
+    // 16, 17, 19, 21, 23, 25, 27, 28, 32, 35, 36, 41, 48, 49, 50, 52, 57, 58, 60, 63, 68, 71, 75,
+    // 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird
     // Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -30917,6 +30917,8 @@ public class SpecialCardAi {
                     return Embercleave.readmit(ai, sa);
                 case Artillerize.NAME:
                     return Artillerize.readmit(ai, sa);
+                case StaticOrb.NAME:
+                    return StaticOrb.isOwnHandCast(sa);
                 default:
                     return false;
             }
@@ -35270,6 +35272,140 @@ public class SpecialCardAi {
                 }
             }
             return d;
+        }
+    }
+
+    // Static Orb (dead-card batch 3, row 48; secret-santa, not an anchor)
+    // "As long as Static Orb is untapped, players can't untap more than two permanents during
+    // their untap steps." ({3} artifact; the Weatherlight text is the Oracle.) Symmetric: it caps
+    // the caster too, and only in the untap STEP (Hokori's upkeep land untap is outside it). The
+    // script keeps AI:RemoveDeck:All: behind the hint the stock PermanentAi.checkApiLogic answers
+    // WillPlay with no floor, in any affordable Main 2 (Winter Orb's behaviour), and the hint also
+    // keeps the Orb off the steal, copy, clone and tutor lists and sorts it last (priority -10).
+    // The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through
+    // AiController's filter, the Manascape Refractor shape (batch 2, row 60): this card's own
+    // permanent spell, cast from hand and not from a Play effect, which consider() judges from
+    // PermanentNoncreatureAi.checkApiLogic (own Main 2, or Main 1 when castPermanentInMain1 says
+    // so). A Play-effect cast (Fevered Suspicion) and an exile MayPlay (Gonti, Dream-Thief's
+    // Bandana) never match isOwnHandCast and keep A's answer.
+    // Value floor: the Orb's worth is the DIFFERENCE in what it takes, so EVERY opponent must lose
+    // at least MARGIN more untaps per untap step than we do (upstream's Smoke and Damping Field
+    // rule, NeedsToPlayVar CountOpps GTCountMe, made exact for a cap of two). loss(p) is p's untap
+    // demand above CAP, after the caps p already lives under. The demand is the permanents p would
+    // want back each untap step that CAN untap in it (Card.canUntap(p, true): every land under
+    // Hokori and "doesn't untap" cards drop out; the replacement is compared against the step's
+    // player):
+    // - lands;
+    // - creatures with power that are neither defenders nor vigilant;
+    // - nonland permanents with a {T} ability they can use again (rocks, utility). Never a
+    //   Treasure, Lotus Petal or Chromatic Sphere: those are sacrificed, not left tapped
+    //   (Cost.isReusuableResource).
+    // An existing UntapAdjust cap (Winter Orb's Land:1, Smoke's Creature:1, Damping Field's
+    // Artifact:1) is applied DURING the scan, min per key as Untap.doUntap parses it, so the
+    // COUNT_LIMIT cut is on the post-cap count and only tightens the floor: once our own count
+    // saturates, no opponent can clear the margin. A Permanent cap of CAP or less (an untapped
+    // Static Orb on any battlefield, Dovin Baan's emblem) leaves the Orb nothing to take: loss 0,
+    // so with an Orb already untapped every opponent's loss is 0 and the floor declines.
+    // RNG parity: A never evaluated this spell (the hint), every check before consider() is
+    // RNG-free for it, and consider() draws no random number, makes no LKI copy and holds
+    // nothing. G2 comes first, so an unpayable window stops before canPlaySa's canPayCost, whose
+    // test payment rolls isManaSourceReserved per source it tries (batch 1, row 159).
+    public static class StaticOrb {
+        public static final String NAME = "Static Orb";
+        static final int CAP = 2;          // printed
+        static final int MARGIN = 2;       // a spell's worth of mana, or two attackers, per turn
+        static final int COUNT_LIMIT = 12; // demand saturates here: bounded work on big boards
+
+        public static boolean isOwnHandCast(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return sa.isSpell() && !sa.isCastFromPlayEffect() && host != null
+                    && NAME.equals(host.getName()) && host.isInZone(ZoneType.Hand);
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // G2 first, exactly as ManascapeRefractor.consider: the engine's test-mode cost (taxes,
+            // RaiseCost and ReduceCost statics; rule B3-5) against honest mana with held sources
+            // skipped, so an unpayable window stops here drawing nothing.
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (HonestMana.of(ai, sa, true).total() < cost.getConvertedManaCost()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int ours = loss(ai);
+            if (ai.getOpponents().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final Player opp : ai.getOpponents()) {
+                if (loss(opp) < ours + MARGIN) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // untaps an untapped Orb takes from p per untap step: its demand, after the caps p already
+        // lives under (Untap.doUntap's parse, min per key), above CAP. The caps are applied during
+        // the scan, so the COUNT_LIMIT cut is on the post-cap count and can only make the floor
+        // stricter: once our own count saturates, no opponent can clear the margin.
+        static int loss(final Player p) {
+            final Map<String, Integer> caps = new LinkedHashMap<>();
+            for (final forge.game.keyword.KeywordInterface ki : p.getKeywords()) {
+                final String kw = ki.getOriginal();
+                if (kw.startsWith("UntapAdjust:")) {
+                    final String[] k = kw.split(":");
+                    caps.merge(k[1], Integer.parseInt(k[2]), Math::min);
+                }
+            }
+            final Integer permanentCap = caps.get("Permanent");
+            if (permanentCap != null && permanentCap <= CAP) {
+                return 0; // already capped at least as hard: the Orb takes nothing more
+            }
+            final Map<String, Integer> used = new HashMap<>();
+            int n = 0;
+            for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
+                if (n >= COUNT_LIMIT) {
+                    break;
+                }
+                if (!wantsUntap(c) || capFull(c, p, caps, used) || !c.canUntap(p, true)) {
+                    continue;
+                }
+                for (final Map.Entry<String, Integer> e : caps.entrySet()) {
+                    if (c.isValid(e.getKey(), p, null, null)) {
+                        used.merge(e.getKey(), 1, Integer::sum);
+                    }
+                }
+                n++;
+            }
+            return Math.max(0, n - CAP);
+        }
+
+        // c matches a cap whose budget the scan has already spent: it would stay tapped anyway
+        private static boolean capFull(final Card c, final Player p, final Map<String, Integer> caps,
+                final Map<String, Integer> used) {
+            for (final Map.Entry<String, Integer> e : caps.entrySet()) {
+                if (used.getOrDefault(e.getKey(), 0) >= e.getValue() && c.isValid(e.getKey(), p, null, null)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static boolean wantsUntap(final Card c) {
+            if (c.isLand()) {
+                return true;
+            }
+            if (c.isCreature() && c.getNetPower() > 0
+                    && !c.hasKeyword(Keyword.DEFENDER) && !c.hasKeyword(Keyword.VIGILANCE)) {
+                return true;
+            }
+            for (final SpellAbility a : c.getSpellAbilities()) {
+                // a tap ability it can use again: never a Treasure, Lotus Petal or Chromatic Sphere,
+                // which are sacrificed, not left tapped (Cost.isReusuableResource)
+                if ((a.isActivatedAbility() || a.isManaAbility()) && a.getPayCosts() != null
+                        && a.getPayCosts().hasTapCost() && a.getPayCosts().isReusuableResource()) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
