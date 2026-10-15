@@ -14938,6 +14938,138 @@ public class SpecialCardAi {
         }
     }
 
+    // Glen Elendra's Answer (dead-card batch 3, row 24)
+    // {2}{U}{U} instant: "This spell can't be countered. Counter all spells your opponents control
+    // and all abilities your opponents control. Create a 1/1 blue and black Faerie creature token
+    // with flying for each spell and ability countered this way." No AI hint. Stock AI: the counter
+    // branch (AiController.getSpellAbilityToPlay -> chooseCounterSpell) offers it at every priority
+    // with a non-empty stack, and CounterAi.checkApiLogic declined every untargeted counter (its
+    // "Counter All" branch), so its owner never cast it from hand on any engine. CounterAi's name
+    // gate there now asks consider() for the root spell; free casts (cascade, Play effects, thefts:
+    // CounterAi.doTriggerNoCost) stay stock, and ComputerUtil.counterSpellRestriction ranks it below
+    // every targeted counter that also wants the window (its null TargetRestrictions threw there).
+    // Window: among the items it would counter - an opponent's (not a teammate's) ability, or a
+    // spell of theirs it can counter - one is worth a counter, or MIN_ITEMS or more count, or, with
+    // nothing but such items on the stack, the threat predictor says they deal us lethal damage.
+    // Our own items are spared by the card, so they never decline it.
+    // - Worth a counter: OverchargedAmalgam.isWorthCountering (removal, theft, bounce or a lethal
+    //   hit on a permanent of ours; a counter aimed at a spell or ability of ours; a wrath, mass
+    //   bounce or mass exile; an opponent's spell of mana value 3+ not aimed only at another
+    //   opponent). An ability costs its controller no card, so it must also aim at a spell or
+    //   ability of ours, sweep (Amalgam's MASS_HOSTILE, Battlefield origin for ChangeZoneAll), or
+    //   be hostile (Amalgam's isHostileTo) to a permanent of ours in play that
+    //   SummaryDismissal.worthKeeping keeps: never a 1/1 Orc Army, a Treasure or a land.
+    // - MIN_ITEMS: a drawback trigger - one with a spawning ability (a delayed or reflexive
+    //   trigger: Sneak Attack's, unearth's or dash's end-step exile or sacrifice, a Pact's upkeep
+    //   payment) or an evoke, echo or cumulative-upkeep trigger - is countered all the same but
+    //   does not count, and while one is on the stack the count alone never approves: countering
+    //   it hands its controller the creature for good.
+    // Mana: the engine's test-mode cost of the root (calculateManaCost: taxes such as Grand Arbiter
+    // Augustin IV, Lodestone Golem or God-Pharaoh's Statue, reductions such as Sapphire Medallion,
+    // a free probe at 0) against HonestMana (G2, held sources skipped), in total and in blue,
+    // checked before canPayCost's isManaSourceReserved draws can be reached.
+    // RNG: every check is RNG-free (stack reads, isWorthCountering, worthKeeping, the trigger
+    // reads, calculateManaCost in test mode, HonestMana, predictThreatenedObjects); the stock
+    // decline drew nothing either. OverchargedAmalgam's (batch 1, row 136) and SummaryDismissal's
+    // (batch 2, row 76) helpers are called unchanged, never copied. Holds nothing, remembers
+    // nothing, targets nothing.
+    public static class GlenElendrasAnswer {
+        public static final String NAME = "Glen Elendra's Answer";
+        public static final int MIN_ITEMS = 3;
+
+        // CounterAi.checkApiLogic's untargeted-branch name gate (root spell only)
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final SpellAbility root = sa.getRootAbility();   // never host.getFirstSpellAbility() (row 77)
+            int items = 0;                 // what it would counter (= faeries made)
+            int counted = 0;               // of those, the ones MIN_ITEMS counts
+            boolean drawback = false;      // a drawback trigger is among them
+            boolean worthy = false;
+            boolean onlyCountered = true;  // every stack item is one it counters
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                SpellAbility item = si.getSpellAbility();
+                if (item != null && item.isWrapper()) {
+                    item = ((WrappedAbility) item).getWrappedAbility();
+                }
+                final Player controller = item == null ? null : item.getActivatingPlayer();
+                if (controller == null || !controller.isOpponentOf(ai) || ai.getYourTeam().contains(controller)) {
+                    onlyCountered = false; // ours or a teammate's: spared, never a reason to decline
+                    continue;
+                }
+                if (item.isSpell() && !item.isCounterableBy(root)) {
+                    onlyCountered = false; // "can't be countered": stays, makes no faerie
+                    continue;
+                }
+                items++;
+                if (isDrawbackTrigger(item)) {
+                    drawback = true;
+                } else {
+                    counted++;
+                }
+                if (!worthy && OverchargedAmalgam.isWorthCountering(ai, root, item, true)
+                        && (item.isSpell() || abilityWorthACard(ai, item))) {
+                    worthy = true;
+                }
+            }
+            final boolean byCount = counted >= MIN_ITEMS && !drawback;
+            if (items == 0 || (!worthy && !byCount && !onlyCountered)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // G2 against the cost as the engine prices it, never getAvailableManaEstimate (it counts
+            // the words of Produced$) nor the printed mana value (rule B3-5)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, root, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLUE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (worthy || byCount) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            // Only items it counters are on the stack, so every predicted threat is one it removes.
+            for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, null, false)) {
+                if (ai.equals(o)) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // an opposing ability is worth this card and four mana only when it aims at a spell or
+        // ability of ours, sweeps, or is hostile to a permanent of ours in play worth keeping
+        private static boolean abilityWorthACard(final Player ai, final SpellAbility item) {
+            for (SpellAbility part = item; part != null; part = part.getSubAbility()) {
+                for (final GameObject o : part.getTargets()) {
+                    if (o instanceof SpellAbility s) {
+                        if (ai.equals(s.getActivatingPlayer())) {
+                            return true; // e.g. a Stifle on our trigger
+                        }
+                    } else if (o instanceof Card c && ai.equals(c.getController()) && c.isInPlay()
+                            && OverchargedAmalgam.isHostileTo(part, c) && SummaryDismissal.worthKeeping(ai, c)) {
+                        return true;
+                    }
+                }
+                final ApiType api = part.getApi();
+                if (api != null && OverchargedAmalgam.MASS_HOSTILE.contains(api)
+                        && (api != ApiType.ChangeZoneAll || part.getParamOrDefault("Origin", "").contains("Battlefield"))) {
+                    return true; // wraths, mass bounce or exile from the battlefield
+                }
+            }
+            return false;
+        }
+
+        // a trigger that is a drawback to its controller: a delayed or reflexive trigger (it has a
+        // spawning ability) or an evoke, echo or cumulative-upkeep sacrifice
+        private static boolean isDrawbackTrigger(final SpellAbility item) {
+            if (item.isSpell()) {
+                return false;
+            }
+            final Trigger t = item.getTrigger();
+            return t != null && (t.getSpawningAbility() != null || t.isKeyword(Keyword.EVOKE)
+                    || t.isKeyword(Keyword.ECHO) || t.isKeyword(Keyword.CUMULATIVE_UPKEEP));
+        }
+    }
+
     // Goblin Archaeologist (dead-card batch 2, row 74)
     // "{R}, {T}: Flip a coin. If you win the flip, destroy target artifact and untap this creature.
     // If you lose the flip, sacrifice this creature." ({1}{R} 1/2.) AI:RemoveDeck:All kept both the

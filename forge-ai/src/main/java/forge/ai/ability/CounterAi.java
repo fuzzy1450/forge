@@ -88,6 +88,11 @@ public class CounterAi extends SpellAbilityAi {
             }
         } else {
             // This spell doesn't target. Must be a "Counter All" or "Counter trigger" type of ability.
+            // Glen Elendra's Answer (dead-card batch 3, row 24) counters only its opponents' side and
+            // has its own window. Root spell only; free casts go through doTriggerNoCost (stock).
+            if (SpecialCardAi.GlenElendrasAnswer.NAME.equals(sourceName) && sa.isSpell() && sa.getRootAbility() == sa) {
+                return SpecialCardAi.GlenElendrasAnswer.consider(ai, sa);
+            }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 

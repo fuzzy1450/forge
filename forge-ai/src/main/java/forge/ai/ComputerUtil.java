@@ -182,6 +182,14 @@ public class ComputerUtil {
             restrict += 40;
         }
 
+        // An untargeted counter (Glen Elendra's Answer, Defined$ ValidStack) has no TargetRestrictions:
+        // until dead-card batch 3 (row 24) none reached here (CounterAi declined them all), and the
+        // reads below would throw. It counters every type it names, so rank it least restrictive, like
+        // three TargetTypes at -5 each: a narrower counter that also wants this window is chosen first.
+        if (tgt == null) {
+            return restrict - 15;
+        }
+
         // TargetValidTargeting gets biggest bonus
         if (tgt.getSAValidTargeting() != null) {
             restrict += 35;
