@@ -29,6 +29,11 @@ public class ChoosePlayerAi extends SpellAbilityAi {
                     ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
                     : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
+        if (SpecialCardAi.SylvanOffering.isOwnHandCast(ai, sa)) {
+            // Dead-card batch 3, row 6: the owner's own paid hand cast only, the G3 readmit's own key
+            // (B3-2). The DBChoose sub (parent set), copies, effect casts and thefts keep the stock answer.
+            return SpecialCardAi.SylvanOffering.consider(ai, sa);
+        }
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 
