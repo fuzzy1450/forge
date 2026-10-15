@@ -35298,8 +35298,8 @@ public class SpecialCardAi {
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 7, 8, 10, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52, 57,
-    // 58, 59, 60, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row 68
-    // (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84, keepOff for batch 2's row
+    // 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -35409,6 +35409,8 @@ public class SpecialCardAi {
                     return AllianceOfArms.readmit(ai, sa);
                 case Skyscribing.NAME:
                     return Skyscribing.readmit(ai, sa);
+                case SharedTrauma.NAME:
+                    return SharedTrauma.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -38327,6 +38329,429 @@ public class SpecialCardAi {
                           && !c.hasKeyword(Keyword.PROTECTION))
                     && ComputerUtilCard.evaluateCreature(c) >= floor);
             return kills.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(kills);
+        }
+    }
+
+    // Shared Trauma (dead-card batch 3, row 61; precon:Devour for Power (CM2))
+    // "Join forces - Starting with you, each player may pay any amount of mana. Each player mills X
+    // cards, where X is the total amount of mana paid this way." ({B} sorcery.) AI:RemoveDeck:All is
+    // KEPT, so every other isCardRemAIDeck reader (the -10 sort, CopySpellAbilityAi, the steal,
+    // clone and tutor pickers, PlayEffect's random cast, a thief's list) still refuses the card,
+    // and RepeatEachAi is untouched, so the canPlaySa probes and the Play-effect thefts (the Nathan
+    // Drake line, Arcane Heist, Planar Portal, Mindleecher, Villainous Wealth) keep A's stock path.
+    // Behind the hint RepeatEachAi.canPlay approves any RepeatEach with no AILogic and MillAi's own
+    // floors never run for the root, so readmit IS the cast decision. At resolution the stock
+    // announcement (PlayerControllerAi.announceRequirements -> ComputerUtilMana
+    // .determineLeftoverMana(DBPay)) prices the root's own, already-paid {B} again on top of X: one
+    // mana short, 0 with no black source left, and never capped at our library. That is modelled
+    // here, not changed (rule B3-8: Minds Aglow's chooser is never widened). AI opponents announce
+    // 0 for our spell, yet every player mills the TOTAL: in a duel the opponent mills exactly what
+    // we mill. What makes that worth a card is a graveyard engine of ours the milled cards feed (the
+    // carrier counts creature cards in ALL graveyards: The Mimeoplasm, Lhurgoyf, Mortivore; its
+    // Vulturous Zombie grows on their half), with nothing of theirs feeding on graveyards or on the
+    // mill, and nothing exiling our half instead.
+    // readmit lets the owner's own hand cast through G3 only when, each refusal its own return in
+    // this order so a print-only overlay can count them by reason:
+    // - shape: the owner's own paid cast of the RepeatEach spell from hand (never a theft, a copy
+    //   or a Play effect);
+    // - window: our own Main 2 at sorcery speed with no mana held (RemoveDeckFilter.noManaHeld);
+    //   the hint's -10 and the CMC-1 sort judge it after every other castable spell, so X is mana
+    //   nothing else at sorcery speed wanted;
+    // - library: more than MIN_MILL cards in our library;
+    // - mana: the engine's test-mode cost c (taxes, reductions) against HonestMana (G2, held
+    //   sources skipped): twice its black shards in black (the cast's and the stock re-price's),
+    //   and the stock X, x = total - 2c, MIN_MILL or more. xHi = max(x, the mana estimate - c)
+    //   bounds the uncapped announcement from above (Signets and filter lands pay it too);
+    // - winner: no opponent has a Draw replacement on its battlefield (Laboratory Maniac and Jace,
+    //   Wielder of Mysteries win on a draw from an emptied library);
+    // - W0, a true: our library outlasts xHi by MIN_MILL, some opponent still has a library, and
+    //   every opponent's is x or less and loses it the game (canBeDecked): each decks at its next
+    //   draw step, which comes before ours;
+    // - floor: our library keeps LIBRARY_FLOOR (MillAi.checkApiLogic's each-player floor) after
+    //   xHi and two turns of the mills Phase triggers force on us (the carrier's Dreamborn Muse);
+    // - keep-up: no instant or flash card in our hand costs the spare mana or less (the cast taps
+    //   it all, and an end-step play would use it: Fact or Fiction, Spell Crumple);
+    // - demand: a graveyard engine of ours the mill feeds: D1 a battlefield trigger on cards put
+    //   into a graveyard from the library or from anywhere (Vulturous Zombie); D2 a creature whose
+    //   power reads Count$ValidGraveyard (Lhurgoyf, Mortivore, Sewer Nemesis); D3 a commander in
+    //   the command zone or a creature card in hand, castable by next turn, whose NeedsToPlayVar
+    //   over Count$ValidGraveyard Creature is unmet now and met by the expected mill (The
+    //   Mimeoplasm GE2, Mortivore GE2);
+    // - graveyard: no replacement of ours exiles our own half (Rest in Peace), and no opponent
+    //   feeds on graveyards or on the mill (usesGraveyard: a graveyard count, a trigger on cards
+    //   put into a graveyard from the library, a play-from-graveyard static, a replacement that
+    //   exiles our half instead (Dauthi Voidwalker), a Milled-family trigger, a graveyard eater).
+    // Every read before a true is a count, a zone, a keyword, a param, an SVar, a trigger, static or
+    // replacement mode, matchesValidParam, canDraw and the cantLose reads, test-mode
+    // calculateManaCost, HonestMana and the mana estimate (their only write, like G2's, is
+    // setActivatingPlayer on mana abilities), calculateAmount on a Count$ValidGraveyard value or
+    // noManaHeld: no random number, no spell-ability id (trigger links are read as text, never
+    // built), nothing held or remembered, so a false is exactly the old filter. The first new draw
+    // is canPayCost's for {B}, after a true, in a window G2 judged payable.
+    public static class SharedTrauma {
+        public static final String NAME = "Shared Trauma";
+        static final int MIN_MILL = 3;                 // three cards from each library
+        static final int LIBRARY_FLOOR = 10;           // MillAi.checkApiLogic's each-player floor, kept after the mill
+        static final double OPP_CREATURE_SHARE = 0.25; // prior for a hidden opposing library (never peeked)
+        // the Milled family: a trigger on cards being milled
+        private static final Set<TriggerType> MILLED = EnumSet.of(TriggerType.Milled, TriggerType.MilledOnce,
+                TriggerType.MilledAll);
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.RepeatEach || sa.isCopied()
+                    || sa.isCastFromPlayEffect() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getController()) || !ai.equals(host.getOwner())) {
+                return false; // shape: a theft, a copy, another zone: the filter, as in A
+            }
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // window: O(1) outside our own Main 2
+            }
+            final int lib = ai.getCardsIn(ZoneType.Library).size();
+            if (lib <= MIN_MILL) {
+                return false; // library
+            }
+            // the cost as the engine prices it (test mode: taxes and Raise/ReduceCost, no MyRandom)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int c = cost.getConvertedManaCost();
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            // the stock resolution asks the spell's {B} again: a second black unit must survive the cast
+            final int x = mana.total() - 2 * c;
+            if (mana.colour(MagicColor.BLACK) < 2 * cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)
+                    || x < MIN_MILL) {
+                return false; // mana
+            }
+            // the announcement is uncapped and may also tap Signets and filters: bound it from above
+            final int xHi = Math.max(x, ComputerUtilMana.getAvailableManaEstimate(ai, true) - c);
+            for (final Player opp : ai.getOpponents()) {
+                if (winsOnEmptyLibrary(opp)) {
+                    return false; // winner
+                }
+            }
+            if (lib - xHi >= MIN_MILL && decksEveryOpponent(ai, x)) {
+                return true; // W0
+            }
+            final int hand = ai.getCardsIn(ZoneType.Hand).size() - 1; // the spell leaves the hand
+            if (lib - xHi - 2 * forcedMill(ai, hand) < LIBRARY_FLOOR) {
+                return false; // floor
+            }
+            if (keepsUpPlay(ai, host, mana.total() - c)) {
+                return false; // keep-up
+            }
+            if (!feedsUs(ai, x, lib)) {
+                return false; // demand
+            }
+            if (exilesOurHalf(ai)) {
+                return false; // graveyard
+            }
+            for (final Player opp : ai.getOpponents()) {
+                if (usesGraveyard(opp)) {
+                    return false; // graveyard
+                }
+            }
+            return true;
+        }
+
+        // winner: a Draw replacement on opp's battlefield. Laboratory Maniac and Jace, Wielder of
+        // Mysteries turn a draw from an emptied library into a win, so the mill hands them the game;
+        // the rest of the mode (Notion Thief and the like) refuses too, the safe side.
+        private static boolean winsOnEmptyLibrary(final Player opp) {
+            for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.Draw) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // W0: some opponent still has a library, and every opponent's library is x or less (the real
+        // X is at least x) and it loses to a draw from an empty library: it can draw and can lose
+        // the game, to a mill too (Skyscribing.canBeDecked's reading, a private copy).
+        private static boolean decksEveryOpponent(final Player ai, final int x) {
+            boolean any = false;
+            for (final Player opp : ai.getOpponents()) {
+                final int library = opp.getCardsIn(ZoneType.Library).size();
+                if (library > x || !opp.canDraw() || opp.cantLose()
+                        || opp.cantLoseCheck(forge.game.player.GameLossReason.Milled)) {
+                    return false;
+                }
+                any |= library > 0;
+            }
+            return any;
+        }
+
+        // floor: the cards the Phase triggers on every battlefield mill from our library each turn,
+        // optional and conditional ones included. A trigger counts when its first Execute link is a
+        // Mill that can take our cards: a targeted one, a TriggeredPlayer one whose ValidPlayer can be
+        // us (Dreamborn Muse's each player's upkeep), a You one (Defined absent) of a permanent we
+        // control, or any other Defined. A numeric NumCards counts as written (1 when absent), any
+        // other count as our hand after the cast (Dreamborn Muse's TriggeredPlayer$CardsInHand). Text
+        // reads only: the link is read without building it.
+        private static int forcedMill(final Player ai, final int hand) {
+            int forced = 0;
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() != TriggerType.Phase) {
+                        continue;
+                    }
+                    final Pair<String, Map<String, String>> link = executeLink(t);
+                    if (link == null || !"Mill".equals(link.getLeft()) || !millsUs(ai, c, t, link.getRight())) {
+                        continue;
+                    }
+                    final String num = link.getRight().get("NumCards");
+                    if (num == null) {
+                        forced++;
+                        continue;
+                    }
+                    try {
+                        forced += Integer.parseInt(num.trim());
+                    } catch (NumberFormatException e) {
+                        forced += hand;
+                    }
+                }
+            }
+            return forced;
+        }
+
+        // the Mill link of host's Phase trigger t can take cards from our library
+        private static boolean millsUs(final Player ai, final Card host, final Trigger t, final Map<String, String> mill) {
+            if (mill.containsKey("ValidTgts")) {
+                return true; // a targeted mill may pick us
+            }
+            final String defined = mill.getOrDefault("Defined", "You");
+            if ("TriggeredPlayer".equals(defined)) {
+                return t.matchesValidParam("ValidPlayer", ai);
+            }
+            return !"You".equals(defined) || ai.equals(host.getController());
+        }
+
+        // The trigger's first Execute link as {API name, params}: the built overriding ability when
+        // there is one, else the Execute SVar's text, because building it (ensureAbility) would
+        // allocate a spell-ability id. A private copy of MindsAglow.executeLink. Null when there is
+        // no link.
+        private static Pair<String, Map<String, String>> executeLink(final Trigger tr) {
+            final SpellAbility built = tr.getOverridingAbility();
+            if (built != null) {
+                return Pair.of(built.getApi() == null ? "" : built.getApi().name(), built.getMapParams());
+            }
+            final String svar = tr.getParam("Execute");
+            final String text = svar == null ? "" : tr.getSVar(svar);
+            if (text.isEmpty()) {
+                return null;
+            }
+            final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+            String api = params.get("DB");
+            if (api == null) {
+                api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+            }
+            return Pair.of(api == null ? "" : api, params);
+        }
+
+        // keep-up: an instant or flash card the spare mana buys at the opponent's end step (Fact or
+        // Fiction, Spell Crumple, Relic Crush in the carrier): the stock announcement would tap it away
+        private static boolean keepsUpPlay(final Player ai, final Card host, final int spare) {
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c != host && !c.isLand() && (c.isInstant() || c.hasKeyword(Keyword.FLASH))
+                        && c.getCMC() <= spare) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // demand, D1, D2, D3: a graveyard engine of ours that X cards from every library feed
+        private static boolean feedsUs(final Player ai, final int x, final int lib) {
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) { // D1: params only, never ensureAbility
+                    if (isMillTrigger(t)) {
+                        return true;
+                    }
+                }
+                if (!c.isCreature()) {
+                    continue;
+                }
+                for (final StaticAbility st : c.getStaticAbilities()) { // D2
+                    if (st.checkMode(StaticAbilityMode.Continuous)
+                            && (countsGraveyard(c, st.getParam("SetPower")) || countsGraveyard(c, st.getParam("AddPower")))) {
+                        return true;
+                    }
+                }
+            }
+            // D3: a graveyard-gated card the expected mill unlocks (our library's creature share is
+            // our own decklist; theirs is hidden, so a fixed prior stands in for it)
+            final double ours = (double) CardLists.count(ai.getCardsIn(ZoneType.Library), CardPredicates.CREATURES) / lib;
+            final double expected = x * ours + x * OPP_CREATURE_SHARE * ai.getOpponents().size();
+            final int nextTurnMana = ComputerUtilMana.getAvailableManaEstimate(ai, false) + 1;
+            for (final Card cmdr : ai.getCommanders()) {
+                if (cmdr.isInZone(ZoneType.Command) && cmdr.getCMC() + 2 * ai.getCommanderCast(cmdr) <= nextTurnMana
+                        && unlocks(cmdr, expected)) {
+                    return true;
+                }
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.isCreature() && c.getCMC() <= nextTurnMana && unlocks(c, expected)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A ChangesZone or ChangesZoneAll trigger live on the battlefield on cards put into a
+        // graveyard from the library or from anywhere, unless it watches its own host (a ValidCard,
+        // or ValidCards, naming Self in any form: Card.Self, Creature.Self).
+        private static boolean isMillTrigger(final Trigger t) {
+            final String valid;
+            if (t.getMode() == TriggerType.ChangesZone) {
+                valid = t.getParamOrDefault("ValidCard", "");
+            } else if (t.getMode() == TriggerType.ChangesZoneAll) {
+                valid = t.getParamOrDefault("ValidCards", "");
+            } else {
+                return false;
+            }
+            final String origin = t.getParamOrDefault("Origin", "Any");
+            return t.getParamOrDefault("Destination", "").contains("Graveyard")
+                    && t.getParamOrDefault("TriggerZones", "Battlefield").contains("Battlefield")
+                    && (origin.contains("Any") || origin.contains("Library"))
+                    && !valid.contains("Self");
+        }
+
+        // a P/T param of the host that counts a graveyard: the Count$ValidGraveyard value itself, or
+        // the name of an SVar holding one (NightSoil.countsGraveyard's reading, a private copy)
+        private static boolean countsGraveyard(final Card host, final String param) {
+            return param != null && (param.startsWith("Count$ValidGraveyard")
+                    || host.getSVar(param).startsWith("Count$ValidGraveyard"));
+        }
+
+        // D3: NeedsToPlayVar "<SVar> GE<n>" / "GT<n>" over Count$ValidGraveyard Creature (all
+        // graveyards), unmet now and reachable by the expected creature cards the mill adds
+        private static boolean unlocks(final Card card, final double expected) {
+            final String[] need = card.getSVar("NeedsToPlayVar").split(" ");
+            if (need.length != 2 || !(need[1].startsWith("GE") || need[1].startsWith("GT"))) {
+                return false;
+            }
+            final String count = card.getSVar(need[0]);
+            if (!"Count$ValidGraveyard Creature".equals(count)) {
+                return false;
+            }
+            final int have = AbilityUtils.calculateAmount(card, count, null);
+            final int target = AbilityUtils.calculateAmount(card, need[1].substring(2), null)
+                    + (need[1].startsWith("GT") ? 1 : 0);
+            return have < target && expected >= target - have;
+        }
+
+        // A Moved replacement into a graveyard that can see a milled card: its Destination names the
+        // graveyard, and its Origin is absent or names the library, Any or All (one from the
+        // battlefield or the stack never sees a card leave the library).
+        private static boolean movesMilledCards(final ReplacementEffect re) {
+            if (re.getMode() != ReplacementType.Moved || !re.getParamOrDefault("Destination", "").contains("Graveyard")) {
+                return false;
+            }
+            final String origin = re.getParam("Origin");
+            return origin == null || origin.contains("Library") || origin.contains("Any") || origin.contains("All");
+        }
+
+        // the cards a Moved replacement applies to: ValidCard, else ValidLKI, else "" (every card)
+        private static String validCards(final ReplacementEffect re) {
+            return re.hasParam("ValidCard") ? re.getParam("ValidCard") : re.getParamOrDefault("ValidLKI", "");
+        }
+
+        // graveyard, our side: a replacement of ours that exiles our own milled cards instead of
+        // putting them into the graveyard (Rest in Peace's ValidCard$ Card), unless it watches only
+        // its own host (Self) or every alternative of its ValidCard is an opponent's card (our own
+        // Leyline of the Void or Dauthi Voidwalker exiles only their half)
+        private static boolean exilesOurHalf(final Player ai) {
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    final String valid = validCards(re);
+                    if (movesMilledCards(re) && !valid.contains("Self") && !opponentsCardsOnly(valid)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // every comma alternative names OppOwn or OppCtrl
+        private static boolean opponentsCardsOnly(final String valid) {
+            if (valid.isEmpty()) {
+                return false;
+            }
+            for (final String alt : valid.split(",")) {
+                if (!alt.contains("OppOwn") && !alt.contains("OppCtrl")) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // every comma alternative names YouOwn or YouCtrl (absent: not limited)
+        private static boolean ownCardsOnly(final String valid) {
+            if (valid == null || valid.isEmpty()) {
+                return false;
+            }
+            for (final String alt : valid.split(",")) {
+                if (!alt.contains("YouOwn") && !alt.contains("YouCtrl")) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // An opponent that feeds on graveyards or on the mill, from public information on its
+        // battlefield and in its command zone (a commander waiting there comes back): a
+        // Count$ValidGraveyard SVar (Lhurgoyf, Karador's reduction, The Mimeoplasm); a trigger on
+        // cards put into a graveyard from the library or from anywhere (Sidisi, Syr Konrad, its own
+        // Vulturous Zombie on our half); a Milled-family trigger (The Wise Mothman, Screeching
+        // Scorchbeast, Mirelurk Queen, Zellix); a may-play-from-graveyard static (Muldrotha,
+        // Karador, Lurrus); a Moved replacement into a graveyard that sees milled cards and does not
+        // watch only its own host (Dauthi Voidwalker and Leyline of the Void exile our half, the
+        // former to play the best of it later); an activated non-mana ability reaching into a
+        // graveyard, not limited by its ValidTgts (else ChangeType) to its own cards (Scavenging
+        // Ooze, Chainer, Dementia Master). Plus, in its graveyard, a Milled-family trigger live
+        // there (Infesting Radroach's TriggerZones$ Graveyard). Parameter reads only.
+        private static boolean usesGraveyard(final Player opp) {
+            for (final Card c : opp.getCardsIn(ZoneType.Battlefield, ZoneType.Command)) {
+                for (final String v : c.getSVars().values()) {
+                    if (v.startsWith("Count$ValidGraveyard")) {
+                        return true;
+                    }
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (isMillTrigger(t) || MILLED.contains(t.getMode())) {
+                        return true;
+                    }
+                }
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (st.checkMode(StaticAbilityMode.Continuous) && st.hasParam("MayPlay")
+                            && st.getParamOrDefault("AffectedZone", "").contains("Graveyard")) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (movesMilledCards(re) && !validCards(re).contains("Self")) {
+                        return true;
+                    }
+                }
+                for (final SpellAbility a : c.getSpellAbilities()) {
+                    if (a.isActivatedAbility() && !a.isManaAbility()
+                            && a.getParamOrDefault("Origin", "").contains("Graveyard")
+                            && !ownCardsOnly(a.hasParam("ValidTgts") ? a.getParam("ValidTgts") : a.getParam("ChangeType"))) {
+                        return true;
+                    }
+                }
+            }
+            for (final Card c : opp.getCardsIn(ZoneType.Graveyard)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (MILLED.contains(t.getMode()) && t.getParamOrDefault("TriggerZones", "").contains("Graveyard")) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
     }
 
