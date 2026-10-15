@@ -1384,6 +1384,269 @@ public class SpecialCardAi {
         }
     }
 
+    // Artillerize (dead-card batch 3, row 63; get-krenk-d, a default_anchor deck)
+    // "As an additional cost to cast this spell, sacrifice an artifact or creature. Artillerize
+    // deals 5 damage to any target." ({3}{R} instant.) Never cast by its owner on any engine:
+    // AI:RemoveDeck:All dropped the hand spell in AiController.getSpellAbilityToPlay's removeIf
+    // before any handler ran (the older engines' credited casts are Nathan Drake thefts: Arcane
+    // Heist from the graveyard, the attack-trigger Play). Behind the hint, DamageDealAi.canPlay's
+    // ComputerUtilCost.checkSacrificeCost finds no fodder (no AIPreference, no SacMe on a Goblin
+    // token, SACRIFICE_DEFAULT_PREF_ENABLE=false in Default.ai), the stock payment falls back to
+    // getWorstAI (the cheapest artifact: Sol Ring, Arcane Signet, a Treasure), and the stock
+    // targeting draws MyRandom at every consult (getDamagingSAToChain, shouldTgtP,
+    // useRemovalNow), so dropping the hint alone would not do. The hint is KEPT, so every other
+    // isCardRemAIDeck reader still refuses the card, and three name-gated points carry it:
+    // - readmit, G3's RemoveDeckFilter.readmit case: the owner's own hand cast that pays its mana
+    //   cost (ownHandCast), with no live mana reservation (RemoveDeckFilter.noManaHeld);
+    // - consider, from DamageDealAi.canPlay after Ion Storm, behind the same ownHandCast key
+    //   (rule B3-2): every hint-ignoring canPlaySa probe of a free copy (ManaAi's ritual
+    //   look-ahead, targetPlayableSpellCard's WithoutManaCost replays such as Nathan Drake's Arcane
+    //   Heist on Krenko's graveyard), every theft and every Play-effect cast keep the stock path;
+    // - chooseSacrifice, from ComputerUtil.chooseSacrificeType beside Momentous Fall: the owner's
+    //   payment sacrifices the token consider priced; null falls through to the stock chooser.
+    // Windows (StealCreatureForX's and Titan's Presence's): never in response (an empty stack);
+    // lethal in any window; else our own main phase, an opponent's end step right before our turn,
+    // or an opponent's declare-attackers or declare-blockers step with attackers on us (those
+    // attackers only). Mana: G2 (HonestMana, held sources skipped) against the engine's test-mode
+    // calculateManaCost (taxes and reductions; rule B3-5), in total and in red, less one per source
+    // of ours whose mana ability sacrifices another permanent (Skirk Prospector): mana is paid
+    // before the sacrifice (Cost.sort), so such a payment could take the decided token.
+    // Value floor, in order:
+    // 1. fodder: the worst creature token of ours by evaluation (getWorstCreatureAI, not
+    //    getWorstAI's cheapest-artifact bias) with no mana ability of its own (an Eldrazi Spawn
+    //    could be spent for mana before the sacrifice is paid). None -> CantAfford: never Krenko,
+    //    a nontoken creature, a rock, Skullclamp, the Boots or a Treasure;
+    // 2. lethal: a targetable opponent who can lose, the predicted 5 damage at least its life;
+    // 3. outside an opponent's combat, an opposing planeswalker the 5 damage kills;
+    // 4. an opposing creature the 5 damage destroys for good (isKill: no SacMe, no undying or
+    //    persist, getEnoughDamageToKill within 5: indestructible, shields, regeneration and
+    //    prevention included), not warded, worth MIN_KILL_EVAL (a vanilla nontoken 2/2, Fiery
+    //    Gambit's and Titan's Presence's floor) and more than the token, and not already dying
+    //    this turn (ComputerUtil.filterCreaturesThatWillDieThisTurn: an attacker our blockers kill
+    //    anyway is not worth the card and a token);
+    // 5. in our own main phase or the end step before our turn, an opponent who can lose, left
+    //    below FACE_LIFE_FLOOR (Ion Storm's and shouldTgtP's 5) by a hit that is not prevented.
+    // Worst accepted cast: {3}{R}, the card and a 1/1 Goblin token (105) for an opponent's vanilla
+    // nontoken 2/2 (160), or 5 face damage that leaves an opponent at 4.
+    // RNG: A never evaluated the card. Every decline returns before canPlaySa's canPayCost and
+    // draws nothing: the window, predictDamageTo, HonestMana, the test-mode calculateManaCost,
+    // canTarget, evaluateCreature, getEnoughDamageToKill, getWorstCreatureAI and
+    // getBestPlaneswalkerAI; no lifeInDanger, useRemovalNow, shouldTgtP or getDamagingSAToChain.
+    // Residual: in combat, filterCreaturesThatWillDieThisTurn's combat predictor reaches
+    // ComputerUtil.canRegenerate, which with a Regenerate ability covering an attacker runs
+    // canPayCost and draws isManaSourceReserved rolls (Tower Defense's documented residual), only
+    // for attackers that passed every other floor. Targets are reset first and set only on a
+    // WillPlay; nothing is reserved or remembered.
+    public static class Artillerize {
+        public static final String NAME = "Artillerize";
+        static final int DAMAGE = 5;            // NumDmg$ 5
+        static final int MIN_KILL_EVAL = 160;   // a vanilla nontoken 2/2 (Fiery Gambit, Titan's Presence)
+        static final int FACE_LIFE_FLOOR = 5;   // Ion Storm / shouldTgtP: the hit leaves it below 5
+
+        private static boolean isArtillerize(final Card host) {
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // a spell of this card, never a Play-effect cast (Arcane Heist, Nathan Drake's attack
+        // trigger and any other effect cast keep the stock path)
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && sa.isSpell() && !sa.isCastFromPlayEffect() && isArtillerize(sa.getHostCard());
+        }
+
+        // the readmit's key, carried by the DamageDealAi route too (rule B3-2): our own copy, cast
+        // from our own hand, paying its mana cost; copyWithNoManaCost probes (WithoutManaCost) and
+        // every other caster stay stock (Grab the Reins' ownHandCast plus the free-copy exclusion)
+        public static boolean ownHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Player activator = sa.getActivatingPlayer();
+            return host != null && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner())
+                    && (activator == null || ai.equals(activator)) && !sa.hasParam("WithoutManaCost");
+        }
+
+        // RemoveDeckFilter.readmit's case: RNG-free, reads zone, owner and AiCardMemory only
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return handles(sa) && ownHandCast(ai, sa) && RemoveDeckFilter.noManaHeld(ai, false);
+        }
+
+        // DamageDealAi.canPlay's name route. Every decline before WillPlay draws nothing.
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty()) {
+                return no(AiPlayDecision.StackNotEmpty); // never in response
+            }
+            final Card host = sa.getHostCard();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean ownTurn = ph.isPlayerTurn(ai);
+            final boolean ownMain = ownTurn && ph.getPhase().isMain();
+            final boolean oppEnd = !ownTurn && ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn());
+            final boolean defensive = !ownTurn && combat != null
+                    && (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS))
+                    && !combat.getAttackersOf(ai).isEmpty();
+            final Player lethal = lethalOpponent(ai, sa, host); // one predictDamageTo per opponent
+            if (lethal == null && !ownMain && !oppEnd && !defensive) {
+                return no(AiPlayDecision.AnotherTime);
+            }
+            // real mana with red (G2, held sources skipped), never the bare estimate; a source whose
+            // mana sacrifices another permanent is not counted: mana is paid before the sacrifice
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int sacSources = sacrificingManaSources(ai);
+            if (mana.total() - sacSources < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.RED) - sacSources
+                        < cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)) {
+                return no(AiPlayDecision.CantAfford);
+            }
+            final Card fodder = chooseSacrifice(ai, sacrificable(ai, sa));
+            if (fodder == null) {
+                return no(AiPlayDecision.CantAfford); // no creature token: never Krenko, a rock, a nontoken
+            }
+            if (lethal != null) {
+                return target(sa, lethal);
+            }
+            // an opposing planeswalker the 5 damage kills, outside an opponent's combat
+            if (!defensive) {
+                final CardCollection pws = CardLists.filter(CardLists.getTargetableCards(CardLists.filter(
+                        CardLists.filterControlledBy(game.getCardsIn(ZoneType.Battlefield), ai.getOpponents()),
+                        CardPredicates.PLANESWALKERS), sa),
+                        c -> !c.hasKeyword(Keyword.WARD) && dies(c, host));
+                if (!pws.isEmpty()) {
+                    return target(sa, ComputerUtilCard.getBestPlaneswalkerAI(pws));
+                }
+            }
+            // an opposing creature worth a vanilla nontoken 2/2 and more than the token, killed for
+            // good and not already dying this turn (skeptic A3)
+            final int fodderEval = ComputerUtilCard.evaluateCreature(fodder);
+            final CardCollection pool = defensive ? combat.getAttackersOf(ai) : ai.getOpponents().getCreaturesInPlay();
+            final CardCollection kills = new CardCollection();
+            for (final Card c : CardLists.getTargetableCards(pool, sa)) {
+                if (!c.isCreature() || !ai.isOpponentOf(c.getController()) || c.hasKeyword(Keyword.WARD)) {
+                    continue;
+                }
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                if (v >= MIN_KILL_EVAL && v > fodderEval && isKill(c, host)) {
+                    kills.add(c);
+                }
+            }
+            Card best = null;
+            int bestEval = -1;
+            for (final Card c : ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, kills)) {
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                if (best == null || v > bestEval || (v == bestEval && c.getId() < best.getId())) {
+                    best = c;
+                    bestEval = v;
+                }
+            }
+            if (best != null) {
+                return target(sa, best);
+            }
+            // a face the 5 damage puts below 5, in our own main phase or before our turn
+            if (ownMain || oppEnd) {
+                final Player low = faceBelowFloor(ai, sa, host);
+                if (low != null) {
+                    return target(sa, low);
+                }
+            }
+            return no(AiPlayDecision.CantPlayAi);
+        }
+
+        // the decision's pick and the payment's (chooseSacrificeType): the worst creature token of
+        // ours with no mana ability of its own, else null (skeptic A2)
+        public static Card chooseSacrifice(final Player ai, final Iterable<Card> options) {
+            final CardCollection tokens = CardLists.filter(options, c -> c.isCreature() && c.isToken()
+                    && ai.equals(c.getController()) && c.getManaAbilities().isEmpty());
+            return tokens.isEmpty() ? null : ComputerUtilCard.getWorstCreatureAI(tokens);
+        }
+
+        // chooseSacrificeType's own list, in its order (getValidCards on the battlefield, then
+        // canBeSacrificedBy(sa, false)), so the decision and the payment break ties alike
+        static CardCollection sacrificable(final Player ai, final SpellAbility sa) {
+            final CostSacrifice part = sa.getPayCosts() == null ? null
+                    : sa.getPayCosts().getCostPartByType(CostSacrifice.class);
+            if (part == null || part.payCostFromSource()) {
+                return new CardCollection(); // script drift: no fodder, a decline
+            }
+            final CardCollection list = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                    part.getType().split(";"), ai, sa.getHostCard(), sa);
+            return CardLists.filter(list, CardPredicates.canBeSacrificedBy(sa, false));
+        }
+
+        // a targetable opponent who can lose, whose life the predicted 5 damage reaches; the lowest
+        // life first, ties in turn order
+        static Player lethalOpponent(final Player ai, final SpellAbility sa, final Card host) {
+            Player best = null;
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.canLoseLife() || opp.cantLoseForZeroOrLessLife() || opp.cantLose() || !sa.canTarget(opp)) {
+                    continue;
+                }
+                if (ComputerUtilCombat.predictDamageTo(opp, DAMAGE, host, false) < opp.getLife()) {
+                    continue;
+                }
+                if (best == null || opp.getLife() < best.getLife()) {
+                    best = opp;
+                }
+            }
+            return best;
+        }
+
+        // the lowest-life targetable opponent who can lose, left below FACE_LIFE_FLOOR by a hit that
+        // is not prevented to nothing; ties in turn order
+        static Player faceBelowFloor(final Player ai, final SpellAbility sa, final Card host) {
+            Player best = null;
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.canLoseLife() || opp.cantLoseForZeroOrLessLife() || opp.cantLose() || !sa.canTarget(opp)) {
+                    continue;
+                }
+                final int hit = ComputerUtilCombat.predictDamageTo(opp, DAMAGE, host, false);
+                if (hit <= 0 || opp.getLife() - hit >= FACE_LIFE_FLOOR) {
+                    continue;
+                }
+                if (best == null || opp.getLife() < best.getLife()) {
+                    best = opp;
+                }
+            }
+            return best;
+        }
+
+        // permanents of ours with a mana ability whose cost sacrifices something other than its
+        // source (Skirk Prospector); HonestMana may count each of them once
+        static int sacrificingManaSources(final Player ai) {
+            int n = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final Cost c = ma.getPayCosts();
+                    if (c != null && c.getCostParts().stream()
+                            .anyMatch(p -> p instanceof CostSacrifice && !p.payCostFromSource())) {
+                        n++;
+                        break;
+                    }
+                }
+            }
+            return n;
+        }
+
+        // Fiery Gambit's kill test at 5: indestructible, shields, regeneration and prevention included
+        static boolean dies(final Card c, final Card host) {
+            return ComputerUtilCombat.getEnoughDamageToKill(c, DAMAGE, host, false) <= DAMAGE;
+        }
+
+        // an opposing creature the 5 damage destroys for good
+        static boolean isKill(final Card c, final Card host) {
+            return !c.hasSVar("SacMe") && !ComputerUtilCard.hasActiveUndyingOrPersist(c) && dies(c, host);
+        }
+
+        private static AiAbilityDecision target(final SpellAbility sa, final GameEntity t) {
+            sa.resetTargets();
+            sa.getTargets().add(t);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision d) {
+            return new AiAbilityDecision(0, d);
+        }
+    }
+
     // Bathe in Light (dead-card batch 2, row 117; precon:Heavenly Inferno (CMA))
     // "Radiance - Choose a color. Target creature and each other creature that shares a color with
     // it gain protection from the chosen color until end of turn." ({1}{W} Instant.) Never cast by
@@ -29929,9 +30192,9 @@ public class SpecialCardAi {
     // added by its own row's commit, labelled with that row's class's NAME constant (the shared
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
-    // 16, 17, 19, 21, 23, 25, 27, 28, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 68, 71, 75, 79, 82,
-    // 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard,
-    // a readmit).
+    // 16, 17, 19, 21, 23, 25, 27, 28, 32, 35, 36, 41, 49, 50, 52, 57, 58, 60, 63, 68, 71, 75, 79,
+    // 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird
+    // Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -30013,6 +30276,8 @@ public class SpecialCardAi {
                     return BrassSquire.readmit(ai, sa);
                 case Embercleave.NAME:
                     return Embercleave.readmit(ai, sa);
+                case Artillerize.NAME:
+                    return Artillerize.readmit(ai, sa);
                 default:
                     return false;
             }

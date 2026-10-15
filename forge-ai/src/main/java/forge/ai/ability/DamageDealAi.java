@@ -324,6 +324,19 @@ public class DamageDealAi extends DamageAiBase {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
+        if (SpecialCardAi.Artillerize.handles(sa) && SpecialCardAi.Artillerize.ownHandCast(ai, sa)) {
+            // Artillerize (dead-card batch 3, row 63): reached by the owner's own hand cast that
+            // pays its mana cost, the key G3's readmit lets through (the hint keeps every other
+            // caster off the list). The stock path below finds no fodder for its
+            // Sac<1/Artifact;Creature> (checkSacrificeCost: no AIPreference,
+            // SACRIFICE_DEFAULT_PREF_ENABLE=false) and its targeting draws MyRandom at every
+            // consult. A hint-ignoring canPlaySa probe of a free copy (ManaAi's ritual look-ahead,
+            // targetPlayableSpellCard's WithoutManaCost replays such as Arcane Heist's), a theft
+            // and a Play-effect cast fail the key and take exactly the path they took before, as
+            // does every other DamageDeal card.
+            return SpecialCardAi.Artillerize.consider(ai, sa);
+        }
+
         final String damage = sa.getParam("NumDmg");
         int dmg = calculateDamageAmount(sa, source, damage);
 

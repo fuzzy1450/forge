@@ -631,6 +631,19 @@ public class ComputerUtil {
             // the board changed between decision and payment: fall through to the stock chooser
         }
 
+        if (amount == 1 && !effect && SpecialCardAi.Artillerize.handles(ability)
+                && ai.equals(ability.getHostCard().getOwner())) {
+            // Artillerize's owner pays with the creature token Artillerize.consider priced, not the
+            // SacMe shuffle or getWorstAI (Sol Ring, a Treasure, Krenko). Here, not in
+            // getCardPreference's SacCost section, which also answers checkSacrificeCost for the
+            // stock path's probes (skeptic A2b). A thief's or a Play-effect cast stays stock.
+            final Card pick = SpecialCardAi.Artillerize.chooseSacrifice(ai, typeList);
+            if (pick != null) {
+                return new CardCollection(pick);
+            }
+            // the board changed between decision and payment: fall through to the stock chooser
+        }
+
         if (amount == 1 && effect && SpecialCardAi.ReadTheRunes.handles(ability)) {
             // Read the Runes' "discard a card unless you sacrifice a permanent" (an unless cost, so
             // effect is true): only the worst token or SacMe permanent that is not a land, a
