@@ -33531,8 +33531,8 @@ public class SpecialCardAi {
     // EdictForAll's per-card name constants for batch 3's rows 41 and 79), and delegates to that
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 10,
     // 11, 16, 17, 19, 21, 23, 25, 27, 28, 32, 33, 35, 36, 38, 41, 48, 49, 50, 52, 57, 58, 59, 60,
-    // 63, 68, 69, 71, 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger; batch 3's
-    // row 68 is Sunbird Standard, a readmit).
+    // 63, 68, 69, 71, 73, 75, 79, 82, 83 and 84, keepOff for batch 2's row 68 (Trench Gorger;
+    // batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -33628,6 +33628,8 @@ public class SpecialCardAi {
                     return MindsAglow.readmit(ai, sa);
                 case JundCharm.NAME:
                     return JundCharm.readmit(ai, sa);
+                case ShieldsOfVelisVel.NAME:
+                    return ShieldsOfVelisVel.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -36288,6 +36290,233 @@ public class SpecialCardAi {
             final HonestMana mana = HonestMana.of(ai, sa, true);
             return mana.total() >= cost.getConvertedManaCost()
                     && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
+        }
+    }
+
+    // Shields of Velis Vel (dead-card batch 3, row 73)
+    // "Changeling. Creatures target player controls get +0/+1 and gain all creature types until end
+    // of turn." ({W} Kindred Instant -- Shapeshifter.) The script keeps AI:RemoveDeck:All. G3
+    // (RemoveDeckFilter.readmit) puts back only its owner's own hand cast, and only inside the
+    // window below, so every other consult's saList is A's. Behind the hint PumpAllAi
+    // .checkApiLogic's targeting branch targets us and answers WillPlay for any board at any
+    // priority; PumpAllAi routes the owner's hand cast here first instead (isOwnHandCast, the
+    // readmit's own key: rule B3-2), and a thief's cast, a Play-effect cast and a copy keep the
+    // stock branch.
+    // Window (Tower Defense's window 1): blocks declared, an empty stack, either player's turn,
+    // and a candidate: a creature of ours that is a blocked attacker or a blocker (skeptic R4, in
+    // both readmit and consider). The pump lasts until end of turn, so +1 toughness matters only
+    // once the combat damage it changes is known.
+    // Floor: +1 toughness takes MIN_COUNT of our combatants from dying now to living (tokens
+    // count), or saves our commander, or one non-token creature worth SINGLE_SAVE_VALUE (a vanilla
+    // 2/2 for 2: a real card for a one-mana card, often free under Morophon). Only saves are
+    // credited: +0/+1 adds no damage, and Morophon's or a lord's bonus to a creature that gains
+    // every type is not modelled (the safe side). A combatant with marked damage is skipped: the
+    // getPumpedCreature copy carries no damage map, so it would read as saved by a toughness point
+    // it does not have (skeptic R3).
+    // Type-gain hazards, each a decline (typeGainHurts), since "gain all creature types" is the
+    // one way the spell hurts us:
+    // (a) a Continuous static's AddPower, AddToughness, SetPower or SetToughness value, or the SVar
+    //     it names, counts shared creature types (Coat of Arms, the carrier's own), or, reading no
+    //     YouCtrl, names a creature type (Soulless One, Sliver Legion, Squirrel Mob, Pestilence
+    //     Rats, the Ones): the gain grows a creature of theirs or shrinks one of ours (skeptic R1);
+    // (b) a negative AddPower or AddToughness static misses a creature of ours now (Engineered
+    //     Plague's Creature.ChosenType): every type may bring it under;
+    // (c) an opposing combatant engaged with one of ours has protection naming a creature type, the
+    //     chosen type or creature types at all (Feline Sovereign's Dogs, Hungry Lynx's Rats,
+    //     Cybernetica Datasmith's Robots): our creature's damage to it would be prevented and the
+    //     trade lost (skeptic R2).
+    // Mana: G2 (HonestMana, held sources skipped) against the engine's own test-mode
+    // calculateManaCost (Morophon's reduction applied; 0 = always), in total and in white (B3-5).
+    // Order: window and candidate, prevent-all-combat-damage, canTarget, the hazards, mana, saves.
+    // RNG: readmit reads the host, phase, stack and combat. consider's checks before any copy draw
+    // nothing (param, SVar and keyword reads, matchesValidParam, canTarget, the test-mode cost,
+    // HonestMana, combatantWouldBeDestroyed per candidate). A copy is built only for a combatant of
+    // ours with no marked damage that dies now. Residuals (Tower Defense's, skeptic R6): the combat
+    // predictors reach ComputerUtil.canRegenerate whatever withoutAbilities says, and with a
+    // Regenerate ability covering a combatant it runs canPayCost, which draws isManaSourceReserved
+    // rolls; each held copy takes two game timestamps plus fresh SpellAbility, StaticAbility and
+    // trigger ids (copyCard(false) keeps the card id); and the readmitted SA, one more saList
+    // element, can reorder the others under binary-insertion TimSort, because saEvaluator is not
+    // transitive (shared by every G3 readmit; the candidate test keeps it to combats where we have
+    // a stake). Nothing is reserved or remembered; the target is set on approval only.
+    public static class ShieldsOfVelisVel {
+        public static final String NAME = "Shields of Velis Vel";
+        static final int TOUGHNESS = 1;            // printed +0/+1
+        static final int MIN_COUNT = 2;            // two combatants saved (tokens count)
+        static final int SINGLE_SAVE_VALUE = 160;  // one real card: a non-token vanilla 2/2 for 2
+        private static final String[] PT_PARAMS = {"AddPower", "AddToughness", "SetPower", "SetToughness"};
+        private static final Pattern NON_WORD = Pattern.compile("[^A-Za-z-]+");
+
+        // the readmit's key and PumpAllAi's route: the owner's own hand cast of the root spell
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && NAME.equals(host.getName()) && sa.isSpell() && sa.getApi() == ApiType.PumpAll
+                    && !sa.isCastFromPlayEffect() && !sa.isCopied() && !host.isFaceDown()
+                    && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner());
+        }
+
+        // RemoveDeckFilter.readmit's case: outside the window the saList is exactly A's
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isOwnHandCast(ai, sa) && window(ai);
+        }
+
+        // after blocks, empty stack, either player's turn, with a blocked or blocking creature of ours
+        private static boolean window(final Player ai) {
+            final Game game = ai.getGame();
+            final Combat combat = game.getCombat();
+            if (combat == null || !game.getStack().isEmpty()
+                    || !game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS)) {
+                return false;
+            }
+            return ai.getCreaturesInPlay().anyMatch(c -> engaged(combat, c));
+        }
+
+        private static boolean engaged(final Combat combat, final Card c) {
+            return combat.isAttacking(c) ? combat.isBlocked(c) : combat.isBlocking(c);
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            if (!window(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // a direct canPlaySa probe off-window
+            }
+            final Combat combat = game.getCombat();
+            if (game.getReplacementHandler().isPreventCombatDamageThisTurn()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!sa.canTarget(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            if (typeGainHurts(ai, combat)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (!savesPayOff(ai, sa, combat)) {
+                return new AiAbilityDecision(0, AiPlayDecision.DoesntImpactCombat);
+            }
+            sa.resetTargets();
+            sa.getTargets().add(ai); // targets are touched only on approval
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // G2 against the adjusted cost, in total and in white; judged on sa, never
+        // host.getFirstSpellAbility() (row 77).
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE);
+        }
+
+        // Tower Defense's window 1 at +0/+1, saves only. Copy diet: one copy and one Combat only for
+        // a combatant of ours with no marked damage that dies now.
+        private static boolean savesPayOff(final Player ai, final SpellAbility sa, final Combat combat) {
+            int saved = 0;
+            boolean worth = false;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!engaged(combat, c)) {
+                    continue; // unblocked attackers and non-combatants: +0/+1 changes nothing
+                }
+                if (c.getDamage() > 0) {
+                    continue; // R3: the copy would forget this damage
+                }
+                if (c.hasKeyword(Keyword.INDESTRUCTIBLE) || !ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat)) {
+                    continue; // lives now: no copy
+                }
+                final boolean attacking = combat.isAttacking(c);
+                final Card pumped = ComputerUtilCard.getPumpedCreature(ai, sa, c, TOUGHNESS, 0, List.of());
+                final Combat pc = pumpedCombat(ai, combat, c, pumped, attacking);
+                if (pc == null) {
+                    continue;
+                }
+                if (!(attacking ? ComputerUtilCombat.attackerWouldBeDestroyed(ai, pumped, pc)
+                                : ComputerUtilCombat.blockerWouldBeDestroyed(ai, pumped, pc))) {
+                    saved++;
+                    worth |= c.isCommander()
+                            || (!c.isToken() && ComputerUtilCard.evaluateCreature(c) >= SINGLE_SAVE_VALUE);
+                }
+            }
+            return saved >= MIN_COUNT || worth;
+        }
+
+        // A private copy of Tower Defense's pumpedCombat (accepted predicates are not shared; skeptic
+        // R5): our attacker against the entity it attacks, the attackers our blocker blocks against us.
+        private static Combat pumpedCombat(final Player ai, final Combat combat, final Card c, final Card pumped,
+                                           final boolean attacking) {
+            final Combat pc = new Combat(combat.getAttackingPlayer());
+            if (attacking) {
+                final GameEntity defender = combat.getDefenderByAttacker(c);
+                if (defender == null) {
+                    return null;
+                }
+                pc.addAttacker(pumped, defender);
+                for (final Card b : combat.getBlockers(c)) {
+                    pc.addBlocker(pumped, b);
+                }
+            } else {
+                for (final Card a : combat.getAttackersBlockedBy(c)) {
+                    pc.addAttacker(a, ai);
+                    pc.addBlocker(a, pumped);
+                }
+            }
+            return pc;
+        }
+
+        // "gain all creature types": (a) and (b) over every battlefield static, (c) over the opposing
+        // combatants engaged with ours. Param, SVar and keyword text and matchesValidParam only:
+        // RNG-free, battlefield statics x our creatures.
+        private static boolean typeGainHurts(final Player ai, final Combat combat) {
+            final CardCollectionView ours = ai.getCreaturesInPlay();
+            for (final Card s : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final StaticAbility st : s.getStaticAbilities()) {
+                    if (!st.checkMode(StaticAbilityMode.Continuous)) {
+                        continue;
+                    }
+                    boolean negative = false;
+                    for (final String p : PT_PARAMS) {
+                        final String v = st.getParam(p);
+                        if (v == null) {
+                            continue;
+                        }
+                        final String text = v + " " + s.getSVar(v);
+                        if (text.contains("sharesCreatureType")) {
+                            return true; // (a) Coat of Arms grows both sides, ours included
+                        }
+                        if (!text.contains("YouCtrl") && namesCreatureType(text)) {
+                            return true; // (a) a count or set by type over the whole table
+                        }
+                        negative |= p.startsWith("Add") && v.startsWith("-");
+                    }
+                    if (negative && ours.anyMatch(c -> !st.matchesValidParam("Affected", c))) {
+                        return true; // (b)
+                    }
+                }
+            }
+            for (final Card c : ours) {
+                if (!engaged(combat, c)) {
+                    continue;
+                }
+                for (final Card o : combat.isAttacking(c) ? combat.getBlockers(c) : combat.getAttackersBlockedBy(c)) {
+                    for (final forge.game.keyword.KeywordInterface k : o.getKeywords(Keyword.PROTECTION)) {
+                        final String text = k.getOriginal();
+                        if (text.contains("ChosenType") || text.contains("CreatureType") || namesCreatureType(text)) {
+                            return true; // (c)
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean namesCreatureType(final String text) {
+            for (final String token : NON_WORD.split(text)) {
+                if (CardType.isACreatureType(token)) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 

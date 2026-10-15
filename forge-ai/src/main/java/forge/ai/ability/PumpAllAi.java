@@ -53,6 +53,18 @@ public class PumpAllAi extends PumpAiBase {
             return SpecialCardAi.TowerDefense.consider(ai, sa);
         }
 
+        if (SpecialCardAi.ShieldsOfVelisVel.isOwnHandCast(ai, sa)) {
+            // Dead-card batch 3, row 73: Shields of Velis Vel, +0/+1 and every creature type for
+            // the targeted player's creatures. The targeting branch below targets us and answers
+            // WillPlay for any board at any priority. The card keeps AI:RemoveDeck:All, and G3
+            // readmits only its owner's own hand cast after blocks with a combatant of ours blocked
+            // or blocking; that cast is judged by the evaluator instead, which draws nothing before
+            // its one copy per dying combatant (residuals named on the class). A thief's cast, a
+            // Play-effect cast (doTriggerNoCost included) and a copy fail the key and keep the
+            // stock branch.
+            return SpecialCardAi.ShieldsOfVelisVel.consider(ai, sa);
+        }
+
         if (logic.equals("UntapCombatTrick")) {
             PhaseHandler ph = ai.getGame().getPhaseHandler();
             if (!(ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS, ai)
