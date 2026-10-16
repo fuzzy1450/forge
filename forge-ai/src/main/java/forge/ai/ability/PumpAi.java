@@ -126,6 +126,19 @@ public class PumpAi extends PumpAiBase {
             // took before this branch.
             return SpecialCardAi.LegionsToAshes.consider(ai, sa);
         }
+        if (SpecialCardAi.BreakingOfTheFellowship.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && !(sa instanceof AbilitySub)) {
+            // Dead-card batch 3, row 110. A Pump target carrier whose real effect is its DealDamage sub
+            // (DamageSource$ ParentTarget): the opposing creature it targets deals damage equal to its
+            // power to another creature that player controls. pumpTgtAI's PowerDmg path sends it to
+            // FightAi.canFight, which reads the root target as OUR fighter (an OppCtrl root offers none of
+            // ours) and the sub's targets before the root has one (TargetsWithDefinedController$
+            // ParentTargetedController), so both lists were empty and every consult returned
+            // MissingNeededCards. That path drew no random number; the evaluator chooses and floors both
+            // targets and draws none on any decline. Copies and Play-effect casts take doTriggerNoCost
+            // and never come here; every other Pump card takes exactly the path it took before.
+            return SpecialCardAi.BreakingOfTheFellowship.consider(ai, sa);
+        }
         if ("Finale of Promise".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
             // Two Pump target carriers over our own graveyard (the real effect is the Play sub): the
             // code below clears X and never announces it (its X handling is keyed on NumAtt/NumDef), so

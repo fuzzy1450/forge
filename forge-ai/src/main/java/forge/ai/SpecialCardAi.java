@@ -5967,6 +5967,325 @@ public class SpecialCardAi {
         }
     }
 
+    // Breaking of the Fellowship (dead-card batch 3, row 110; Izzet Ring-Bearer Tempo and Treasure)
+    // "Target creature an opponent controls deals damage equal to its power to another target creature that
+    // player controls. The Ring tempts you." ({1}{R} sorcery.) A Pump target carrier (+0/+0, no keywords) whose
+    // real effect is its DealDamage sub (DamageSource$ ParentTarget, NumDmg$ X = ParentTargeted$CardPower,
+    // TargetUnique, TargetsWithDefinedController$ ParentTargetedController); the Ring tempt is AlwaysPlayAi.
+    // Unhinted, so A considered it at every own-main-phase consult and declined it in FightAi.canFight
+    // (PumpAi.pumpTgtAI's isFight path for AILogic$ PowerDmg): canFight takes OUR creatures the root can target
+    // as the fighters, and an OppCtrl root targets none of them, and the sub's targets before the root has one,
+    // so both lists were empty and every consult was MissingNeededCards, with no random draw. Routed from
+    // PumpAi.checkApiLogic, root only, after Legions to Ashes. consider() chooses both targets itself, as
+    // canFight does for the YouCtrl PowerDmg cards, and DamageDealAi's PowerDmg case keeps them.
+    // Floor: the victim dies and is worth a vanilla 2/2 for 2 (MIN_EVAL, Titan's Presence's and Oubliette's) or
+    // is a commander. It is never a card we own, never wearing our aura, not useless, not already dying, no
+    // SacMe, no active undying or persist, no shield and no Regenerate ability that can cover it, and no death
+    // trigger of its own that harms us; neither target has ward (not priced on this path). The kill is
+    // FightAi.canKill's test with the opposing source as the damage source: getEnoughDamageToKill reads
+    // deathtouch, wither and infect on the source, indestructible and shields on the victim, and static
+    // prevention and replacement. A source whose power is short of the victim's damage to kill is dropped
+    // before the prediction unless it has deathtouch, so a kill only an opposing amplifier makes is missed (the
+    // safe direction). A (source, victim) pair is skipped when a noncombat DamageDone, DamageDoneOnce or
+    // DamageDealtOnce trigger on that opponent's battlefield matches the victim as ValidTarget and the source
+    // as ValidSource (High Priest of Penance, Illusory Ambusher, Screaming Nemesis, Body of Knowledge, enrage,
+    // "whenever this deals damage"), and the next killer is tried. Source choice: a lifelink-free killer
+    // first (no life for them), then the least valuable, battlefield order on ties. Nothing deals damage back
+    // to the source: this is not a fight.
+    // Pick: prioritizeCreaturesWorthRemovingNow, then, with every victim under one controller (always in 1v1),
+    // getBestRemovalTargetAI's own pick without its board term, the first maximum of evaluateCreature plus 30
+    // for a token (its evaluateBoardPosition(ai, controller) / 4 is then one constant, and it simulates blocks
+    // that draw MyRandom on a cache miss); victims under two or more controllers (pods) keep the stock call.
+    // Mana: G1 (CommanderCastCeiling.affordable, called unchanged under G4's contract) before the board scan,
+    // so canPayCost's test payment never runs in a window that cannot pay.
+    // Private copies (accepted helpers are not shared, rule B3-4): Sudden Demise's punisher loop, read with the
+    // opposing creature as the source; Wave of Reckoning's isDeathTrigger / deathTriggerHarmsUs and its API
+    // set; ComputerUtil.canRegenerate's coverage test without its canPayCost, which test-pays the opponent's
+    // regeneration and draws isManaSourceReserved rolls (any coverable Regenerate ability reads as a save).
+    // RNG: every decline draws nothing (G1 and HonestMana, the board reads, evaluateCreature, isUselessCreature,
+    // filterCreaturesThatWillDieThisTurn, getEnoughDamageToKill and predictDamageTo, the trigger scans,
+    // prioritizeCreaturesWorthRemovingNow); the only draws come after a (source, victim) pair exists: the pod
+    // pick, and canPayCost after a WillPlay. Its writes are G1's and the regeneration test's
+    // setActivatingPlayer, canRegenerate's own. A decline resets both targets and holds or remembers nothing.
+    // Unmodelled, as for every stock removal spell: an instant-speed response and the source's damage triggers
+    // other than the scanned modes. Copies and Play-effect casts take PumpAi.doTriggerNoCost and never come here.
+    public static class BreakingOfTheFellowship {
+        public static final String NAME = "Breaking of the Fellowship";
+        // a vanilla 2/2 for 2 (TitansPresence.MIN_EVAL, Oubliette); a 1/1 token is 106, a 2/2 token 131
+        static final int MIN_EVAL = 160;
+
+        // WaveOfReckoning.HARMFUL_DIES_APIS, copied
+        private static final EnumSet<ApiType> HARMFUL_DIES_APIS = EnumSet.of(
+                ApiType.DealDamage, ApiType.DamageAll, ApiType.EachDamage, ApiType.LoseLife,
+                ApiType.Sacrifice, ApiType.SacrificeAll, ApiType.Destroy, ApiType.DestroyAll,
+                ApiType.ChangeZone, ApiType.ChangeZoneAll, ApiType.Charm, ApiType.Pump,
+                ApiType.PumpAll, ApiType.Discard, ApiType.GainControl);
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            AbilitySub sub = sa.getSubAbility();
+            while (sub != null && sub.getApi() != ApiType.DealDamage) {
+                sub = sub.getSubAbility();
+            }
+            final AbilitySub dmg = sub; // effectively final for the lambdas below
+            if (!sa.usesTargeting() || dmg == null || !dmg.usesTargeting()
+                    || !"ParentTarget".equals(dmg.getParam("DamageSource"))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // script drift
+            }
+            dmg.resetTargets();
+            // cheapest first: two creatures under one opponent, then the mana ceiling
+            boolean pairPossible = false;
+            for (final Player opp : ai.getOpponents()) {
+                if (opp.getCreaturesInPlay().size() >= 2) {
+                    pairPossible = true;
+                    break;
+                }
+            }
+            if (!pairPossible) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final CardCollection victims = new CardCollection();
+            final Map<Card, Card> killerOf = new HashMap<>(); // read by key only: no iteration order
+            final Map<Card, Integer> eval = new HashMap<>();  // read by key only
+            for (final Player opp : ai.getOpponents()) {
+                final CardCollection theirs = opp.getCreaturesInPlay();
+                if (theirs.size() < 2) {
+                    continue;
+                }
+                for (final Card c : theirs) {
+                    eval.put(c, ComputerUtilCard.evaluateCreature(c));
+                }
+                final CardCollection sources = CardLists.filter(CardLists.getTargetableCards(theirs, sa),
+                        c -> c.getNetPower() > 0 && !c.hasKeyword(Keyword.WARD));
+                if (sources.isEmpty()) {
+                    continue;
+                }
+                CardCollection cands = CardLists.filter(theirs, v -> v.canBeTargetedBy(dmg)
+                        && !v.hasKeyword(Keyword.WARD)
+                        && !ai.equals(v.getOwner())                // its card would land in our graveyard
+                        && !v.hasSVar("SacMe")                     // its controller wants it dead
+                        && v.getEnchantedBy().stream().noneMatch(a -> ai.equals(a.getController()))
+                        && !ComputerUtilCard.isUselessCreature(opp, v)
+                        && !ComputerUtilCard.hasActiveUndyingOrPersist(v)
+                        && (v.isCommander() || eval.get(v) >= MIN_EVAL));
+                cands = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, cands);
+                List<Trigger> punishers = null; // that opponent's, collected once, only when a victim is left
+                for (final Card v : cands) {
+                    // FightAi.canKill's shield and regeneration refusals, once per victim (they do not
+                    // depend on the source); a Targeting$ Dies victim dies before either matters
+                    if (!diesWhenTargeted(v) && (v.getShieldCount() > 0 || regenerationCovers(v))) {
+                        continue;
+                    }
+                    if (punishers == null) {
+                        punishers = damagePunishers(opp);
+                    }
+                    final Card s = killer(sources, v, eval, punishers);
+                    if (s != null && !deathHarmsUs(v)) { // the death scan only for a victim that dies
+                        victims.add(v);
+                        killerOf.put(v, s);
+                    }
+                }
+            }
+            if (victims.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // best first; the authoritative canTarget checks need the root target set (TargetUnique and
+            // the sub's defined controller read it)
+            final CardCollection left = ComputerUtilCard.prioritizeCreaturesWorthRemovingNow(ai, victims, false);
+            while (!left.isEmpty()) {
+                final Card v = bestVictim(ai, left, eval);
+                if (v == null) {
+                    break;
+                }
+                final Card s = killerOf.get(v);
+                if (sa.canTarget(s)) {
+                    sa.getTargets().add(s);
+                    if (dmg.canTarget(v)) {
+                        dmg.getTargets().add(v);
+                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                    }
+                    sa.resetTargets();
+                }
+                left.remove(v);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // getBestRemovalTargetAI(ai, left) when every victim has one controller: its board term is then a
+        // constant, so the first maximum of evaluateCreature + 30 per token is the same card, drawn for nothing
+        private static Card bestVictim(final Player ai, final CardCollection left, final Map<Card, Integer> eval) {
+            final Player controller = left.get(0).getController();
+            for (final Card c : left) {
+                if (!controller.equals(c.getController())) {
+                    return ComputerUtilCard.getBestRemovalTargetAI(ai, left); // pods: the stock pick
+                }
+            }
+            Card best = null;
+            int max = Integer.MIN_VALUE;
+            for (final Card c : left) {
+                final int value = eval.get(c) + (c.isToken() ? 30 : 0);
+                if (value > max) {
+                    max = value;
+                    best = c;
+                }
+            }
+            return best;
+        }
+
+        // a creature of the victim's controller, not the victim, that kills it with nothing punishing the
+        // damage: lifelink-free first, then the lowest evaluation; battlefield order on ties
+        private static Card killer(final CardCollection sources, final Card v, final Map<Card, Integer> eval,
+                final List<Trigger> punishers) {
+            final boolean dies = diesWhenTargeted(v);
+            final int lethal = ComputerUtilCombat.getDamageToKill(v, false);
+            Card best = null;
+            for (final Card s : sources) {
+                if (s.equals(v)) {
+                    continue; // TargetUnique: "another target creature"
+                }
+                if (!dies && s.getNetPower() < lethal && !s.hasKeyword(Keyword.DEATHTOUCH)) {
+                    continue; // cheap power prefilter before the prediction
+                }
+                if (punished(punishers, s, v) || !kills(s, v)) {
+                    continue;
+                }
+                if (best == null || better(s, best, eval)) {
+                    best = s;
+                }
+            }
+            return best;
+        }
+
+        private static boolean better(final Card a, final Card b, final Map<Card, Integer> eval) {
+            final boolean la = a.hasKeyword(Keyword.LIFELINK);
+            final boolean lb = b.hasKeyword(Keyword.LIFELINK);
+            if (la != lb) {
+                return !la;
+            }
+            return eval.get(a) < eval.get(b);
+        }
+
+        private static boolean diesWhenTargeted(final Card v) {
+            return "Dies".equals(v.getSVar("Targeting"));
+        }
+
+        // FightAi.canKill(src, v, 0), its shield and canRegenerate refusals hoisted into the victim loop
+        private static boolean kills(final Card src, final Card v) {
+            if (diesWhenTargeted(v)) {
+                return true;
+            }
+            final int d = src.getNetPower();
+            return d > 0 && ComputerUtilCombat.getEnoughDamageToKill(v, d, src, false) <= d;
+        }
+
+        // Sudden Demise's punisher loop, copied: that opponent's noncombat damage-received (DamageDone,
+        // DamageDoneOnce) and damage-dealt (DamageDealtOnce) triggers
+        private static List<Trigger> damagePunishers(final Player opp) {
+            final List<Trigger> out = new ArrayList<>();
+            for (final Card h : opp.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    final TriggerType mode = t.getMode();
+                    if ((mode != TriggerType.DamageDone && mode != TriggerType.DamageDoneOnce
+                            && mode != TriggerType.DamageDealtOnce)
+                            || "True".equalsIgnoreCase(t.getParam("CombatDamage"))) {
+                        continue;
+                    }
+                    out.add(t);
+                }
+            }
+            return out;
+        }
+
+        // the damage source is the opposing creature, not this spell (Sudden Demise's call reads the spell)
+        private static boolean punished(final List<Trigger> punishers, final Card src, final Card v) {
+            for (final Trigger t : punishers) {
+                if (t.matchesValidParam("ValidTarget", v) && t.matchesValidParam("ValidSource", src)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the victim's own death trigger that harms us (Kokusho, a targeted death trigger): Wave of
+        // Reckoning's rule over the victim's triggers
+        private static boolean deathHarmsUs(final Card v) {
+            for (final Trigger t : v.getTriggers()) {
+                if (isDeathTrigger(t) && t.matchesValidParam("ValidCard", v) && t.matchesValidParam("ValidCards", v)
+                        && deathTriggerHarmsUs(t)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // WaveOfReckoning.isDeathTrigger, copied
+        private static boolean isDeathTrigger(final Trigger t) {
+            if (t.getMode() == TriggerType.ChangesZone) {
+                return zoneListMatches(t.getParam("Destination"), "Graveyard")
+                        && zoneListMatches(t.getParam("Origin"), "Battlefield");
+            }
+            if (t.getMode() == TriggerType.ChangesZoneAll) {
+                return zoneListMatches(t.getParam("Destination"), "Graveyard");
+            }
+            return false;
+        }
+
+        // WaveOfReckoning.zoneListMatches, copied
+        private static boolean zoneListMatches(final String zones, final String zone) {
+            if (zones == null) {
+                return true;
+            }
+            for (final String z : zones.split(",")) {
+                final String s = z.trim();
+                if (s.equals(zone) || s.equals("Any")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // WaveOfReckoning.deathTriggerHarmsUs, copied
+        private static boolean deathTriggerHarmsUs(final Trigger t) {
+            for (SpellAbility part = t.ensureAbility(); part != null; part = part.getSubAbility()) {
+                if (part.usesTargeting() || (part.getApi() != null && HARMFUL_DIES_APIS.contains(part.getApi()))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // ComputerUtil.canRegenerate (its coverage pre-filter and sa.canPlay()) without its canPayCost
+        private static boolean regenerationCovers(final Card v) {
+            if (!v.canBeShielded()) {
+                return false;
+            }
+            final Player controller = v.getController();
+            final Game game = controller.getGame();
+            for (final Card c : controller.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ab : c.getSpellAbilities()) {
+                    if (!ab.isActivatedAbility() || ab.getApi() != ApiType.Regenerate) {
+                        continue;
+                    }
+                    final forge.game.spellability.TargetRestrictions tgt = ab.getTargetRestrictions();
+                    final boolean covers = tgt != null
+                            ? CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), tgt.getValidTgts(),
+                                    controller, ab.getHostCard(), ab).contains(v)
+                            : AbilityUtils.getDefinedCards(ab.getHostCard(), ab.getParam("Defined"), ab).contains(v);
+                    if (covers) {
+                        ab.setActivatingPlayer(controller); // canRegenerate's own write
+                        if (ab.canPlay()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Breath of Fury (dead-card batch 3, row 33; batch 2 row 35 a3d9d9d45bc, reverted windowless db9ebaf27b0)
     // Design: tools/deadcards/b3/breath-of-fury/final-design.md.
     // "Enchant creature you control. When enchanted creature deals combat damage to a player, sacrifice it and
