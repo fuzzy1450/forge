@@ -11032,6 +11032,53 @@ public class SpecialCardAi {
         }
     }
 
+    // Danitha, Benalia's Hope (dead-card batch 3, row 87; in Mono-White Legends Matter, Esper
+    // Modified Voltron and Naya Auras and Equipment, none an anchor)
+    // {4}{W} Legendary Creature 4/4, first strike, vigilance, lifelink; "When Danitha enters, you may
+    // put an Aura or Equipment card from your hand or graveyard onto the battlefield attached to
+    // Danitha." Every paid cast was BadEtbEffects: checkETBEffects asks ChangeZoneAi.hiddenTriggerAI
+    // before the cast, and ChangeType$ ...CanEnchantSource tests canBeAttached against the LKI host
+    // on the stack, which is never in play (Card.cantBeEnchantedByMsg / cantBeEquippedByMsg), so the
+    // list was always empty (MissingNeededCards). Two exceptions, with 0 stored games between them:
+    // under an ETB-disabling static (Torpor Orb, Hushwing Gryff, Hushbringer, Tocatli Honor Guard,
+    // Elesh Norn, Mother of Machines) checkETBEffects answers true and A judged it as a vanilla 4/4,
+    // and hybrid_sim and full_sim seats return from saSideEffects before the ETB check (every stored
+    // carrier seat is ai=default). The timing artifact of Druid of Purification (row 51) and batch
+    // 1's Chaos Defiler (row 100).
+    // The script's AILogic$ Always on SVar:TrigChangeZone approves the probe
+    // (ChangeZoneAi.doTriggerNoCost answers WillPlay before hiddenTriggerAI) and the real trigger,
+    // which is mandatory and was WillPlay at stock already: RNG-free both ways. ChangeZoneEffect
+    // reads no AILogic, and the put stays a "may" (an empty pick is a no-op). Resolution keeps the
+    // stock pick (chooseCardToHiddenOriginChangeZone: shuffle, legends and hostless Auras filtered,
+    // getMostExpensivePermanentAI) and the stock attach (attachGeneralAI's one option, Danitha).
+    // The cast floor is the stock creature judgement (own Main 2 unless castPermanentInMain1) plus G1
+    // (CommanderCastCeiling.affordable, called unchanged under G4's widened contract; its frozen
+    // caller list does not name this row) in PermanentCreatureAi.checkApiLogic, so a window A vetoed
+    // RNG-free that cannot pay stays RNG-free in B. A Play-effect cast skips the ceiling (the
+    // precedent): Clive's Hideaway (Mono-White) now plays a hidden Danitha free, where A's
+    // canPlayFromEffectAI vetoed at saSideEffects. The exile casts of Laelia, the Blade Reforged and
+    // Armory Paladin (Naya) are paid MayPlay casts and meet the ceiling; they are owner casts of an
+    // undrawn copy that the held metric cannot see (B3-10).
+    // RNG parity: A drew nothing after checkApiLogic on this path (mana-only cost: willPayCosts,
+    // checkRestrictions, getDamageForPlaying, getDamageFromETB and the checkETBEffects chain are
+    // reads); B's first new draw is canPayCost's isManaSourceReserved test payment, on a G1-affordable
+    // window only. Residuals: a G1 decline skips the LKI and exSA copies A made, which advance
+    // SimScope's SpellAbility and trigger counters (never nextCardId), so later SA ids, and the order
+    // of a hash-keyed SA collection, may differ from A's (B3x-3, the 973410 family, rare); in the
+    // two exceptions A's unpayable Main 2s reached canPayCost and drew, and B's ceiling now declines
+    // them RNG-free, a re-roll the other way.
+    // Readers that now see a passing ETB check: Aethersnatch's steal test (precon:Seize Control, an
+    // anchor; a stolen Danitha fetches from the thief's own zones); the other SpecialCardAi
+    // checkETBEffects readers, which judge their own boards (none in a carrier); and the TapAi
+    // shockland path (ComputerUtil.hasReasonToPlayCardThisTurn: with a rock or Treasure lifting G1 to
+    // five, an own Main-2 Godless Shrine or Temple Garden drop now pays 2 life its mana was not needed
+    // for; RNG-free, rare). B3-13: a later deck holding a Pacifism-class Aura in its own hand or
+    // graveyard could see the stock most-expensive pick attach it to Danitha; no carrier holds one.
+    // No logic here, only the name; holds nothing.
+    public static class DanithaBenaliasHope {
+        public static final String NAME = "Danitha, Benalia's Hope";
+    }
+
     // Daretti, Scrap Savant (dead-card batch 2, row 2; the commander of precon:Built from
     // Scratch (C14), and in the 99 of Invent Superiority, Lorehold Legacies and Heads I Win,
     // Tails You Lose)

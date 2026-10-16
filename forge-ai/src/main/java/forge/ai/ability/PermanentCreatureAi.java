@@ -309,6 +309,16 @@ public class PermanentCreatureAi extends PermanentAi {
             // (Nathan Drake) keeps the stock path. See the class comment.
             return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
         }
+        if (SpecialCardAi.DanithaBenaliasHope.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
+                && !SpecialCardAi.CommanderCastCeiling.affordable(ai, sa)) {
+            // Dead-card batch 3, row 87. RNG-free affordability (G1 on G2, under G4's widened
+            // contract) before canPlayAndPayForFace's canPayCost rolls
+            // ComputerUtilMana.isManaSourceReserved: with the enters-trigger probe approved
+            // (AILogic$ Always), an unpayable Main 2 must draw nothing, as A's BadEtbEffects veto drew
+            // nothing. Everything else is the stock creature judgement above. A Play-effect cast
+            // (Clive's Hideaway) keeps the stock path. See the class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
 
         /*
          * Checks if the creature will have non-positive toughness after
