@@ -5981,7 +5981,9 @@ public class SpecialCardAi {
     // Floor: the victim dies and is worth a vanilla 2/2 for 2 (MIN_EVAL, Titan's Presence's and Oubliette's) or
     // is a commander. It is never a card we own, never wearing our aura, not useless, not already dying, no
     // SacMe, no active undying or persist, no shield and no Regenerate ability that can cover it, and no death
-    // trigger of its own that harms us; neither target has ward (not priced on this path). The kill is
+    // trigger of its own that harms us; neither target has ward (not priced on this path), and neither matches
+    // the ValidTarget of a becomes-target trigger on that opponent's battlefield (Myriad Construct, Kira,
+    // Thunderbreak Regent, Frost Titan, the Illusions; ValidSource unread, as in Rile). The kill is
     // FightAi.canKill's test with the opposing source as the damage source: getEnoughDamageToKill reads
     // deathtouch, wither and infect on the source, indestructible and shields on the victim, and static
     // prevention and replacement. A source whose power is short of the victim's damage to kill is dropped
@@ -5999,9 +6001,10 @@ public class SpecialCardAi {
     // Mana: G1 (CommanderCastCeiling.affordable, called unchanged under G4's contract) before the board scan,
     // so canPayCost's test payment never runs in a window that cannot pay.
     // Private copies (accepted helpers are not shared, rule B3-4): Sudden Demise's punisher loop, read with the
-    // opposing creature as the source; Wave of Reckoning's isDeathTrigger / deathTriggerHarmsUs and its API
-    // set; ComputerUtil.canRegenerate's coverage test without its canPayCost, which test-pays the opponent's
-    // regeneration and draws isManaSourceReserved rolls (any coverable Regenerate ability reads as a save).
+    // opposing creature as the source; the becomes-target scan of Rile and Here Comes a New Hero; Wave of
+    // Reckoning's isDeathTrigger / deathTriggerHarmsUs and its API set; ComputerUtil.canRegenerate's coverage
+    // test without its canPayCost, which test-pays the opponent's regeneration and draws isManaSourceReserved
+    // rolls (any coverable Regenerate ability reads as a save).
     // RNG: every decline draws nothing (G1 and HonestMana, the board reads, evaluateCreature, isUselessCreature,
     // filterCreaturesThatWillDieThisTurn, getEnoughDamageToKill and predictDamageTo, the trigger scans,
     // prioritizeCreaturesWorthRemovingNow); the only draws come after a (source, victim) pair exists: the pod
@@ -6058,13 +6061,16 @@ public class SpecialCardAi {
                 for (final Card c : theirs) {
                     eval.put(c, ComputerUtilCard.evaluateCreature(c));
                 }
+                final List<Trigger> targetPunishers = targetPunishers(opp);
                 final CardCollection sources = CardLists.filter(CardLists.getTargetableCards(theirs, sa),
-                        c -> c.getNetPower() > 0 && !c.hasKeyword(Keyword.WARD));
+                        c -> c.getNetPower() > 0 && !c.hasKeyword(Keyword.WARD)
+                                && !targetPunished(targetPunishers, c));
                 if (sources.isEmpty()) {
                     continue;
                 }
                 CardCollection cands = CardLists.filter(theirs, v -> v.canBeTargetedBy(dmg)
                         && !v.hasKeyword(Keyword.WARD)
+                        && !targetPunished(targetPunishers, v)
                         && !ai.equals(v.getOwner())                // its card would land in our graveyard
                         && !v.hasSVar("SacMe")                     // its controller wants it dead
                         && v.getEnchantedBy().stream().noneMatch(a -> ai.equals(a.getController()))
@@ -6179,6 +6185,28 @@ public class SpecialCardAi {
             }
             final int d = src.getNetPower();
             return d > 0 && ComputerUtilCombat.getEnoughDamageToKill(v, d, src, false) <= d;
+        }
+
+        // that opponent's becomes-target triggers (Myriad Construct, Kira, Thunderbreak Regent, Illusions)
+        private static List<Trigger> targetPunishers(final Player opp) {
+            final List<Trigger> out = new ArrayList<>();
+            for (final Card h : opp.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    if (t.getMode() == TriggerType.BecomesTarget || t.getMode() == TriggerType.BecomesTargetOnce) {
+                        out.add(t);
+                    }
+                }
+            }
+            return out;
+        }
+
+        private static boolean targetPunished(final List<Trigger> tps, final Card c) {
+            for (final Trigger t : tps) {
+                if (t.matchesValidParam("ValidTarget", c)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         // Sudden Demise's punisher loop, copied: that opponent's noncombat damage-received (DamageDone,
