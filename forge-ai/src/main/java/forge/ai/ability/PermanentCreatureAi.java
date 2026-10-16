@@ -319,6 +319,16 @@ public class PermanentCreatureAi extends PermanentAi {
             // (Clive's Hideaway) keeps the stock path. See the class comment.
             return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
         }
+        if (SpecialCardAi.NadaarSelflessPaladin.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()
+                && !SpecialCardAi.NadaarSelflessPaladin.castAffordable(ai, sa)) {
+            // Dead-card batch 3, row 103. RNG-free affordability (G1 under G4) before
+            // canPlayAndPayForFace's canPayCost rolls ComputerUtilMana.isManaSourceReserved: the
+            // script's AILogic$ Always lifted the checkETBEffects veto (BadEtbEffects) that answered
+            // every Main 2 before canPayCost, so an unpayable Main 2 must still draw nothing.
+            // Everything else is the stock creature judgement above. A Play-effect cast keeps the
+            // stock path. See the class comment.
+            return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
 
         /*
          * Checks if the creature will have non-positive toughness after

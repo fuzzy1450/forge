@@ -32386,6 +32386,52 @@ public class SpecialCardAi {
         }
     }
 
+    // Nadaar, Selfless Paladin (dead-card batch 3, row 103; in Esper Dungeon Reanimator, not an
+    // anchor)
+    // "Vigilance. Whenever Nadaar enters or attacks, venture into the dungeon. Other creatures you
+    // control get +1/+1 as long as you've completed a dungeon." ({2}{W} legendary 3/3.) Never cast,
+    // by its owner or anyone (0 owner casts in 171 holds on 2.0.15+55e709fa6ba): VentureAi.canPlay
+    // reads every AbilitySub as costed (Cost.Zero carries a {0} CostPartMana, so hasManaCost() is
+    // true), a trigger is not sorcery speed, and so it declines outside an opponent's end step,
+    // where a non-flash creature cannot be cast; AiController.checkETBEffects vetoed the spell
+    // (BadEtbEffects) in every own Main 2. The script's AILogic$ Always on SVar:DBVenture (Radiant
+    // Solar's DBVenture idiom; Kardur, Doomscourge, batch 1) lets the non-mandatory ETB consult
+    // through SpellAbilityAi.doTriggerNoCostWithSubs. VentureAi and VentureEffect read no AILogic,
+    // so the dungeon and room choices stay stock (chooseCardFace, chooseSingleSpellAbility), and the
+    // attack trigger, which shares the SVar, is mandatory and was WillPlay at stock already.
+    // That veto answered before ComputerUtilCost.canPayCost, whose test payment draws MyRandom per
+    // source it tries; castAffordable answers an unpayable window first: G1
+    // (CommanderCastCeiling.affordable, called unchanged under G4's widened contract; its frozen
+    // caller list does not name this row), the engine's test-mode calculateManaCost against
+    // HonestMana (G2, held sources skipped), total and {W}. A Play-effect cast skips it (the
+    // precedent). Value floor: the body, a 3/3 vigilance for three whose enters trigger ventures at
+    // once; each attack ventures again, and a completed dungeon turns the anthem on. The stock
+    // creature checks judge the rest (own Main 2 unless castPermanentInMain1, the legend rule).
+    // RNG parity: A drew nothing on its decline path (checkApiLogic through the checkETBEffects
+    // chain are reads for a mana-only cost, and VentureAi.canPlay has no roll); B's first new draw
+    // is canPayCost's, on a G1-affordable window only. Residual (B3x-3, the one Druid of
+    // Purification accepted): a G1 decline skips the LKI and exSA copies A made, so later
+    // SpellAbility ids, and the order of a hash-keyed SA collection, may differ from A's (the
+    // 973410 family, rare).
+    // Readers that now see a passing ETB check (the true answer, a 3/3 that ventures): Play-effect
+    // casts (canPlayFromEffectAI), MayPlay thieves (a paid cast, judged by G1 on the thief's own
+    // mana), targetPlayableSpellCard probes (a no-cost copy passes G1 at zero), the SpecialCardAi
+    // checkETBEffects pickers (Aethersnatch's CMC >= 5 window never reaches this three-drop; the
+    // eight others judge their own boards, none in the carrier), and the TapAi shockland path
+    // (ComputerUtil.hasReasonToPlayCardThisTurn: an own Main-2 Godless Shrine drop on two lands with
+    // a rock already lifting G1 to three now pays 2 life and casts; RNG-free, rare). The seven
+    // other ETB-venture cards with the same veto (Barrowin of Clan Undurr, Cloister Gargoyle,
+    // Displacer Beast, Eccentric Apprentice, Find the Path, Precipitous Drop, Veteran Dungeoneer)
+    // are in no registered deck and stay unfixed: the general repair, VentureAi.canPlay testing a
+    // real cost, is a follow-up. Draws nothing, holds nothing.
+    public static class NadaarSelflessPaladin {
+        public static final String NAME = "Nadaar, Selfless Paladin";
+
+        public static boolean castAffordable(final Player ai, final SpellAbility sa) {
+            return CommanderCastCeiling.affordable(ai, sa);
+        }
+    }
+
     // Nahiri, the Lithomancer (dead-card batch 2, row 5; the commander of precon:Forged in Stone
     // (C14))
     // Its AI:RemoveDeck:All hint stripped every spell ability of the card at
