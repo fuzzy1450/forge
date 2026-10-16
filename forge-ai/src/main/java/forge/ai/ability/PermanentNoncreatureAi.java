@@ -80,6 +80,23 @@ public class PermanentNoncreatureAi extends PermanentAi {
         final String sourceName = ComputerUtilAbility.getAbilitySourceName(sa);
         final Game game = ai.getGame();
 
+        // Cursed Windbreaker / Killer's Mask (dead-card batch 3, rows 97 and 106; the shape also
+        // matches Conductive Machete and Dissection Tools): AttachAi.chkDrawback's ManifestDread arm
+        // lifts their enters-trigger veto, and this is the paid cast's RNG-free affordability
+        // ceiling in front of it (G1; see SpecialCardAi.ManifestDreadEquipment), so a window that
+        // cannot pay declines here, drawing nothing, as A's BadEtbEffects did, before canPlaySa's
+        // canPayCost test payment rolls isManaSourceReserved. A Play-effect cast
+        // (PermanentAi.doTriggerNoCost ends in this checkApiLogic) keeps the stock answer. Residual:
+        // in A that path also met the ETB veto (canPlayFromEffectAI ends in saSideEffects), so a
+        // paid Play that cannot pay (Nathan Drake's attack trigger: no WithoutManaCost) now reaches
+        // PlayAi.chooseSingleCard's canPayCost and draws there before declining.
+        if (sa.isSpell() && !sa.isCastFromPlayEffect() && SpecialCardAi.ManifestDreadEquipment.isShape(host)) {
+            final AiAbilityDecision dread = SpecialCardAi.ManifestDreadEquipment.considerCast(ai, sa);
+            if (!dread.willingToPlay()) {
+                return dread;
+            }
+        }
+
         // Manascape Refractor keeps AI:RemoveDeck:All; the G3 dispatcher lets only its owner's hand
         // cast through, and that cast is judged here (reached in Main 2 only, PermanentAi:38).
         if (SpecialCardAi.ManascapeRefractor.isOwnHandCast(sa)) {

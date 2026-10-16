@@ -28966,6 +28966,55 @@ public class SpecialCardAi {
         }
     }
 
+    // Manifest-dread Equipment (dead-card batch 3, rows 97 Cursed Windbreaker and 106 Killer's
+    // Mask; the shape also covers Conductive Machete and Dissection Tools, the only other two
+    // scripts of the chain, in no registered deck): "When CARDNAME enters, manifest dread, then
+    // attach CARDNAME to that creature". AttachAi.chkDrawback's ManifestDread arm releases the
+    // enters-trigger veto (AiController.checkETBEffects answered BadEtbEffects on every consult,
+    // before canPayCost, drawing nothing). This is the paid cast's RNG-free ceiling in front of
+    // it: without it an unaffordable window would pass canPlaySa and reach canPayCost, whose test
+    // payment draws MyRandom per source (ComputerUtilMana.isManaSourceReserved), so a held game
+    // would re-roll with no visible cast. The ceiling is G1 (CommanderCastCeiling.affordable,
+    // called unchanged under G4's contract): the engine's test-mode calculateManaCost against
+    // HonestMana (G2) with held sources skipped. A ceiling, not a payability test: G1's
+    // multicolour residual (one source counted toward each colour it makes) can still let
+    // canPayCost draw and fail. Keyed on the script shape, never a name; holds nothing,
+    // remembers nothing.
+    public static class ManifestDreadEquipment {
+        // cheap precondition first (an O(1) type test); then the enters trigger's chain:
+        // DB$ ManifestDread | RememberManifested$ True -> DB$ Attach | Defined$ Remembered
+        public static boolean isShape(final Card host) {
+            if (host == null || !host.isEquipment()) {
+                return false;
+            }
+            for (final Trigger t : host.getTriggers()) {
+                if (t.getMode() != TriggerType.ChangesZone
+                        || !"Battlefield".equals(t.getParam("Destination"))
+                        || !t.getParamOrDefault("ValidCard", "").contains("Self")) {
+                    continue;
+                }
+                final SpellAbility ex = t.ensureAbility();
+                final SpellAbility sub = ex == null ? null : ex.getSubAbility();
+                if (ex != null && ex.getApi() == ApiType.ManifestDread && ex.hasParam("RememberManifested")
+                        && sub != null && sub.getApi() == ApiType.Attach
+                        && "Remembered".equals(sub.getParam("Defined"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // PermanentNoncreatureAi.checkApiLogic's shape gate, after the stock approval, paid casts
+        // only (from hand, or a MayPlay thief's; the caller leaves Play-effect casts stock): G1,
+        // the adjusted cost against G2's honest count, nothing else. Timing (Main 2, or Main 1
+        // through castPermanentInMain1) and the ETB floor stay where they are.
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            return CommanderCastCeiling.affordable(ai, sa)
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+        }
+    }
+
     // Marath, Will of the Wild (dead-card batch 2, row 1; the commander of precon:Nature of the
     // Beast)
     // Its AI:RemoveDeck:All hint stripped the command-zone spell at

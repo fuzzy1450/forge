@@ -1128,6 +1128,32 @@ public class AttachAi extends SpellAbilityAi {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
         } else if ("Remembered".equals(sa.getParam("Defined")) && sa.getParent() != null
+            && sa.getParent().getApi() == ApiType.ManifestDread && !sa.getParent().usesTargeting()
+            && sa.getParent().hasParam("RememberManifested")) {
+            // Cursed Windbreaker, Killer's Mask, Conductive Machete, Dissection Tools (the only
+            // scripts of this chain; dead-card batch 3, rows 97 and 106): "When CARDNAME enters,
+            // manifest dread, then attach CARDNAME to that creature". Living Weapon-shaped: the
+            // ManifestDread parent creates the attach target, so refusing for lack of one vetoed
+            // the whole permanent at AiController.checkETBEffects (BadEtbEffects). Floor =
+            // Lightform's above (the manifest AI's own TopOfLibrary floor, ManifestBaseAi
+            // .checkApiLogic minus its phase checks and 80% roll): a library of at least 5
+            // (ManifestAi's anti-self-mill line), and one of the two cards manifest dread looks at
+            // (ManifestDreadEffect.manifestLoop) that ManifestAi.shouldApply accepts, the
+            // predicate ManifestBaseAi.chooseSingleCard picks with. For a card the AI may not see,
+            // that is only "no CantHappen-layer replacement stops the face-down 2/2 entering"
+            // (Grafdigger's Cage). The paid cast's affordability is screened before this, in
+            // PermanentNoncreatureAi.checkApiLogic (SpecialCardAi.ManifestDreadEquipment). Draws
+            // no random numbers, like the CantPlayAi return it replaces.
+            final SpellAbility dread = sa.getParent();
+            if (ai.getCardsIn(ZoneType.Library).size() >= 5) {
+                final ManifestBaseAi dreadAi = (ManifestBaseAi) SpellApiToAi.Converter.get(dread);
+                for (final Card top : ai.getTopXCardsFromLibrary(2)) {
+                    if (dreadAi.shouldApply(top, ai, dread)) {
+                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                    }
+                }
+            }
+        } else if ("Remembered".equals(sa.getParam("Defined")) && sa.getParent() != null
             && sa.getParent().getApi() == ApiType.ChangeZone && sa.getParent().hasParam("RememberChanged")
             && sa.getParent().usesTargeting()
             && "Battlefield".equals(sa.getParent().getParam("Destination"))) {
