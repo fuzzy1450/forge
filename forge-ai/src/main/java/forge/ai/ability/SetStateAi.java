@@ -44,6 +44,14 @@ public class SetStateAi extends SpellAbilityAi {
 
     @Override
     public AiAbilityDecision chkDrawback(Player aiPlayer, SpellAbility sa) {
+        if (SpecialCardAi.HustleBustle.takeJudged(sa)) {
+            // Dead-card batch 3, row 98: Bustle's optional face-up of a creature WE control was floored
+            // a moment ago, in this same consult, by SpecialCardAi.HustleBustle (routed from
+            // PumpAllAi.checkApiLogic); the host reads as an alternate state only because it is the
+            // split half's copy. Any other route to this sub, and every other SetState sub, finds no mark
+            // and keeps the stock answer below.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         // Gross generalization, but this always considers alternate states more powerful
         return sa.getHostCard().isInAlternateState() ? new AiAbilityDecision(0, AiPlayDecision.CantPlayAi) : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }

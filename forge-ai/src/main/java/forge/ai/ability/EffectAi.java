@@ -164,6 +164,18 @@ public class EffectAi extends SpellAbilityAi {
             return SpecialCardAi.Indulge.consider(ai, sa);
         }
 
+        if (SpecialCardAi.HustleBustle.isOwnHandCast(ai, sa, ApiType.Effect)) {
+            // Hustle // Bustle, the Hustle half: "Target creature attacks or blocks this turn if able."
+            // (dead-card batch 3, row 98). The generic RememberObjects/StaticAbilities branch below knows no
+            // MustAttack or MustBlock mode and refused it at every consult. Routed after the randomReturn
+            // roll: the card has no RemoveDeck hint, so the stock engine evaluated it and drew here before
+            // refusing, and every refusal in the evaluator draws nothing more. The key is the owner's own
+            // hand cast behind canPlayAndPayFor's split-state host switch (rule B3-2), so direct canPlaySa
+            // callers, thefts, copies and Play-effect casts (doTriggerNoCost's own branch) keep the stock
+            // path. Every other Effect card takes exactly the path it took before this branch.
+            return SpecialCardAi.HustleBustle.considerHustle(ai, sa);
+        }
+
         if (SpecialCardAi.TeferisReproach.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             // "Choose target opponent. Until that player's next turn, they gain protection from
             // everything and their life total can't change. All nonland permanents they control

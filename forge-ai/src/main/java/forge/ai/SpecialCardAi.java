@@ -24887,6 +24887,346 @@ public class SpecialCardAi {
         }
     }
 
+    // Hustle // Bustle (dead-card batch 3, row 98; carrier Four-Color Gold Spells c11a6618, an upload,
+    // not an anchor)
+    // Hustle: "Target creature attacks or blocks this turn if able." ({U/R} instant, the LeftSplit
+    // half, ApiType Effect.) Bustle: "Creatures you control get +2/+2 and gain trample until end of
+    // turn. You may turn a creature you control face up." ({4}{R/G}{R/G} sorcery, the RightSplit half,
+    // ApiType PumpAll with a SetState TurnFaceUp sub.) The script is unhinted and matches the printed
+    // text; two handler gates refused every owner consult of the card:
+    // - Hustle: EffectAi's generic RememberObjects/StaticAbilities branch knows no MustAttack or
+    //   MustBlock mode and refused at its "TODO add more cases later" line. considerHustle is routed
+    //   from EffectAi.checkApiLogic beside Indulge, after the randomReturn roll A drew at every consult.
+    // - Bustle: PumpAllAi's stock decision (WillPlay in our MAIN1 whenever shouldPumpCard predicts one
+    //   attacker) was thrown away by SetStateAi.chkDrawback's "alternate states are more powerful"
+    //   veto: canPlayAndPayFor switches a split half's host to Spell.getAlternateHost's LKI copy in that
+    //   half's state, SpellAbility.setHostCard pushes it to the sub, and isInAlternateState() is then
+    //   always true. considerBustle runs in PumpAllAi only after the stock decision said WillPlay,
+    //   floors it, and on approval marks the face-up sub (JUDGED), which SetStateAi.chkDrawback
+    //   consumes in the same canPlayWithSubs chain (Domineering Will's token).
+    // The key, isOwnHandCast: the root spell (never a sub, a copy or a Play-effect cast) of the card in
+    // its owner's hand, owned and controlled by ai (a thief fails on owner or zone), AND evaluated
+    // behind canPlayAndPayFor's host switch (skeptic A1, rule B3-2): its host is a copy in the SA's own
+    // state, not the card, which is the very condition under which gate B fires. Every direct canPlaySa
+    // caller asks with the hand card itself as the host, fails the key and keeps A's stock answers and
+    // draws: ComputerUtil.hasReasonToPlayCardThisTurn (TapAi's pay-life ETB: Temple Garden, in this
+    // carrier, entering as the 7th land matches the combined mana value 7), targetPlayableSpellCard's
+    // ab.copy() probes, ManaAi's ritual probe and the battlefield scans.
+    // Hustle (considerHustle), cheapest checks first, every decline drawing nothing:
+    // 1. window, stack empty: F, a forced fatal attack, at an opponent's COMBAT_BEGIN on their turn,
+    //    with ai the active player's only opponent left (A2: in a pod a forced attacker goes to its
+    //    controller's designated defender); or K, a forced fatal block, in our own
+    //    COMBAT_DECLARE_ATTACKERS with our attackers declared. Else CantPlayAi;
+    // 2. price (B3-5, G2): the test-mode calculateManaCost of the SA being cast against HonestMana
+    //    (held sources skipped), in total and in the better of blue and red for its {U/R}. Else
+    //    CantAfford;
+    // 3. A3: ComputerUtil.canRegenerate, which the combat predictors call whatever withoutAbilities
+    //    says, test-pays (and so draws) for a battlefield activated Regenerate ability that covers a
+    //    combatant; we decline when we control one, and skip every creature of an opponent who
+    //    controls one, before any predictor runs;
+    // 4. F only: the active player controls an Attacks or AttackersDeclared trigger (raid, exalted,
+    //    battalion, "whenever a creature you control attacks", t's own included): a forced attack must
+    //    not feed it. CantPlayAi;
+    // 5. candidates t: an opposing creature, nontoken (A5) and worth MIN_KILL_VALUE (Ion Storm's 130),
+    //    no ward, targetable by sa, no non-mana activated ability (so the withoutAbilities predictors
+    //    are exact for t's side), not already forced to block or attack;
+    //    F: t is the active player's, can attack us with no attack tax, can be blocked by a single
+    //    creature and carries no AttackerBlocked, AttackerBlockedOnce or AttackerBlockedByCreature
+    //    trigger, and an untapped creature of ours that can block it kills it and survives in an
+    //    artificial one-on-one Combat (shouldPumpCard's idiom): AiBlockController.makeGoodBlocks makes
+    //    that safe kill block;
+    //    K: t can block, and EVERY attacker of ours t could block has no menace-style minimum, kills t
+    //    and survives it: makeRequiredBlocks puts the forced blocker on the first sorted attacker it
+    //    can block, so the kill does not depend on that choice;
+    // 6. the most valuable such t is the target, WillPlay. None, CantPlayAi.
+    // Bustle (considerBustle), after the stock WillPlay: our own MAIN1, empty stack; the price in total
+    // and in the better of red and green for its two {R/G} (an R1 + G1 board declines, the safe side);
+    // then the AI's own predicted attack (getPredictedCombat, the cache the stock shouldPumpCard loop
+    // built in this consult: a true in MAIN1 always passed its doesCreatureAttackAI) has
+    // MIN_ATTACKERS attackers (+6 damage and trample, the card's mana value), or every attacker is
+    // aimed at one player d who controls no creature able to block, and the attackers aimed at d
+    // itself (A4: not its planeswalkers or battles) deal d's life with +2 each (an attacker whose
+    // damage is prevented, or an infect attacker, adds nothing: the safe side). Else CantPlayAi, A's
+    // final answer on this path.
+    // RNG parity: Hustle draws A's one roll and nothing more (window, price, the regeneration and
+    // trigger screens, canTarget, evaluateCreature, the static scans, the predictors behind A3, a
+    // local Combat). Bustle runs the stock path unchanged and reads only the cached combat, so a
+    // decline is A's answer with A's draws; the sub's chkDrawback, which A reached and a decline skips,
+    // draws nothing. canPayCost's test payment follows an approval only.
+    // Non-RNG state: the predictors' trigger scans call Trigger.ensureAbility, which can allocate
+    // SpellAbility ids, as every stock combat prediction does (Indulge's note), and the local Combat
+    // refreshes two cards' views. Nothing is held: Hustle's target is reset first and set only on an
+    // approval; JUDGED is cleared at the start of every floored Bustle consult and consumed in the same
+    // chain on the same "Game AI Eval" thread.
+    // Residuals (A6): in F the opponent can pump t after blocks, or our block AI can spend the blocker
+    // elsewhere under lifeInDanger; in K makeRequiredBlocks can add t to an attacker an earlier pass
+    // already blocked, splitting our damage so t lives and the attacker may die to the combined
+    // blockers, t's own Blocks triggers are not screened, and removal on our attacker after the forced
+    // block can turn the kill into a loss. Aragorn, the Uniter's colour triggers are unmodelled upside.
+    // Reach: name gates on the combined split name in EffectAi and PumpAllAi (only
+    // h/hustle_bustle.txt); the SetStateAi token is an identity compare, inert for every other
+    // SetState sub (no other spell script puts a Choices$ SetState under a split, adventure or modal
+    // spell half). Thefts and Play-effect casts keep the stock doTriggerNoCost paths (EffectAi's Nova
+    // Pentacle branch, PumpAllAi's YouCtrl WillPlay and the stock sub refusal).
+    public static class HustleBustle {
+        public static final String NAME = "Hustle // Bustle";
+        static final int MIN_KILL_VALUE = 130; // Ion Storm's: a vanilla 2/2 token, a nontoken 1/1 one-drop
+        static final int MIN_ATTACKERS = 3;    // Bustle: +6 damage, the card's mana value
+        static final int PUMP = 2;             // Bustle's +2/+2
+        private static final List<ZoneType> TABLE = Arrays.asList(ZoneType.Battlefield, ZoneType.Command);
+        private static final ThreadLocal<SpellAbility> JUDGED = new ThreadLocal<>();
+
+        // the root spell of the card in its owner's hand, judged behind canPlayAndPayFor's host switch:
+        // the host is Spell.getAlternateHost's copy in the SA's own split-half state, never the card
+        // itself (getOriginalHost, the Original-state split card). A direct canPlaySa caller (the hand
+        // card as host), a copy, a sub, a Play-effect cast and a thief all fail.
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa, final ApiType api) {
+            if (sa == null || sa instanceof AbilitySub || sa.isCopied() || !sa.isSpell()
+                    || sa.isCastFromPlayEffect() || sa.getApi() != api) {
+                return false;
+            }
+            final Card card = sa.getOriginalHost();
+            final Card host = sa.getHostCard();
+            return card != null && host != null && host != card && NAME.equals(card.getName())
+                    && card.isInZone(ZoneType.Hand) && ai.equals(card.getOwner()) && ai.equals(card.getController())
+                    && host.getCurrentStateName() == sa.getCardStateName();
+        }
+
+        // consumed by SetStateAi.chkDrawback in the same canPlayWithSubs chain
+        public static boolean takeJudged(final SpellAbility sub) {
+            if (sub == null || JUDGED.get() != sub) {
+                return false;
+            }
+            JUDGED.remove();
+            return true;
+        }
+
+        // Hustle, from EffectAi.checkApiLogic after the randomReturn roll
+        public static AiAbilityDecision considerHustle(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 1. the window, O(1): F on their beginning of combat, K on our declare-attackers step
+            final Player active = ph.getPlayerTurn();
+            final Combat combat = game.getCombat();
+            final boolean attack = active != null && active.isOpponentOf(ai) && ph.is(PhaseType.COMBAT_BEGIN);
+            final boolean block = !attack && ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS, ai) && combat != null
+                    && ai.equals(combat.getAttackingPlayer()) && !combat.getAttackers().isEmpty();
+            if (!attack && !block) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (attack && active.getOpponents().size() != 1) {
+                // A2: in a pod the forced attacker goes to its controller's designated defender
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 2. the engine's test-mode price within G2, in total and in blue or red
+            if (!affordable(ai, sa, MagicColor.BLUE, MagicColor.RED, forge.card.mana.ManaCostShard.UR)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // 3. A3: canRegenerate test-pays a regeneration cost inside every predictor below
+            if (regenerates(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 4. F: a forced attack must not feed the attacker's attack triggers
+            if (attack && feedsOnAttacks(active, game)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 5. the most valuable creature the forced combat kills
+            Card best = null;
+            int bestValue = MIN_KILL_VALUE - 1;
+            for (final Player opp : ai.getOpponents()) {
+                if ((attack && !opp.equals(active)) || regenerates(opp)) {
+                    continue;
+                }
+                for (final Card t : opp.getCreaturesInPlay()) {
+                    if (t.isToken() || t.hasKeyword(Keyword.WARD) || !sa.canTarget(t) || hasActivatedNonMana(t)) {
+                        continue;
+                    }
+                    final int value = ComputerUtilCard.evaluateCreature(t);
+                    if (value <= bestValue || alreadyForced(t)) {
+                        continue;
+                    }
+                    if (attack ? fatalAttack(ai, game, t) : fatalBlock(t, combat)) {
+                        best = t;
+                        bestValue = value;
+                    }
+                }
+            }
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Bustle, from PumpAllAi.checkApiLogic after the stock decision said WillPlay
+        public static AiAbilityDecision considerBustle(final Player ai, final SpellAbility sa) {
+            JUDGED.remove();
+            final Game game = ai.getGame();
+            if (!game.getPhaseHandler().is(PhaseType.MAIN1, ai) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!affordable(ai, sa, MagicColor.RED, MagicColor.GREEN, forge.card.mana.ManaCostShard.RG)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // the cached prediction: the stock loop's doesCreatureAttackAI built it in this consult
+            final Combat predicted = ((PlayerControllerAi) ai.getController()).getAi().getPredictedCombat();
+            if (!worthPumping(predicted)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            JUDGED.set(sa.getSubAbility());
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // MIN_ATTACKERS predicted attackers, or lethal through an open board at one player (A4: only the
+        // attackers aimed at that player itself count toward its life)
+        private static boolean worthPumping(final Combat combat) {
+            final CardCollection attackers = combat.getAttackers();
+            if (attackers.size() >= MIN_ATTACKERS) {
+                return true;
+            }
+            if (attackers.isEmpty()) {
+                return false;
+            }
+            Player d = null;
+            for (final Card a : attackers) {
+                final Player p = combat.getDefenderPlayerByAttacker(a);
+                if (p == null || (d != null && !d.equals(p))) {
+                    return false;
+                }
+                d = p;
+            }
+            for (final Card b : d.getCreaturesInPlay()) {
+                if (CombatUtil.canBlock(b)) {
+                    return false;
+                }
+            }
+            int damage = 0;
+            for (final Card a : attackers) {
+                if (!d.equals(combat.getDefenderByAttacker(a))) {
+                    continue;
+                }
+                final int dealt = ComputerUtilCombat.damageIfUnblocked(a, d, combat, true);
+                if (dealt > 0) {
+                    damage += dealt + PUMP;
+                }
+            }
+            return damage >= d.getLife();
+        }
+
+        // F: t attacks us if able into a block of ours that kills it and survives
+        private static boolean fatalAttack(final Player ai, final Game game, final Card t) {
+            if (!CombatUtil.canAttack(t, ai) || CombatUtil.getAttackCost(game, t, ai) != null
+                    || !CombatUtil.canBeBlocked(t, null, ai)
+                    || forge.game.staticability.StaticAbilityCantAttackBlock.getMinMaxBlocker(t, ai).getLeft() > 1
+                    || hasTrigger(t, game, TriggerType.AttackerBlocked, TriggerType.AttackerBlockedOnce,
+                            TriggerType.AttackerBlockedByCreature)) {
+                return false;
+            }
+            for (final Card b : ai.getCreaturesInPlay()) {
+                if (!CombatUtil.canBlock(b) || !CombatUtil.canBlock(t, b)) {
+                    continue;
+                }
+                final Combat duel = new Combat(t.getController());
+                duel.addAttacker(t, ai);
+                duel.addBlocker(t, b);
+                if (ComputerUtilCombat.canDestroyAttacker(ai, t, b, duel, true)
+                        && !ComputerUtilCombat.canDestroyBlocker(ai, b, t, duel, true)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // K: t blocks if able, and every attacker of ours it could block kills it and survives
+        private static boolean fatalBlock(final Card t, final Combat combat) {
+            final Player defender = t.getController();
+            if (!CombatUtil.canBlock(t, combat)) {
+                return false;
+            }
+            boolean any = false;
+            for (final Card a : combat.getAttackers()) {
+                if (!CombatUtil.canBlock(a, t, combat)) {
+                    continue;
+                }
+                if (forge.game.staticability.StaticAbilityCantAttackBlock.getMinMaxBlocker(a, defender).getLeft() > 1
+                        || !ComputerUtilCombat.canDestroyBlocker(defender, t, a, combat, true)
+                        || ComputerUtilCombat.canDestroyAttacker(defender, a, t, combat, true)) {
+                    return false;
+                }
+                any = true;
+            }
+            return any;
+        }
+
+        // already made to block or attack: Hustle would add nothing
+        private static boolean alreadyForced(final Card t) {
+            return !t.getMustBlockCards().isEmpty()
+                    || forge.game.staticability.StaticAbilityMustBlock.blocksEachCombatIfAble(t)
+                    || !forge.game.staticability.StaticAbilityMustAttack.entitiesMustAttack(t).isEmpty();
+        }
+
+        private static boolean hasActivatedNonMana(final Card t) {
+            for (final SpellAbility ab : t.getNonManaAbilities()) {
+                if (ab.isActivatedAbility()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A3: the abilities ComputerUtil.canRegenerate test-pays, by controller
+        private static boolean regenerates(final Player p) {
+            for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ab : c.getSpellAbilities()) {
+                    if (ab.isActivatedAbility() && ab.getApi() == ApiType.Regenerate) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // F: raid, exalted, battalion and every other attack trigger of the attacking player
+        private static boolean feedsOnAttacks(final Player active, final Game game) {
+            for (final Card c : active.getCardsIn(TABLE)) {
+                if (hasTrigger(c, game, TriggerType.Attacks, TriggerType.AttackersDeclared,
+                        TriggerType.AttackersDeclaredOneTarget)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // parsed modes only, never ensureAbility
+        private static boolean hasTrigger(final Card c, final Game game, final TriggerType... modes) {
+            for (final Trigger tr : c.getTriggers()) {
+                if (!tr.zonesCheck(game.getZoneOf(c))) {
+                    continue;
+                }
+                for (final TriggerType mode : modes) {
+                    if (tr.getMode() == mode) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // the engine's test-mode price (calculateManaCost: taxes and reductions) within G2 (HonestMana,
+        // held sources skipped), in total and in the better colour of the cost's hybrid pair
+        private static boolean affordable(final Player ai, final SpellAbility sa, final byte one, final byte other,
+                final forge.card.mana.ManaCostShard hybrid) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && Math.max(mana.colour(one), mana.colour(other)) >= cost.getUnpaidShards(hybrid);
+        }
+    }
+
     // Infernal Offering (dead-card batch 3, row 8; carriers precon:Sworn to Darkness (C14), the
     // card's own precon, and precon:Silverquill Statement (C21), both anchors)
     // "Choose an opponent. You and that player each sacrifice a creature. Each player who sacrificed

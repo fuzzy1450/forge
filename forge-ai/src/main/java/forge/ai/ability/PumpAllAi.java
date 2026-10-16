@@ -4,6 +4,7 @@ import forge.ai.*;
 import forge.game.Game;
 import forge.game.GameObject;
 import forge.game.ability.AbilityUtils;
+import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CardLists;
@@ -171,6 +172,16 @@ public class PumpAllAi extends PumpAiBase {
 
         boolean result = ai.getCreaturesInPlay().anyMatch(c -> c.isValid(valid, source.getController(), source, sa)
                 && ComputerUtilCard.shouldPumpCard(ai, sa, c, defense, power, keywords));
+        if (result && SpecialCardAi.HustleBustle.isOwnHandCast(ai, sa, ApiType.PumpAll)) {
+            // Dead-card batch 3, row 98: Hustle // Bustle's Bustle half. SetStateAi.chkDrawback refused
+            // every WillPlay here, because the face-up sub's host is the RightSplit copy canPlayAndPayFor
+            // installed (isInAlternateState). The stock path above ran and drew exactly as before; the
+            // floor reads only the predicted combat that path already built, so a decline draws nothing
+            // more and answers what the sub's refusal answered, and an approval marks the sub for
+            // SetStateAi. Direct canPlaySa callers (the hand card as host), thefts, copies and Play-effect
+            // casts (doTriggerNoCost) fail the key and keep the stock answer.
+            return SpecialCardAi.HustleBustle.considerBustle(ai, sa);
+        }
         return result ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
 
