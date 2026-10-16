@@ -9830,6 +9830,196 @@ public class SpecialCardAi {
         }
     }
 
+    // Cosmium Confluence (dead-card batch 3, row 108; Temur Modal Spells 4cf9bed4)
+    // "Choose three. You may choose the same mode more than once. - Search your library for a Cave
+    // card, put it onto the battlefield tapped, then shuffle. - Put three +1/+1 counters on a Cave
+    // you control. It becomes a 0/0 Elemental creature with haste. It's still a land. - Destroy
+    // target enchantment." ({4}{G} sorcery.) Unhinted, so CharmAi saw it at every main-phase
+    // evaluation, but "choose three" (min 3) went to chooseMultipleOptionsAi, which ignores
+    // CanRepeatModes and needs three DISTINCT passing modes; the carrier holds no Cave, so the
+    // search mode (ChangeZoneAi.hiddenOriginCanPlayAI, empty list) never passes and the list was
+    // always cleared: CantPlayAi. Reached from CharmAi after the stock chooser came back empty
+    // (Maestros Confluence's gate, batch 2 row 67), so a Cave deck in which the stock pass fills
+    // all three modes keeps the stock cast. One line: Destroy chosen in every slot on ONE
+    // opposing enchantment worth a card (chainAbilities clones the sub's target into each
+    // instance, and CharmAi.chkDrawbackWithSubs answers WillPlay for a stored chosen list, so the
+    // clones are never re-targeted; the repeats are a legal no-op margin, and beat a regeneration
+    // shield). The Cave modes are never chosen here: no library search, so no B3-7 punisher scan
+    // is needed, and no shuffle.
+    // Pick (score): a Curse on us, or an opposing Aura on a permanent we control that is worth
+    // freeing (our commander or a planeswalker, or a nontoken permanent of mana value 2+ that is
+    // not a land by its own type: Imprisoned in the Moon on Riku or on one of our creatures, never
+    // on a Bird token or a basic land) and is not a Pump Aura (Unfinished Business's helps(), its
+    // Aura half, private copy: a buff on a creature we stole), at any mana value, the commander
+    // first. Else Prismatic Ending's floor (row 43, private copy): a commander or a planeswalker
+    // always, an enchantment creature of evaluateCreature 160, a noncreature enchantment of
+    // 50 + 30 * mana value >= 110 (mana value 2+). Every other Aura takes that generic value.
+    // Never (candidate): warded (canPayCost adds ward after targeting, the RNG-free bound does
+    // not), not destroyable (indestructible), a shield counter or regeneration shield, a card we
+    // own, SacMe, Targeting:Dies, EndOfTurnLeavePlay, a noncreature token, one wearing our Aura,
+    // one with a sacrifice-itself activated ability (a Seal, cracked in response; DestroyAi's own
+    // filter without its canPayCost probe), or an Aura attached to a player other than us or to a
+    // permanent controlled by neither us nor the Aura's controller (destroying it frees another
+    // opponent: pods only).
+    // Window: our own main phase on an empty stack (canCastTiming's, re-checked for callers that
+    // skip canPlaySa). Mana: G2 (HonestMana, held sources skipped) covers the test-mode
+    // calculateManaCost in total and in green (B3-5).
+    // RNG-free and read-only; a decline sets nothing (the subs keep whatever the stock pass left,
+    // exactly as in A), holds nothing and remembers nothing; targets are written only on approval.
+    // Residuals: a target-dependent cost increase (priced before the target is set, so canPayCost
+    // fails it after approval, as for Prismatic Ending); a symmetric enchantment, or one that
+    // rewards its own death; an opposing Pump Aura on a creature we stole takes its generic value.
+    public static class CosmiumConfluence {
+        public static final String NAME = "Cosmium Confluence";
+        static final int CREATURE_FLOOR = 160;   // Prismatic Ending's / Dispatch's floor
+        static final int PERMANENT_FLOOR = 110;  // 50 + 30 * mana value: mana value 2+
+        static final int FREES_OURS = 1000;      // a Curse on us, or an Aura on our permanent worth freeing
+        static final int FREES_COMMANDER = 500;  // that permanent is our commander
+        static final int MIN_FREED_CMC = 2;      // a permanent of ours worth five mana to free
+
+        // the owner's own spell; a thief's cast and any copy keep the stock chooser
+        public static boolean handles(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    && sa.isSpell() && !sa.isCopied() && !sa.isTrigger()
+                    && ai.equals(sa.getActivatingPlayer()) && ai.equals(host.getOwner());
+        }
+
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa,
+                                                   final List<AbilitySub> choices, final int num) {
+            final List<AbilitySub> chosen = Lists.newArrayList(); // mutable: chainAbilities sorts it
+            AbilitySub destroy = null;
+            for (final AbilitySub sub : choices) {
+                if (sub.getApi() == ApiType.Destroy) {
+                    destroy = sub; // offered only while some enchantment can be targeted (603.3c)
+                }
+            }
+            if (destroy == null || num < 1 || num > 3) {
+                return chosen; // nothing to destroy, or the script drifted
+            }
+            // 1. O(1) window
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return chosen;
+            }
+            // 2. the target: the opposing enchantment worth the card
+            Card best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    if (!c.isEnchantment() || !candidate(ai, c) || !destroy.canTarget(c)) {
+                        continue;
+                    }
+                    final int score = score(ai, c);
+                    if (score < 0) {
+                        continue; // below the floor
+                    }
+                    if (score > bestScore) { // battlefield order breaks ties
+                        best = c;
+                        bestScore = score;
+                    }
+                }
+            }
+            if (best == null) {
+                return chosen;
+            }
+            // 3. RNG-free affordability, judged on the root sa: canPayCost runs only after approval
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.GREEN) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN)) {
+                return chosen;
+            }
+            // 4. approve: one target, every slot
+            destroy.resetTargets(); // drop the stock pass's pick
+            destroy.getTargets().add(best);
+            while (chosen.size() < num) {
+                chosen.add(destroy);
+            }
+            return chosen;
+        }
+
+        private static boolean candidate(final Player ai, final Card c) {
+            if (!c.getController().isOpponentOf(ai) || ai.equals(c.getOwner())
+                    || c.hasKeyword(Keyword.WARD) || !c.canBeDestroyed()
+                    || c.getCounters(CounterEnumType.SHIELD) > 0 || c.getShieldCount() > 0
+                    || c.hasSVar("SacMe") || c.hasSVar("EndOfTurnLeavePlay")
+                    || "Dies".equals(c.getSVar("Targeting"))
+                    || (!c.isCreature() && (c.isToken() || c.isTokenCard()))
+                    || c.getEnchantedBy().stream().anyMatch(a -> ai.equals(a.getController()))) {
+                return false;
+            }
+            if (c.isAura()) {
+                // destroying it must not free another opponent or what they control (pods)
+                final Player onPlayer = c.getPlayerAttachedTo();
+                if (onPlayer != null && !ai.equals(onPlayer)) {
+                    return false;
+                }
+                final Card on = c.getAttachedTo();
+                if (on != null && !ai.equals(on.getController()) && !c.getController().equals(on.getController())) {
+                    return false;
+                }
+            }
+            for (final SpellAbility ab : c.getAllSpellAbilities()) {
+                if (!ab.isActivatedAbility() || ab.getPayCosts() == null) {
+                    continue;
+                }
+                for (final CostPart part : ab.getPayCosts().getCostParts()) {
+                    if (part instanceof CostSacrifice && part.payCostFromSource()) {
+                        return false; // sacrificed in response (Seal of Cleansing): the spell fizzles
+                    }
+                }
+            }
+            return true;
+        }
+
+        // < 0 = below the floor
+        private static int score(final Player ai, final Card c) {
+            if (c.isAura()) {
+                if (ai.equals(c.getPlayerAttachedTo())) {
+                    return FREES_OURS; // a Curse on us
+                }
+                final Card on = c.getAttachedTo();
+                if (on != null && ai.equals(on.getController()) && !pumpAura(c) && worthFreeing(on)) {
+                    return FREES_OURS + (on.isCommander() ? FREES_COMMANDER : 0) + 30 * on.getCMC();
+                }
+            }
+            if (c.isCommander() || c.isPlaneswalker()) {
+                return FREES_OURS - 1; // the command zone costs it two more
+            }
+            if (c.isCreature()) {
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                return eval >= CREATURE_FLOOR ? eval : -1;
+            }
+            final int value = 50 + 30 * c.getCMC();
+            return value >= PERMANENT_FLOOR ? value : -1;
+        }
+
+        // Our commander or a planeswalker, or a nontoken permanent of mana value 2+ that is not a land
+        // by its own type: a land's mana value is 0, and getOriginalType keeps a creature under
+        // Imprisoned in the Moon (AddType$ Land, RemoveCardTypes$ True; its mana value intact) in.
+        private static boolean worthFreeing(final Card on) {
+            return on.isCommander() || on.isPlaneswalker()
+                    || (!on.isToken() && !on.isTokenCard() && !on.getOriginalType().isLand()
+                        && on.getCMC() >= MIN_FREED_CMC);
+        }
+
+        // Unfinished Business's helps(), its Aura half, copied (an accepted helper is not shared):
+        // an Aura whose attach logic is Pump, the stock "good aura" signal
+        private static boolean pumpAura(final Card a) {
+            if ("Pump".equals(a.getSVar("AttachAILogic"))) {
+                return true;
+            }
+            for (final SpellAbility s : a.getSpellAbilities()) {
+                if (s.getApi() == ApiType.Attach && "Pump".equals(s.getParam("AILogic"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Crackling Spellslinger
     // "When Crackling Spellslinger enters, if you cast it, the next instant or sorcery
     // spell you cast this turn has storm." Reached from EffectAi.checkApiLogic's

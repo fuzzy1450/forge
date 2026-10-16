@@ -151,6 +151,15 @@ public class CharmAi extends SpellAbilityAi {
             chosenList = SpecialCardAi.MaestrosConfluence.chooseModes(ai, sa, choices, num);
         }
 
+        // Cosmium Confluence: same shape as Maestros above. The stock chooser runs first,
+        // unchanged (min 3 distinct modes; its Cave search can never pass in a deck without
+        // Caves), so every draw A made is consumed before this gate; the card's chooser draws
+        // nothing and only runs when the stock list came back empty. A Cave deck in which the
+        // stock pass fills all three modes keeps the stock cast.
+        if (chosenList.isEmpty() && SpecialCardAi.CosmiumConfluence.handles(ai, sa)) {
+            chosenList = SpecialCardAi.CosmiumConfluence.chooseModes(ai, sa, choices, num);
+        }
+
         if (chosenList.isEmpty()) {
             if (timingRight) {
                 // Set minimum choices for triggers where chooseMultipleOptionsAi() returns null
