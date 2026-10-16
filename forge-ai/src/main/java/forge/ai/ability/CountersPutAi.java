@@ -589,6 +589,14 @@ public class CountersPutAi extends CountersAi {
                             break;
                         }
                     }
+                    // Repulsive Mutation (dead-card batch 3, row 107): X is every spare mana, so a
+                    // pump pick stands only in a fight after blocks (our blocker, a blocked attacker,
+                    // or an unblocked one whose counters make the attack lethal); the loop above and
+                    // its draws are kept as they were, and the nulled pick falls through RNG-free code
+                    if (choice != null && SpecialCardAi.RepulsiveMutation.isMutation(sa)
+                            && !SpecialCardAi.RepulsiveMutation.inFight(ai, choice, amount)) {
+                        choice = null;
+                    }
 
                     if (choice == null) {
                         // try to use as cheap kill
@@ -608,7 +616,11 @@ public class CountersPutAi extends CountersAi {
                                 || ph.getTurn() - source.getTurnInZone() >= game.getPlayers().size() * 2) {
                             if (abCost.isFree() || ph.is(PhaseType.END_OF_TURN) && ph.getPlayerTurn().isOpponentOf(ai)) {
                                 // only use at opponent EOT unless it is free
-                                choice = chooseBoonTarget(list, type);
+                                // Repulsive Mutation (dead-card batch 3, row 107): at least MIN_X
+                                // counters, on our commander or a creature worth a premium body
+                                choice = SpecialCardAi.RepulsiveMutation.isMutation(sa)
+                                        ? SpecialCardAi.RepulsiveMutation.boonTarget(ai, list, amount)
+                                        : chooseBoonTarget(list, type);
                             }
                         }
                     }

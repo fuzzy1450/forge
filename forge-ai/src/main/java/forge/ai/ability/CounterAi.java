@@ -230,6 +230,26 @@ public class CounterAi extends SpellAbilityAi {
 
     @Override
     public AiAbilityDecision chkDrawback(Player aiPlayer, SpellAbility sa) {
+        // Dead-card batch 3, row 107 (Repulsive Mutation). An "up to one target spell" rider
+        // (a minimum of 0 targets and a maximum above 0) is legal with no target, but the mandatory
+        // chooser below answers TargetingFailed on an empty stack -- vetoing every root that wanted
+        // the cast -- and on a stack holding no opposing counterable spell either fails the same
+        // way (only abilities there) or aims the rider at its least bad option, a spell of our own.
+        // With no opposing counterable spell the rider takes no target and the root's own judgment
+        // stands. RNG-free (a stack walk). Reaches two scripts today (rule B3-13):
+        // r/repulsive_mutation.txt and r/repel_intruders.txt (no game_cards rows; its RemoveDeck hint
+        // still keeps it off the playable list). The max clause leaves l/long_rivers_pull.txt and
+        // h/highly_illogical.txt, whose 0/0 riders (gift not promised, not kicked) need no target,
+        // on the stock path verbatim. A rider with a required target, or with an opposing spell to
+        // aim at, keeps the stock path too.
+        if (sa.usesTargeting() && sa.getMinTargets() == 0 && sa.getMaxTargets() > 0) {
+            final Game game = aiPlayer.getGame();
+            if (game.getStack().isEmpty()
+                    || !chooseTargetSpellAbility(game, sa, aiPlayer, true).getRight()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+        }
         return doTriggerNoCost(aiPlayer, sa, true);
     }
 

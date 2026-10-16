@@ -39059,6 +39059,119 @@ public class SpecialCardAi {
         }
     }
 
+    // Repulsive Mutation (dead-card batch 3, row 107)
+    // "Put X +1/+1 counters on target creature you control. Then counter up to one target spell unless
+    // its controller pays mana equal to the greatest power among creatures you control." {X}{G}{U}
+    // Instant, unhinted. The root is a PutCounter, the counter half a Counter sub with TargetMin$ 0.
+    // CounterAi.chkDrawback's mandatory chooser vetoed every empty-stack approval of the root; that
+    // gate is lifted there, by shape. This class is the floor on the two stock pump windows of
+    // CountersPutAi.checkApiLogic that the lift opens, where X is setMaxXValue's every spare mana (the
+    // engine's own test payments of the adjusted cost):
+    // - inFight (B1', after the root's shouldPumpCard loop, its draws kept): the pick stands only in
+    //   our or an opponent's declare-blockers step, on our blocker, on an attacker of ours with a
+    //   blocker still on it, or on an unblocked attacker of ours whose X counters make the unblocked
+    //   attack on the player it attacks lethal. The Main-1 "becomes an attacker" roll and the chance
+    //   roll on an unblocked attacker that is not lethal are dropped: Jund Charm D's "an unblocked
+    //   attacker counts only in the lethal line", Shields of Velis Vel's blocked or blocking
+    //   combatant. The lethal line keeps Jund Charm D's guards: a player who cannot lose, and an
+    //   attacker with infect or whose damage to that player is prevented, add nothing;
+    // - boonTarget (B2, the stock boon at an opponent's end step once the card has sat in hand for
+    //   2 x players turns): X >= MIN_X, on our commander, else our best non-Defender creature worth
+    //   PREMIUM_VALUE, never a useless one. An adapted private copy of Jund Charm E's private
+    //   boonTarget (rule B3-4: copied, never called or widened) that walks the root's already
+    //   filtered target list.
+    // The in-response window (canPumpAgainstRemoval) is untouched; with the CounterAi lift its rider
+    // aims at the opposing spell. Only the root spell, by its ability source name, reaches this class:
+    // copies and effect casts go through CountersPutAi.doTriggerNoCost. RNG: nothing here draws
+    // (Combat reads, isCombatDamagePrevented, damageIfUnblocked without abilities, evaluateCreature,
+    // isUselessCreature), and every decline comes after exactly the draws the stock path made.
+    // Nothing is held or remembered.
+    public static class RepulsiveMutation {
+        public static final String NAME = "Repulsive Mutation";
+        static final int MIN_X = 2;           // Jund Charm E's two counters
+        static final int PREMIUM_VALUE = 200; // Tower Defense / Cosmic Intervention's floor
+
+        // the root spell of this card (a spell, so rule B3-3's host-name key does not apply)
+        public static boolean isMutation(final SpellAbility sa) {
+            return sa != null && sa.isSpell() && sa.getRootAbility() == sa
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        // B1': the pump pick c stands only in a fight after blocks
+        public static boolean inFight(final Player ai, final Card c, final int x) {
+            final Game game = ai.getGame();
+            if (c == null || !game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS)) {
+                return false;
+            }
+            final Combat combat = game.getCombat();
+            if (combat == null) {
+                return false;
+            }
+            if (combat.isBlocking(c)) {
+                return true; // our blocker
+            }
+            if (!combat.isAttacking(c)) {
+                return false;
+            }
+            if (!combat.getBlockers(c).isEmpty()) {
+                return true; // an attacker with a blocker still on it
+            }
+            if (!combat.isUnblocked(c)) {
+                return false; // blocked, its blockers all gone
+            }
+            // an unblocked attacker: the lethal line only, on the player it attacks (never a
+            // planeswalker or a battle)
+            if (!(combat.getDefenderByAttacker(c) instanceof Player d) || !d.canLoseLife() || d.cantLose()
+                    || d.cantLoseForZeroOrLessLife()) {
+                return false;
+            }
+            if (c.hasKeyword(Keyword.INFECT)
+                    || ComputerUtilCombat.isCombatDamagePrevented(c, d, c.getNetCombatDamage() + x)) {
+                return false; // the counters add no life damage
+            }
+            int damage = x;
+            for (final Card a : combat.getUnblockedAttackers()) {
+                if (d.equals(combat.getDefenderByAttacker(a))) {
+                    damage += ComputerUtilCombat.damageIfUnblocked(a, d, combat, true);
+                }
+            }
+            return damage >= d.getLife();
+        }
+
+        // B2: null below MIN_X counters; else our commander (the best, with two), else our best
+        // non-Defender creature worth PREMIUM_VALUE; never one that cannot take the counters or a
+        // useless one (isUselessCreature: detained, unable to attack or block, tapped for good)
+        public static Card boonTarget(final Player ai, final CardCollectionView list, final int x) {
+            if (x < MIN_X) {
+                return null;
+            }
+            Card commander = null;
+            int commanderEval = 0;
+            Card best = null;
+            int bestEval = 0;
+            for (final Card c : list) {
+                if (!c.isCreature() || !ai.equals(c.getController()) || !c.canReceiveCounters(CounterEnumType.P1P1)
+                        || ComputerUtilCard.isUselessCreature(ai, c)) {
+                    continue;
+                }
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                if (c.isCommander() && ai.equals(c.getOwner())) {
+                    if (commander == null || eval > commanderEval
+                            || (eval == commanderEval && c.getId() < commander.getId())) {
+                        commander = c;
+                        commanderEval = eval;
+                    }
+                } else if (!c.hasKeyword(Keyword.DEFENDER) && eval >= PREMIUM_VALUE) {
+                    if (best == null || eval > bestEval || (eval == bestEval && c.getId() < best.getId())) {
+                        best = c;
+                        bestEval = eval;
+                    }
+                }
+            }
+            return commander != null ? commander : best;
+        }
+    }
+
     // Reshape
     // "As an additional cost to cast this spell, sacrifice an artifact. Search your library for an
     // artifact card with mana value X or less, put it onto the battlefield, then shuffle." {X}{U}{U}.
