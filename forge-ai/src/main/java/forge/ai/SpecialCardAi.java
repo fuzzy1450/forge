@@ -33123,6 +33123,83 @@ public class SpecialCardAi {
         }
     }
 
+    // Nemata, Grove Guardian (dead-card batch 3, row 101; extension 2026-10-15; Mono-Green Food and
+    // Tokens 8428b3ce)
+    // "{2}{G}: Create a 1/1 green Saproling creature token. Sacrifice a Saproling: Saproling
+    // creatures get +1/+1 until end of turn." ({4}{G}{G} legendary 4/5 Treefolk; the printed text and
+    // the Oracle agree.) AI:RemoveDeck:All dropped the owner's creature spell in
+    // AiController.getSpellAbilityToPlay's removeIf before any handler ran, so its owner never cast
+    // it (0 owner casts in 229 carrier rows on 2.0.15+55e709fa6ba, 24/24 drawn replays on
+    // 2.0.15+b659f1910af; its one cast was a Silent-Blade Oni theft, a Play effect, which never reads
+    // the hint). The script KEEPS the hint: the global Sac-a-Saproling PumpAll (it pumps every
+    // Saproling, the opponents' too, and stock PumpAllAi sells a Saproling on shouldPumpCard alone)
+    // and the {2}{G} Token stay off the list, the -10 sort still applies, and every other
+    // isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) still refuses it.
+    // The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through: the owner's own
+    // creature spell from hand, not a Play-effect cast and not a copy, and only in a window where the
+    // stock path would cast it and real mana pays for it:
+    // - our own main phase with an empty stack (ai.canCastSorcery(), canCastTiming's window for a
+    //   sorcery-speed creature; PermanentCreatureAi's flash branches are never entered);
+    // - Main 2, or Main 1 only where ComputerUtil.castPermanentInMain1 says so (the stock
+    //   PermanentAi.checkPhaseRestrictions wait, answered first; RNG-free for this card);
+    // - no copy of it in play (PermanentAi.checkApiLogic's legend refusal, read early, so the spell
+    //   does not sit on the list for a stock refusal);
+    // - no live mana reservation (RemoveDeckFilter.noManaHeld);
+    // - G2 (HonestMana, held sources skipped) covers the engine's test-mode calculateManaCost
+    //   (Emerald Medallion's reduction and every other tax or reducer) in total and in green, so a
+    //   readmitted spell never reaches ComputerUtilCost.canPayCost, whose test payment draws MyRandom
+    //   per source it tries, in a window that cannot pay for it.
+    // Value floor: the body, a 4/5 for six with no ETB, upkeep or drawback (Bosh's and Patron of the
+    // Nezumi's reasoning); the stock checks behind the filter judge the rest (zero toughness,
+    // curses, damage on the cast).
+    // Readmitted, it sorts behind every positive-key SA (saEvaluator), but sortCreatureSpells
+    // re-deals the creature slots by EvaluateCreatureSpellComparator, where its body outweighs most
+    // of the -10. It takes the slot of the first creature it outranks (the 1-3 mana 1/1s), and every
+    // SA before that slot is A's. A non-RNG stock decline after a readmit (zero toughness, a lethal
+    // cast punisher) leaves the rest of that pass in a different order from A.
+    // Draws nothing, holds nothing, remembers nothing; its only writes are setActivatingPlayer on a
+    // hand SA with no activator yet and on the mana abilities G2 reads, so a refusal is the old
+    // filter, and the first new draw is canPayCost's reservation roll in a window G2 judged payable.
+    // A thief's copy fails the owner and hand checks; a token copy (Bramble Sovereign's) still reads
+    // the hint by name, and its abilities are not spells. Squallmonger's readmitCast window with
+    // Bosh's early legend check, as a private class (B3-4: accepted predicates are not shared).
+    public static class NemataGroveGuardian {
+        public static final String NAME = "Nemata, Grove Guardian";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || sa.isCopied() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // both activated abilities, a theft, a Play-effect cast: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (!ai.canCastSorcery()) {
+                return false; // our own main phase with an empty stack, read first
+            }
+            if (!host.ignoreLegendRule() && ai.isCardInPlay(NAME)) {
+                return false; // the stock legend refusal (PermanentAi.checkApiLogic), read early
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ai.getGame().getPhaseHandler().is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait (PermanentAi.checkPhaseRestrictions), answered first
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.GREEN) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+    }
+
     // Netherborn Altar (dead-card batch 2, row 103; precon:Symbiotic Swarm (C20))
     // "{T}, Put a soul counter on this artifact: Put your commander into your hand from the command
     // zone. Then you lose 3 life for each soul counter on this artifact." Its only value is commander
@@ -37469,8 +37546,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93 and 111, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird
-    // Standard, a readmit).
+    // rows 93, 101 and 111, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is
+    // Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -37586,6 +37663,8 @@ public class SpecialCardAi {
                     return Nethergoyf.readmit(ai, sa);
                 case RecklessBarbarian.NAME:             // batch 3 extension, row 111 (W12)
                     return RecklessBarbarian.readmit(ai, sa);
+                case NemataGroveGuardian.NAME:           // batch 3 extension, row 101 (W13)
+                    return NemataGroveGuardian.readmit(ai, sa);
                 default:
                     return false;
             }
