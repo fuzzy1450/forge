@@ -95,6 +95,15 @@ public class ChooseGenericAi extends SpellAbilityAi {
             // value); a Play-effect cast reaches only this sub, so it is judged here on value.
             return SpecialCardAi.ZimonesHypothesis.considerSub(ai, sa);
         }
+        if (SpecialCardAi.VisionOfLove.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                && !(sa instanceof AbilitySub)) {
+            // "You may sacrifice an artifact or discard a card. If you do, draw two cards." No
+            // AILogic, so the fallthrough below refused it outright (dead-card batch 3, row 92).
+            // Judged whole in SpecialCardAi.VisionOfLove: only the owner's own cast from hand; a
+            // thief's cast, and a Play-effect cast or a copy of a card outside our hand, get the
+            // old refusal there.
+            return SpecialCardAi.VisionOfLove.consider(ai, sa);
+        }
         if (sa.hasParam("AILogic")) {
             // This is equivalent to what was here before but feels bad
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
@@ -164,6 +173,12 @@ public class ChooseGenericAi extends SpellAbilityAi {
             // creature it kills, else -2/+2 (the logic == null fallthrough below answered +2/-2,
             // always: a pump for an opponent's bigger creature, a kill for a small one of ours)
             return SpecialCardAi.ShaperParasite.chooseMode(player, sa, spells);
+        }
+        if (SpecialCardAi.VisionOfLove.NAME.equals(host.getName())) {
+            // sacrifice the worst expendable artifact, else discard; the logic == null fallthrough
+            // below answered spells.get(0), the sacrifice, paid with getWorstAI (an artifact land,
+            // a mana rock, an artifact creature)
+            return SpecialCardAi.VisionOfLove.chooseMode(player, sa, spells);
         }
         final Game game = host.getGame();
         final String logic = sa.getParam("AILogic");

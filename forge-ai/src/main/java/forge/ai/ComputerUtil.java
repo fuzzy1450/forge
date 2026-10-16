@@ -662,6 +662,15 @@ public class ComputerUtil {
             return pick == null ? null : new CardCollection(pick);
         }
 
+        if (amount == 1 && effect && SpecialCardAi.VisionOfLove.handles(ability)) {
+            // Vision of Love's "you may sacrifice an artifact" (an unless cost, so effect is true):
+            // only the worst expendable noncreature artifact (VisionOfLove.chooseSacrifice). None ->
+            // null: the payment declines, nothing is sacrificed or drawn (the printed "may"), never
+            // the stock getWorstAI pick. VisionOfLove.chooseMode asks this same call first.
+            final Card pick = SpecialCardAi.VisionOfLove.chooseSacrifice(ai, typeList);
+            return pick == null ? null : new CardCollection(pick);
+        }
+
         if (typeList.size() < amount) {
             return null;
         }

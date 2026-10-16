@@ -53486,6 +53486,181 @@ public class SpecialCardAi {
         }
     }
 
+    // Vision of Love (dead-card batch 3, row 92; Mono-Red Pingers and Burn 4181d544, Mardu Dice,
+    // Treasure and Robots 4bab0245, neither an anchor)
+    // "{1}{R} Instant. You may sacrifice an artifact or discard a card. If you do, draw two cards."
+    // A GenericChoice with no AILogic: ChooseGenericAi.checkApiLogic's fallthrough refused it at
+    // every consult, so its owner never cast it (0 owner casts in 52 held games under 55e709fa6ba).
+    // Judged here as Witch's Mark's rummage (batch 1 row 103) plus an artifact half: only the
+    // owner's own cast from hand, in its own Main 2 or at an opponent's end step right before its
+    // turn, on an empty stack, when the draw is safe (WitchsMark.willRummage: two draws allowed,
+    // outside DrawAi's deck-out margin, no opposing draw thief or Drawn/Discarded punisher; plus
+    // no opposing DiscardedAll trigger our discard would feed, which willRummage does not scan),
+    // something pays the "if you do" (another card in hand, or an expendable artifact that paying
+    // {1}{R} leaves in play, in total and in red), the hand fits under its maximum after the draw
+    // on our own turn (the opponent's end step has the slack), and real mana covers the engine's
+    // adjusted {1}{R} (G1).
+    // At resolution chooseMode sacrifices the worst expendable noncreature artifact (a token or
+    // SacMe artifact of ours that is not a land, a commander or a combatant: ReadTheRunes.expendable)
+    // unless the hand holds a card worse than a draw, else it discards through the stock chooser;
+    // the payment's sacrifice is the same pick (ComputerUtil.chooseSacrificeType's hook). The stock
+    // chooser took spells.get(0), the sacrifice, paid with getWorstAI's pick.
+    // RNG parity: A's refusal drew nothing. Every decline here is a read (phase, zones, triggers,
+    // HonestMana, test-mode calculateManaCost); the first draws are canPayCost's after WillPlay.
+    // chooseMode and chooseSacrifice draw nothing. Holds nothing, writes no AiCardMemory.
+    public static class VisionOfLove {
+        public static final String NAME = "Vision of Love";
+
+        // any ability of a host of the name (our cast, a thief's, a copy): the resolution hooks
+        public static boolean handles(final SpellAbility sa) {
+            final Card host = sa == null ? null : sa.getHostCard();
+            return host != null && NAME.equals(host.getName());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || !ai.equals(sa.getActivatingPlayer())
+                    || !host.isInZone(ZoneType.Hand) || host.getZone() == null
+                    || !ai.equals(host.getZone().getPlayer())) {
+                // the old fallthrough answer for every path but the owner's own hand cast
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean main2 = ph.isPlayerTurn(ai) && ph.is(PhaseType.MAIN2);
+            final boolean beforeOurTurn = !ph.isPlayerTurn(ai) && ph.is(PhaseType.END_OF_TURN)
+                    && ai.equals(ph.getNextTurn());
+            if (!game.getStack().isEmpty() || !(main2 || beforeOurTurn)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final SpellAbility sac = choice(sa, ai, CostSacrifice.class);
+            final SpellAbility discard = choice(sa, ai, CostDiscard.class);
+            if (sac == null || discard == null || !WitchsMark.willRummage(ai, discard)
+                    || discardsFeedAnOpponent(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final int others = ai.getCardsIn(ZoneType.Hand).size() - 1; // this card is spent
+            if (others < 1 && !spareFodder(ai, sa, sac)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // nothing pays "if you do"
+            }
+            if (main2 && !ai.isUnlimitedHandSize() && others + 1 > ai.getMaxHandSize()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime); // no cleanup discard
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the choice whose unless cost is of the given part type, its activator set for the
+        // sacrifice filter (canBeSacrificedBy) and the payment chooser
+        private static SpellAbility choice(final SpellAbility root, final Player ai,
+                final Class<? extends CostPart> part) {
+            for (final AbilitySub sub : root.getAdditionalAbilityList("Choices")) {
+                if (sub.hasParam("UnlessCost")
+                        && new Cost(sub.getParam("UnlessCost"), false).hasOnlySpecificCostType(part)) {
+                    sub.setActivatingPlayer(ai);
+                    return sub;
+                }
+            }
+            return null;
+        }
+
+        // B3-7's DiscardedAll clause (skeptic F2), which WitchsMark.willRummage's Drawn and
+        // Discarded scan misses: an opponent's battlefield trigger on one or more cards discarded by
+        // a player other than its controller alone (ValidPlayer$ not exactly You): Tinybones, Pocket
+        // Nuisance pings us, Hostile Investigator gets a Clue. It declines the sacrifice
+        // route too, as willRummage already does on any opposing Discarded trigger.
+        private static boolean discardsFeedAnOpponent(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.DiscardedAll
+                                && !"You".equals(t.getParam("ValidPlayer"))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // A noncreature artifact the "you may sacrifice" may take: ReadTheRunes.expendable (a token
+        // or SacMe permanent of ours, never a land -- Treasure Vault --, a commander or a combatant).
+        static boolean fodder(final Player ai, final Card c, final Combat combat) {
+            return c.isArtifact() && !c.isCreature() && ReadTheRunes.expendable(ai, c, combat);
+        }
+
+        // An expendable artifact the {1}{R} cannot spend: one with no mana ability (Clue, Food), or
+        // honest mana that covers the adjusted cost, in total and in red, without every expendable
+        // one's mana (a Treasure spent for the cast is no longer there to sacrifice). Each fodder
+        // left here has a mana ability, so taking all of them off the red count can only
+        // over-decline (skeptic F1: a Treasure as the only red source would pay the {R} and leave
+        // nothing to sacrifice).
+        static boolean spareFodder(final Player ai, final SpellAbility root, final SpellAbility sac) {
+            final Combat combat = ai.getGame().getCombat();
+            final CardCollection list = CardLists.filter(ai.getCardsIn(ZoneType.Battlefield),
+                    c -> fodder(ai, c, combat) && c.canBeSacrificedBy(sac, true));
+            if (list.isEmpty()) {
+                return false;
+            }
+            if (list.anyMatch(c -> c.getManaAbilities().isEmpty())) {
+                return true;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, root, true);
+            return mana.total() - list.size() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) - list.size() >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // ChooseGenericAi.chooseSingleSpellAbility: sacrifice when the payment's own pick (this
+        // class's hook) finds an expendable artifact and no card in hand is worse than a draw; else
+        // discard (the stock rummage chooser, AiController.getCardsToDiscard); with neither, the
+        // sacrifice, whose payment the hook then declines (nothing is sacrificed or drawn).
+        public static SpellAbility chooseMode(final Player ai, final SpellAbility sa,
+                final List<SpellAbility> spells) {
+            SpellAbility sac = null, discard = null;
+            for (final SpellAbility sp : spells) {
+                if (!sp.hasParam("UnlessCost")) {
+                    continue;
+                }
+                final Cost unless = new Cost(sp.getParam("UnlessCost"), false);
+                if (unless.hasOnlySpecificCostType(CostSacrifice.class)) {
+                    sac = sp;
+                } else if (unless.hasOnlySpecificCostType(CostDiscard.class)) {
+                    discard = sp;
+                }
+            }
+            final boolean junk = discard != null
+                    && ai.getCardsIn(ZoneType.Hand).anyMatch(c -> ComputerUtil.isWorseThanDraw(ai, c));
+            if (sac != null && !junk) {
+                sac.setActivatingPlayer(ai);
+                final CostSacrifice part = new Cost(sac.getParam("UnlessCost"), false)
+                        .getCostPartByType(CostSacrifice.class);
+                if (ComputerUtil.chooseSacrificeType(ai, part.getType(), sac, null, true, 1, null) != null) {
+                    return sac;
+                }
+            }
+            if (discard != null) {
+                return discard;
+            }
+            return sac != null ? sac : spells.get(0);
+        }
+
+        // ComputerUtil.chooseSacrificeType's hook (effect && amount == 1 && handles): the worst
+        // expendable noncreature artifact among the payment's own candidates, or null
+        public static Card chooseSacrifice(final Player ai, final Iterable<Card> candidates) {
+            final Combat combat = ai.getGame().getCombat();
+            final CardCollection list = new CardCollection();
+            for (final Card c : candidates) {
+                if (fodder(ai, c, combat)) {
+                    list.add(c);
+                }
+            }
+            return list.isEmpty() ? null : ComputerUtilCard.getWorstAI(list);
+        }
+    }
+
     // Vizier of Tumbling Sands (dead-card batch 3, row 42; precon:Timeless Wisdom (C20), commander
     // Gavi, Nest Warden)
     // "{T}: Untap another target permanent. Cycling {1}{U}. When you cycle Vizier of Tumbling Sands,
