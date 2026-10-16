@@ -876,6 +876,14 @@ public class AiController {
             return AiPlayDecision.CantAfford;
         }
 
+        // Dead-card batch 3, row 89: Signature Slam's chooser found no victim worth the card and
+        // kept A's untargeted WillPlay, so canPlaySa and canPayCost above ran A's path, draws
+        // included. A cast it here and MagicStack.add refused the paid chain for its untargeted
+        // EachDamage sub, stranding the card on the stack. A name compare: inert for every other SA.
+        if (SpecialCardAi.SignatureSlam.untargetedRegularCast(sa)) {
+            return AiPlayDecision.TargetingFailed;
+        }
+
         return AiPlayDecision.WillPlay;
     }
 

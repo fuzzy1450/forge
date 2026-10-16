@@ -54,6 +54,17 @@ public class DamageEachAi extends DamageAiBase {
 
     @Override
     public AiAbilityDecision chkDrawback(Player aiPlayer, SpellAbility sa) {
+        if (SpecialCardAi.SignatureSlam.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dead-card batch 3, row 89. Signature Slam's "target creature you don't control" is
+            // this sub's own target, and the stock answer below never chose one: the AI paid
+            // {2}{G}, MagicStack.add refused the chain (hasLegalTargeting walks every sub) and the
+            // card stayed in the stack zone uncast (358 of its 615 rows under 2.0.15+55e709fa6ba).
+            // Reached only after the root PutCounter's stock approval, which made every draw A
+            // made; the chooser draws none. With no victim a regular cast keeps A's answer, and
+            // AiController.canPlayAndPayForFace refuses it after canPayCost. Every other
+            // EachDamage sub takes exactly the path it took before.
+            return SpecialCardAi.SignatureSlam.chooseVictim(aiPlayer, sa);
+        }
         // check AI life before playing this drawback?
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }

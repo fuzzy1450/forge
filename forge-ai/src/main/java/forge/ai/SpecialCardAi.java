@@ -41966,6 +41966,221 @@ public class SpecialCardAi {
         }
     }
 
+    // Signature Slam (dead-card batch 3, row 89; extension 2026-10-15)
+    // "Put a +1/+1 counter on target creature you control, then each modified creature you
+    // control deals damage equal to its power to target creature you don't control." The stock
+    // root (CountersPutAi.checkApiLogic: shouldPumpCard's combat trick or "become attacker" pump,
+    // pump against removal on a non-empty stack, or the boon at an opponent's end step) approved
+    // the cast, and DamageEachAi.chkDrawback answered WillPlay without choosing the sub's own
+    // target, so MagicStack.add refused the paid chain (hasLegalTargeting walks every sub) and the
+    // card stayed in the stack zone uncast, its mana spent. Two name gates route here:
+    // - chooseVictim (DamageEachAi.chkDrawback, reached only after the root's stock approval, so
+    //   every draw A made is made first): picks the sub's victim. The damagers are the sub's own
+    //   DefinedDamagers read now (modified creatures we control) plus the root's target, which the
+    //   +1/+1 counter about to land makes modified (+1 power). DamageEachEffect deals it all at
+    //   once through one damage map, so per-source predictDamageTo is summed and deathtouch counts
+    //   per source. A victim is a targetable creature an opponent controls (never an ally's) that
+    //   no noncombat damage-received trigger on the opponents' side matches: Phyrexian
+    //   Obliterator, Boros Reckoner, Spitemare, Hornet Nest, Body of Knowledge, Brash Taunter, all
+    //   scaled by the whole team's damage at once (a private copy of
+    //   WaveOfReckoning.opponentPunishesDamageTo, without its ValidSource line: our creatures are
+    //   the sources). It dies when it is not indestructible, has no shield counter or regeneration
+    //   shield, the summed damage reaches getDamageToKill with prevention shields (or a deathtouch
+    //   source hits it), and no activated Regenerate ability on its controller's side covers it
+    //   (ComputerUtil.canRegenerate's filter half, without its test payment, which rolls
+    //   isManaSourceReserved for an AI opponent).
+    //   - A regular cast takes the best such kill (CreatureEvaluator) worth a card: a nontoken of
+    //     CMC 2 or more, or power 3 or more, with no active undying or persist and no SacMe (the
+    //     Meteor Blast filter WaveOfReckoning and Volcanic Offering use, a private copy). With
+    //     none it returns A's own answer, WillPlay with the sub untargeted, so canPlaySa and
+    //     canPayCost run A's exact path, draws included.
+    //   - A free cast (a copy or a Play-effect cast) takes the best kill, else the best legal
+    //     victim nothing punishes, else TargetingFailed: it must be legal, and costs no card here.
+    // - untargetedRegularCast (AiController.canPlayAndPayForFace, after canPayCost, just before
+    //   its WillPlay): refuses the regular cast whose sub is still untargeted, the cast A made and
+    //   stranded. Every decline A made before it (a stock root decline, CantAfford, AnotherTime)
+    //   is unchanged, draw for draw.
+    // RNG-free on every path; holds no mana and remembers nothing. The sub's targets are reset at
+    // entry and written only right before a targeted WillPlay; the root's stale target is reset
+    // by the root's own next consult, as in A.
+    public static class SignatureSlam {
+        public static final String NAME = "Signature Slam";
+
+        public static AiAbilityDecision chooseVictim(final Player ai, final SpellAbility sub) {
+            sub.resetTargets();
+            final SpellAbility root = sub.getRootAbility();
+            final boolean free = root.isCopied() || root.isCastFromPlayEffect();
+            final AiAbilityDecision none = free ? new AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+                    : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            final CardCollection damagers = new CardCollection(
+                    AbilityUtils.getDefinedCards(sub.getHostCard(), sub.getParam("DefinedDamagers"), sub));
+            final Card pumped = root.usesTargeting() ? root.getTargets().getFirstTargetedCard() : null;
+            final boolean counterLands = pumped != null && pumped.isInPlay() && pumped.isCreature()
+                    && ai.equals(pumped.getController()) && pumped.canReceiveCounters(CounterEnumType.P1P1);
+            if (counterLands && !damagers.contains(pumped)) {
+                damagers.add(pumped);
+            }
+            // the whole team's power: a cheap bound before any per-victim prediction
+            int bound = 0;
+            boolean anyDeathtouch = false;
+            for (final Card d : damagers) {
+                final int p = power(d, pumped, counterLands);
+                if (p > 0) {
+                    bound += p;
+                    anyDeathtouch |= d.hasKeyword(Keyword.DEATHTOUCH);
+                }
+            }
+            if (bound <= 0) {
+                return none;
+            }
+            final CardCollectionView oppCards = ai.getOpponents().getCardsIn(ZoneType.Battlefield);
+            final List<Trigger> punishers = damageReceivedTriggers(oppCards);
+            final CardCollection victims = CardLists.filter(
+                    CardLists.getTargetableCards(CardLists.filter(oppCards, Card::isCreature), sub),
+                    v -> !punished(punishers, v));
+            if (victims.isEmpty()) {
+                return none;
+            }
+            Card best = null;
+            int bestValue = Integer.MIN_VALUE;
+            Card fallback = null;
+            int fallbackValue = Integer.MIN_VALUE;
+            for (final Card v : victims) {
+                if (!free && !worthACard(v)) {
+                    continue; // the cheap screen first: only a free cast takes any victim
+                }
+                final boolean dies = dies(v, damagers, pumped, counterLands, bound, anyDeathtouch);
+                if (!dies && !free) {
+                    continue;
+                }
+                final int value = ComputerUtilCard.evaluateCreature(v);
+                if (dies && value > bestValue) {
+                    best = v;
+                    bestValue = value;
+                }
+                if (free && value > fallbackValue) {
+                    fallback = v;
+                    fallbackValue = value;
+                }
+            }
+            final Card pick = best != null ? best : fallback;
+            if (pick == null) {
+                return none;
+            }
+            sub.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // AiController.canPlayAndPayForFace, after canPayCost: the regular cast whose sub
+        // chooseVictim left untargeted (no victim worth the card), which A cast and stranded
+        public static boolean untargetedRegularCast(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (!sa.isSpell() || host == null || !NAME.equals(host.getName())) {
+                return false;
+            }
+            final SpellAbility sub = sa.getSubAbility();
+            return sub != null && sub.usesTargeting() && !sub.isTargetNumberValid();
+        }
+
+        // Count$CardPower read per damager at resolution, after the counter has landed
+        private static int power(final Card d, final Card pumped, final boolean counterLands) {
+            return d.getNetPower() + (counterLands && d.equals(pumped) ? 1 : 0);
+        }
+
+        private static boolean dies(final Card v, final CardCollection damagers, final Card pumped,
+                final boolean counterLands, final int bound, final boolean anyDeathtouch) {
+            if (v.hasKeyword(Keyword.INDESTRUCTIBLE) || v.getCounters(CounterEnumType.SHIELD) > 0
+                    || (v.getShieldCount() > 0 && v.canBeShielded())) {
+                return false; // wither through indestructible is ignored: the conservative side
+            }
+            // marked damage, DestroyWhenDamaged and "prevent the next N" shields count
+            final int need = ComputerUtilCombat.getDamageToKill(v, true);
+            if (!anyDeathtouch && need > bound) {
+                return false; // no prediction and no scan needed
+            }
+            if (mayRegenerate(v)) {
+                return false;
+            }
+            int total = 0;
+            for (final Card d : damagers) {
+                final int p = power(d, pumped, counterLands);
+                if (p <= 0) {
+                    continue;
+                }
+                final int dealt = ComputerUtilCombat.predictDamageTo(v, p, d, false);
+                if (dealt <= 0) {
+                    continue;
+                }
+                if (d.hasKeyword(Keyword.DEATHTOUCH)) {
+                    return true;
+                }
+                total += dealt;
+            }
+            return total >= need;
+        }
+
+        // ComputerUtil.canRegenerate's filter half: an activated Regenerate ability on the
+        // victim's controller's side whose ValidTgts or Defined covers it. Without that method's
+        // setActivatingPlayer, canPlay and test payment (canPayCost rolls isManaSourceReserved
+        // for an AI controller), so a covered victim counts as regenerating whether or not its
+        // controller could pay: over-excluding only costs a cast.
+        private static boolean mayRegenerate(final Card v) {
+            if (!v.canBeShielded()) {
+                return false;
+            }
+            final Player controller = v.getController();
+            for (final Card c : controller.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ab : c.getSpellAbilities()) {
+                    if (!ab.isActivatedAbility() || ab.getApi() != ApiType.Regenerate) {
+                        continue;
+                    }
+                    if (ab.getTargetRestrictions() != null) {
+                        if (v.isValid(ab.getTargetRestrictions().getValidTgts(), controller, ab.getHostCard(), ab)) {
+                            return true;
+                        }
+                    } else if (AbilityUtils.getDefinedCards(ab.getHostCard(), ab.getParam("Defined"), ab).contains(v)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Noncombat damage-received triggers (DamageDone, DamageDoneOnce) on the opponents' side,
+        // collected once per consult: a private copy of WaveOfReckoning.opponentPunishesDamageTo's
+        // scan, without its ValidSource test (our creatures are the sources, any of them may
+        // match) and without DamageDealtOnce, which reads the victim as a source
+        private static List<Trigger> damageReceivedTriggers(final CardCollectionView oppCards) {
+            final List<Trigger> found = new ArrayList<>();
+            for (final Card h : oppCards) {
+                for (final Trigger t : h.getTriggers()) {
+                    if ("True".equalsIgnoreCase(t.getParam("CombatDamage"))) {
+                        continue; // the slam's damage is noncombat
+                    }
+                    if (t.getMode() == TriggerType.DamageDone || t.getMode() == TriggerType.DamageDoneOnce) {
+                        found.add(t);
+                    }
+                }
+            }
+            return found;
+        }
+
+        private static boolean punished(final List<Trigger> punishers, final Card victim) {
+            for (final Trigger t : punishers) {
+                if (t.matchesValidParam("ValidTarget", victim)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the Meteor Blast filter (WaveOfReckoning, Volcanic Offering's AITgts), no value on death
+        private static boolean worthACard(final Card k) {
+            return !ComputerUtilCard.hasActiveUndyingOrPersist(k) && !k.hasSVar("SacMe")
+                    && ((!k.isToken() && k.getCMC() >= 2) || k.getNetPower() >= 3);
+        }
+    }
+
     // Sin, Unending Cataclysm
     // "As Sin enters, remove all counters from any number of artifacts, creatures, and
     // enchantments. Sin enters with X +1/+1 counters, where X is twice the number removed."
