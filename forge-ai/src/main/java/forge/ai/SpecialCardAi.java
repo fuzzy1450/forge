@@ -1282,6 +1282,40 @@ public class SpecialCardAi {
         }
     }
 
+    // Ambitious Dragonborn (dead-card batch 3, row 95; Gruul Dragons 6c9a5c01, commander Thrakkus
+    // the Butcher)
+    // "Ambitious Dragonborn enters with X +1/+1 counters on it, where X is the greatest power among
+    // creatures you control and creature cards in your graveyard." ({3}{G} 0/0 Dragon Barbarian.)
+    // Its script floor was mis-keyed (SVar:NeedsToPlay:X GE1, the card-FILTER key):
+    // checkNeedsToPlayReqs read "X GE1" as a type name and refused every board with
+    // MissingNeededCards, the last check of AiController.saSideEffects. The script now says
+    // NeedsToPlayVar:X GE3, the 0/0 etbCounter convention (Prime Speaker Zegana's greatest-power
+    // counter and floor; Golgari Raiders, Custodi Soulbinders; batch-1 Ulasht, row 174, the same
+    // rename). The floor and the counters read one SVar, so they cannot disagree. This class only
+    // names the card for the cast ceiling that rename needs.
+    // RNG and ability-id parity: the card is unhinted, so A ran all of canPlaySa for it in every
+    // own main phase its timing allows (Main 2, or Main 1 under castPermanentInMain1) and declined
+    // at that last check, drawing nothing, after checkETBEffectsPreparedCard's exSA.copy for the
+    // etbCounter replacement had taken a SpellAbility id. With the floor met, B goes on to
+    // canPayCost, whose test payment rolls ComputerUtilMana.isManaSourceReserved per source it
+    // tries, so every unpayable X >= 3 window would re-roll a held game with no visible cast. The
+    // ceiling (CommanderCastCeiling.affordable, G1 under G4's contract: test-mode
+    // calculateManaCost against HonestMana, in total and in green; reads only, no draw, no
+    // ability id) therefore sits in AiController.canPlayAndPayForFace, right after canPlaySa
+    // approves and before canPayCost. B has by then run exactly A's canPlaySa, the same draws and
+    // the same ids, and the decline reason (CantAfford for MissingNeededCards) is the only
+    // difference. A ceiling in PermanentCreatureAi.checkApiLogic (Druid of Purification's
+    // placement, row 51) would be RNG-exact too, but it would decline before that copy and skip an
+    // id A took; SpellAbility.hashCode embeds the id, so a hash-ordered collection of abilities
+    // could then iterate differently (the 973410 family; rule B3x-3). Below the floor B declines at
+    // A's own check, now NeedsToPlayCriteriaNotMet, and G1 is never asked. Only a
+    // G1-affordable X >= 3 window goes on to canPayCost's roll. A Play-effect cast never reaches
+    // canPlayAndPayForFace (and the gate skips one anyway); a MayPlay exile cast or a thief's is
+    // priced for its caster, whose board X reads too. No AiCardMemory, no mana hold, no targets.
+    public static class AmbitiousDragonborn {
+        public static final String NAME = "Ambitious Dragonborn";
+    }
+
     // Anikthea, Hand of Erebos (dead-card batch 2, row 129; the commander of precon:Enduring
     // Enchantments (CMM))
     // "Whenever Anikthea enters or attacks, exile up to one target non-Aura enchantment card from

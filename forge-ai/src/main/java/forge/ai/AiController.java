@@ -863,6 +863,17 @@ public class AiController {
             return canPlay;
         }
 
+        // Dead-card batch 3, row 95: canPlaySa approved Ambitious Dragonborn (its renamed script
+        // floor, NeedsToPlayVar:X GE3, is met); refuse an unpayable window here, before canPayCost's
+        // isManaSourceReserved rolls. Placed after canPlaySa so B has done exactly A's evaluation
+        // (its RNG draws and checkETBEffectsPreparedCard's SpellAbility copy) before the decline.
+        // G1 under G4's contract, called not edited. A name compare: inert for every other SA. See
+        // the class comment.
+        if (sa.isSpell() && host != null && SpecialCardAi.AmbitiousDragonborn.NAME.equals(host.getName())
+                && !sa.isCastFromPlayEffect() && !SpecialCardAi.CommanderCastCeiling.affordable(player, sa)) {
+            return AiPlayDecision.CantAfford;
+        }
+
         if (!ComputerUtilCost.canPayCost(sa, player, sa.isTrigger())) {
             // for dependent costs with X, e.g. Repeal, which require a valid target to be specified before a decision can be made
             // on whether the cost can be paid, this can only be checked late after canPlaySa has been run (or the AI will misplay)
