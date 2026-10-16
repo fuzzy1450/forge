@@ -32,6 +32,18 @@ public class TapAi extends TapAiBase {
             return SpecialCardAi.Dispatch.consider(ai, sa);
         }
 
+        // Coordinated Clobbering (dead-card batch 3, row 94): a removal sorcery whose Tap part aims
+        // at OUR untapped creatures. The tap-down window below refuses our Main 2 ("Don't tap down
+        // after blockers"), and tapPrefTargeting lists only the opponents' permanents
+        // (TapAiBase.tapPrefTargeting), so every consult was CantPlayAi or TargetingFailed. Judged
+        // as the removal it is by SpecialCardAi.CoordinatedClobbering, which also chooses the
+        // EachDamage sub's victim (DamageEachAi.chkDrawback never does). It draws nothing on any
+        // decline, as the stock path drew nothing. A cast through a Play effect or a copy goes to
+        // TapAiBase.doTriggerNoCost and is unchanged (Dispatch's precedent).
+        if (SpecialCardAi.CoordinatedClobbering.handles(sa)) {
+            return SpecialCardAi.CoordinatedClobbering.consider(ai, sa);
+        }
+
         final PhaseHandler phase = ai.getGame().getPhaseHandler();
         final Player turn = phase.getPlayerTurn();
 

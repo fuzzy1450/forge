@@ -53,6 +53,7 @@ import forge.game.cost.CostRemoveCounter;
 import forge.game.cost.CostReveal;
 import forge.game.cost.CostSacrifice;
 import forge.game.cost.CostTap;
+import forge.game.cost.CostTapType;
 import forge.game.cost.PaymentDecision;
 import forge.game.keyword.Keyword;
 import forge.game.mana.ManaCostBeingPaid;
@@ -9144,6 +9145,309 @@ public class SpecialCardAi {
             for (final String word : MANA_SPENT_WORDS) {
                 if (text.contains(word)) {
                     return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    // Coordinated Clobbering (dead-card batch 3, row 94; Selesnya Tap-and-Untap Draw 6fb9ae07)
+    // {G} Sorcery: "Tap one or two target untapped creatures you control. They each deal damage
+    // equal to their power to target creature an opponent controls." (SP$ Tap | ValidTgts$
+    // Creature.untapped+YouCtrl | TargetMin$ 1 | TargetMax$ 2, sub DB$ EachDamage | ValidTgts$
+    // Creature.OppCtrl | DefinedDamagers$ ParentTarget | NumDmg$ Count$CardPower.) A {G} removal
+    // spell whose victim never hits back. Unhinted, it was considered and declined at every
+    // consult, whatever the board: TapAi is the tap-down handler, so its own-turn window refuses a
+    // sorcery in Main 2 ("Don't tap down after blockers") and tapPrefTargeting lists only the
+    // opponents' permanents (TapAiBase), so Main 1 was always TargetingFailed. Behind both,
+    // DamageEachAi.chkDrawback answers WillPlay without choosing the sub's victim, so consider()
+    // writes that target itself, as FightAi.canFight does for Band Together, and relies on
+    // chkDrawback leaving it alone.
+    // Window: our own Main 2 on an empty stack, any damager; our own Main 1 only with damagers that
+    // cannot attack this turn (summoning-sick, defender, can't attack), whose tap costs no attack.
+    // Any other body waits for Main 2 (WaitForMain2), when vigilance attackers and creatures that
+    // stayed home are known.
+    // Damagers: our untapped creatures the Tap part may target, power >= 1, no Targeting$ Dies or
+    // Counter, that untap normally (canUntap: not exerted, no "doesn't untap", no untap lock), and
+    // with no mana ability of their own that can be activated now: the payment avoids a spell's
+    // own targets for Pump only (ComputerUtilMana.chooseManaAbility), so a mana creature could pay
+    // for this spell, become tapped, fizzle as a target (untapped is part of ValidTgts:
+    // MagicStack.hasFizzled) and deal nothing.
+    // Floor: one or two damagers whose predicted damage (predictDamageTo per source: protection and
+    // static prevention) reaches getDamageToKill (marked damage, DestroyWhenDamaged), or any
+    // deathtouch damager dealing at least 1, kill an opposing creature worth Oubliette's 160 (a
+    // vanilla 2/2) or a commander. The victim has no ward (canPayCost prices ward only after
+    // targeting), no indestructible, no shield counter, no regeneration shield and no activated
+    // Regenerate on its side (AcornCatapult.mayRegenerate), no SacMe, no undying or persist; it is
+    // not useless and does not leave this turn anyway (Dispatch.leavesThisTurn); and it carries no
+    // damage-dealt-to trigger for these sources (Rile.isDamageDealtToTrigger) and no DamageDone
+    // replacement (Rile.damageWouldBeReplaced): over-excluding only costs a cast. One damager when
+    // one kills, preferring one whose own "becomes tapped" trigger pays us (Wylie Duke: 1 life and
+    // a card), then the less valuable body; else the two biggest hits. Best victim first
+    // (sortByEvaluateCreature), at most MAX_VICTIMS tried; the scans run only for a victim the
+    // cheap math already kills.
+    // Crack-back: never when the opponents' next-turn unblocked damage, the victim's own share left
+    // out, plus AI_IN_DANGER_MAX_THRESHOLD reaches our life (ComputerUtilMana.stewardGrantUnsafe's
+    // rule, a private copy that reads damageIfUnblocked(..., true): withoutAbilities=false reaches
+    // canPayCost in the pump scan and draws). The opposing sum is taken once per consult, at the
+    // first victim that gets that far. It ignores our remaining blockers, as stewardGrantUnsafe does.
+    // Mana: Dispatch.affordable's shape in green (G2, held sources skipped, against the engine's
+    // test-mode cost), then greenWithoutCreatureTap: some green the payer can make without tapping
+    // a creature for a cost (Relic of Legends' "Tap an untapped legendary creature", Springleaf
+    // Drum), the one way the payment could still tap a picked damager (a CostTapType part scores
+    // as not undoable, so the payer takes it only when no other green is left).
+    // Reached from the first statements of TapAi.checkApiLogic, after Dispatch's route: a normal
+    // cast, a MayPlay theft (judged from the thief's side) or a canPlaySa probe. A cast through a
+    // Play effect or a copy takes TapAiBase.doTriggerNoCost and is unchanged. Draws no random
+    // numbers on any path, and every decline returns before canPlayAndPayForFace's canPayCost, as
+    // the stock declines did. Holds nothing past a decline: targets are reset at entry and written
+    // only right before WillPlay; its only other write is setActivatingPlayer on the mana abilities
+    // it reads, as HonestMana does. HonestMana (of, isHeld), Rile, AcornCatapult, Dispatch and
+    // Oubliette are called, never edited.
+    public static class CoordinatedClobbering {
+        public static final String NAME = "Coordinated Clobbering";
+        static final int MAX_VICTIMS = 8; // best-value victims tried per consult; bounds big boards
+
+        // the targeted root spell with its EachDamage sub, by source, host or card-state name
+        // (Dispatch.handles' idiom: a card cast face down from exile reads "" from
+        // getAbilitySourceName)
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || !sa.usesTargeting()
+                    || sa.getSubAbility() == null || sa.getSubAbility().getApi() != ApiType.EachDamage) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AbilitySub hit = sa.getSubAbility();
+            sa.resetTargets();
+            hit.resetTargets();
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean main2 = ph.is(PhaseType.MAIN2, ai);
+            if ((!main2 && !ph.is(PhaseType.MAIN1, ai)) || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final CardCollection damagers = new CardCollection();
+            boolean laterOnly = false;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (c.getNetPower() <= 0 || !sa.canTarget(c)
+                        || "Dies".equals(c.getSVar("Targeting")) || "Counter".equals(c.getSVar("Targeting"))
+                        || !c.canUntap(ai, true) || paysMana(ai, c)) {
+                    continue;
+                }
+                if (!main2 && CombatUtil.canAttack(c)) {
+                    laterOnly = true; // it can attack this turn: tapping it waits for Main 2
+                    continue;
+                }
+                damagers.add(c);
+            }
+            if (damagers.isEmpty()) {
+                return new AiAbilityDecision(0, laterOnly ? AiPlayDecision.WaitForMain2 : AiPlayDecision.MissingNeededCards);
+            }
+            final CardCollection victims = CardLists.filter(
+                    CardLists.getTargetableCards(ai.getOpponents().getCreaturesInPlay(), hit),
+                    v -> v.getController().isOpponentOf(ai)
+                            && !v.hasKeyword(Keyword.WARD) && !v.hasKeyword(Keyword.INDESTRUCTIBLE)
+                            && v.getCounters(CounterEnumType.SHIELD) <= 0
+                            && !(v.getShieldCount() > 0 && v.canBeShielded())
+                            && !v.hasSVar("SacMe") && !ComputerUtilCard.hasActiveUndyingOrPersist(v)
+                            && !ComputerUtilCard.isUselessCreature(v.getController(), v)
+                            && !Dispatch.leavesThisTurn(v)
+                            && (v.isCommander() || ComputerUtilCard.evaluateCreature(v) >= Oubliette.MIN_TARGET_VALUE));
+            if (victims.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            // RNG-free necessary conditions for canPayCost (whose test payment draws MyRandom)
+            if (!affordable(ai, sa) || !greenWithoutCreatureTap(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            ComputerUtilCard.sortByEvaluateCreature(victims); // best first; draws nothing
+            boolean summed = false;
+            int incoming = 0;
+            for (int i = 0; i < Math.min(MAX_VICTIMS, victims.size()); i++) {
+                final Card v = victims.get(i);
+                final int need = ComputerUtilCombat.getDamageToKill(v, false);
+                Card single = null;
+                Card top1 = null;
+                Card top2 = null;
+                int d1 = 0;
+                int d2 = 0;
+                for (final Card d : damagers) {
+                    final int dealt = ComputerUtilCombat.predictDamageTo(v, d.getNetPower(), d, false);
+                    if (dealt <= 0) {
+                        continue;
+                    }
+                    if ((dealt >= need || d.hasKeyword(Keyword.DEATHTOUCH)) && (single == null || preferTap(d, single))) {
+                        single = d;
+                    }
+                    if (dealt > d1) {
+                        top2 = top1;
+                        d2 = d1;
+                        top1 = d;
+                        d1 = dealt;
+                    } else if (dealt > d2) {
+                        top2 = d;
+                        d2 = dealt;
+                    }
+                }
+                final List<Card> pick = single != null ? List.of(single)
+                        : (top2 != null && d1 + d2 >= need ? List.of(top1, top2) : null);
+                if (pick == null) {
+                    continue;
+                }
+                if (AcornCatapult.mayRegenerate(v) || damageTriggered(v, pick) || replaced(game, v, pick, hit)) {
+                    continue;
+                }
+                if (!summed) {
+                    incoming = incomingNextTurn(ai);
+                    summed = true;
+                }
+                // the victim's own attack dies with it
+                final int own = ComputerUtilCombat.canAttackNextTurn(v, ai)
+                        ? ComputerUtilCombat.damageIfUnblocked(v, ai, null, true) : 0;
+                if (incoming - own + AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD) >= ai.getLife()) {
+                    continue; // lethal range with these bodies tapped through the next opposing turn
+                }
+                for (final Card d : pick) {
+                    sa.getTargets().add(d);
+                }
+                hit.getTargets().add(v);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed); // targets still empty
+        }
+
+        // a damager whose own "becomes tapped" trigger pays us (Wylie Duke) first, then the less
+        // valuable body
+        private static boolean preferTap(final Card d, final Card cur) {
+            final boolean a = tapsPayoff(d);
+            final boolean b = tapsPayoff(cur);
+            if (a != b) {
+                return a;
+            }
+            return ComputerUtilCard.evaluateCreature(d) < ComputerUtilCard.evaluateCreature(cur);
+        }
+
+        private static boolean tapsPayoff(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() == TriggerType.Taps && t.matchesValidParam("ValidCard", c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the creature has a mana ability it can activate right now, so the payment for this very
+        // spell may tap it (A1)
+        private static boolean paysMana(final Player ai, final Card c) {
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                ma.setActivatingPlayer(ai);
+                if (ma.canPlay()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the victim punishes or profits from being dealt damage (Phyrexian Obliterator, Boros
+        // Reckoner, enrage): Rile.isDamageDealtToTrigger, called unchanged; any such trigger excludes
+        private static boolean damageTriggered(final Card v, final List<Card> pick) {
+            for (final Trigger t : v.getTriggers()) {
+                for (final Card d : pick) {
+                    if (Rile.isDamageDealtToTrigger(t, v, d)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // any DamageDone replacement on the victim (prevention, redirection, amplifiers):
+        // Rile.damageWouldBeReplaced, called unchanged; over-excluding only costs a cast
+        private static boolean replaced(final Game game, final Card v, final List<Card> pick, final SpellAbility hit) {
+            for (final Card d : pick) {
+                if (Rile.damageWouldBeReplaced(game, v, d, hit)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // ComputerUtilMana.stewardGrantUnsafe's sum (batch 2 row 79), a private copy read for our
+        // own turn: every opposing creature that can attack next turn, unblocked, through
+        // damageIfUnblocked(..., true), which returns before the pump scan's canPayCost (the false
+        // form draws: Riot Control's note). The caller subtracts the victim's own share (A2).
+        private static int incomingNextTurn(final Player ai) {
+            int incoming = 0;
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card att : opp.getCreaturesInPlay()) {
+                    if (ComputerUtilCombat.canAttackNextTurn(att, ai)) {
+                        incoming += ComputerUtilCombat.damageIfUnblocked(att, ai, null, true);
+                    }
+                }
+            }
+            return incoming;
+        }
+
+        // Dispatch.affordable's shape in green: the engine's test-mode cost (calculateManaCost:
+        // taxes and reductions applied) against G2's count with held sources skipped, its mana value
+        // against the total and its {G} against the green sources (G2 called, not changed)
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.GREEN) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+
+        // A1: green in the pool, or a source HonestMana would count (not held: HonestMana.isHeld,
+        // called unchanged) with a mana ability that can be activated now, has no mana and no
+        // CostTapType part in its cost, meets its conditions and may be spent on sa, makes at least
+        // one mana and can make green, its letters read as HonestMana reads them (Combo letters,
+        // Any, the chosen colour, else the produced string). A private copy in the shape of
+        // HonestMana's loop; G2 stays frozen.
+        private static boolean greenWithoutCreatureTap(final Player ai, final SpellAbility sa) {
+            if (ai.getManaPool().getAmountOfColor(MagicColor.GREEN) > 0) {
+                return true;
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (HonestMana.isHeld(ai, src)) {
+                    continue;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost()
+                            || ma.getPayCosts().hasSpecificCostType(CostTapType.class)
+                            || !ma.metConditions() || !mp.meetsManaRestrictions(sa)
+                            || AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma) <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final String letters;
+                    if (ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana()) {
+                        letters = "";
+                    } else if (mp.isComboMana()) {
+                        letters = mp.getComboColors(ma);
+                    } else if (mp.isAnyMana()) {
+                        letters = "W U B R G";
+                    } else if (produced.contains("Chosen")) {
+                        letters = produced.replace("Chosen", mp.getChosenColor(ma));
+                    } else {
+                        letters = produced;
+                    }
+                    for (final String t : letters.split(" ")) {
+                        if (t.length() == 1 && MagicColor.fromName(t.charAt(0)) == MagicColor.GREEN) {
+                            return true;
+                        }
+                    }
                 }
             }
             return false;
