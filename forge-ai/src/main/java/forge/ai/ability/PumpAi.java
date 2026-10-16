@@ -290,6 +290,17 @@ public class PumpAi extends PumpAiBase {
             // brass_squire.txt carries this AILogic; a copy of the ability (Rings of Brighthearth) goes
             // through doTriggerNoCost, and every other Pump card takes exactly the path it took before.
             return SpecialCardAi.BrassSquire.consider(ai, sa);
+        } else if (SpecialCardAi.FriendlyRivalry.LOGIC.equals(aiLogic) && !(sa instanceof AbilitySub)
+                && !checkPhaseRestrictions(ai, sa, game.getPhaseHandler())) {
+            // Dead-card batch 3, row 105. A Pump targeting shell (+0/+0, no keywords; the real effect
+            // is the EachDamage sub two levels down). Without the script's AILogic$ the 3-arg phase
+            // check above refused every empty-stack consult outside the combat steps
+            // (MissingPhaseRestrictions, no random draw). The AILogic routes the 4-arg check to the
+            // base true; this branch hands exactly those windows -- the ones the 3-arg check, asked
+            // here unchanged, still refuses -- to the evaluator, which draws nothing on any decline.
+            // Every other consult falls through to the stock path below, as in A. Only
+            // friendly_rivalry.txt carries this AILogic (B3-13).
+            return SpecialCardAi.FriendlyRivalry.consider(ai, sa);
         } else if ("MoveCounter".equals(aiLogic)) {
             final SpellAbility moveSA = sa.findSubAbilityByType(ApiType.MoveCounter);
 
@@ -538,6 +549,14 @@ public class PumpAi extends PumpAiBase {
             // doTriggerNoCost and never come here; every other Pump card takes exactly the path it
             // took before this branch.
             return SpecialCardAi.MaelstromPulse.consider(ai, sa);
+        }
+        if (SpecialCardAi.FriendlyRivalry.LOGIC.equals(aiLogic) && !(sa instanceof AbilitySub)) {
+            // Dead-card batch 3, row 105. The empty-stack combat steps, where A reached pumpTgtAI:
+            // it ran above in full (shouldPumpCard's two MyRandom draws, an AiAttackController and a
+            // game timestamp per creature of ours), so B consumes exactly A's draws. The evaluator
+            // then replaces its verdict and its targets; it draws nothing when it declines. A
+            // non-empty stack returned canPumpAgainstRemoval's verdict above, unchanged.
+            return SpecialCardAi.FriendlyRivalry.consider(ai, sa);
         }
         if (stockTargeted) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
@@ -913,6 +932,17 @@ public class PumpAi extends PumpAiBase {
             // SpecialCardAi.FinaleOfPromise.consider together with X; the generic re-targeting below
             // would discard that pick and refuse zero targets. Without an announced X (a free cast by
             // another effect) the stock path runs as before.
+            return sa.isTargetNumberValid() ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+        if (SpecialCardAi.FriendlyRivalry.takeJudged(sa)) {
+            // Dead-card batch 3, row 105. Friendly Rivalry's "up to one other target legendary
+            // creature you control" was chosen, or deliberately left empty, a moment ago in this
+            // same canPlayWithSubs chain by SpecialCardAi.FriendlyRivalry.consider. pumpTgtAI below
+            // would reset it, re-pick through shouldPumpCard's draws, and refuse zero targets
+            // (isZeroTargets), vetoing the whole spell. The mark is identity-keyed: every other Pump
+            // sub, and this one on any other route (a copy, a Play-effect cast), finds none and
+            // takes the stock path unchanged.
             return sa.isTargetNumberValid() ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
                     : new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }

@@ -19364,6 +19364,238 @@ public class SpecialCardAi {
         }
     }
 
+    // Friendly Rivalry (dead-card batch 3, row 105, extension 2026-10-15; Four-Color Gold Spells
+    // c11a6618, not an anchor)
+    // "Target creature you control and up to one other target legendary creature you control each
+    // deal damage equal to their power to target creature you don't control." ({R}{G} Instant.)
+    // Never cast on any engine (0 owner casts, 0 raw casts in 106 held games under
+    // 2.0.15+55e709fa6ba). The SP$ Pump root is a +0/+0 targeting shell with no AILogic: PumpAi's
+    // 3-arg phase check refused every main phase and end step, the combat-step targeting asked
+    // shouldPumpCard whether +0/+0 helps (TargetingFailed), and canPumpAgainstRemoval found nothing
+    // it saves. Behind the root, the DB$ Pump sub's chkDrawback refused zero legendary targets and
+    // DamageEachAi.chkDrawback never chose the victim. Routed by the script's AILogic$
+    // FriendlyRivalry from PumpAi.checkApiLogic (the windows A refused before any draw, then the
+    // combat steps after A's own pumpTgtAI ran); the legendary pick reaches PumpAi.chkDrawback
+    // through an identity mark (Brass Squire's idiom, copied: that row's mark is private to it).
+    // Windows (Artillerize's, empty stack only): our own main phase; an opponent's end step right
+    // before our turn; an opponent's declare-attackers step with attackers on us, those attackers
+    // only (before our blocks, so no attacker is "already dying"). Never in response.
+    // Floor: a KILL. The victim is an opposing creature the EachDamage sub can target and that we
+    // do not own (never our own creature stolen back at us: Mob Rule, Captivating Crew, Grab the
+    // Reins, Rubinia Soulsinger), worth Artillerize.MIN_KILL_EVAL (160, a vanilla nontoken 2/2) or
+    // a commander, with no ward, indestructible, shield counter or regeneration shield, no SacMe,
+    // no active undying/persist, not useless, not leaving this turn (Dispatch.leavesThisTurn), no
+    // regeneration ability on its controller's side (AcornCatapult.mayRegenerate), no DamageDone
+    // replacement on it from our damagers (Rile.damageWouldBeReplaced) and no damage-dealt-to
+    // trigger matching them (Rile.isDamageDealtToTrigger). Damage is per source (predictDamageTo:
+    // protection, prevention statics), summed (one damage map), against getDamageToKill (marked
+    // damage included), or any deathtouch damager dealing 1+. Our creatures take no damage and are
+    // not tapped.
+    // Damagers: the second target is our best legendary creature it can take, chosen from every
+    // damager; the root is our best root candidate other than it, else that legendary alone when it
+    // is a root candidate itself, else nothing. A root candidate is tapped or has no mana ability
+    // with a {T} cost: ComputerUtilMana.chooseManaAbility (:375-382) never taps a Pump instant's
+    // ROOT target for mana, while castAffordable counts that mana, so a mana creature as the root
+    // (Rootcoil Creeper, Wose Pathfinder, Ruby, Daring Tracker in the carrier) would approve, draw in
+    // canPayCost and fail to pay (rule B3-5: approve only where the payer agrees). A mana creature
+    // may still be the legendary second target: the payer reads the root's targets only.
+    // Cost bound: before the MAX_VICTIMS cap, a victim whose getDamageToKill exceeds the sum of our
+    // two largest damager powers is dropped, unless a damager has deathtouch. Every amplifier
+    // staticReplaceDamage knows (Furnace of Rath, Dictate of the Twin Gods) is also a DamageDone
+    // replacement the floor refuses, so the bound drops no victim the full check would take, and
+    // the cap's slots go to plausible kills.
+    // Mana: AniktheaHandOfErebos.castAffordable (G1, then the private colour check), before the kill
+    // math; a free plotted cast (Lilah) prices at 0.
+    // RNG: every decline draws nothing (the phase and stack reads, canTarget,
+    // getTargetableCards, evaluateCreature, isUselessCreature, predictDamageTo, getDamageToKill,
+    // the mana-ability scan, the trigger and replacement scans, mayRegenerate, castAffordable's
+    // test-mode calculateManaCost and HonestMana). The combat-step route is reached only after A's
+    // own pumpTgtAI, so B makes A's draws first there. Targets are reset on entry and written only
+    // right before WillPlay; if the second target cannot be written then, the cast is declined
+    // rather than made with less damage than the kill math counted. Nothing is reserved or
+    // remembered beyond the one-chain mark.
+    public static class FriendlyRivalry {
+        public static final String NAME = "Friendly Rivalry";
+        public static final String LOGIC = "FriendlyRivalry";
+        static final int MAX_VICTIMS = 8;     // best-value victims tried per consult; bounds big boards
+        private static final ThreadLocal<SpellAbility> JUDGED = new ThreadLocal<>();
+
+        // consumed by PumpAi.chkDrawback in the same canPlayWithSubs chain (Brass Squire's idiom)
+        public static boolean takeJudged(final SpellAbility sub) {
+            if (sub == null || JUDGED.get() != sub) {
+                return false;
+            }
+            JUDGED.remove();
+            return true;
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            JUDGED.remove();
+            sa.resetTargets();
+            final SpellAbility second = sa.getSubAbility();
+            final SpellAbility hit = sa.findSubAbilityByType(ApiType.EachDamage);
+            if (!sa.usesTargeting() || second == null || second.getApi() != ApiType.Pump
+                    || !second.usesTargeting() || hit == null || !hit.usesTargeting()) {
+                return no(AiPlayDecision.CantPlayAi); // script drift
+            }
+            second.resetTargets();
+            hit.resetTargets();
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty()) {
+                return no(AiPlayDecision.StackNotEmpty); // unreachable from both routes; never in response
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean ownTurn = ph.isPlayerTurn(ai);
+            final boolean ownMain = ownTurn && ph.getPhase().isMain();
+            final boolean oppEnd = !ownTurn && ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn());
+            final boolean defensive = !ownTurn && ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                    && combat != null && !combat.getAttackersOf(ai).isEmpty();
+            if (!ownMain && !oppEnd && !defensive) {
+                return no(AiPlayDecision.AnotherTime);
+            }
+            final CardCollection damagers = new CardCollection();
+            int top = 0;
+            int next = 0;
+            boolean anyDeathtouch = false;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (c.getNetPower() > 0 && sa.canTarget(c) && !"Dies".equals(c.getSVar("Targeting"))) {
+                    damagers.add(c);
+                    final int p = c.getNetPower();
+                    if (p > top) {
+                        next = top;
+                        top = p;
+                    } else if (p > next) {
+                        next = p;
+                    }
+                    anyDeathtouch |= c.hasKeyword(Keyword.DEATHTOUCH);
+                }
+            }
+            if (damagers.isEmpty()) {
+                return no(AiPlayDecision.MissingNeededCards);
+            }
+            // skeptic A3: no pair of ours deals more than our two largest powers
+            final int reach = top + next;
+            final boolean deathtouchAny = anyDeathtouch;
+            final CardCollection pool = defensive ? combat.getAttackersOf(ai) : ai.getOpponents().getCreaturesInPlay();
+            final CardCollection victims = CardLists.filter(CardLists.getTargetableCards(pool, hit),
+                    v -> v.isCreature() && ai.isOpponentOf(v.getController()) && !ai.equals(v.getOwner())
+                            && !v.hasKeyword(Keyword.WARD) && !v.hasKeyword(Keyword.INDESTRUCTIBLE)
+                            && v.getCounters(CounterEnumType.SHIELD) <= 0
+                            && !(v.getShieldCount() > 0 && v.canBeShielded())
+                            && !v.hasSVar("SacMe") && !ComputerUtilCard.hasActiveUndyingOrPersist(v)
+                            && (deathtouchAny || ComputerUtilCombat.getDamageToKill(v, false) <= reach)
+                            && !ComputerUtilCard.isUselessCreature(v.getController(), v)
+                            && !Dispatch.leavesThisTurn(v)
+                            && (v.isCommander() || ComputerUtilCard.evaluateCreature(v) >= Artillerize.MIN_KILL_EVAL));
+            if (victims.isEmpty()) {
+                return no(AiPlayDecision.TargetingFailed);
+            }
+            if (!AniktheaHandOfErebos.castAffordable(ai, sa)) {   // B3-5: the adjusted cost against G2
+                return no(AiPlayDecision.CantAfford);
+            }
+            ComputerUtilCard.sortByEvaluateCreature(victims);     // best first; draws nothing
+            final int n = damagers.size();
+            final int[] dealt = new int[n];
+            for (int i = 0; i < Math.min(MAX_VICTIMS, victims.size()); i++) {
+                final Card v = victims.get(i);
+                for (int j = 0; j < n; j++) {
+                    dealt[j] = dealt(v, damagers.get(j));         // once per victim and damager
+                }
+                // the second target: our best legendary creature it can take, from every damager
+                int legend = -1;
+                for (int j = 0; j < n; j++) {
+                    final Card d = damagers.get(j);
+                    if (dealt[j] > (legend < 0 ? 0 : dealt[legend]) && d.getType().isLegendary()
+                            && second.canTarget(d)) {
+                        legend = j;
+                    }
+                }
+                // the root: our best root candidate other than it (skeptic M1)
+                int other = -1;
+                for (int j = 0; j < n; j++) {
+                    if (j != legend && dealt[j] > (other < 0 ? 0 : dealt[other])
+                            && rootCandidate(damagers.get(j))) {
+                        other = j;
+                    }
+                }
+                final Card rootPick;
+                final Card secondPick;
+                if (other >= 0) {
+                    rootPick = damagers.get(other);
+                    secondPick = legend >= 0 ? damagers.get(legend) : null;
+                } else if (legend >= 0 && rootCandidate(damagers.get(legend))) {
+                    rootPick = damagers.get(legend);                    // a lone legendary is the root
+                    secondPick = null;
+                } else {
+                    continue;   // nothing of ours hurts it, or only a mana creature the payer keeps
+                }
+                int total = dealt[other >= 0 ? other : legend];
+                boolean deathtouch = total > 0 && rootPick.hasKeyword(Keyword.DEATHTOUCH);
+                if (secondPick != null) {
+                    total += dealt[legend];
+                    deathtouch |= dealt[legend] > 0 && secondPick.hasKeyword(Keyword.DEATHTOUCH);
+                }
+                if (!deathtouch && total < ComputerUtilCombat.getDamageToKill(v, false)) {
+                    continue;
+                }
+                final List<Card> pick = secondPick == null ? List.of(rootPick) : List.of(rootPick, secondPick);
+                // the scans run only for a victim the cheap math already kills
+                if (AcornCatapult.mayRegenerate(v) || damageTriggered(v, pick) || replaced(game, v, pick, hit)) {
+                    continue;
+                }
+                sa.getTargets().add(rootPick);
+                if (secondPick != null) {
+                    if (!second.canTarget(secondPick)) {   // TargetUnique now sees the root (skeptic A4)
+                        sa.resetTargets();
+                        return no(AiPlayDecision.TargetingFailed);
+                    }
+                    second.getTargets().add(secondPick);
+                }
+                hit.getTargets().add(v);
+                JUDGED.set(second);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return no(AiPlayDecision.TargetingFailed);
+        }
+
+        // skeptic M1: the payer never taps the root target for mana (ComputerUtilMana.chooseManaAbility,
+        // the Pump instant/sorcery exclusion), so the root is tapped already or makes no {T} mana
+        private static boolean rootCandidate(final Card c) {
+            return c.isTapped() || !c.getManaAbilities().anyMatch(
+                    ma -> ma.getPayCosts() != null && ma.getPayCosts().hasTapCost());
+        }
+
+        private static int dealt(final Card v, final Card d) {
+            return d.getNetPower() <= 0 ? 0 : ComputerUtilCombat.predictDamageTo(v, d.getNetPower(), d, false);
+        }
+
+        private static boolean damageTriggered(final Card v, final List<Card> pick) {
+            for (final Trigger t : v.getTriggers()) {
+                for (final Card d : pick) {
+                    if (Rile.isDamageDealtToTrigger(t, v, d)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean replaced(final Game game, final Card v, final List<Card> pick, final SpellAbility hit) {
+            for (final Card d : pick) {
+                if (Rile.damageWouldBeReplaced(game, v, d, hit)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision d) {
+            JUDGED.remove();
+            return new AiAbilityDecision(0, d);
+        }
+    }
+
     // Galepowder Mage (dead-card batch 2, row 111)
     // "Flying. Whenever Galepowder Mage attacks, exile another target creature. Return that card to
     // the battlefield under its owner's control at the beginning of the next end step." The trigger
