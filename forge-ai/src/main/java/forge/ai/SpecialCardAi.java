@@ -25936,6 +25936,228 @@ public class SpecialCardAi {
         }
     }
 
+    // Isengard Unleashed (dead-card batch 3, row 90; carriers Boros Miracle Spells 73ed3acd, commander
+    // Lorehold, the Historian, and Mono-Red Punisher 71d77565, commander Gimli, Counter of Kills; both
+    // uploads, neither an anchor)
+    // "Damage can't be prevented this turn. If a source you control would deal damage this turn to an
+    // opponent or a permanent an opponent controls, it deals triple that damage instead." ({2}{R}{R}{R}
+    // sorcery, Flashback {4}{R}{R}{R}.) Unhinted, no AILogic$, no RememberObjects$: EffectAi's
+    // no-AILogic fallthrough refused the hand cast, the flashback cast and every Play-effect cast
+    // (Lorehold's miracle for {2}) at every priority. Reached from EffectAi.checkApiLogic's name gate
+    // after the randomReturn roll. Judged only as a multiplier on this turn's attack; in order, the
+    // first failure declines:
+    //   1. window, O(1): a spell (the root Effect SA), our own turn before combat (UNTAP..MAIN1; a hand or
+    //      flashback cast is sorcery-timed, so Main 1; a Play-effect cast -- Lorehold's miracle on our own
+    //      draw step -- may come earlier), an opponent, and no Isengard effect of ours already in the
+    //      Command zone (alreadyActive: matched on the effect's source card, Cosmic Intervention's idiom;
+    //      the effect card's own name embeds the host's view string, so isCardInCommand(name) never
+    //      matches), so a graveyard copy waits for another turn instead of stacking to 9x. Else
+    //      CantPlayAi, the stock answer;
+    //   2. the SA being cast (never host.getFirstSpellAbility(): row 77; the flashback SA at
+    //      {4}{R}{R}{R}, the miracle copy at {2}) priced in test mode (calculateManaCost: taxes,
+    //      reductions, rule B3-5) within G2 (HonestMana, held sources skipped), in total and in red; a
+    //      free cast skips it. Else CantAfford;
+    //   3. a ceiling, O(our creatures), RNG-free, building no ability: our creatures that can attack an
+    //      opponent with no attack tax, net combat damage (double strike twice). None, more than
+    //      MAX_ATTACKERS, an opponent with more than MAX_BLOCKERS creatures, or a ceiling that reaches
+    //      neither MIN_EXTRA_DAMAGE extra nor any opponent's death or commander kill at triple: CantPlayAi;
+    //   4. the attack the AI would declare and each defending opponent's answering blocks, built on a side
+    //      stream: AiAttackController, AiBlockController(opp, true) (checkingOther: no hidden hand read,
+    //      as AiController.declareBlockersFor predicts another player's blocks) and every read below run
+    //      inside the swap. No attacker: CantPlayAi;
+    //   5. a simulated blocker that answers being dealt damage (answersDamage: a DamageDone or
+    //      DamageDoneOnce trigger with ValidTarget$ Card.Self -- Brash Taunter, Boros Reckoner, Spitemare,
+    //      Stuffy Doll, Hornet Nest, Phyrexian Obliterator) would answer tripled damage: CantPlayAi. A
+    //      parsed-param read, never ensureAbility; it over-declines harmless "is dealt damage" triggers,
+    //      the safe side;
+    //   6. per opponent D = unblocked damage (damageIfUnblocked, withoutAbilities) plus a blocked
+    //      trampler's excess over its blockers' lethal damage (1 each against deathtouch; the trample rule's
+    //      lethal damage ignores the replacement); untaxed attackers at players only;
+    //   7. WillPlay when 3*D kills an opponent who can lose life and can lose at 0, or an unblocked
+    //      commander of ours reaches 21 commander damage at 3x its hit, or 2*sum(D) >= MIN_EXTRA_DAMAGE.
+    //      Else CantPlayAi.
+    // The burn line (our spells tripled) is not modelled: the burn AI does not know the damage is
+    // tripled, and the miss is on the safe side. Prevention is still counted by damageIfUnblocked although
+    // the card makes damage unpreventable: an under-count, the safe side. The opponent's blocks are its own
+    // AI's, never a worst-case all-block; its live blocks read damage through Player/Card
+    // .staticReplaceDamage, a name list of battlefield cards this Command-zone effect is not on, so the
+    // simulation and the live blocks share one model.
+    // RNG parity: the stock engine drew the randomReturn roll and refused (EffectAi's no-AILogic
+    // fallthrough). The gate sits after that roll; steps 1-3 read zones, P/T, keywords, attack costs, the
+    // test-mode price and HonestMana; steps 4-7 draw only from a fixed-seed Random swapped in and out
+    // around them (MyRandom.setRandom replaces the bound SimScope's stream object, so the restore in
+    // finally is exact). The swap relies on what Indulge's does: one game per JVM thread at a time and AI
+    // timeouts off, so declareAttackers joins its must-attack futures before the restore. Nothing is
+    // targeted, held or remembered; the only writes are setActivatingPlayer on the mana abilities G2 reads
+    // and the simulation's own view/LKI touches (as Indulge's: SA ids that predictPowerBonusOfAttacker's
+    // ensureAbility builds, AnimateAi timestamps, CombatView ids). canPayCost's draws follow a WillPlay
+    // only. Thefts are judged for the caster, controller-agnostic. Indulge is untouched: the swap is a
+    // private copy under its own SIDE_SEED.
+    // Cost: steps 1-3 reject the common case (not our turn, past Main 1, unaffordable, no power on
+    // board); past them one declareAttackers plus one assignBlockersForCombat per defending opponent, per
+    // consult, bounded by MAX_ATTACKERS and MAX_BLOCKERS. No memo: each Main 1 consult follows a board or
+    // mana change.
+    public static class IsengardUnleashed {
+        public static final String NAME = "Isengard Unleashed";
+        static final int MIN_EXTRA_DAMAGE = 8;     // a 4-power hit tripled: twice a 5-mana Banefire's 4
+        static final int MAX_ATTACKERS = 10;       // big-board guard: above it the stock answer
+        static final int MAX_BLOCKERS = 20;
+        static final int COMMANDER_LETHAL = 21;
+        static final long SIDE_SEED = 0x15E9A4DL;  // any fixed seed: the side stream only has to repeat
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // 1. window
+            if (!sa.isSpell() || sa.getParent() != null || !ph.isPlayerTurn(ai)
+                    || !ph.getPhase().isBefore(PhaseType.COMBAT_BEGIN) || ai.getOpponents().isEmpty()
+                    || alreadyActive(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 2. price: the SA being cast, the engine's test-mode adjusted cost within G2
+            final Cost pay = sa.getPayCosts();
+            if (pay != null && pay.hasManaCost() && !pay.getTotalMana().isZero()) {
+                final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(pay, sa, ai, true, 0, false);
+                final HonestMana mana = HonestMana.of(ai, sa, true);
+                if (mana.total() < cost.getConvertedManaCost()
+                        || mana.colour(MagicColor.RED) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            // 3. ceiling
+            int attackers = 0;
+            int ceiling = 0;
+            boolean cmdrKill = false;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!CombatUtil.canAttack(c)) {
+                    continue;
+                }
+                boolean untaxed = false;
+                for (final Player opp : ai.getOpponents()) {
+                    if (CombatUtil.getAttackCost(game, c, opp) == null) {
+                        untaxed = true;
+                        break;
+                    }
+                }
+                if (!untaxed) {
+                    continue;
+                }
+                final int hit = Math.max(0, c.getNetCombatDamage()) * (c.hasDoubleStrike() ? 2 : 1);
+                attackers++;
+                ceiling += hit;
+                if (c.isCommander() && hit > 0) {
+                    for (final Player opp : ai.getOpponents()) {
+                        cmdrKill |= opp.getCommanderDamage(c) + 3 * hit >= COMMANDER_LETHAL;
+                    }
+                }
+            }
+            if (attackers == 0 || attackers > MAX_ATTACKERS) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            boolean canKill = cmdrKill;
+            for (final Player opp : ai.getOpponents()) {
+                if (opp.getCreaturesInPlay().size() > MAX_BLOCKERS) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                canKill |= killable(opp) && 3 * ceiling >= opp.getLife();
+            }
+            if (2 * ceiling < MIN_EXTRA_DAMAGE && !canKill) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 4-7. side-stream attack and blocks, the reflector veto, then the floor
+            return simulatedPays(ai, game) ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // An Isengard effect of ours is already active this turn. The effect card's name embeds the
+        // host's view string, so match on the effect source rather than isCardInCommand(name)
+        // (Cosmic Intervention's idiom, a private copy). RNG-free, O(command zone).
+        private static boolean alreadyActive(final Player ai) {
+            return ai.getCardsIn(ZoneType.Command).anyMatch(c -> c.getEffectSource() != null
+                    && NAME.equals(c.getEffectSource().getName()));
+        }
+
+        private static boolean killable(final Player opp) {
+            return opp.canLoseLife() && !opp.cantLoseForZeroOrLessLife();
+        }
+
+        // A blocker that answers being dealt damage: tripled damage to it is tripled for its controller.
+        // Parsed params only (never ensureAbility, which would build a SpellAbility id).
+        private static boolean answersDamage(final Card blocker) {
+            for (final Trigger t : blocker.getTriggers()) {
+                final TriggerType mode = t.getMode();
+                if ((mode == TriggerType.DamageDone || mode == TriggerType.DamageDoneOnce)
+                        && "Card.Self".equals(t.getParam("ValidTarget"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The attack the AI would declare now and each defender's answering blocks, built on a side
+        // stream: everything that touches AiAttackController or AiBlockController (their constructors
+        // included) and every damage read run inside the swap, with the game's stream restored in finally.
+        private static boolean simulatedPays(final Player ai, final Game game) {
+            final Random saved = MyRandom.getRandom();
+            MyRandom.setRandom(new Random(SIDE_SEED));
+            try {
+                final Combat combat = new Combat(ai);
+                new AiAttackController(ai).declareAttackers(combat);
+                if (combat.getAttackers().isEmpty()) {
+                    return false;
+                }
+                for (final Player opp : ai.getOpponents()) {
+                    if (!combat.getAttackersOf(opp).isEmpty()) {
+                        new AiBlockController(opp, true).assignBlockersForCombat(combat);
+                    }
+                }
+                // 5. a damage reflector among the blockers
+                for (final Card b : combat.getAllBlockers()) {
+                    if (answersDamage(b)) {
+                        return false;
+                    }
+                }
+                // 6-7. D per opponent, then the lethal, commander and extra-damage lines
+                int extra = 0;
+                for (final Player opp : ai.getOpponents()) {
+                    if (!opp.canLoseLife()) {
+                        continue;
+                    }
+                    int d = 0;
+                    for (final Card att : combat.getAttackersOf(opp)) {
+                        if (CombatUtil.getAttackCost(game, att, opp) != null) {
+                            continue;
+                        }
+                        final CardCollectionView blockers = combat.getBlockers(att);
+                        int hit = 0;
+                        if (blockers.isEmpty() || forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked
+                                .assignCombatDamageAsUnblocked(att)) {
+                            hit = ComputerUtilCombat.damageIfUnblocked(att, opp, combat, true);
+                            if (att.isCommander() && hit > 0
+                                    && opp.getCommanderDamage(att) + 3 * hit >= COMMANDER_LETHAL) {
+                                return true;
+                            }
+                        } else if (att.hasKeyword(Keyword.TRAMPLE) && !att.hasKeyword(Keyword.INFECT)) {
+                            int shield = 0;
+                            for (final Card b : blockers) {
+                                shield += att.hasKeyword(Keyword.DEATHTOUCH) ? 1 : Math.max(0, b.getLethalDamage());
+                            }
+                            hit = Math.max(0, att.getNetCombatDamage() - shield);
+                        }
+                        d += hit;
+                    }
+                    if (d > 0 && killable(opp) && 3 * d >= opp.getLife()) {
+                        return true;
+                    }
+                    extra += 2 * d;
+                }
+                return extra >= MIN_EXTRA_DAMAGE;
+            } finally {
+                MyRandom.setRandom(saved);
+            }
+        }
+    }
+
     // Jolted Awake (dead-card batch 3, row 14)
     // "Choose up to one target artifact or creature card in your graveyard. You get {E}{E}. Then
     // you may pay an amount of {E} equal to that card's mana value. If you do, return it from

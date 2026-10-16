@@ -188,6 +188,19 @@ public class EffectAi extends SpellAbilityAi {
             return SpecialCardAi.FlareOfFortitude.consider(ai, sa);
         }
 
+        if (SpecialCardAi.IsengardUnleashed.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // "Damage can't be prevented this turn. If a source you control would deal damage this turn to
+            // an opponent or a permanent an opponent controls, it deals triple that damage instead."
+            // (flashback {4}{R}{R}{R}). The no-AILogic fallthrough below refused it at every priority, for
+            // the hand cast, the flashback cast and Play-effect casts (Lorehold's miracle) alike. Routed
+            // after the randomReturn roll: the card has no RemoveDeck hint, so the stock engine evaluated it
+            // and drew here before refusing, and every refusal in the evaluator draws nothing more from the
+            // game's stream (its combat simulation runs on a side stream). A name gate, not an AILogic$, so
+            // doTriggerNoCost's AILogic pre-call never runs for it and a Play-effect cast still draws exactly
+            // one roll. Every other Effect card takes exactly the path it took before this branch.
+            return SpecialCardAi.IsengardUnleashed.consider(ai, sa);
+        }
+
         if (sa.hasParam("AILogic")) {
             logic = sa.getParam("AILogic");
             if (logic.equals("BeginningOfOppTurn")) {
