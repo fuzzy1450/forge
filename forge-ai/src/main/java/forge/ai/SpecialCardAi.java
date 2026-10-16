@@ -40990,6 +40990,73 @@ public class SpecialCardAi {
         }
     }
 
+    // Shatter the Oath (dead-card batch 3, row 99; carrier Rakdos Descend Punisher 21c33124)
+    // {3}{B}{B} Sorcery, "Destroy target creature or enchantment. Create a Wicked Role token
+    // attached to up to one target creature you control." The Role rides as a targeted sub (DB$
+    // Token, TokenScript$ role_wicked, TargetMin$ 0, ValidTgts$ Creature.YouCtrl), and the
+    // inherited SpellAbilityAi.chkDrawback refuses every targeted sub (TargetingFailed with no
+    // creature of ours, CantPlayAi with one), so the Destroy that DestroyAi approved was never
+    // cast: Witch's Mark's veto (batch 1, row 103). TokenAi.chkDrawback routes here after its
+    // Witch's Mark block. The value is the Destroy, judged by stock DestroyAi before this sub is
+    // ever asked (opponents' cards only, its filters, useRemovalNow's floor and roll, all consumed
+    // exactly as A consumed them; canPlayWithSubs never asks the sub after a root decline). The
+    // sub never adds a reason to cast; it only picks the Role's home:
+    // - shape bound: the targeted role_wicked Token sub, TargetMin 0, under a Destroy spell, else
+    //   null (the caller keeps super.chkDrawback, A's answer);
+    // - the sub's targets are reset before anything else, so every refusal leaves the sub
+    //   untargeted, as A left it;
+    // - payable window: G1 (CommanderCastCeiling.affordable, called unchanged under G4's widened
+    //   contract) on the ROOT for every cast we pay for, a thief's included. canPayCost's test
+    //   payment draws MyRandom (ComputerUtilMana.isManaSourceReserved) and A never reached it for
+    //   this card, so an unaffordable window answers CantAfford here, drawing nothing. A
+    //   Play-effect cast or a copy is paid, or not, elsewhere;
+    // - the Role: TokenAi.tgtRoleAura's non-curse, non-mandatory pick (the Wicked Role is
+    //   AttachAILogic Pump and the sub has no AILogic), inline so no prototype token takes a card
+    //   id (spawnToken advances game.nextCardId(), and this is asked at every consult where the
+    //   Destroy is willing, affordable or not): our best creature with no Role of ours on it (so
+    //   it never replaces one of ours, the printed "put that one into the graveyard"), never one
+    //   whose Targeting SVar is Dies or Counter (ComputerUtil.getSafeTargets: Glyph Keeper or a
+    //   Glasskite would counter the whole spell, Destroy included; a Phantasmal Image copying our
+    //   best body would be sacrificed); none -> zero targets, which is legal ("up to one"), and
+    //   TokenEffectBase creates no Aura it cannot attach (CR 303.4i).
+    // RNG-free and id-free on every path; nothing held or remembered. isShatter reads the host's
+    // and the card state's name too (Divine Reckoning's idiom: getAbilitySourceName reads "" for a
+    // card cast face down from exile).
+    public static class ShatterTheOath {
+        public static final String NAME = "Shatter the Oath";
+
+        public static boolean isShatter(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        // null = not the expected shape (the caller keeps the stock answer)
+        public static AiAbilityDecision chooseRole(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            if (!sa.usesTargeting() || sa.getApi() != ApiType.Token || sa.getMinTargets() != 0
+                    || !"role_wicked".equals(sa.getParam("TokenScript"))
+                    || root == null || root == sa || root.getApi() != ApiType.Destroy || !root.isSpell()) {
+                return null;
+            }
+            sa.resetTargets();
+            if (!root.isCopied() && !root.isCastFromPlayEffect() && !CommanderCastCeiling.affordable(ai, root)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final CardCollection homes = CardLists.filter(
+                    ComputerUtil.getSafeTargets(ai, sa,
+                            CardLists.filterControlledBy(CardUtil.getValidCardsToTarget(sa), ai.getYourTeam())),
+                    c -> !c.getAttachedCards().anyMatch(att ->
+                            att.getController() == ai && att.getType().hasSubtype("Role")));
+            final Card home = homes.isEmpty() ? null : ComputerUtilCard.getBestCreatureAI(homes);
+            if (home != null && sa.canTarget(home)) {
+                sa.getTargets().add(home);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Shielded by Faith (dead-card batch 2, row 28)
     // "Enchant creature. Enchanted creature has indestructible. Whenever a creature enters, you
     // may attach Shielded by Faith to that creature." The card carried AI:RemoveDeck:All

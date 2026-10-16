@@ -297,6 +297,18 @@ public class TokenAi extends SpellAbilityAi {
             }
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
+        // Shatter the Oath (dead-card batch 3, row 99): "Destroy target creature or enchantment.
+        // Create a Wicked Role token attached to up to one target creature you control." The same
+        // veto as Witch's Mark above: the inherited chkDrawback refuses every targeted sub, so the
+        // Destroy that DestroyAi approved was never cast. Reached only after the root approved
+        // (canPlayWithSubs); answered without spawnToken (no card id) and with no draw. A script
+        // outside the expected shape gets null and keeps the stock answer.
+        if (sa.usesTargeting() && SpecialCardAi.ShatterTheOath.isShatter(sa)) {
+            final AiAbilityDecision d = SpecialCardAi.ShatterTheOath.chooseRole(ai, sa);
+            if (d != null) {
+                return d;
+            }
+        }
         return super.chkDrawback(ai, sa);
     }
 
