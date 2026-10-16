@@ -25002,6 +25002,149 @@ public class SpecialCardAi {
         }
     }
 
+    // Inspiration from Beyond (dead-card batch 3, row 104)
+    // "Mill three cards, then return an instant or sorcery card from your graveyard to your hand.
+    //  Flashback {5}{U}{U}." ({2}{U} sorcery.) Its root is SP$ Mill | Defined$ You, and
+    // MillAi.checkPhaseRestrictions allows a self-mill only at instant speed in an opponent's end
+    // step, so its owner refused the hand cast AND the Flashback cast on every consult
+    // (MissingPhaseRestrictions) and never cast it on any engine: 0 owner casts in 175 holds under
+    // 2.0.15+55e709fa6ba; the one raw cast is an opponent's Chaos Wand casting it from our library,
+    // a Play effect (MillAi.doTriggerNoCost). The AI's own discard preference
+    // (ComputerUtil.getCardPreference's replayKW) pitches it to every loot "for its flashback", so
+    // 77% of holds ended in the graveyard with that flashback unused. Routed by name from
+    // MillAi.canPlay for a sorcery-speed spell, both casts (the Flashback SA is a copy of the root,
+    // GameActionUtil.getGraveyardSpellByKeyword, and keeps Defined$ You), as Roots of Wisdom
+    // (batch 2, row 124) and Incarnation Technique (batch 3, row 31). Past the gate the stock path
+    // approves with nothing to return (ChangeZoneAi.hiddenOriginPlayDrawbackAI), so the milled
+    // cards are a bonus, never the reason. The hand cast trades the card for a spell from the
+    // graveyard and keeps the flashback (the card goes to the graveyard); the Flashback cast nets a
+    // card. The script's AIActivateLast$ True (read only by ComputerUtilAbility.saComparator; the
+    // Flashback twin copies the param and is generated at the root's sorted position) sorts both
+    // casts behind every other play, so they spend only the mana the rest of the turn left idle.
+    // In order, every decline before any WillPlay:
+    // - the base class's restriction check, which the override bypasses (Roots' idiom; for the
+    //   Flashback SA it is the Graveyard zone check), else CantPlaySa;
+    // - window: our own turn, Main 2 (Main 1 only when castSpellInMain1 says so: a static
+    //   Threshold permanent of ours, for the hand cast; it excludes a source in the graveyard, so
+    //   never for the Flashback), else WaitForMain2;
+    // - a library of LIBRARY_FLOOR or more (MillAi.checkApiLogic's self-mill floor, which the
+    //   routing bypasses), else CantPlayAi;
+    // - the Flashback cast's whole gain is the returned card: a hand below its maximum size (or no
+    //   maximum), else CantPlayAi;
+    // - the pick, else CantPlayAi: an instant or sorcery card we own ALREADY in our graveyard, other
+    //   than this card (on the stack at resolution), and no candidate the resolution's own pick can
+    //   take (likelyPicks) may be AI:RemoveDeck:All (Random is deck generation only, so Frantic
+    //   Search is a live pick). A decline, never the runner-up;
+    // - no opposing mill payoff, else CantPlayAi (feedsOpposingMillPayoff, Shared Trauma's rule as
+    //   a private scan): the three milled cards would feed an opponent's Milled, MilledOnce or
+    //   MilledAll trigger (The Wise Mothman, Screeching Scorchbeast, Mirelurk Queen, Glowing One
+    //   and Zellix, Sanity Flayer);
+    // - affordable, else CantAfford: this SA's own cost as the engine prices it (test-mode
+    //   calculateManaCost: Sapphire Medallion, taxes; never host.getFirstSpellAbility(): row 77)
+    //   against G2 (HonestMana, held sources skipped) in total, and its printed {U} pips in blue;
+    // - keep-up, else CantAfford: when our hand holds an instant or flash card the mana could buy,
+    //   the spare after this cast must still buy the cheapest one
+    //   (BenevolentOffering.cheapestInstant, Sylvan's reserve rule, called unchanged; B3-4).
+    // RNG: the stock path stopped at checkPhaseRestrictions with no draw, and every check here
+    // reads state without drawing (the restriction check, phase reads, castSpellInMain1, zone
+    // sizes, the graveyard filter, getCMC, isCardRemAIDeck, the trigger scan, calculateManaCost in
+    // test mode, HonestMana, cheapestInstant's test-mode hand pricing); nothing is targeted, held
+    // or remembered. Its writes are setActivatingPlayer on the mana abilities G2 reads and on the
+    // hand spells cheapestInstant prices, the accepted residuals of both helpers. New draws come
+    // only after a WillPlay: the drawback's defender pick (pods only), canPayCost's reservation
+    // roll and the resolution's shuffle. Not declined (Roots' and Incarnation's residuals): Syr
+    // Konrad, the Grim (1 damage to us per creature card milled) and Dauthi Voidwalker (our milled
+    // cards are exiled with void counters).
+    public static class InspirationFromBeyond {
+        public static final String NAME = "Inspiration from Beyond";
+        static final int LIBRARY_FLOOR = 10;   // MillAi.checkApiLogic's self-mill floor
+        static final int LAND_FIX_LANDS = 4;   // ChangeZoneAi's "does AI need a land" bar
+        static final int DESPERATE_LIFE = 5;   // ChangeZoneAi's desperate branch
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // Routing from MillAi.canPlay bypasses the base class's
+            // restriction check, so mirror it here.
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.isPlayerTurn(ai)
+                    || (ph.getPhase().isBefore(PhaseType.MAIN2) && !ComputerUtil.castSpellInMain1(ai, sa))) {
+                return new AiAbilityDecision(0, AiPlayDecision.WaitForMain2);
+            }
+            if (ai.getCardsIn(ZoneType.Library).size() < LIBRARY_FLOOR) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (sa.isFlashback() && !ai.isUnlimitedHandSize()
+                    && ai.getCardsIn(ZoneType.Hand).size() >= ai.getMaxHandSize()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility back = sa.findSubAbilityByType(ApiType.ChangeZone);
+            if (back == null || !back.hasParam("ChangeType") || sa.getPayCosts() == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final CardCollection picks = CardLists.filter(CardLists.getValidCards(ai.getCardsIn(ZoneType.Graveyard),
+                    back.getParam("ChangeType"), ai, host, back), c -> !c.equals(host));
+            if (picks.isEmpty() || likelyPicks(ai, picks).anyMatch(ComputerUtilCard::isCardRemAIDeck)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (feedsOpposingMillPayoff(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // judged on this SA's own cost as the engine prices it (never host.getFirstSpellAbility():
+            // row 77): {2}{U} from hand, {5}{U}{U} for the Flashback; G2, never the bare estimate
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int need = cost.getConvertedManaCost();
+            final int bluePips = sa.getPayCosts().getTotalMana().getShardCount(forge.card.mana.ManaCostShard.BLUE);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < need || mana.colour(MagicColor.BLUE) < bluePips) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final int reserve = BenevolentOffering.cheapestInstant(ai, host, mana.total());
+            if (reserve > 0 && mana.total() - need < reserve) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The cards the resolution's pick (ChangeZoneAi.chooseCardToHiddenOriginChangeZone, Hand from
+        // Graveyard, an instants-and-sorceries list) can take from our graveyard as it stands: after
+        // its shuffle, the land-fix branch (no land in hand and fewer than LAND_FIX_LANDS lands: it
+        // returns the shuffled first; its third conjunct is dropped, a superset) and the desperate
+        // branch can take any of them; otherwise getBestAI = getMostExpensivePermanentAI takes one of
+        // the top-CMC ties. The milled cards can only add options.
+        static CardCollection likelyPicks(final Player ai, final CardCollection picks) {
+            final boolean any = ai.getLife() <= DESPERATE_LIFE
+                    || (!ai.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.LANDS)
+                        && CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS) < LAND_FIX_LANDS);
+            if (any) {
+                return picks;
+            }
+            final int top = Aggregates.max(picks, Card::getCMC);
+            return CardLists.filter(picks, c -> c.getCMC() == top);
+        }
+
+        // An opposing battlefield card with a Milled-family trigger our mill would fire: its
+        // ValidPlayer is not exactly "You" (that one fires only on its controller's own mill), and
+        // it has no TriggerZones or its TriggerZones include the battlefield. A pure read.
+        static boolean feedsOpposingMillPayoff(final Player ai) {
+            for (final Player o : ai.getOpponents()) {
+                for (final Card c : o.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        final TriggerType m = t.getMode();
+                        if ((m == TriggerType.Milled || m == TriggerType.MilledOnce || m == TriggerType.MilledAll)
+                                && !"You".equals(t.getParam("ValidPlayer"))
+                                && (!t.hasParam("TriggerZones") || t.getParam("TriggerZones").contains("Battlefield"))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Intellectual Offering (dead-card batch 3, row 12)
     // {4}{U} instant: "Choose an opponent. You and that player each draw three cards. Choose an
     // opponent. Untap all nonland permanents you control and all nonland permanents that player
