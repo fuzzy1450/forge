@@ -13668,6 +13668,211 @@ public class SpecialCardAi {
         }
     }
 
+    // Flunk (dead-card batch 3, row 113; extension 2026-10-15; Mono-Black Discard 0e26545f)
+    // "Target creature gets -X/-X until end of turn, where X is 7 minus the number of cards in that
+    // creature's controller's hand." ({1}{B} Instant.) Unhinted. PumpAi.checkApiLogic computed the
+    // defense before any target exists: SVar:X:TargetedController$CardsInHand/NMinus.7 then reads an
+    // empty player list, AbilityUtils.playerXCount returns 0 before NMinus.7 applies, so defense is 0
+    // and PumpAi refused every consult (CantPlayAi) with no random draw; doTriggerNoCost met the same
+    // zero (getCurseCreatures' "X is zero" branch) and refused an optional Kaervek, the Punisher
+    // copy. Defile, the same Pump curse with an untargeted X, is owner-cast in 175 of its 180 held
+    // games in the same deck.
+    // Judged as the instant removal it is, in Dispatch's windows (batch 2, row 20): an opponent's
+    // declare-attackers or declare-blockers step, on an attacker aimed at us (or our planeswalker or
+    // battle) that our blocks do not already kill, or an opponent's end step, on any opposing
+    // creature. Our own turn is never a window: removing a blocker there would need
+    // AiAttackController.declareAttackers, which draws. X is read per target from the script's own
+    // SVar against that creature's controller (in a pod, each opponent's own hand), and the target
+    // must surely die: toughness <= X is a state-based death through indestructible, shield
+    // counters and regeneration; marked damage lowers that threshold only for what damage can
+    // destroy (killAt, a private verbatim copy of Black Sun's Zenith's, batch 2), so a shield
+    // counter, indestructible, DestroyWhenDamaged and a planeswalker creature's loyalty never count
+    // a damage kill that -X/-X, which deals no damage, cannot make. X <= 0 is never a kill, so a 7+
+    // card hand, where -X/-X becomes a pump, is never targeted.
+    // Floor: targetable, not warded (canPayCost prices ward only after targeting), no SacMe (it can
+    // sacrifice itself in response: DestroyAi, FieryGambit.isKill), no active undying or persist,
+    // not useless, not wearing our aura, not already aimed at by our own stack, not leaving this
+    // turn anyway; worth Oubliette's 160 (a vanilla nontoken 2/2) or a commander. A creature we own
+    // dies into our own graveyard, so unlike Dispatch's exile the owner is not checked. Pick:
+    // prioritizeCreaturesWorthRemovingNow, then the stock removal formula without its board term
+    // (evaluateCreature, +30 for a token), never getBestRemovalTargetAI, whose
+    // evaluateBoardPosition term draws.
+    // Mana: G1 (CommanderCastCeiling.affordable, called unchanged under G4's widened contract: the
+    // engine's test-mode {1}{B}, taxes and reductions applied, against HonestMana in total and in
+    // black). Holds nothing: no mana reservation, no AiCardMemory write.
+    // RNG: A drew nothing on its way to the refusal; every exit here is RNG-free and returns before
+    // canPayCost. Nothing is written past a decline but sa.resetTargets() on its own ability (A
+    // never set a target on it).
+    // Residuals: a regeneration shield on a damaged creature (Black Sun's Zenith's own); death
+    // triggers that punish us are not scanned (stock Murder and Defile do not scan them either);
+    // Kaervek's "If you do, you lose 2 life" is not priced on its copy (saSideEffects prices only
+    // the spell's own effects), so at 2 life or less an approved copy loses us the game, as any
+    // other black removal spell Kaervek copies does on the stock path today.
+    public static class Flunk {
+        public static final String NAME = "Flunk";
+        // the script's X: SVar:X:TargetedController$CardsInHand/NMinus.7
+        static final String X_PREFIX = "TargetedController$";
+
+        // the targeted root spell, by source, host or card-state name (Dispatch's idiom: a card cast
+        // face down from exile reads "" from getAbilitySourceName), and only while the script still
+        // has the shape this evaluator reads (rule B3-13: f/flunk.txt is the only script with
+        // NumDef$ -X and SVar:X:TargetedController)
+        public static boolean handles(final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || !sa.usesTargeting() || !sa.isCurse()
+                    || !"-X".equals(sa.getParam("NumDef")) || !sa.getSVar("X").startsWith(X_PREFIX)) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        // X as the resolution reads it with a creature of p's targeted: the TargetedController
+        // branch of AbilityUtils.calculateAmount on a one-player list, the script's own SVar
+        static int xAgainst(final SpellAbility sa, final Player p) {
+            return AbilityUtils.playerXCount(Lists.newArrayList(p),
+                    sa.getSVar("X").substring(X_PREFIX.length()), sa.getHostCard(), sa);
+        }
+
+        // -X/-X surely kills c (Targeting$ Dies: it dies as soon as it is targeted)
+        static boolean kills(final Card c, final int x) {
+            return x > 0 && ("Dies".equals(c.getSVar("Targeting")) || killAt(c) <= x);
+        }
+
+        // X for each opponent whose hand leaves it at 1 or more (looked up, never iterated)
+        private static Map<Player, Integer> positiveX(final Player ai, final SpellAbility sa) {
+            final Map<Player, Integer> xs = new HashMap<>();
+            for (final Player o : ai.getOpponents()) {
+                final int x = xAgainst(sa, o);
+                if (x > 0) {
+                    xs.put(o, x);
+                }
+            }
+            return xs;
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Player active = ph.getPlayerTurn();
+            if (active == null || !active.isOpponentOf(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Combat combat = game.getCombat();
+            final boolean combatWindow = combat != null
+                    && (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS));
+            if (!combatWindow && !ph.is(PhaseType.END_OF_TURN)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // cheap precondition before any loop or mana read: some opponent's hand leaves X >= 1
+            final Map<Player, Integer> xs = positiveX(ai, sa);
+            if (xs.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // RNG-free necessary condition for canPayCost (whose test payment draws MyRandom)
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final CardCollection list;
+            if (combatWindow) {
+                final boolean afterBlocks = ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS);
+                list = CardLists.filter(combat.getAttackers(), c -> ai.equals(combat.getDefenderPlayerByAttacker(c))
+                        // our blocks already kill it: not worth a card
+                        && !(afterBlocks && combat.isBlocked(c) && ComputerUtilCombat.attackerWouldBeDestroyed(ai, c, combat)));
+            } else {
+                list = CardLists.filter(ai.getOpponents().getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES);
+            }
+            return pick(ai, sa, game, list, xs);
+        }
+
+        // PumpAi.doTriggerNoCost: a Play-effect or copy cast happens now, so there is no window (and
+        // a paid one passed doTrigger's canPayCost already). null = a mandatory cast with no kill:
+        // the caller's stock path (pumpMandatoryTarget), as in A.
+        public static AiAbilityDecision considerEffect(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            final Map<Player, Integer> xs = positiveX(ai, sa);
+            if (!xs.isEmpty()) {
+                final AiAbilityDecision d = pick(ai, sa, ai.getGame(),
+                        CardLists.filter(ai.getOpponents().getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES), xs);
+                if (d.willingToPlay()) {
+                    return d;
+                }
+            }
+            sa.resetTargets();
+            return mandatory ? null : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        private static AiAbilityDecision pick(final Player ai, final SpellAbility sa, final Game game,
+                                              CardCollection list, final Map<Player, Integer> xs) {
+            list = CardLists.getTargetableCards(list, sa);
+            list = ComputerUtil.filterAITgts(sa, ai, list, true);
+            list = CardLists.filter(list, c -> c.isCreature()
+                    && c.getController().isOpponentOf(ai)
+                    // X against this creature's own controller
+                    && kills(c, xs.getOrDefault(c.getController(), 0))
+                    // canPayCost prices ward only after targeting and can stick on an unpayable pick
+                    && !c.hasKeyword(Keyword.WARD)
+                    // it can sacrifice itself in response (DestroyAi, FieryGambit.isKill)
+                    && !c.hasSVar("SacMe")
+                    // it comes straight back
+                    && !ComputerUtilCard.hasActiveUndyingOrPersist(c)
+                    && !ComputerUtilCard.isUselessCreature(c.getController(), c)
+                    && c.getEnchantedBy().stream().noneMatch(a -> ai.equals(a.getController()))
+                    && !targetedByOurStack(ai, game, c)
+                    // it leaves at end of turn anyway (unearth, blitz, Kiki-Jiki copies, Ball Lightning)
+                    && !leavesThisTurn(c)
+                    && (c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= Oubliette.MIN_TARGET_VALUE));
+            if (list.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            list = ComputerUtilCard.prioritizeCreaturesWorthRemovingNow(ai, list, false);
+            // getBestRemovalTargetAI's formula without its evaluateBoardPosition term, which draws;
+            // itemWithMax keeps the first maximum
+            final Card best = Aggregates.itemWithMax(list,
+                    c -> ComputerUtilCard.evaluateCreature(c) + (c.isToken() ? 30 : 0));
+            if (best == null || !sa.canTarget(best)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Private verbatim copy of BlackSunsZenith.killAt (batch 2; rule B3-4: its helper stays
+        // private and frozen). Smallest X that kills c. Toughness 0 kills through indestructible,
+        // shields and regeneration; marked damage lowers the threshold only for what damage can
+        // destroy.
+        private static int killAt(final Card c) {
+            final int t = c.getNetToughness();
+            final boolean destroyable = !c.hasKeyword(Keyword.INDESTRUCTIBLE) && c.getCounters(CounterEnumType.SHIELD) <= 0;
+            return destroyable && c.getDamage() > 0 ? Math.max(1, t - c.getDamage()) : t;
+        }
+
+        // Private verbatim copies of Dispatch's leavesThisTurn and targetedByOurStack (batch 2, row
+        // 20; rule B3-4: Dispatch's helpers stay private and frozen).
+        // EndOfTurnLeavePlay: AtEOT (unearth, myriad, encore, mobilize, Kiki-Jiki and Twinflame
+        // copies), Blitz, or True (Ball Lightning). A Dash creature returns to its owner's hand and a
+        // Warp creature is exiled with permission to recast it, so killing either is real removal.
+        private static boolean leavesThisTurn(final Card c) {
+            final String v = c.getSVar("EndOfTurnLeavePlay");
+            return !v.isEmpty() && !"Dash".equals(v) && !"Warp".equals(v);
+        }
+
+        // one of our own stack objects already aims at it (removal cast earlier in this window)
+        private static boolean targetedByOurStack(final Player ai, final Game game, final Card c) {
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                for (SpellAbility s = si.getSpellAbility(); s != null; s = s.getSubAbility()) {
+                    if (ai.equals(s.getActivatingPlayer()) && s.getTargets() != null
+                            && s.getTargets().getTargetCards().contains(c)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Divine Reckoning (dead-card batch 3, row 18)
     // {2}{W}{W} Sorcery, "Each player chooses a creature they control. Destroy the rest."
     // Flashback {5}{W}{W}. AI:RemoveDeck:All hid both spell abilities (the hand cast and the

@@ -218,6 +218,16 @@ public class PumpAi extends PumpAiBase {
             // does every other Pump card.
             return SpecialCardAi.CauldronOfSouls.consider(ai, sa);
         }
+        if (SpecialCardAi.Flunk.handles(sa)) {
+            // Dead-card batch 3, row 113. X is TargetedController$CardsInHand/NMinus.7: read below
+            // before any target exists, its player list is empty, AbilityUtils.playerXCount returns
+            // 0 before NMinus applies, and the defense == 0 refusal below answered CantPlayAi at
+            // every consult. The evaluator reads X per target and owns window, floor and target. A
+            // drew no random number on its way to that refusal and the evaluator draws none on any
+            // decline. Play-effect casts and copies take doTriggerNoCost; every other Pump card
+            // takes exactly the path it took before this branch.
+            return SpecialCardAi.Flunk.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final Card source = sa.getHostCard();
         final SpellAbility root = sa.getRootAbility();
@@ -881,6 +891,15 @@ public class PumpAi extends PumpAiBase {
             // keeps the original's target. A Play-effect cast (Nathan Drake, Prosper) is not a copy
             // and keeps the stock path below. Post-cast only; no random draw.
             return SpecialCardAi.FieryGambit.retargetCopy(ai, sa);
+        }
+        if (SpecialCardAi.Flunk.handles(sa)) {
+            // Dead-card batch 3, row 113: a Play-effect or copy cast (Kaervek, the Punisher's crime
+            // copy) met the same X = 0 below and was refused when optional. Same per-target X and
+            // floor, no window. null = a mandatory cast with no kill: the stock path below, as in A.
+            final AiAbilityDecision flunk = SpecialCardAi.Flunk.considerEffect(ai, sa, mandatory);
+            if (flunk != null) {
+                return flunk;
+            }
         }
         final SpellAbility root = sa.getRootAbility();
         final String numDefense = sa.getParamOrDefault("NumDef", "");
