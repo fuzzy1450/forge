@@ -13607,6 +13607,265 @@ public class SpecialCardAi {
         }
     }
 
+    // Dog Umbra (dead-card batch 3, row 91; extension 2026-10-15)
+    // "Flash. Enchant creature. As long as another player controls enchanted creature, it can't
+    // attack or block. Otherwise, Dog Umbra has umbra armor." ({1}{W} Aura.) Unhinted, so A considered it
+    // at every priority and refused every consult at attachGeneralAI's no-logic fallthrough: the script
+    // names no AttachAILogic, so the aura spell has no AILogic$ and chooseUnpreferred (not mandatory)
+    // returns null. A script logic is no fix: AttachAi.checkApiLogic would then run
+    // doAdvancedFlashAuraLogic for this Flash Aura, which reads the Self static's "Umbra armor" as a buff
+    // on the enchanted creature, refuses exactly the combats umbra armor wins, and draws MyRandom on every
+    // consult it reaches. The owner's own cast (isOwnCast) is judged whole here, from AttachAi's name gate.
+    // Windows (O(1) tests first; nothing below runs outside them):
+    // - RESPOND: an opponent's object tops the stack, its chain destroys or deals damage and has no
+    //   exile, bounce, -X/-X, control or curse-Aura part and no wither or infect damage (skeptic A2: the
+    //   -1/-1 counters kill by the toughness rule, which umbra armor never stops, and the Aura goes too),
+    //   and predictThreatenedObjects (null saviour, top only: Flickerform's STACK idiom) marks a holder of
+    //   ours: enchant the best such holder.
+    // - MAIN2: our own Main 2, empty stack, no mana held (RemoveDeckFilter.noManaHeld, G3, called
+    //   unchanged), and the mana left after this cast still pays the dearest other instant or flash card
+    //   in our hand whose printed cost today's mana could pay, in total and by colour (skeptic A1: a Negate
+    //   in hand with only Plains open never blocks the cast).
+    // - END: an opponent's end step right before our turn, empty stack (SpellAbilityAi's AtOppEOT idiom).
+    //   MAIN2 and END: PACIFY their best attacker when it is worth more than our best holder, else
+    //   PROTECT that holder. Never Main 1 or any other step of our own turn.
+    // Holder: ShieldedByFaith.isHolder's shape (a private copy: accepted predicates are not shared) plus
+    // no umbra armor yet and not an animated land or a planeswalker; worth MIN_VALUE, with COMMANDER_BONUS
+    // for our own commander.
+    // Pacify target: an opponent's creature, no ward (canPayCost adds it after targeting: Domineering
+    // Will's rule), able to attack next turn for MIN_PACIFY_DAMAGE or more, or a commander; not useless,
+    // not leaving at end of turn, not crewed this turn; worth MIN_VALUE, with COMMANDER_BONUS for any
+    // commander.
+    // Mana: G2 (HonestMana, held sources skipped) against the engine's test-mode calculateManaCost with
+    // the target in place (B3-5), in total and in white: one cost and one HonestMana per approval, which
+    // the MAIN2 reserve reads too. G2 under-counts filter sources (B3-6), the safe side.
+    // RNG: A's only draw is attachGeneralAI's choosePreferredDefenderPlayer (the pod tiebreak), reached
+    // whenever getValidCardsToTarget is not empty; consider makes that call under the same condition
+    // first (Infinite Reflection's idiom) and reads nothing else random. A decline targets nothing, holds
+    // nothing and writes no memory set (A's ATTACHED_THIS_TURN write is read only by the Equipment
+    // re-attach branch, so dropping it is inert for an Aura). Residuals: predictThreatenedObjects'
+    // calculateAmount on a threat whose NumDmg counts at random, and an approval where G2 over-counts a
+    // restricted mana source.
+    public static class DogUmbra {
+        public static final String NAME = "Dog Umbra";
+        // a vanilla non-token 2/2 for two (CreatureEvaluator 160, Shielded by Faith's floor)
+        static final int MIN_VALUE = 160;
+        // the re-cast tax (Shielded by Faith's)
+        static final int COMMANDER_BONUS = 50;
+        static final int MIN_PACIFY_DAMAGE = 2;
+
+        // the owner's own cast: our Aura spell from our hand or our library's top (Errant and Giada's
+        // MayPlay), face up, not a Play effect, not a copy. A ReplaySpell probe of a hand copy
+        // (targetPlayableSpellCard's ab.copy() or copyWithNoManaCost(), neither marked copied) passes too.
+        public static boolean isOwnCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && NAME.equals(host.getName()) && sa.isSpell() && sa.getApi() == ApiType.Attach
+                    && !sa.isCastFromPlayEffect() && !sa.isCopied() && !host.isFaceDown()
+                    && ai.equals(host.getOwner())
+                    && (host.isInZone(ZoneType.Hand) || host.isInZone(ZoneType.Library));
+        }
+
+        // AttachAi.checkApiLogic's name gate: choose the creature to enchant, or don't cast
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // the cached aura spell: a stale target would hide itself from getValidCardsToTarget
+            sa.resetTargets();
+            if (CardUtil.getValidCardsToTarget(sa).isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            AiAttackController.choosePreferredDefenderPlayer(ai); // RNG parity with the stock path
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Card aura = sa.getHostCard();
+            final boolean stackEmpty = game.getStack().isEmpty();
+            final boolean main2 = stackEmpty && ph.is(PhaseType.MAIN2, ai) && RemoveDeckFilter.noManaHeld(ai, true);
+            final boolean end = stackEmpty && ph.is(PhaseType.END_OF_TURN)
+                    && ai.equals(ph.getNextTurn()) && !ph.isPlayerTurn(ai);
+            Card pick = null;
+            if (!stackEmpty) {
+                pick = respondPick(ai, sa, aura, game.getStack().peekAbility());
+            } else if (main2 || end) {
+                pick = boardPick(ai, sa, aura);
+            }
+            if (pick == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.getTargets().add(pick);
+            if (spareAfter(ai, sa, aura, main2) < 0) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // RESPOND: destruction or damage only, a holder of ours marked, the best one
+        private static Card respondPick(final Player ai, final SpellAbility sa, final Card aura, final SpellAbility top) {
+            if (top == null || top.getActivatingPlayer() == null || !top.getActivatingPlayer().isOpponentOf(ai)
+                    || !destroysOrDamagesOnly(top)) {
+                return null;
+            }
+            Card best = null;
+            int bestValue = MIN_VALUE - 1;
+            for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, null, true)) {
+                if (o instanceof Card c && isHolder(ai, aura, c) && sa.canTarget(c)) {
+                    final int v = holderValue(ai, c);
+                    if (v > bestValue) {
+                        best = c;
+                        bestValue = v;
+                    }
+                }
+            }
+            return best;
+        }
+
+        // the chain umbra armor answers whole: some Destroy/DestroyAll/DealDamage/DamageAll part, no
+        // wither or infect damage, and no part of predictThreatenedObjects' other branches (exile or
+        // bounce, -X/-X pump, control, curse Aura)
+        private static boolean destroysOrDamagesOnly(SpellAbility top) {
+            if (top.isWrapper()) {
+                top = ((WrappedAbility) top).getWrappedAbility();
+            }
+            boolean kills = false;
+            for (SpellAbility s = top; s != null; s = s.getSubAbility()) {
+                final ApiType api = s.getApi();
+                if (api == ApiType.DealDamage || api == ApiType.DamageAll) {
+                    if (witherDamage(s)) {
+                        return false;
+                    }
+                    kills = true;
+                } else if (api == ApiType.Destroy || api == ApiType.DestroyAll) {
+                    kills = true;
+                } else if (api == ApiType.ChangeZone || api == ApiType.ChangeZoneAll || api == ApiType.Pump
+                        || api == ApiType.PumpAll || api == ApiType.GainControl || api == ApiType.Attach) {
+                    return false;
+                }
+            }
+            return kills;
+        }
+
+        // skeptic A2: damage whose source has wither or infect (the keywords or the static) is dealt as
+        // -1/-1 counters; read on the part's host and on every card its DamageSource names (getDefinedCards,
+        // RNG-free). A part with no host is read as wither: a missed cast, never a bad one.
+        private static boolean witherDamage(final SpellAbility s) {
+            final Card host = s.getHostCard();
+            if (host == null || host.isWitherDamage()) {
+                return true;
+            }
+            if (s.hasParam("DamageSource")) {
+                for (final Card d : AbilityUtils.getDefinedCards(host, s.getParam("DamageSource"), s)) {
+                    if (d.isWitherDamage()) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // MAIN2 / END: pacify their best attacker when it outweighs our best holder, else protect the holder
+        private static Card boardPick(final Player ai, final SpellAbility sa, final Card aura) {
+            Card holder = null;
+            int holderBest = MIN_VALUE - 1;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (isHolder(ai, aura, c) && sa.canTarget(c)) {
+                    final int v = holderValue(ai, c);
+                    if (v > holderBest) {
+                        holder = c;
+                        holderBest = v;
+                    }
+                }
+            }
+            Card mark = null;
+            int markBest = MIN_VALUE - 1;
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCreaturesInPlay()) {
+                    if (isPacifyTarget(ai, aura, c) && sa.canTarget(c)) {
+                        final int v = ComputerUtilCard.evaluateCreature(c) + (c.isCommander() ? COMMANDER_BONUS : 0);
+                        if (v > markBest) {
+                            mark = c;
+                            markBest = v;
+                        }
+                    }
+                }
+            }
+            return mark != null && (holder == null || markBest > holderBest) ? mark : holder;
+        }
+
+        private static boolean isHolder(final Player ai, final Card aura, final Card c) {
+            return c.isCreature() && c.isInPlay() && ai.equals(c.getController())
+                    && !c.hasKeyword(Keyword.INDESTRUCTIBLE) && !umbraArmored(c)
+                    && !c.isLand() && !c.isPlaneswalker()
+                    && !c.hasSVar("EndOfTurnLeavePlay") && c.getTimesCrewedThisTurn() == 0
+                    && !"Dies".equals(c.getSVar("Targeting")) && !"Counter".equals(c.getSVar("Targeting"))
+                    && !ComputerUtilCard.isUselessCreature(ai, c)
+                    && c.canBeAttached(aura, null);
+        }
+
+        private static int holderValue(final Player ai, final Card c) {
+            return ComputerUtilCard.evaluateCreature(c)
+                    + (c.isRealCommander() && ai.equals(c.getOwner()) ? COMMANDER_BONUS : 0);
+        }
+
+        private static boolean isPacifyTarget(final Player ai, final Card aura, final Card c) {
+            return c.isCreature() && c.isInPlay() && c.getController().isOpponentOf(ai)
+                    && !c.hasKeyword(Keyword.WARD) && !c.isLand() && !c.isPlaneswalker()
+                    && !c.hasSVar("EndOfTurnLeavePlay") && c.getTimesCrewedThisTurn() == 0
+                    && !ComputerUtilCard.isUselessCreature(ai, c)
+                    && ComputerUtilCombat.canAttackNextTurn(c)
+                    && (c.getNetCombatDamage() >= MIN_PACIFY_DAMAGE || c.isCommander())
+                    && c.canBeAttached(aura, null);
+        }
+
+        // an Aura with umbra armor already on it (HarshMercy.umbraArmored, a private copy: accepted
+        // predicates are not shared)
+        private static boolean umbraArmored(final Card c) {
+            for (final Card a : c.getEnchantedBy()) {
+                if (a.hasKeyword(Keyword.UMBRA_ARMOR)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // G2 against the engine's test-mode cost with the target in place (B3-5): the mana left after this
+        // cast, less, in MAIN2, the reserve instantNeed reads from the same HonestMana (skeptic A1);
+        // negative when short in total or in white, or when the reserve is not left
+        private static int spareAfter(final Player ai, final SpellAbility sa, final Card aura, final boolean main2) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.colour(MagicColor.WHITE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)) {
+                return -1;
+            }
+            final int left = mana.total() - cost.getConvertedManaCost();
+            if (left < 0) {
+                return -1;
+            }
+            return main2 ? left - instantNeed(ai, aura, mana) : left;
+        }
+
+        // MAIN2: the dearest other instant or flash card in hand whose printed cost today's mana could pay,
+        // in total and by colour (a mask of the WUBRG colours HonestMana counts); a card that mana could not
+        // pay anyway never blocks the cast (skeptic A1)
+        private static int instantNeed(final Player ai, final Card aura, final HonestMana mana) {
+            byte mask = 0;
+            for (final byte colour : MagicColor.WUBRG) {
+                if (mana.colour(colour) > 0) {
+                    mask |= colour;
+                }
+            }
+            int need = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.equals(aura) || c.isLand() || !(c.isInstant() || c.hasKeyword(Keyword.FLASH))) {
+                    continue;
+                }
+                final int cmc = c.getCMC();
+                final ManaCost printed = c.getManaCost();
+                if (cmc > need && cmc <= mana.total() && printed != null && printed.canBePaidWithAvailable(mask)) {
+                    need = cmc;
+                }
+            }
+            return need;
+        }
+    }
+
     // Domineering Will (dead-card batch 2, row 44)
     // "Target player gains control of up to three target nonattacking creatures until end of turn.
     // Untap those creatures. They block this turn if able." ({3}{U} instant.) One window, the

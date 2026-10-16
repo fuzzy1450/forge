@@ -148,6 +148,18 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.BreathOfFury.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.DogUmbra.NAME.equals(source.getName())
+                && SpecialCardAi.DogUmbra.isOwnCast(ai, sa)) {
+            // Dead-card batch 3, row 91. Judged whole in SpecialCardAi.DogUmbra: the script names no
+            // AttachAILogic, so attachGeneralAI's no-logic fallthrough (chooseUnpreferred, not mandatory)
+            // refused every consult, and a script logic would reach doAdvancedFlashAuraLogic (Flash), which
+            // reads the Aura's own Umbra armor as a buff and draws MyRandom on every consult it reaches. Only
+            // the owner's own cast (hand, or the top of the library under Errant and Giada) comes here; a
+            // thief's cast, a Play-effect cast (doTriggerNoCost) and the indirect attach (chooseSingleCard)
+            // keep the stock path. A decline writes no ATTACHED_THIS_TURN.
+            return SpecialCardAi.DogUmbra.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {
