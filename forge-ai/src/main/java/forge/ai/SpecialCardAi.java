@@ -22536,6 +22536,67 @@ public class SpecialCardAi {
         }
     }
 
+    // Hexhaven Battalion (dead-card batch 3, row 102; carrier Boros Miracle Spells 73ed3acd)
+    // {4}{W}{W} Sorcery, "Create three 2/2 colorless Wizard Soldier creature tokens named Cadet.
+    // Empower Jace 2." The root is the stock TokenAi: our main phase, Main 2 for tokens without
+    // haste unless castSpellInMain1 (Firebrand Archer's BuffedBy), the profile's
+    // TOKEN_GENERATION_ABILITY_CHANCE roll on a cast we pay for, doTriggerNoCost's margin-free
+    // floor on a Play-effect cast. The rider DB$ Empower had no SpellApiToAi entry, so the lookup
+    // fell back to CannotPlayAi, whose chkDrawback refuses unconditionally: every root TokenAi
+    // approved was dropped, on every route (the hand cast, Lorehold's miracle {2}, Glamdring's
+    // free cast, cascade, discover). EmpowerAi.chkDrawback routes this card's rider, and only
+    // this card's, here. The rider is pure upside for its controller: no target, Defined You (the
+    // activator, a thief included), and the Jace token is not legendary and gets its counters in
+    // the same resolution. So the value floor is the stock TokenAi's, and the only check added is
+    // the payable window:
+    // - shape bound: the Empower sub of a Token spell root activated by the deciding AI, Defined
+    //   absent or You; anything else answers CantPlayAi, A's own answer;
+    // - G1 (CommanderCastCeiling.affordable, called unchanged under G4's widened contract: a
+    //   row's own name gate, activator set) on the ROOT for a cast priced here: the hand cast, a
+    //   MayPlay cast from exile, a copy (CopySpellAbilityAi's topCopy prices the full printed
+    //   cost: under-approved, the safe side), a ReplaySpell probe (0 for a free one).
+    //   canPayCost's test payment draws MyRandom (ComputerUtilMana.isManaSourceReserved) and A
+    //   never reached it for this card, so an unaffordable window answers CantPlayAi here,
+    //   drawing nothing;
+    // - a Play-effect root (isCastFromPlayEffect, set by AbilityUtils.getSpellsFromPlayEffect)
+    //   skips G1, as Sunfall's (row 9) does: its caller prices or waives the cost itself
+    //   (RevealAi's miracle doTrigger runs canPayCost before the subs, PlayAi's chooser runs
+    //   canPayCost after the approval, Glamdring, cascade and discover cast free), and
+    //   DiscoverAi.confirmAction asks at the FULL printed cost before the free copy is made, so
+    //   G1 there would refuse a free cast.
+    // Residual: a non-free Play effect that does not price the cost before asking (none in the
+    // carrier) now reaches PlayAi's canPayCost draw where G1 would have declined. RNG-free and
+    // id-free on every path (shape tests, one test-mode calculateManaCost of a plain {4}{W}{W},
+    // one HonestMana walk), reached only after TokenAi approved the root; nothing held or
+    // remembered, no target and no X set.
+    public static class HexhavenBattalion {
+        public static final String NAME = "Hexhaven Battalion";
+
+        // the host's paper name (B3-3); only the Empower sub of this card
+        public static boolean handles(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return sa.getApi() == ApiType.Empower && host != null && NAME.equals(host.getName());
+        }
+
+        public static AiAbilityDecision considerEmpower(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            if (root == null || !root.isSpell() || root.getApi() != ApiType.Token
+                    || !ai.equals(root.getActivatingPlayer())
+                    || (sa.hasParam("Defined") && !"You".equals(sa.getParam("Defined")))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // A Play-effect root (Glamdring, cascade, discover, Lorehold's miracle) is priced or
+            // waived by its caller: RevealAi's doTrigger runs canPayCost before the subs, PlayAi's
+            // chooser runs canPayCost after the approval, and discover/Glamdring/cascade cast free.
+            // DiscoverAi.confirmAction asks at the FULL printed cost, so G1 there would refuse the
+            // free cast (Sunfall row 9's skip).
+            if (!root.isCastFromPlayEffect() && !CommanderCastCeiling.affordable(ai, root)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Hierophant Bio-Titan
     // "As an additional cost to cast this spell, you may remove any number of +1/+1 counters
     // from among creatures you control. This spell costs {2} less to cast for each counter
