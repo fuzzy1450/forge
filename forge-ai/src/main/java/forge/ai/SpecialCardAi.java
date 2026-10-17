@@ -35231,6 +35231,28 @@ public class SpecialCardAi {
     // resolution), so a non-feeder first spell forfeits that turn's reveal. RNG-free and decline-only:
     // a stack lookup, MagicStack.hasFizzled's per-target test read-only, and one library scan; no
     // copy, no card, no id. The accept path is the stock (100, WillPlay), and the subs run as before.
+    // sequenceFeeder (part 1B; AiController.chooseSpellAbilityToPlayFromList, right after
+    // SylvanOffering.sequenceFollower) puts a feeder first. While a Neera we control has its
+    // once-each-turn trigger unspent (the engine's own gate, limitByActivations(1) > 0), on an empty
+    // stack, it finds the first own-hand spell in sorted order that is timing-legal and payable (G2,
+    // HonestMana, at the engine's adjusted cost: test-mode calculateManaCost, B3-5); if shouldBottom
+    // would refuse that spell, the first movable feeder sorted behind it moves to just ahead of it,
+    // when G2 pays for both. That spell is not always the one the loop then casts (its own AI may
+    // decline it: a held creature, a skipped counter), so the move only reorders what the loop
+    // approves. Movable is takenPreCast (shouldBottom's accept judged before the cast: a real cost
+    // with no X, the floor, player targets only and none under DealDamage or LoseLife, so A never
+    // declines what B moves) minus the random-gated roots (Opt, Preordain, Consider: ScryAi and
+    // SurveilAi roll after their phase gates) and an engine permanent kept on the table (Sensei's
+    // Divining Top). A moved feeder its own AI holds (DrawAi's and DigAi's Main 2, PermanentAi's
+    // Main 1, canCastTiming) is declined at a gate that draws nothing and the order resumes; DrawAi's
+    // holds are never overridden, and there is no phase clause. Residuals: when an adjusted cost
+    // inverts the printed sort (Blasphemous Act at 3 sorted above Ovika at 7), the guard checks the
+    // wrong spell and the real cast can slip one turn, as G2's multicolour over-count can; a moved
+    // feeder refused after its own draws (canPayCost's reservation roll, Portent's target roll)
+    // shifts the rest of that pass with no visible cast. A spell whose test-mode pricing asks a
+    // controller or test-pays is never priced: the list is left as it is. Draws nothing, copies
+    // nothing; its writes are setActivatingPlayer (the value getOriginalAndAltCostAbilities writes
+    // next, ComputerUtilAbility:104) and G2's.
     public static class NeeraWildMage {
         public static final String NAME = "Neera, Wild Mage";
         public static final String LOGIC = "NeeraWildMage";
@@ -35321,6 +35343,165 @@ public class SpecialCardAi {
                 return p.isOpponentOf(ai) && (s.getApi() == ApiType.DealDamage || s.getApi() == ApiType.LoseLife);
             }
             return false; // Portent or a draw at a player is not interaction we keep
+        }
+
+        // B: while our Neera is unspent this turn, on an empty stack, the first own-hand spell that is
+        // timing-legal and payable (G2 at the engine's adjusted cost) takes the trigger when the loop
+        // casts it. If shouldBottom would refuse it, the first movable feeder sorted behind it moves to
+        // just ahead of it, when G2 pays for both. Nothing else moves.
+        public static void sequenceFeeder(final Player ai, final List<SpellAbility> all) {
+            if (!ai.getGame().getStack().isEmpty() || !ai.isCardInPlay(NAME) || !unspent(ai)) {
+                return;
+            }
+            int b = -1;
+            ManaCostBeingPaid bCost = null;
+            HonestMana mana = null;
+            for (int i = 0; i < all.size() && b < 0; i++) {
+                final SpellAbility s = all.get(i);
+                if (!ownHandCast(ai, s)) {
+                    continue;
+                }
+                s.setActivatingPlayer(ai); // the value getOriginalAndAltCostAbilities writes next
+                if (!s.canCastTiming(ai) || s.getPayCosts() == null) {
+                    continue;
+                }
+                if (asksController(s)) {
+                    return; // its pricing would ask a controller or test-pay: the list as it is
+                }
+                final ManaCostBeingPaid c = ComputerUtilMana.calculateManaCost(s.getPayCosts(), s, ai, true, 0, false);
+                final HonestMana m = HonestMana.of(ai, s, true);
+                if (!pays(m, c, null)) {
+                    continue;
+                }
+                if (takenPreCast(ai, s)) {
+                    return; // a feeder already goes first
+                }
+                b = i;
+                bCost = c;
+                mana = m;
+            }
+            if (b < 0) {
+                return;
+            }
+            for (int i = b + 1; i < all.size(); i++) {
+                final SpellAbility s = all.get(i);
+                if (!ownHandCast(ai, s)) {
+                    continue;
+                }
+                s.setActivatingPlayer(ai);
+                if (!s.canCastTiming(ai) || s.getPayCosts() == null || !movable(ai, s) || asksController(s)) {
+                    continue;
+                }
+                final ManaCostBeingPaid c = ComputerUtilMana.calculateManaCost(s.getPayCosts(), s, ai, true, 0, false);
+                if (pays(mana, bCost, c)) {
+                    all.add(b, all.remove(i)); // i > b: b is not shifted
+                    return;
+                }
+            }
+        }
+
+        // the engine's own once-each-turn gate on a Neera we control (TriggerHandler.canRunTrigger)
+        public static boolean unspent(final Player ai) {
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!NAME.equals(c.getName())) {
+                    continue;
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.SpellCast && t.hasParam("ActivationLimit")
+                            && !t.isSuppressed() && t.limitByActivations(1) > 0) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // shouldBottom's accept, judged before the cast: a real cost with no X, the floor, and no
+        // target that could be an opponent's card or spell, or an opponent under damage or life loss
+        static boolean takenPreCast(final Player ai, final SpellAbility s) {
+            final Card h = s.getHostCard();
+            final ManaCost mc = h.getManaCost();
+            return mc != null && !mc.isNoCost() && mc.countX() == 0 && playerTargetsOnly(s) && cheap(ai, h.getCMC());
+        }
+
+        // what B may move: takenPreCast, minus the random-gated roots (Opt, Preordain, Consider:
+        // ScryAi and SurveilAi roll after their phase gate, so a moved one that rolls no would shift
+        // the stream with no visible cast) and an engine permanent we keep on the table (Sensei's
+        // Divining Top: a non-mana activated ability that does not sacrifice it)
+        static boolean movable(final Player ai, final SpellAbility s) {
+            return takenPreCast(ai, s) && s.getApi() != ApiType.Scry && s.getApi() != ApiType.Surveil
+                    && !reusablePermanent(s.getHostCard());
+        }
+
+        // player targets only, and none under a DealDamage or LoseLife ability (B1: shouldBottom keeps
+        // an opponent's face under those)
+        private static boolean playerTargetsOnly(final SpellAbility root) {
+            for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
+                if (!s.usesTargeting()) {
+                    continue;
+                }
+                if (s.getApi() == ApiType.DealDamage || s.getApi() == ApiType.LoseLife) {
+                    return false;
+                }
+                for (final String v : s.getTargetRestrictions().getValidTgts()) {
+                    if (!(v.startsWith("Player") || v.startsWith("Opponent") || v.startsWith("You"))) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        private static boolean reusablePermanent(final Card h) {
+            if (!h.isPermanent()) {
+                return false;
+            }
+            for (final SpellAbility a : h.getSpellAbilities()) {
+                if (a.isActivatedAbility() && !a.isManaAbility()
+                        && !ComputerUtilCost.isSacrificeSelfCost(a.getPayCosts())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean ownHandCast(final Player ai, final SpellAbility s) {
+            final Card h = s.getHostCard();
+            return h != null && s.isSpell() && !s.isCopied() && !s.isCastFromPlayEffect()
+                    && h.isInZone(ZoneType.Hand) && ai.equals(h.getOwner());
+        }
+
+        // G2 total and each colour against one or two adjusted costs (B3-5; TrenchGorger's test)
+        private static boolean pays(final HonestMana m, final ManaCostBeingPaid a, final ManaCostBeingPaid b) {
+            if (m.total() < a.getConvertedManaCost() + (b == null ? 0 : b.getConvertedManaCost())) {
+                return false;
+            }
+            final byte[] col = {MagicColor.WHITE, MagicColor.BLUE, MagicColor.BLACK, MagicColor.RED, MagicColor.GREEN};
+            final forge.card.mana.ManaCostShard[] sh = {forge.card.mana.ManaCostShard.WHITE,
+                    forge.card.mana.ManaCostShard.BLUE, forge.card.mana.ManaCostShard.BLACK,
+                    forge.card.mana.ManaCostShard.RED, forge.card.mana.ManaCostShard.GREEN};
+            for (int k = 0; k < col.length; k++) {
+                if (m.colour(col[k]) < a.getUnpaidShards(sh[k]) + (b == null ? 0 : b.getUnpaidShards(sh[k]))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // SylvanOffering.asksController, a private copy (B3-4): a cost whose test-mode pricing asks a
+        // controller or test-pays (Convoke, Delve, Improvise, Assist, Emerge, Offering, Waterbend; the
+        // Announce$ NumTimes loop's canPayManaCost test payments can draw MyRandom). None in deck 507.
+        private static boolean asksController(final SpellAbility s) {
+            final Card h = s.getHostCard();
+            if (h != null && (h.hasKeyword(Keyword.CONVOKE) || h.hasKeyword(Keyword.DELVE) || h.hasKeyword(Keyword.IMPROVISE)
+                    || h.hasKeyword(Keyword.ASSIST) || h.hasKeyword(Keyword.EMERGE) || h.hasKeyword(Keyword.OFFERING))) {
+                return true;
+            }
+            if (s.getPayCosts() != null && s.getPayCosts().getMaxWaterbend() != null) {
+                return true;
+            }
+            final String announce = s.getParam("Announce");
+            return announce != null && announce.contains("NumTimes");
         }
     }
 

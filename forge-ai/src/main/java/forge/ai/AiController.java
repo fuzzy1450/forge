@@ -1784,6 +1784,11 @@ public class AiController {
         // draws nothing, makes no card; either moves that follower to just after Offering or leaves
         // the list exactly as it is.
         SpecialCardAi.SylvanOffering.sequenceFollower(player, all);
+        // Dead-card batch 4, row 1, part 1B (Neera, Wild Mage): a cheap feeder ahead of the first
+        // own-hand spell that is timing-legal and payable, while our Neera's once-each-turn trigger is
+        // unspent. Inert (an empty-stack test and one isCardInPlay) otherwise; draws nothing, makes no
+        // card; either moves that one feeder or leaves the list exactly as it is.
+        SpecialCardAi.NeeraWildMage.sequenceFeeder(player, all);
 
         FutureTask<SpellAbility> future = new FutureTask<>(() -> {
             //avoid ComputerUtil.aiLifeInDanger in loops as it slows down a lot.. call this outside loops will generally be fast...
