@@ -895,6 +895,14 @@ public class AiController {
             return AiPlayDecision.TargetingFailed;
         }
 
+        // Dead-card batch 4, row 5: The Water Crystal's mill. MillAi approved it from MAIN2 on and
+        // canPayCost above ran A's test payment, draws included; TheWaterCrystal.holdMill keeps it
+        // for the end step before our turn unless it empties a library now (and never mills nothing).
+        // A name compare: inert for every other SA. See the class comment.
+        if (SpecialCardAi.TheWaterCrystal.holdMill(player, sa)) {
+            return AiPlayDecision.WaitForEndOfTurn;
+        }
+
         return AiPlayDecision.WillPlay;
     }
 

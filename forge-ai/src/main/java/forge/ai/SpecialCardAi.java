@@ -36752,6 +36752,15 @@ public class SpecialCardAi {
                 }
 
                 testSa.setActivatingPlayer(ai);
+                // Dead-card batch 4, row 5: an untapped Water Crystal mill that TheWaterCrystal.holdMill
+                // keeps right now is no reason to make devotion mana. canPlaySa approves it (MillAi), but
+                // AiController.canPlayAndPayForFace holds it after this mana is made, and the pool emptied
+                // unspent with two lands and Nykthos tapped through the opponent's turn (skeptic probes
+                // 1625179/1626240). A tapped Crystal keeps A's path. A name compare inside holdMill: inert
+                // for every other testSa; RNG-free (the skipped canPlaySa drew nothing either).
+                if (TheWaterCrystal.holdMill(ai, testSa) && !testSa.getHostCard().isTapped()) {
+                    continue;
+                }
                 if (((PlayerControllerAi) ai.getController()).getAi().canPlaySa(testSa) == AiPlayDecision.WillPlay) {
                     // the AI is willing to play the spell
                     return true;
@@ -51399,6 +51408,64 @@ public class SpecialCardAi {
                 // No valid targets, can't play this ability
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
             }
+        }
+    }
+
+    // The Water Crystal (dead-card batch 4, row 5; deck review 2026-10-17)
+    // "{4}{U}{U}, {T}: Each opponent mills cards equal to the number of cards in your hand", and its own
+    // replacement "If an opponent would mill one or more cards, they mill that many cards plus four
+    // instead". A activated it at the first window MillAi opens (checkPhaseRestrictions: every MAIN2
+    // and end step, either turn; checkApiLogic always approves). The CMC-first saEvaluator sort
+    // (6, plus 1 for this card's own ReduceCost static) ranked it above Gilded Lotus and the rest of
+    // our Main 2, so the deck tapped out for a non-lethal mill every own turn and had no mana on the
+    // opponent's turn (review logs: 18 of 18 activations in our own Main 2).
+    // holdMill keeps it for the end step before our turn, on an empty stack (the AtOppEOT idiom of
+    // SpellAbilityAi.checkPhaseRestrictions), where the mana the opponent's turn left over is lost at
+    // our untap anyway. It approves at once, in any window A opens, when the mill empties a library:
+    // that opponent loses at its next draw, a turn cycle sooner than at the end step. It never
+    // approves a mill of nothing (an empty hand: MillEffect returns at 0, the replacement adds nothing).
+    // The count is MillEffect's own: NumCards when present, else 1.
+    // Two callers:
+    // - AiController.canPlayAndPayForFace, AFTER canPayCost: MillAi's stock approval and the test
+    //   payment's isManaSourceReserved draws have run exactly as in A, so a hold changes the game
+    //   only in a window where A activated. Not a script AILogic$ AtOppEOT: that refuses at the phase
+    //   gate, before canPayCost, in the unaffordable windows A drew in outside the opponent's end step
+    //   (25 of 30 in 1614202), and it has no lethal exception.
+    // - NykthosShrineToNyx.consider, between setActivatingPlayer and its canPlaySa test: a direct
+    //   canPlaySa scanner (B3-2) reads MillAi's stock approval and never sees the hold above, so it
+    //   made devotion mana for a Crystal the main loop then held, and the pool emptied unspent with
+    //   two lands and Nykthos tapped through the opponent's turn (skeptic probes 1625179, 1626240).
+    //   An untapped Crystal held right now is no reason to activate Nykthos; a tapped one keeps A's
+    //   path (after a lethal mill the tapped Crystal reads as a hold, in a game A and B play alike).
+    // Keyed on the host's paper name (B3-3). RNG-free, O(opponents).
+    public static class TheWaterCrystal {
+        public static final String NAME = "The Water Crystal";
+        static final int MILL_BONUS = 4; // its own replacement, on a mill of one or more
+
+        // true = keep the mill this window (canPlayAndPayForFace answers WaitForEndOfTurn, the Nykthos
+        // scan skips it); false = A's path
+        public static boolean holdMill(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !NAME.equals(host.getName()) || !sa.isActivatedAbility()
+                    || sa.getApi() != ApiType.Mill) {
+                return false; // every other SA, a Mairsil grant included: A's path
+            }
+            // Y = Count$ValidHand Card.YouOwn, the count MillEffect.resolve reads (1 without NumCards)
+            final int inHand = sa.hasParam("NumCards")
+                    ? AbilityUtils.calculateAmount(host, sa.getParam("NumCards"), sa) : 1; // MillEffect's default
+            if (inHand <= 0) {
+                return true; // mills nothing
+            }
+            final int milled = inHand + MILL_BONUS;
+            for (final Player o : ai.getOpponents()) { // Defined$ Opponent: each of them
+                final int library = o.getCardsIn(ZoneType.Library).size();
+                if (library > 0 && milled >= library) {
+                    return false; // empties a library now
+                }
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            return !(ph.is(PhaseType.END_OF_TURN) && ph.getNextTurn() == ai && game.getStack().isEmpty());
         }
     }
 
