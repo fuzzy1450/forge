@@ -35202,6 +35202,128 @@ public class SpecialCardAi {
         }
     }
 
+    // Neera, Wild Mage (dead-card batch 4, row 1; commander of Neera - Wild Magic 510f65b5, deck 507)
+    // "Whenever you cast a spell, you may put it on the bottom of its owner's library. If you do,
+    // reveal cards from the top of your library until you reveal a nonland card. You may cast that
+    // card without paying its mana cost. Then put all revealed cards not cast this way on the bottom
+    // of your library in a random order. This ability triggers only once each turn." ({4}{U}{R} 2/7;
+    // the script matches the printed text clause by clause.)
+    // The once-each-turn count is spent when the trigger is stacked (TriggerHandler
+    // .runSingleTriggerInternal's regtrig.triggerRun()), the "may" is asked at resolution
+    // (WrappedAbility.resolve -> PlayerControllerAi.confirmTrigger -> doTrigger(sa, false)), and the
+    // stock answer was always yes (ChangeZoneAi.knownOriginTriggerAI's untargeted WillPlay) on
+    // whatever spell came first: 58 of 58 logged triggers taken, a Blasphemous Act cast for 9
+    // bottomed for nothing, counters and removal bottomed under their targets, 2.43 payoffs,
+    // interaction and MV 3-4 spells bottomed per Neera game.
+    // shouldBottom (AILogic$ NeeraWildMage on SVar:TrigPutBottom, ChangeZoneAi.doTriggerNoCost) is
+    // that choice, with the cast spell S still on the stack:
+    // - S has left the stack: bottom it (the stock answer; the bottom moves nothing);
+    // - keep S, whatever its MV, if any still-legal target is a card an opponent controls (any
+    //   zone), a spell or ability an opponent controls, or an opponent under a DealDamage or
+    //   LoseLife ability of S (the AI aims burn at a face only near lethal, DamageAiBase.shouldTgtP);
+    // - bottom S if it chose targets and none is still legal (it is countered on resolution anyway);
+    // - keep S if it has no mana cost (Ancestral Vision off suspend draws three);
+    // - otherwise bottom S only if its mana value on the stack (X included) is at most 2 and below
+    //   9/10 of our library's average nonland mana value (a reveal is cast 93% of the time, worth
+    //   about 0.9 x 3.47 MV in this deck); keep everything else: MV 3-4 is a neutral trade, a payoff
+    //   a loss.
+    // A decline spends the turn's trigger (CR 603.5: the ability triggered, the "may" is chosen on
+    // resolution), so a non-feeder first spell forfeits that turn's reveal. RNG-free and decline-only:
+    // a stack lookup, MagicStack.hasFizzled's per-target test read-only, and one library scan; no
+    // copy, no card, no id. The accept path is the stock (100, WillPlay), and the subs run as before.
+    public static class NeeraWildMage {
+        public static final String NAME = "Neera, Wild Mage";
+        public static final String LOGIC = "NeeraWildMage";
+        public static final int FEEDER_MAX_MV = 2;                 // a cantrip or a two-mana rock
+        public static final int REVEAL_NUM = 9, REVEAL_DEN = 10;  // the share of reveals that become a cast
+
+        // true = bottom it (the stock answer), false = keep the spell
+        public static boolean shouldBottom(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final List<SpellAbility> defined = AbilityUtils.getDefinedSpellAbilities(
+                    sa.getHostCard(), "TriggeredSpellAbility", sa);
+            final SpellAbility trig = defined.isEmpty() ? null : defined.get(0);
+            final SpellAbilityStackInstance si = trig == null ? null
+                    : game.getStack().getInstanceMatchingSpellAbilityID(trig);
+            if (si == null || si.getSpellAbility() == null) {
+                return true; // left the stack: the bottom moves nothing, the stock answer kept
+            }
+            final SpellAbility spell = si.getSpellAbility();
+            boolean chose = false, live = false;
+            for (SpellAbility s = spell; s != null; s = s.getSubAbility()) {
+                if (!s.usesTargeting()) {
+                    continue;
+                }
+                for (final GameObject o : s.getTargets()) {
+                    chose = true;
+                    if (!stillLegal(game, s, o)) {
+                        continue;
+                    }
+                    live = true;
+                    if (opposed(ai, game, s, o)) {
+                        return false; // a counter, removal or burn on their object or face resolves
+                    }
+                }
+            }
+            if (chose && !live) {
+                return true; // every target gone: it is countered on resolution anyway
+            }
+            final Card card = spell.getHostCard();
+            if (card == null || card.getManaCost() == null || card.getManaCost().isNoCost()) {
+                return false; // priced by suspend, not by MV (Ancestral Vision draws three)
+            }
+            return cheap(ai, card.getCMC()); // on the stack getCMC counts X
+        }
+
+        // the floor: MV <= 2 and MV < 9/10 of our library's average nonland MV
+        static boolean cheap(final Player ai, final int mv) {
+            if (mv > FEEDER_MAX_MV) {
+                return false;
+            }
+            int n = 0, sum = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Library)) {
+                if (!c.isLand()) {
+                    n++;
+                    sum += c.getCMC();
+                }
+            }
+            return n > 0 && REVEAL_DEN * mv * n < REVEAL_NUM * sum;
+        }
+
+        // MagicStack.hasFizzled's per-target test, read-only (hasFizzled removes the targets it fails)
+        private static boolean stillLegal(final Game game, final SpellAbility s, final GameObject o) {
+            if (o instanceof Card c) {
+                final Card cur = game.getCardState(c);
+                return !(cur != null && !cur.equalsWithGameTimestamp(c)) && s.canTarget(c, true);
+            }
+            if (o instanceof SpellAbility t) {
+                final SpellAbilityStackInstance ti = game.getStack().getInstanceMatchingSpellAbilityID(t);
+                return ti != null && s.canTarget(ti.getSpellAbility(), true);
+            }
+            return s.canTarget(o, true);
+        }
+
+        // interaction we keep: their card or spell, or their face under damage or life loss
+        private static boolean opposed(final Player ai, final Game game, final SpellAbility s, final GameObject o) {
+            if (o instanceof Card c) {
+                final Card cur = game.getCardState(c);
+                final Player p = (cur != null ? cur : c).getController();
+                return p != null && p.isOpponentOf(ai);
+            }
+            if (o instanceof SpellAbility t) {
+                final SpellAbilityStackInstance ti = game.getStack().getInstanceMatchingSpellAbilityID(t);
+                final Player p = ti == null ? null : ti.getSpellAbility().getActivatingPlayer();
+                return p != null && p.isOpponentOf(ai);
+            }
+            if (o instanceof Player p) {
+                // burn or drain at an opponent's face: the AI aims it there only near lethal
+                // (DamageAiBase.shouldTgtP: life after the damage below 5), e.g. 1650999 T20
+                return p.isOpponentOf(ai) && (s.getApi() == ApiType.DealDamage || s.getApi() == ApiType.LoseLife);
+            }
+            return false; // Portent or a draw at a player is not interaction we keep
+        }
+    }
+
     // Nemata, Grove Guardian (dead-card batch 3, row 101; extension 2026-10-15; Mono-Green Food and
     // Tokens 8428b3ce)
     // "{2}{G}: Create a 1/1 green Saproling creature token. Sacrifice a Saproling: Saproling

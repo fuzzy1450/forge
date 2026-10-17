@@ -728,6 +728,16 @@ public class ChangeZoneAi extends SpellAbilityAi {
             // (checkETBEffects, not mandatory) gets the stock answer, RNG-free; the trigger going on
             // the stack (mandatory) takes the best live picks, up to the kicks paid
             return SpecialCardAi.MarshalsAnthem.chooseReturns(aiPlayer, sa, mandatory);
+        } else if (SpecialCardAi.NeeraWildMage.LOGIC.equals(aiLogic)) {
+            // Neera, Wild Mage's "you may put it on the bottom of its owner's library" (dead-card batch
+            // 4, row 1): the mandatory call is the trigger going on the stack (prepareSingleSa),
+            // approved as knownOriginTriggerAI did (its untargeted WillPlay); the choice is
+            // confirmTrigger's, at resolution, with the cast spell still under it. RNG-free; it only
+            // ever declines.
+            if (mandatory || SpecialCardAi.NeeraWildMage.shouldBottom(aiPlayer, sa)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
         if (!mandatory && SpecialCardAi.TitansPresence.handles(sa)) {
