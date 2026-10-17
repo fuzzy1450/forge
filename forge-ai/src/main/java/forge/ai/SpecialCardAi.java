@@ -21,6 +21,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Table;
 import forge.StaticData;
 import forge.ai.ability.AnimateAi;
+import forge.ai.ability.CannotPlayAi;
 import forge.ai.ability.FightAi;
 import forge.ai.ability.ProtectAi;
 import forge.ai.ability.TokenAi;
@@ -48,8 +49,10 @@ import forge.game.cost.CostExile;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostPartMana;
 import forge.game.cost.CostPayEnergy;
+import forge.game.cost.CostPutCardToLib;
 import forge.game.cost.CostRemoveAnyCounter;
 import forge.game.cost.CostRemoveCounter;
+import forge.game.cost.CostReturn;
 import forge.game.cost.CostReveal;
 import forge.game.cost.CostSacrifice;
 import forge.game.cost.CostTap;
@@ -73,6 +76,7 @@ import forge.game.spellability.SpellPermanent;
 import forge.game.spellability.TargetChoices;
 import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityAttackRestrict;
+import forge.game.staticability.StaticAbilityCantBeCast;
 import forge.game.staticability.StaticAbilityCantDraw;
 import forge.game.staticability.StaticAbilityCantPhase;
 import forge.game.staticability.StaticAbilityFlipCoinMod;
@@ -24786,6 +24790,138 @@ public class SpecialCardAi {
                 }
             }
             return Math.max(2, 1 + copyTriggers * (copyAddsOne ? 2 : 1));
+        }
+    }
+
+    // Illusionist's Bracers (dead-card batch 4, row 4; deck review 2026-10-17: Arcanis - i LOVE
+    // drawing cards 87715b77, the only carrier). "Whenever an ability of equipped creature is
+    // activated, if it isn't a mana ability, copy that ability." Equip {3}. Its own Equip, asked
+    // by its controller and not mandatory (AttachAi.attachToCardAIPreferences' gate; another
+    // card's attach ability, a mandatory attach and a Mairsil-granted Equip keep the stock path:
+    // B3-3, the host's paper name).
+    // Holder value (payoff): the best of the creature's own battlefield non-mana activated
+    // abilities that the AI activates and whose copy adds something: a Draw of N literal cards
+    // (untargeted) is N, anything else 1, doubled when the cost is {T} with no mana (used every
+    // turn: Clever Conjurer 9 activations in 2 logs, Spectral Sailor 0 in 15). 0 for: equip,
+    // loyalty, other-zone abilities (cycling, ninjutsu), AILogic$ Never, a CannotPlayAi api, an
+    // AI:RemoveDeck card (its abilities never reach the AI's list), a cost that sacrifices,
+    // exiles, returns or tucks the creature itself (ruling 2013-01-24: no copy), and a
+    // self-move (Arcanis' {2}{U}{U} bounce, Nezahal's exile: the copy does what the original
+    // does). 0 for an ability a CantBeActivated static forbids (Arrest, Pithing Needle naming
+    // it, Cursed Totem): stock's Pump filter never equipped an Arrested creature
+    // (canAttackNextTurn), and the bar would never move the Bracers off one. A creature that is
+    // detained, tapped for good or leaving at end of turn holds 0.
+    // Choice: our own creature (controlled and owned), a valid Equip target that can wear it,
+    // not marked to die (ComputerUtil.getSafeTargets, the stock filter), with payoff >= MIN_PAYOFF,
+    // the highest payoff, then the highest creatureEvaluator. Arcanis = 3 x 2 = 6; Clever
+    // Conjurer, Vizier = 2; Spectral Sailor, Kefnet = 1 (never chosen); Consecrated Sphinx, a
+    // Drake token, Aphetto Alchemist (RemoveDeck) = 0 (never chosen).
+    // Move: equipping a creature of ours already, the Bracers moves only to a STRICTLY higher
+    // payoff (so equal holders never trade it back and forth and no memory set is needed); the
+    // profile's "never" is honoured; from_useless_only is overridden for this card on purpose.
+    // RNG: the stock chooser at this consult draws nothing (Pump: prefPlayer = ai; the Pump
+    // preference, getSafeTargets and getBestCreatureAI are deterministic) and neither does this:
+    // payoff reads params, costs and states only (no calculateAmount), evaluateCreature is
+    // deterministic. A decline writes nothing (A's ATTACHED_THIS_TURN write is read only by the
+    // move branch this replaces) and reserves no mana (A's predictSpellToCastInMain2 runs only
+    // on a move from a useless holder).
+    public static class IllusionistsBracers {
+        public static final String NAME = "Illusionist's Bracers";
+        static final int MIN_PAYOFF = 2;
+
+        public static boolean handles(final Player ai, final SpellAbility sa, final Card attachSource,
+                final boolean mandatory) {
+            return !mandatory && attachSource != null && sa.isEquip() && attachSource.equals(sa.getHostCard())
+                    && NAME.equals(attachSource.getName()) && ai.equals(attachSource.getController());
+        }
+
+        // the creature to equip, or null: do not equip (keep the {3})
+        public static Card chooseEquipTarget(final Player ai, final SpellAbility sa, final Card bracers,
+                final CardCollection candidates) {
+            final Card holder = bracers.getEquipping();
+            final boolean holdsOurs = holder != null && ai.equals(holder.getController());
+            if (holdsOurs && "never".equals(AiProfileUtil.getProperty(ai, AiProps.MOVE_EQUIPMENT_TO_BETTER_CREATURES))) {
+                return null;
+            }
+            final int bar = holdsOurs ? Math.max(MIN_PAYOFF, payoff(ai, holder) + 1) : MIN_PAYOFF;
+            Card best = null;
+            int bestPayoff = 0;
+            int bestEval = 0;
+            for (final Card c : ComputerUtil.getSafeTargets(ai, sa, candidates)) {
+                if (c.equals(holder) || !c.isCreature() || !ai.equals(c.getController()) || !ai.equals(c.getOwner())) {
+                    continue;
+                }
+                final int p = payoff(ai, c);
+                if (p < bar) {
+                    continue;
+                }
+                final int e = ComputerUtilCard.evaluateCreature(c);
+                if (best == null || p > bestPayoff || (p == bestPayoff && e > bestEval)) {
+                    best = c;
+                    bestPayoff = p;
+                    bestEval = e;
+                }
+            }
+            return best;
+        }
+
+        static int payoff(final Player ai, final Card c) {
+            if (c.isDetained() || (c.isTapped() && !c.canUntap(ai, true)) || c.hasSVar("EndOfTurnLeavePlay")
+                    || ComputerUtilCard.isCardRemAIDeck(c)) {
+                return 0;
+            }
+            int best = 0;
+            for (final SpellAbility s : c.getNonManaAbilities()) {
+                if (!s.isActivatedAbility() || s.isEquip() || s.isPwAbility() || s.getApi() == null
+                        || s.getRestrictions() == null || s.getRestrictions().getZone() != ZoneType.Battlefield
+                        || "Never".equals(s.getParam("AILogic"))
+                        || SpellApiToAi.Converter.get(s.getApi()) instanceof CannotPlayAi
+                        || paysWithItself(s.getPayCosts()) || movesItself(s)
+                        || (s.getActivatingPlayer() != null
+                            && StaticAbilityCantBeCast.cantBeActivatedAbility(s, c, ai))) {
+                    continue;
+                }
+                int p = s.getApi() == ApiType.Draw && !s.usesTargeting() ? Math.max(1, literal(s.getParam("NumCards"), 1)) : 1;
+                final Cost cost = s.getPayCosts();
+                if (cost != null && cost.hasTapCost() && !cost.hasManaCost()) {
+                    p *= 2;
+                }
+                best = Math.max(best, p);
+            }
+            return best;
+        }
+
+        private static boolean paysWithItself(final Cost cost) {
+            if (cost == null) {
+                return false;
+            }
+            for (final CostPart p : cost.getCostParts()) {
+                if (p.payCostFromSource() && (p instanceof CostSacrifice || p instanceof CostExile
+                        || p instanceof CostReturn || p instanceof CostPutCardToLib)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean movesItself(final SpellAbility s) {
+            if (s.getApi() != ApiType.ChangeZone || s.usesTargeting() || s.hasParam("ChangeType")) {
+                return false;
+            }
+            final String defined = s.getParam("Defined");
+            return "Battlefield".equals(s.getParam("Origin")) && (defined == null || "Self".equals(defined));
+        }
+
+        // private copy (accepted helpers stay frozen: B3-4); integer literals only
+        private static int literal(final String s, final int dflt) {
+            if (s == null) {
+                return dflt;
+            }
+            try {
+                return Integer.parseInt(s.trim());
+            } catch (final NumberFormatException ex) {
+                return dflt;
+            }
         }
     }
 

@@ -1604,6 +1604,17 @@ public class AttachAi extends SpellAbilityAi {
         // Filter AI-specific targets if provided
         prefList = ComputerUtil.filterAITgts(sa, aiPlayer, prefList, true);
 
+        // Illusionist's Bracers (dead-card batch 4, row 4; carrier Arcanis - i LOVE drawing cards
+        // 87715b77): its only value is copying the equipped creature's non-mana activations. The
+        // Pump preference below never reads that (no statics: the !grantingAbilities branch takes
+        // the best-evaluated attacker - Consecrated Sphinx, a pumped Drake token, Spectral Sailor
+        // in 4 of 9 logged equips) and from_useless_only then pins it there for the game. Its own
+        // Equip, never a mandatory attach, is judged whole in SpecialCardAi.IllusionistsBracers:
+        // RNG-free like the stock chooser here, no memory set, no mana reservation.
+        if (SpecialCardAi.IllusionistsBracers.handles(aiPlayer, sa, attachSource, mandatory)) {
+            return SpecialCardAi.IllusionistsBracers.chooseEquipTarget(aiPlayer, sa, attachSource, prefList);
+        }
+
         Card c = attachGeneralAI(aiPlayer, sa, prefList, mandatory, attachSource, sa.getParam("AILogic"));
 
         AiController aic = ((PlayerControllerAi)aiPlayer.getController()).getAi();
