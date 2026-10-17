@@ -238,6 +238,19 @@ public class SacrificeAi extends SpellAbilityAi {
             return SpecialCardAi.KarplusanMinotaur.willPayUpkeep(payer, sa);
         }
 
+        // Mystic Remora (dead-card batch 4, row 2): a mana-budgeted cumulative upkeep
+        if (sa.isCumulativeUpkeep() && sa.getHostCard() != null
+                && SpecialCardAi.MysticRemora.NAME.equals(sa.getHostCard().getName())
+                && !SpecialCardAi.MysticRemora.willPayUpkeep(payer, sa, cost)) {
+            // RNG parity: the stock path below approves every Remora upkeep (no Icy Prison, no
+            // OblivionRing SVar, super checks only life/damage/sacrifice/discard), so A always went on to
+            // PlayerControllerAi.payCostToPreventEffect's canPayCost, whose test payment draws
+            // (isManaSourceReserved). Make the same call, so an upkeep A could not pay either leaves the
+            // random stream exactly where A left it.
+            ComputerUtilCost.canPayCost(cost, sa, payer, true);
+            return false;
+        }
+
         // Icy Prison
         if (payers.size() > 1) {
             final Player p = sa.getActivatingPlayer();

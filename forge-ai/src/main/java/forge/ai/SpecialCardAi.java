@@ -28766,6 +28766,77 @@ public class SpecialCardAi {
         }
     }
 
+    // Mystic Remora (dead-card batch 4, row 2)
+    // {U} enchantment, "Cumulative upkeep {1}. Whenever an opponent casts a noncreature spell, you may
+    // draw a card unless that player pays {4}." The keyword's upkeep trigger resolves DB$ Sacrifice |
+    // CumulativeUpkeep$ 1 (CardFactoryUtil), and SacrificeEffect asks payCostToPreventEffect ->
+    // SacrificeAi.willPayUnlessCost, whose stock answer (SpellAbilityAi.willPayUnlessCost) approves any
+    // mana upkeep: the AI paid age N with N + k mana for as long as it made land drops, so its usable
+    // mana froze at the level of the turn Remora landed (store 2026-10-17: Arcanis cast it by its own
+    // turn 4 in 1,349 games and won 17.8% of them). The value floor:
+    // - never past MAX_AGE age counters: one opponent casts about 0.2-0.6 noncreature spells a turn
+    //   cycle in this field, and an AI opponent pays the {4} whenever it can, so a cycle is worth well
+    //   under a card and three mana never buys one;
+    // - at age 1 or 2, pay only when it costs no cast this turn. avail = HonestMana (G2, every source)
+    //   plus the land drop when a land with no ETB replacement is in hand on our turn with a drop
+    //   open. The best subset-sum of the nonland cards in hand (an X spell at X = 1) and our
+    //   commanders in the command zone (with tax) that fits avail must still fit avail - N.
+    // Decided in our upkeep, before the draw and the land drop, so the draw is unknown: that is why the
+    // cap holds even with an empty hand. Every upkeep this pays is an upkeep the stock path paid (stock
+    // approves every Remora upkeep it can pay), so the only change is an earlier sacrifice, and the
+    // worst case is Remora's remaining value. Draws nothing (HonestMana, the hand, counters). Keyed on
+    // the host's paper name (B3-3): any controller, any copy; no other cumulative-upkeep card.
+    public static class MysticRemora {
+        public static final String NAME = "Mystic Remora";
+        public static final int MAX_AGE = 2;
+
+        public static boolean willPayUpkeep(final Player ai, final SpellAbility sa, final Cost cost) {
+            // SacrificeEffect adds this upkeep's AGE counter before asking (as KarplusanMinotaur reads it)
+            if (sa.getHostCard().getCounters(CounterEnumType.AGE) > MAX_AGE) {
+                return false;
+            }
+            final int pay = cost.getTotalMana().getCMC();
+            final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
+            int avail = HonestMana.of(ai, sa, false).total();
+            if (ai.getGame().getPhaseHandler().isPlayerTurn(ai)
+                    && (ai.getMaxLandPlaysInfinite() || ai.getLandsPlayedThisTurn() < ai.getMaxLandPlays())
+                    && CardLists.count(hand, c -> c.isLand() && !c.hasETBReplacement()) > 0) {
+                avail++; // this turn's land drop, on a land with no ETB replacement
+            }
+            if (avail < pay) {
+                return false;
+            }
+            final int cap = Math.min(avail, 62);
+            final long mask = (1L << (cap + 1)) - 1;
+            long reach = 1L; // bit i: some subset of the demand costs exactly i
+            for (final Card c : hand) {
+                if (!c.isLand()) {
+                    final boolean x = c.getManaCost() != null && c.getManaCost().countX() > 0;
+                    reach = fit(reach, c.getCMC() + (x ? 1 : 0), cap, mask);
+                }
+            }
+            for (final Card cmdr : ai.getCommanders()) {
+                if (cmdr.isInZone(ZoneType.Command)) {
+                    reach = fit(reach, cmdr.getCMC() + 2 * ai.getCommanderCast(cmdr), cap, mask);
+                }
+            }
+            return best(reach, Math.min(avail - pay, cap)) == best(reach, cap);
+        }
+
+        private static long fit(final long reach, final int cost, final int cap, final long mask) {
+            return cost <= cap ? reach | ((reach << cost) & mask) : reach;
+        }
+
+        private static int best(final long reach, final int x) {
+            for (int i = x; i > 0; i--) {
+                if ((reach & (1L << i)) != 0) {
+                    return i;
+                }
+            }
+            return 0;
+        }
+    }
+
     // Kheru Spellsnatcher (dead-card batch 2, row 41)
     // {3}{U} 3/3, "Morph {4}{U}{U}. When Kheru Spellsnatcher is turned face up, counter target
     // spell. If that spell is countered this way, exile it instead of putting it into its owner's
