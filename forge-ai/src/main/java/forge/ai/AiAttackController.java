@@ -1572,6 +1572,23 @@ public class AiAttackController {
      * @return a boolean.
      */
     public final boolean shouldAttack(final Card attacker, final List<Card> defenders, final Combat combat, final GameEntity defender) {
+        // Arcanis the Omnipotent (dead-card batch 4, row 3): "{T}: Draw three cards" outweighs a 3-power
+        // swing until four hits kill (NonCombatPriority's meaning, value 4). Asked only AFTER the stock
+        // evaluation approved the attack: that evaluation's blocker simulations draw MyRandom
+        // (AiBlockController.wouldLikeToRandomlyTrade, ComputerUtilCombat.lifeInDanger), so a hold placed
+        // where the SVar's block sits would re-roll every game in which the stock AI stayed home anyway.
+        // Name-gated on the paper name (a copy or a thief's Arcanis holds too); reads game state only
+        // (the activator stamp holdForDraw sets is put back). Every shouldAttack caller (Exalted,
+        // attackMax, the main loop) and every predicted-combat reader sees the same answer.
+        final boolean attack = shouldAttackStock(attacker, defenders, combat, defender);
+        if (attack && SpecialCardAi.ArcanisTheOmnipotent.NAME.equals(attacker.getName())
+                && SpecialCardAi.ArcanisTheOmnipotent.holdForDraw(ai, attacker, defender)) {
+            return false;
+        }
+        return attack;
+    }
+
+    private boolean shouldAttackStock(final Card attacker, final List<Card> defenders, final Combat combat, final GameEntity defender) {
         // The Rani (dead-card batch 3, row 81): in a game of two with no other creature of ours, its
         // attack trigger must put the +2/+2 goad Mark on an opposing creature, which may then block
         // and kill it; HasAttackEffect:TRUE makes it an effective attacker unconditionally, so it

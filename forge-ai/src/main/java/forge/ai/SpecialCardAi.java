@@ -1542,6 +1542,105 @@ public class SpecialCardAi {
         }
     }
 
+    // Arcanis the Omnipotent (dead-card batch 4, row 3)
+    // "{T}: Draw three cards. {2}{U}{U}: Return Arcanis the Omnipotent to its owner's hand." The stock
+    // attack code keeps a creature home for a tap ability only when its script carries
+    // SVar:NonCombatPriority, and Arcanis's has none, so the AI swung its 3/4 about as often as it drew
+    // (17 attacks, 18 draws in 12 EXACT logs). AiAttackController.shouldAttack asks holdForDraw only after
+    // the stock evaluation approved the attack (RNG parity: that evaluation can draw MyRandom). Held, the
+    // draw comes from DrawAi's stock timing: our Main 2 with a hand of 4 or fewer, else the opponent's
+    // Main 2 or end step. Reads game state only: no random draw, no SpellAbility id, and the one write
+    // (legalFor's activator stamp) is put back.
+    public static class ArcanisTheOmnipotent {
+        public static final String NAME = "Arcanis the Omnipotent";
+        // NonCombatPriority's meaning: stay home unless this many unblocked hits of the current power kill
+        // the weakest opponent (power 3: attack at 12 life or less). Lethal assaults and must-attack
+        // requirements never ask shouldAttack.
+        public static final int HOLD_HITS = 4;
+
+        public static boolean isTapDraw(final SpellAbility sa) {
+            return sa.isActivatedAbility() && sa.getApi() == ApiType.Draw && !sa.usesTargeting()
+                    && sa.getPayCosts() != null && sa.getPayCosts().hasTapCost() && !sa.getPayCosts().hasManaCost();
+        }
+
+        public static SpellAbility tapDraw(final Card host) {
+            for (final SpellAbility sa : host.getSpellAbilities()) {
+                if (isTapDraw(sa)) {
+                    return sa;
+                }
+            }
+            return null;
+        }
+
+        public static boolean holdForDraw(final Player ai, final Card attacker, final GameEntity defender) {
+            if (attacker.hasKeyword(Keyword.VIGILANCE)) {
+                return false; // attacking does not tap it (the stock block's exemption)
+            }
+            if (attacker.getCurrentPower() * HOLD_HITS >= ai.getOpponentsSmallestLifeTotal()) {
+                return false; // within four hits of the kill: the stock decision stands
+            }
+            // this hit is commander-damage lethal (Player.java: 21 from one commander loses); doAssault
+            // counts life and poison only
+            if (defender instanceof Player p && attacker.isCommander()
+                    && p.getCommanderDamage(attacker) + attacker.getNetCombatDamage() >= 21) {
+                return false;
+            }
+            final SpellAbility draw = tapDraw(attacker);
+            if (draw == null || !legalFor(ai, attacker, draw)) {
+                return false;
+            }
+            // an opponent's Notion Thief / Alms Collector takes the three, Bowmasters / Spiteful Visions /
+            // Nekusar / an opposing Sphinx punish them: keep the stock attack (batch 1's helper, unchanged;
+            // private, but nested classes share access inside SpecialCardAi)
+            if (KnollspineDragon.drawOrDiscardIsPunished(ai, attacker)) {
+                return false;
+            }
+            return drawWouldBeTaken(ai, draw);
+        }
+
+        // Legal for ai now. Not draw.canPlay() bare: every AI priority pass stamps itself as the activating
+        // player of every battlefield card's abilities (Card.getAllPossibleAbilities via
+        // AiController.getSpellAbilityToPlay), so at our declaration the stamp is the opponent who passed last
+        // in our beginning-of-combat step and the "You" activator restriction answers false. canPlay: untapped
+        // and not ability-sick (CostTap), not suppressed or detained, no split second; checkRestrictions:
+        // Pithing Needle and other CantBeActivated statics, which canPlay does not read. The stamp is put back.
+        static boolean legalFor(final Player ai, final Card host, final SpellAbility draw) {
+            final Player stamped = draw.getActivatingPlayer();
+            draw.setActivatingPlayer(ai);
+            try {
+                return draw.canPlay() && draw.checkRestrictions(host, ai);
+            } finally {
+                draw.setActivatingPlayer(stamped);
+            }
+        }
+
+        // Cards one activation draws: printed NumCards, doubled per Teferi's Ageless Insight we control (it
+        // doubles every draw but the first of our draw step; Arcanis never draws that one). Rings of
+        // Brighthearth's optional copy is declined by the AI today and is not counted.
+        public static int effectiveDraw(final Player ai, final SpellAbility draw) {
+            int n = AbilityUtils.calculateAmount(draw.getHostCard(), draw.getParamOrDefault("NumCards", "1"), draw);
+            n <<= CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.nameEquals("Teferi's Ageless Insight"));
+            return n;
+        }
+
+        // DrawAi.targetAI's untargeted refusals that no later window of this turn cycle lifts: a hold that
+        // DrawAi then refuses would blank both uses.
+        public static boolean drawWouldBeTaken(final Player ai, final SpellAbility draw) {
+            if (!ai.canDraw()) {
+                return false;
+            }
+            // DrawAi's library guard (targetAI: numCards >= library - 3) on the real count, with its
+            // Laboratory Maniac exemption
+            if (effectiveDraw(ai, draw) >= ai.getCardsIn(ZoneType.Library).size() - 3
+                    && !(ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin())) {
+                return false;
+            }
+            // DrawAi compares the hand with getMaxHandSize() even under "no maximum hand size": with Reliquary
+            // Tower a hand above it is refused on every turn; without it, cleanup trims the hand.
+            return !(ai.isUnlimitedHandSize() && ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize());
+        }
+    }
+
     // Archangel of Strife
     // "As this enters, each player chooses war or peace." Every AI chooser takes the first choice
     // (ChooseGenericAi.chooseSingleSpellAbility -> War), and a human opponent is modelled the same
