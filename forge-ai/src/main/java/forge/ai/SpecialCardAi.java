@@ -1629,15 +1629,30 @@ public class SpecialCardAi {
             if (!ai.canDraw()) {
                 return false;
             }
-            // DrawAi's library guard (targetAI: numCards >= library - 3) on the real count, with its
-            // Laboratory Maniac exemption
-            if (effectiveDraw(ai, draw) >= ai.getCardsIn(ZoneType.Library).size() - 3
-                    && !(ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin())) {
+            if (decksUsNow(ai, draw)) {
                 return false;
             }
             // DrawAi compares the hand with getMaxHandSize() even under "no maximum hand size": with Reliquary
             // Tower a hand above it is refused on every turn; without it, cleanup trims the hand.
             return !(ai.isUnlimitedHandSize() && ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize());
+        }
+
+        // DrawAi's library guard (targetAI: numCards >= library - 3) on the real count, with its
+        // Laboratory Maniac exemption: true when this draw would leave fewer than three cards.
+        public static boolean decksUsNow(final Player ai, final SpellAbility draw) {
+            return effectiveDraw(ai, draw) >= ai.getCardsIn(ZoneType.Library).size() - 3
+                    && !(ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin());
+        }
+
+        // Part 3B: Arcanis's own {T} draw, on the battlefield (not a copy, not a trigger), while it is
+        // leaving: ComputerUtil.playImmediately sees a threat to it on the stack (predictThreatenedObjects,
+        // which returns at once on an empty stack; an untargeted bounce with no Defined or ValidCards, its
+        // own {2}{U}{U} or an Evacuation, is no threat) or a combatant that combat damage destroys. DrawAi
+        // asks it before its Main-2 phase gate and in checkApiLogic. RNG-free.
+        public static boolean drawsBeforeLeaving(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && NAME.equals(host.getName()) && host.isInPlay() && !sa.isCopied()
+                    && !sa.isTrigger() && isTapDraw(sa) && ComputerUtil.playImmediately(ai, sa);
         }
     }
 

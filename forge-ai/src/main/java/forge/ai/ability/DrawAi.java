@@ -117,6 +117,15 @@ public class DrawAi extends SpellAbilityAi {
             // doTriggerNoCost) and the Forecast keep the stock path.
             return SpecialCardAi.Skyscribing.consider(ai, sa);
         }
+        if (SpecialCardAi.ArcanisTheOmnipotent.drawsBeforeLeaving(ai, sa) && !(sa instanceof AbilitySub)
+                && ai.canDraw() && !SpecialCardAi.ArcanisTheOmnipotent.decksUsNow(ai, sa)) {
+            // Arcanis the Omnipotent (dead-card batch 4, row 3, part 3B): it is leaving (a threat on the
+            // stack, or a combatant combat damage destroys), so its draw is now or never. targetAI's own-turn
+            // hand guard would refuse at a hand of 5 or more, but three cards and a cleanup discard beat
+            // losing the draw. Every phase; RNG-free; the library guard (Teferi's Ageless Insight counted)
+            // and canDraw still apply. Anything else falls through to the stock path below.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
 
         Card hostCard = sa.getHostCard();
         PhaseHandler ph = ai.getGame().getPhaseHandler();
@@ -259,6 +268,15 @@ public class DrawAi extends SpellAbilityAi {
         boolean isSacCost = false;
         if (sa.getPayCosts() != null && sa.getPayCosts().hasSpecificCostType(CostSacrifice.class)) {
             isSacCost = true;
+        }
+
+        // Arcanis the Omnipotent (dead-card batch 4, row 3, part 3B): before Main 2 the gate below refused
+        // the tap-draw even while Arcanis was leaving (removal on the stack in the opponent's upkeep, draw
+        // step, Main 1 or combat; a blocker combat damage destroys), so its three cards left with it:
+        // checkApiLogic's playImmediately approval was unreachable. Its own {T} draw only; RNG-free; a false
+        // keeps the stock refusal below.
+        if (ph.getPhase().isBefore(PhaseType.MAIN2) && SpecialCardAi.ArcanisTheOmnipotent.drawsBeforeLeaving(ai, sa)) {
+            return super.checkPhaseRestrictions(ai, sa, ph);
         }
 
         // Don't use draw abilities before main 2 if possible
