@@ -903,6 +903,15 @@ public class AiController {
             return AiPlayDecision.WaitForEndOfTurn;
         }
 
+        // Dead-card batch 4, row 6 (Engulf the Shore, Evacuation). ChangeZoneAllAi prices a mass bounce
+        // to hand by evaluateCreatureList, where our own commander is an ordinary body. canPlaySa and
+        // canPayCost above ran A's path, draws included, so this veto changes only the cast A was about
+        // to make; a decline in an unpayable window would have skipped canPayCost's draws (row 159).
+        // A name compare inside declines: inert for every other SA. Draws nothing. See the class comment.
+        if (SpecialCardAi.OwnCommanderBounce.declines(player, sa)) {
+            return AiPlayDecision.CantPlayAi;
+        }
+
         return AiPlayDecision.WillPlay;
     }
 

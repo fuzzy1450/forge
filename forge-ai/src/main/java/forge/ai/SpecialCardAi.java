@@ -17647,6 +17647,176 @@ public class SpecialCardAi {
         }
     }
 
+    // Engulf the Shore, Evacuation (dead-card batch 4, row 6; deck review 2026-10-17)
+    // "Return to their owners' hands all creatures with toughness less than or equal to the number of
+    // Islands you control." / "Return all creatures to their owners' hands." ChangeZoneAllAi.canPlay
+    // prices a mass bounce to hand as evaluateCreatureList(ours) + the profile's
+    // BOUNCE_ALL_TO_HAND_CREAT_EVAL_DIFF (200) against evaluateCreatureList(theirs), and our own
+    // commander is an ordinary body there: Arcanis the Omnipotent is a 3/4 at about 236, below a 3/5
+    // flier, and in every Engulf once we control four Islands. So the AI returned its engine for a
+    // board that did not threaten it (1625179: 26 life against 7 power, their returned tempo 11 against
+    // Arcanis's 6). A commander bounced to hand stays there (ChangeZoneAi.doReturnCommanderLogic
+    // declines the command zone for a Hand destination), so the cost is its recast at mana value plus
+    // the summoning-sick turn (for Arcanis, a draw-3), not commander tax.
+    // declines vetoes the cast when our own commander (owned by the caster and among its returned
+    // creatures) goes back, no exemption below applies, and the opponents' returned tempo is under
+    // MIN_RATIO times that commander's mana value plus its +1/+1 counters. Our other returned bodies
+    // are not summed: the stock evaluation already priced them. Exemptions, where A's verdict stands:
+    // - E1 danger: the opponents' next attack, unblocked, would leave us below LifeFloor (5 under
+    //   Default); the bounce is a Fog then;
+    // - E2 an opponent's declare blockers step with attackers on us: the stock emergency exit's window
+    //   (ChangeZoneAllAi's lifeInSeriousDanger WillPlay), which cannot be re-asked here because it
+    //   test-pays through predictPowerBonusOfAttacker and draws;
+    // - E3 the stack threatens our commander: the bounce saves it (to hand at mana value, not to the
+    //   command zone and a taxed recast);
+    // - E4 an opponent's Aura is on our commander: the bounce frees it and bins their Aura;
+    // - E5 our own turn before attackers: the bounce leaves an opponent no creature and our creatures
+    //   that stay deal that opponent's life, unblocked.
+    // The one caller is AiController.canPlayAndPayForFace, AFTER canPlaySa and canPayCost:
+    // ChangeZoneAllAi's run-away draw and 80% coin and the test payment's isManaSourceReserved roll
+    // have run exactly as in A, so a veto changes the game only at a cast A was about to make. A veto
+    // inside ChangeZoneAllAi.canPlay would have skipped canPayCost's draws in unpayable windows (5 of
+    // the 9 approvals in the skeptic's census) and re-rolled games with no visible cast (batch 1 row
+    // 159). Regular casts only: the B3-2 direct canPlaySa probes (targetPlayableSpellCard,
+    // hasReasonToPlayCardThisTurn) and free casts (ChangeZoneAllAi.doTriggerNoCost: a Play effect,
+    // Yidris's cascade) keep A's path.
+    // Keyed on the host's paper name (B3-3); a MayPlay thief is judged by its own commander. Draws
+    // nothing: filterListByType (X is a Count$Valid), mana values, P/T and counters, canAttackNextTurn
+    // and CombatUtil.canAttack (rules checks), damageIfUnblocked(..., true) (it returns before the pump
+    // scan's canPayCost; never the false form, lifeInSeriousDanger or poisonIfUnblocked, which can
+    // test-pay), predictThreatenedObjects and getEnchantedBy. No SpellAbility copy, no id.
+    public static class OwnCommanderBounce {
+        static final Set<String> NAMES = Set.of("Engulf the Shore", "Evacuation");
+        static final int MIN_RATIO = 2;
+
+        static boolean handles(final SpellAbility sa) {
+            final Card host = sa.getHostCard(); // the paper name (B3-3), not getAbilitySourceName
+            return host != null && NAMES.contains(host.getName()) && sa.getApi() == ApiType.ChangeZoneAll
+                    && sa.isSpell() && !sa.isTrigger() && !sa.usesTargeting() && !sa.isCastFromPlayEffect();
+        }
+
+        // true = refuse this cast (canPlayAndPayForFace answers CantPlayAi); false = A's path
+        public static boolean declines(final Player ai, final SpellAbility sa) {
+            if (!handles(sa)) {
+                return false; // every other SA: A's path
+            }
+            final String type = sa.getParam("ChangeType");
+            if (type == null) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            // ChangeZoneAllAi.canPlay's own two lists: Origin$ Battlefield, filtered by ChangeType
+            final CardCollectionView ours = AbilityUtils.filterListByType(ai.getCardsIn(ZoneType.Battlefield), type, sa);
+            final CardCollectionView theirs = AbilityUtils.filterListByType(
+                    ai.getOpponents().getCardsIn(ZoneType.Battlefield), type, sa);
+            final CardCollection cmdrs = new CardCollection();
+            int cost = 0;
+            for (final Card c : ours) {
+                if (c.isCommander() && ai.equals(c.getOwner())) {
+                    cmdrs.add(c);
+                    cost += c.getCMC() + c.getCounters(CounterEnumType.P1P1);
+                }
+            }
+            if (cmdrs.isEmpty()) {
+                return false; // our commander stays: the stock verdict
+            }
+            if (!LifeFloor.keeps(ai, incomingNextTurn(ai))) {
+                return false; // E1 danger: the bounce is a Fog
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            if (combat != null && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS) && ph.getPlayerTurn().isOpponentOf(ai)
+                    && !combat.getAttackersOf(ai).isEmpty()) {
+                return false; // E2 the stock emergency exit's window
+            }
+            if (!game.getStack().isEmpty()) {
+                // null, not sa, as the saviour: a ChangeZoneAll saviour passes only the threat scan's
+                // damage branch (its destroy, exile, -X/-X and control branches admit ChangeZone, not
+                // ChangeZoneAll), so E3 would miss removal; null asks what the stack threatens at all
+                final List<GameObject> threatened = ComputerUtil.predictThreatenedObjects(ai, null);
+                for (final Card c : cmdrs) {
+                    if (threatened.contains(c)) {
+                        return false; // E3 the bounce saves it
+                    }
+                }
+            }
+            for (final Card c : cmdrs) {
+                for (final Card a : c.getEnchantedBy()) {
+                    if (a.getController().isOpponentOf(ai)) {
+                        return false; // E4 the bounce frees it
+                    }
+                }
+            }
+            if (opensLethal(ai, ours, theirs)) {
+                return false; // E5 a game-winning bounce
+            }
+            return tempo(theirs) < MIN_RATIO * cost;
+        }
+
+        // the mana they spend to put these back: a nontoken's mana value (X is 0 on the battlefield)
+        // plus its +1/+1 counters, which the bounce strips; a token or a face-down body, which does not
+        // come back as itself, at half its power plus toughness, at least 1
+        static int tempo(final CardCollectionView cards) {
+            int sum = 0;
+            for (final Card c : cards) {
+                if (c.isToken() || c.isFaceDown()) {
+                    sum += Math.max(1, (Math.max(0, c.getNetPower()) + Math.max(0, c.getNetToughness())) / 2);
+                } else {
+                    sum += c.getCMC() + c.getCounters(CounterEnumType.P1P1);
+                }
+            }
+            return sum;
+        }
+
+        // ComputerUtilMana.stewardGrantUnsafe's sum (batch 2 row 79), a private copy: every opposing
+        // creature that can attack us next turn, unblocked, through damageIfUnblocked(..., true), which
+        // returns before the pump scan's canPayCost (the false form draws)
+        private static int incomingNextTurn(final Player ai) {
+            int incoming = 0;
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card att : opp.getCreaturesInPlay()) {
+                    if (ComputerUtilCombat.canAttackNextTurn(att, ai)) {
+                        incoming += ComputerUtilCombat.damageIfUnblocked(att, ai, null, true);
+                    }
+                }
+            }
+            return incoming;
+        }
+
+        // our own turn before attackers: for an opponent whose every creature is in theirs, our
+        // creatures NOT in ours that CombatUtil.canAttack him deal, unblocked
+        // (damageIfUnblocked(..., true)), at least his life (> 0)
+        private static boolean opensLethal(final Player ai, final CardCollectionView ours, final CardCollectionView theirs) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || ph.getPhase() == null || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)) {
+                return false;
+            }
+            for (final Player opp : ai.getOpponents()) {
+                boolean cleared = true;
+                for (final Card b : opp.getCreaturesInPlay()) {
+                    if (!theirs.contains(b)) {
+                        cleared = false; // a blocker stays
+                        break;
+                    }
+                }
+                if (!cleared) {
+                    continue;
+                }
+                int dealt = 0;
+                for (final Card c : ai.getCreaturesInPlay()) {
+                    if (!ours.contains(c) && CombatUtil.canAttack(c, opp)) {
+                        dealt += ComputerUtilCombat.damageIfUnblocked(c, opp, null, true);
+                    }
+                }
+                final int life = opp.getLife();
+                if (life > 0 && dealt >= life) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Evolution Charm (dead-card batch 3, row 52)
     // "Choose one - Search your library for a basic land card, reveal it, put it into your hand,
     // then shuffle; or return target creature card from your graveyard to your hand; or target
