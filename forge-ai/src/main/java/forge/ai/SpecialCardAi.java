@@ -1619,6 +1619,9 @@ public class SpecialCardAi {
         // Brighthearth's optional copy is declined by the AI today and is not counted.
         public static int effectiveDraw(final Player ai, final SpellAbility draw) {
             int n = AbilityUtils.calculateAmount(draw.getHostCard(), draw.getParamOrDefault("NumCards", "1"), draw);
+            // Part 3C: times (1 + each Illusionist's Bracers on it), whose copy of a non-mana ability is
+            // mandatory once row 4's part 4A lands ("copy that ability", no "may"); reverts with 4A.
+            n *= 1 + CardLists.count(draw.getHostCard().getEquippedBy(), CardPredicates.nameEquals("Illusionist's Bracers"));
             n <<= CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.nameEquals("Teferi's Ageless Insight"));
             return n;
         }
