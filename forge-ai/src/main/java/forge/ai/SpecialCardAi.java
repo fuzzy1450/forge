@@ -21140,6 +21140,14 @@ public class SpecialCardAi {
     //   payment draws. AttachAi.checkApiLogic calls consider() for that window only: it enchants bestHolder and
     //   prices the cast again with the target in place. The hint's -10 sorts the cast after every other spell
     //   ability, so it takes only the mana A leaves.
+    // - the untap (part 53B, isOwnUntap): the root {U} Untap of the face-up paper card on the battlefield, ours to
+    //   own, control and activate, not a copy, at the opponent's end step right before our turn (G6's
+    //   oppEndStepBeforeOurs) on an empty stack, while untapWindow finds the enchanted creature ours, tapped and not
+    //   summoning sick, its {T} draw (ArcanisTheOmnipotent.tapDraw) legal once untapped (G6's legalOnceUntapped),
+    //   taken at once (G6's drawsNow on an opponent's turn: canDraw, canDraw(printed), no decksUsNow on the
+    //   effective count, hand <= max) and feeding no opponent (drawOrDiscardIsPunished), with no held mana and G1's
+    //   {U}. UntapAi's stock Defined branch then approves, drawing nothing, and DrawAi takes the draw in the same
+    //   step. The mana would empty unspent before our untap step, so the {U} costs nothing.
     // The {U}: Tap ability is never readmitted. Keyed on the paper name and on owner and controller (rule B3-3): a
     // thief's Freed (Xanathar, Nathan Drake, Obscura Operation cast it through Play effects), the owner's own
     // Play-effect casts and a copy keep A's path. RNG: every check reads state only (getters, the phase and the
@@ -21169,12 +21177,28 @@ public class SpecialCardAi {
                     && ai.equals(host.getController());
         }
 
+        // 53B's key: the root activated Untap of the face-up paper card on the battlefield, ours to own and control
+        // and to activate (G1 prices it: the activator must be ours), not a copy; never the {U}: Tap
+        static boolean isOwnUntap(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return isPaper(host) && !(sa instanceof AbilitySub) && sa.isActivatedAbility() && !sa.isCopied()
+                    && sa.getApi() == ApiType.Untap && host.isInPlay() && !host.isFaceDown()
+                    && ai.equals(sa.getActivatingPlayer()) && ai.equals(host.getOwner())
+                    && ai.equals(host.getController());
+        }
+
         // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
         public static boolean readmit(final Player ai, final SpellAbility sa) {
             if (isOwnHandCast(ai, sa)) {
                 return castWindow(ai, sa); // 53A
             }
-            return false; // the {U} abilities stay filtered
+            if (!isOwnUntap(ai, sa) || !ai.getGame().getStack().isEmpty()) {
+                return false; // the {U}: Tap, a thief's or a copy's untap, and any untap with a stack, stay filtered
+            }
+            if (TapDrawEngine.oppEndStepBeforeOurs(ai)) {
+                return untapWindow(ai, sa, false); // 53B
+            }
+            return false;
         }
 
         // 53A: the cast's window, cheapest first: our Main 2 on an empty stack, no held mana, a holder, then G1's
@@ -21252,6 +21276,26 @@ public class SpecialCardAi {
                 return c.isCommander();
             }
             return ComputerUtilCard.evaluateCreature(c) > ComputerUtilCard.evaluateCreature(best);
+        }
+
+        // The untap's window past the phase and the empty stack: the enchanted creature is ours, tapped and not
+        // summoning sick (its {T} needs it untapped and unsick; Card.isSick reads haste), and its {T} draw
+        // (ArcanisTheOmnipotent.tapDraw) is legal once untapped (G6's legalOnceUntapped), is taken at once under
+        // DrawAi's hand guard for whose turn it is (G6's drawsNow: ourTurn, hand + printed <= max; else hand <=
+        // max) and feeds no opponent (drawOrDiscardIsPunished); then no held mana and G1's {U}, before canPayCost's
+        // isManaSourceReserved draws (row 159). Reads state only.
+        static boolean untapWindow(final Player ai, final SpellAbility untap, final boolean ourTurn) {
+            final Card c = untap.getHostCard().getEnchantingCard();
+            if (c == null || !c.isCreature() || !c.isInPlay() || !ai.equals(c.getController()) || !c.isTapped()
+                    || c.isSick()) {
+                return false;
+            }
+            final SpellAbility draw = ArcanisTheOmnipotent.tapDraw(c);
+            if (draw == null || !TapDrawEngine.legalOnceUntapped(ai, c, draw)
+                    || !TapDrawEngine.drawsNow(ai, draw, ourTurn) || KnollspineDragon.drawOrDiscardIsPunished(ai, c)) {
+                return false;
+            }
+            return RemoveDeckFilter.noManaHeld(ai, false) && CommanderCastCeiling.affordable(ai, untap);
         }
 
         // The counter reserve, which part 53C's own-Main-2 untap and part 53R's cast ask: true when no counterspell
