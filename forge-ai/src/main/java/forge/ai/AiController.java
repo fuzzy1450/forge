@@ -2095,6 +2095,10 @@ public class AiController {
             // fallthrough below answers Max (10), a number almost no opposing spell matches
             return SpecialCardAi.TalionTheKindlyLord.chooseNumber(player, sa, min, max);
         }
+        if (SpecialCardAi.SanctumPrelate.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dead-card batch 4, row 47: the stock "Max" below answers 99, a number no spell has
+            return SpecialCardAi.SanctumPrelate.chooseNumber(player, sa, min, max);
+        }
         if (SpecialCardAi.WrathOfTheSkies.isWrath(sa)) {
             // Dead-card batch 3, row 29: the stock "Max" below pays every {E} we have, sweeping our
             // own commander and rocks with theirs

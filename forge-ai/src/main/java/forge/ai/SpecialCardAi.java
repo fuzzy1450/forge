@@ -44209,6 +44209,107 @@ public class SpecialCardAi {
         }
     }
 
+    // Sanctum Prelate (dead-card batch 4, row 47; PackAStax dba1b683, deck 515, commander Winota, Joiner
+    // of Forces: a site upload, not an anchor)
+    // "As Sanctum Prelate enters, choose a number. Noncreature spells with mana value equal to the chosen
+    // number can't be cast." ({1}{W}{W} Creature - Human Cleric 2/2.) Printed = Oracle = script:
+    // K:ETBReplacement:Other:ChooseNumber with DB$ ChooseNumber | Defined$ You and no Min$ or Max$ (0..99,
+    // ChooseNumberEffect), S:Mode$ CantBeCast | ValidCard$ Card.nonCreature+cmcEQChosen with no caster
+    // restriction (it binds every player, us included; no chosen number locks nothing, CardProperty), and
+    // AI:RemoveDeck:All. Three gates kept it a blank: AiController.getSpellAbilityToPlay's RemoveDeck
+    // filter dropped the owner's hand cast before any handler ran (G-a; RemoveDeckFilter.readmit had no
+    // case); behind it checkETBEffects' non-mandatory probe of the DB$ ChooseNumber answered MissingLogic
+    // in ChooseNumberAi (G-b, Talion's, Anikthea's and Kardur's gate); and wherever it did enter (Winota's
+    // attack trigger digs it, a Human, onto the battlefield), the stock chooser's AILogic default "Max"
+    // named 99, a mana value no spell has, so it locked nothing (G-c).
+    // - Number (part 47A; AiController.chooseNumber, by the ability's source name, so a Clone-type copy
+    //   of the Prelate on either side picks for its own controller): the n in [min, min(max, MV_CAP)]
+    //   with the highest net[n], the opposing noncreature spells still unseen at mana value n minus
+    //   OWN_WEIGHT times ours. Unseen is the deck-list knowledge the stock already assumes (PermanentAi's
+    //   Chalice of the Void, Talion's chooser): each opponent's Library and Hand, one set at weight 1 (the
+    //   deck list minus the public zones, so a draw does not change it), plus its noncreature commander in
+    //   the command zone at COMMANDER_WEIGHT; ours the same at -OWN_WEIGHT (Chalice's "theirs at least
+    //   twice ours"). A card counts only if it is not a land, a creature or a token and has no X in its
+    //   cost (an X spell dodges the lock by its choice of X). Ties go to the lower n (Talion's rule:
+    //   cheaper spells come earlier and more often); an n that another Sanctum Prelate on the battlefield
+    //   already locks is skipped (Chalice's "already disabled"). When the best net is 0 or less it answers
+    //   max, the stock 99: it never names a number that costs us more than it costs the opponents.
+    // - Cast (part 47B, a later commit of this row): the owner's own hand cast through the G3 readmit and
+    //   a keyed ETB probe, both behind a lock floor read from the same counts. Without it the hand cast
+    //   stays filtered, and this chooser answers only the Prelates that enter otherwise.
+    // Draws nothing, holds nothing and remembers nothing; the number is chosen once per entry, at
+    // resolution, never per consult.
+    public static class SanctumPrelate {
+        public static final String NAME = "Sanctum Prelate";
+        static final int OWN_WEIGHT = 2;        // PermanentAi's Chalice of the Void: theirs >= 2 x ours
+        static final int COMMANDER_WEIGHT = 10; // Talion's recast weight (a private copy, B3-4)
+        static final int MV_CAP = 16;           // the highest mana value counted
+
+        // AiController.chooseNumber's branch: the ETB ChooseNumber at resolution, once per entry
+        public static int chooseNumber(final Player ai, final SpellAbility sa, final int min, final int max) {
+            final int lo = Math.max(0, min), hi = Math.min(max, MV_CAP);
+            if (hi < lo) {
+                return max;
+            }
+            final int[] net = net(ai);
+            final int b = best(ai.getGame(), sa.getHostCard(), net, lo, hi);
+            return b >= 0 && net[b] > 0 ? b : max; // nothing nets a lock: the stock Max (99), which no spell has
+        }
+
+        // net[n]: the opposing unseen noncreature spells at mana value n, minus OWN_WEIGHT times ours
+        private static int[] net(final Player ai) {
+            final int[] w = new int[MV_CAP + 1];
+            for (final Player opp : ai.getOpponents()) {
+                count(opp.getCardsIn(ZoneType.Library), 1, w);
+                count(opp.getCardsIn(ZoneType.Hand), 1, w);
+                commanders(opp, COMMANDER_WEIGHT, w);
+            }
+            count(ai.getCardsIn(ZoneType.Library), -OWN_WEIGHT, w);
+            count(ai.getCardsIn(ZoneType.Hand), -OWN_WEIGHT, w);
+            commanders(ai, -OWN_WEIGHT * COMMANDER_WEIGHT, w);
+            return w;
+        }
+
+        private static void count(final CardCollectionView cards, final int wt, final int[] w) {
+            for (final Card c : cards) {
+                if (c.isLand() || c.isCreature() || c.isToken() || c.getManaCost().countX() > 0) {
+                    continue;
+                }
+                final int mv = c.getCMC();
+                if (mv >= 0 && mv <= MV_CAP) {
+                    w[mv] += wt;
+                }
+            }
+        }
+
+        private static void commanders(final Player p, final int wt, final int[] w) {
+            for (final Card c : p.getCardsIn(ZoneType.Command)) {
+                if (c.isCommander() && !c.isCreature() && !c.isLand() && c.getManaCost().countX() == 0
+                        && c.getCMC() <= MV_CAP) {
+                    w[c.getCMC()] += wt;
+                }
+            }
+        }
+
+        // the lower n on ties; a number another Sanctum Prelate on the battlefield already locks is skipped
+        private static int best(final Game game, final Card self, final int[] net, final int lo, final int hi) {
+            final boolean[] locked = new boolean[MV_CAP + 1];
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (c != self && NAME.equals(c.getName()) && c.hasChosenNumber()
+                        && c.getChosenNumber() >= 0 && c.getChosenNumber() <= MV_CAP) {
+                    locked[c.getChosenNumber()] = true;
+                }
+            }
+            int b = -1;
+            for (int n = lo; n <= hi; n++) {
+                if (!locked[n] && (b < 0 || net[n] > net[b])) {
+                    b = n;
+                }
+            }
+            return b;
+        }
+    }
+
     public static class SarkhanTheMad {
         public static AiAbilityDecision considerDig(final Player ai, final SpellAbility sa) {
             if (sa.getHostCard().getCounters(CounterEnumType.LOYALTY) == 1) {
