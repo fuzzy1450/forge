@@ -7499,6 +7499,151 @@ public class SpecialCardAi {
         }
     }
 
+    // Call the Coppercoats (dead-card batch 4, row 15; the precons Cabaretti Cacophony, Rebellion
+    // Rising and Ruthless Regiment, all three anchors)
+    // "Strive - This spell costs {1}{W} more to cast for each target beyond the first. Choose any
+    // number of target opponents. Create X 1/1 white Human Soldier creature tokens, where X is the
+    // number of creatures those opponents control." ({2}{W} instant.) Its owner never cast it from
+    // hand (0 owner casts in 1,341 held rows on 2.0.15+499e03087c5, its 907 non-copy held games
+    // over 105 distinct libraries; all 21 casts were thieves' Play-effect casts), through two gates
+    // in turn:
+    // - AI:RemoveDeck:All dropped the hand spell in AiController.getSpellAbilityToPlay's removeIf
+    //   before any handler ran: no G3 case named it;
+    // - behind it, TokenAi.checkPhaseRestrictions reads X (Count$Valid Creature.TargetedPlayerCtrl)
+    //   before checkApiLogic has chosen the target, so X counts no player's creatures, reads 0 and
+    //   the consult declines ("0 tokens"). Dropping the hint alone would only reach that decline.
+    // The script keeps the hint, so the -10 sort and every other isCardRemAIDeck reader (the tutor,
+    // steal, exchange and copy pickers) still refuse it. The G3 case (readmit) and TokenAi's two
+    // routes (admits in checkPhaseRestrictions, consider in checkApiLogic) let exactly one shape
+    // through: the owner's own paid cast of the root spell from hand (not a Play-effect cast, not a
+    // copy, not WithoutManaCost), on an empty stack, in one of two windows, both inside TokenAi's
+    // own window for a non-haste instant (an opponent's turn, from declare attackers on):
+    // - END: an opponent's end step, with our turn next;
+    // - DEFEND: an opponent's declare-attackers step of an attack on us. Its tokens can block, but
+    //   they face that opponent's Main 2 (a sorcery sweeper); under an opponent's Authority of the
+    //   Consuls or Thalia, Heretic Cathar they enter tapped and cannot block, so the cast is only
+    //   the bodies for our turn; and the mana spent here is not there for an instant we would have
+    //   cast later in that turn (only our own known block tricks are held, by noManaHeld). DEFEND
+    //   is the droppable half: one branch of inWindow.
+    // Floor: the targetable opponent with the most creatures (ties: lower life, then turn order)
+    // controls at least FLOOR, three 1/1s for {2}{W} (rate parity; 2 is the alternative). One
+    // target: Strive's extra targets matter only in a pod. Then no live mana reservation (G3's
+    // noManaHeld) and G1's CommanderCastCeiling.affordable over G2's HonestMana, in total and in
+    // each colour, so an admitted spell seldom reaches ComputerUtilCost.canPayCost, whose test
+    // payment draws MyRandom per source it examines, in a window that cannot pay for it.
+    // RNG class: gates on paths A refused at a draw-free point. A removed the spell at the filter
+    // (no consult, no draw, no card id); every refusal here is that same removal, and consider
+    // declines draw-free (no spawnToken, no 80% roll). A direct canPlaySa probe, which skips the
+    // filter (TapAi's ComputerUtil.hasReasonToPlayCardThisTurn, targetPlayableSpellCard's copies),
+    // keeps the stock path outside an admitted state (spawnToken, then X = 0), and consider asks
+    // admits again because a target an earlier admitted consult left on the hand SA can carry the
+    // stock X past checkPhaseRestrictions: such a probe is declined as A declined it, with no id,
+    // no draw and no write. Nothing here draws, holds or remembers; the writes are consider's
+    // targets (as the stock checkApiLogic writes them) and G2's setActivatingPlayer on the mana
+    // abilities it reads. Reach: a thief is not the owner, and a Play-effect cast reaches
+    // TokenAi.doTriggerNoCost, which targets before X and is unchanged; every other token ability
+    // pays one name compare, and admits is O(1) outside the two windows.
+    public static class CallTheCoppercoats {
+        public static final String NAME = "Call the Coppercoats";
+        static final String TOKEN_SCRIPT = "w_1_1_human_soldier";
+        static final int FLOOR = 3;   // three 1/1s for {2}{W}: rate parity; 2 is the alternative
+
+        // the owner's own paid cast of the root spell from hand, of the reviewed script
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())
+                    || !sa.isSpell() || sa.getParent() != null || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || sa.hasParam("WithoutManaCost") || sa.getApi() != ApiType.Token
+                    || !ai.equals(host.getOwner()) || !ai.equals(host.getController())
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false;
+            }
+            return "X".equals(sa.getParam("TokenAmount")) && TOKEN_SCRIPT.equals(sa.getParam("TokenScript"))
+                    && sa.usesTargeting();
+        }
+
+        // END: an opponent's end step before our turn; DEFEND: an opponent's declare-attackers step of an
+        // attack on us. Empty stack. Both lie inside TokenAi's own instant window (an opponent's turn,
+        // from declare attackers on).
+        static boolean inWindow(final Player ai) {
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty()) {
+                return false;
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Player active = ph.getPlayerTurn();
+            if (active == null || !active.isOpponentOf(ai)) {
+                return false;
+            }
+            if (ph.is(PhaseType.END_OF_TURN)) {
+                return ai.equals(ph.getNextTurn());
+            }
+            final Combat combat = game.getCombat();
+            return ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) && combat != null
+                    && active.equals(combat.getAttackingPlayer()) && !combat.getAttackersOf(ai).isEmpty();
+        }
+
+        static int creatures(final Player p) {
+            return CardLists.count(p.getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES);
+        }
+
+        // the targetable opponent with the most creatures; ties: lower life, then turn order
+        static Player bestTarget(final Player ai, final SpellAbility sa) {
+            Player best = null;
+            int bestN = -1;
+            for (final Player opp : ai.getOpponents()) {
+                if (!sa.canTarget(opp)) {
+                    continue;
+                }
+                final int n = creatures(opp);
+                if (n > bestN || (n == bestN && opp.getLife() < best.getLife())) {
+                    best = opp;
+                    bestN = n;
+                }
+            }
+            return best;
+        }
+
+        // RNG-free, O(1) outside the windows: shape, then window, then floor, then reservation, then price
+        public static boolean admits(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa) || !inWindow(ai)) {
+                return false;
+            }
+            final Player best = bestTarget(ai, sa);
+            if (best == null || creatures(best) < FLOOR) {
+                return false;
+            }
+            return RemoveDeckFilter.noManaHeld(ai, false)              // G3: no live reservation
+                    && CommanderCastCeiling.affordable(ai, sa);        // G1 over G2 HonestMana, colours too
+        }
+
+        // RemoveDeckFilter.readmit's case
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return admits(ai, sa);
+        }
+
+        // TokenAi.checkApiLogic's route: target first, then X as the engine counts it, then the floor; no roll
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // Reached past TokenAi's admitted route; a direct probe outside it (a target left on the hand SA by an
+            // earlier admitted consult can carry the stock X past checkPhaseRestrictions) is declined as A
+            // declined it: no id, no draw, no write.
+            if (!admits(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.resetTargets();
+            final Player best = bestTarget(ai, sa);
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best);
+            if (AbilityUtils.calculateAmount(sa.getHostCard(), "X", sa) < FLOOR) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Carpet of Flowers
     // "At the beginning of each of your main phases, if you haven't added mana with this ability this
     // turn, you may add X mana of any one color, where X is the number of Islands target opponent
@@ -41553,8 +41698,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51 and 65, keepOff for batch 2's row 68
-    // (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65 and 15, keepOff for batch 2's row
+    // 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -41678,6 +41823,8 @@ public class SpecialCardAi {
                     return LionsEyeDiamond.readmit(ai, sa);
                 case ScrollRack.NAME:                    // batch 4, row 65 (W2)
                     return ScrollRack.readmit(ai, sa);
+                case CallTheCoppercoats.NAME:            // batch 4, row 15 (W3)
+                    return CallTheCoppercoats.readmit(ai, sa);
                 default:
                     return false;
             }

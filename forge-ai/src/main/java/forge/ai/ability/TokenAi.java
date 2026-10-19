@@ -61,6 +61,12 @@ public class TokenAi extends SpellAbilityAi {
                 sa.getParamOrDefault("TokenToughness", "LifePaidOnETB"), sa) < 1) {
             return false;
         }
+        // Call the Coppercoats (dead-card batch 4, row 15): X counts the opponent checkApiLogic targets, so the
+        // X test below reads no target and 0. An admitted window answers here, before spawnToken; every other
+        // consult (a direct canPlaySa probe of the hand card) keeps the stock path, spawnToken and its 0 included.
+        if (SpecialCardAi.CallTheCoppercoats.admits(ai, sa)) {
+            return true;
+        }
         final Card source = sa.getHostCard();
         // Planeswalker-related flags
         boolean pwMinus = false;
@@ -166,6 +172,12 @@ public class TokenAi extends SpellAbilityAi {
         // draws no random numbers.
         if (SpecialCardAi.GhoulcallerGisa.handles(sa)) {
             return SpecialCardAi.GhoulcallerGisa.consider(ai, sa);
+        }
+        // Call the Coppercoats (batch 4, row 15): the widest opponent, X as the engine counts it, the floor; no
+        // spawnToken, no 80% roll. consider answers only in an admitted state (admits, as the route above) and
+        // declines every other consult draw-free and write-free, a stale target on the hand SA included.
+        if (SpecialCardAi.CallTheCoppercoats.isOwnHandCast(ai, sa)) {
+            return SpecialCardAi.CallTheCoppercoats.consider(ai, sa);
         }
         final Game game = ai.getGame();
         final Player opp = ai.getWeakestOpponent();
