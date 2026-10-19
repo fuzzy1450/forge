@@ -1611,6 +1611,16 @@ public class PlayerControllerAi extends PlayerController {
             final String name = SpecialCardAi.DayOfTheMoon.chooseName(player, sa, cpp);
             return name != null ? name : SpecialCardAi.DayOfTheMoon.harmlessName(player, sa, cpp);
         }
+        if (sa.getHostCard() != null && SpecialCardAi.DisruptorFlute.NAME.equals(sa.getHostCard().getName())) {
+            // Dead-card batch 4, row 26: the cast decision's own chooser, so the name picked agrees
+            // with the reason it was cast, for any Flute entry (a cast, Tayam's return, a copy, a
+            // flicker). With nothing worth naming any more (the target left in response, or a token
+            // copy's board): the stock pick below.
+            final String name = SpecialCardAi.DisruptorFlute.chooseName(player);
+            if (name != null) {
+                return name;
+            }
+        }
         if (sa.hasParam("AILogic")) {
             CardCollectionView aiLibrary = player.getCardsIn(ZoneType.Library);
             CardCollectionView oppLibrary = player.getStrongestOpponent().getCardsIn(ZoneType.Library);

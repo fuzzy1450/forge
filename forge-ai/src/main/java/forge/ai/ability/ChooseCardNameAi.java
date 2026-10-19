@@ -64,6 +64,17 @@ public class ChooseCardNameAi extends SpellAbilityAi {
             // BadEtbEffects. The real chapter triggers are mandatory and keep WillPlay.
             return SpecialCardAi.DayOfTheMoon.consider(ai, sa);
         }
+        if (!mandatory && sa.getHostCard() != null
+                && SpecialCardAi.DisruptorFlute.NAME.equals(sa.getHostCard().getName())) {
+            // Disruptor Flute (dead-card batch 4, row 26) names a card as it enters, so
+            // AiController.checkETBEffectsPreparedCard asks here whether a name is worth choosing.
+            // The stock fall-through below answered CantPlayAi to every non-mandatory ask, and
+            // canPlaySa vetoed the cast with BadEtbEffects at every priority. The answer is given at
+            // A's own decline point, after A's whole evaluation (the replacement's exSA.copy
+            // included), and draws nothing. Mandatory asks (the replacement itself) keep the stock
+            // WillPlay below.
+            return SpecialCardAi.DisruptorFlute.consider(ai, sa);
+        }
         String aiLogic = sa.getParamOrDefault("AILogic", "");
         if ("PhyrexianRevoker".equals(aiLogic) && !mandatory) {
             // Phyrexian Revoker names a card as it enters, so

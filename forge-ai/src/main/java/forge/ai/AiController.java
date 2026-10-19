@@ -887,6 +887,18 @@ public class AiController {
             return AiPlayDecision.CantAfford;
         }
 
+        // Dead-card batch 4, row 26: Disruptor Flute. canPlaySa approved it (its window and chooser,
+        // SpecialCardAi.DisruptorFlute.consider, answered at A's own decline point in
+        // ChooseCardNameAi.doTriggerNoCost); refuse an unpayable window here, before canPayCost's
+        // isManaSourceReserved rolls, as row 95 does. A flash card is consulted at every priority, so
+        // without this every unpayable in-window consult would draw with no visible cast. Own paid
+        // casts (from hand, or a MayPlay caster's); a Play-effect cast never comes here. G1 under G4's
+        // contract, called not edited. A name compare: inert for every other SA.
+        if (sa.isSpell() && host != null && SpecialCardAi.DisruptorFlute.NAME.equals(host.getName())
+                && !sa.isCastFromPlayEffect() && !SpecialCardAi.CommanderCastCeiling.affordable(player, sa)) {
+            return AiPlayDecision.CantAfford;
+        }
+
         if (!ComputerUtilCost.canPayCost(sa, player, sa.isTrigger())) {
             // for dependent costs with X, e.g. Repeal, which require a valid target to be specified before a decision can be made
             // on whether the cost can be paid, this can only be checked late after canPlaySa has been run (or the AI will misplay)

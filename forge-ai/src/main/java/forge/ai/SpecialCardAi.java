@@ -14786,6 +14786,118 @@ public class SpecialCardAi {
         }
     }
 
+    // Disruptor Flute (dead-card batch 4, row 26)
+    // {2} artifact, "Flash / As Disruptor Flute enters, choose a card name. / Spells with the chosen
+    // name cost {3} more to cast. / Activated abilities of sources with the chosen name can't be
+    // activated unless they're mana abilities." Never cast: the name is an ETBReplacement:Other
+    // NameCard sub with no AILogic, so on every cast evaluation
+    // AiController.checkETBEffectsPreparedCard asked it whether the AI would run it (non-mandatory),
+    // ChooseCardNameAi.doTriggerNoCost's stock fall-through answered CantPlayAi, and canPlaySa vetoed
+    // the cast with BadEtbEffects at every priority. ChooseCardNameAi now asks consider() at that
+    // same decline point, after A's whole evaluation. Floor:
+    // - a window: own Main 2, or an end step after which our turn comes next (Misleading Signpost's),
+    //   with an empty stack; outside it consider() answers at once, with no scan;
+    // - a name worth it, from the opponents' public zones only: an opposing commander in the command
+    //   zone (its next cast costs {3} more), else an opposing commander, planeswalker or other nontoken
+    //   nonland permanent on the battlefield with a non-mana battlefield ability nothing stops today
+    //   (PithingNeedle's ability score, plus 200 for a commander, 100 for a planeswalker; the first
+    //   seen wins a tie); never a name the caster owns or controls in any zone (both halves are
+    //   symmetric), never a token, face-down or unreal name, never one an existing named-card lock
+    //   covers (Phyrexian Revoker's rule);
+    // - G1 (CommanderCastCeiling.affordable, called unchanged under G4's widened contract) in
+    //   AiController.canPlayAndPayForFace, after canPlaySa and before canPayCost's test payment.
+    // consider() and chooseName() share one chooser: PlayerControllerAi.chooseCardName takes
+    // chooseName() for any Flute entry (a cast, Tayam's return, a copy, a flicker), so the cast
+    // decision and the name picked at resolution agree; a null there keeps the stock pick. No random
+    // draw, no SpellAbility or Card allocated, nothing held or remembered.
+    public static class DisruptorFlute {
+        public static final String NAME = "Disruptor Flute";
+        static final int COMMANDER = 200;    // the tax on its next cast, or the lock on it
+        static final int PLANESWALKER = 100;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (!inWindow(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime); // O(1): no scan outside it
+            }
+            return chooseName(ai) != null
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        static boolean inWindow(final Player ai) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!game.getStack().isEmpty()) {
+                return false;
+            }
+            return ph.is(PhaseType.MAIN2, ai) || (ph.is(PhaseType.END_OF_TURN) && ph.getNextTurn() == ai);
+        }
+
+        // null = nothing worth naming
+        public static String chooseName(final Player ai) {
+            final Set<String> excluded = new HashSet<>();
+            for (final Card c : ai.getAllCards()) {
+                excluded.add(c.getName());
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (!c.hasNamedCard()) {
+                    continue;
+                }
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (st.checkMode(StaticAbilityMode.CantBeActivated)) {
+                        excluded.addAll(c.getNamedCards());
+                        break;
+                    }
+                }
+            }
+            String best = null;
+            int bestScore = 0;
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Command)) {
+                    if (c.isCommander() && nameable(c, excluded) && COMMANDER > bestScore) {
+                        best = c.getName();
+                        bestScore = COMMANDER;
+                    }
+                }
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    if (c.isLand() || !nameable(c, excluded) || !hasLockableAbility(c)) {
+                        continue;
+                    }
+                    final int score = PithingNeedle.scoreCardAbilities(c, true)
+                            + (c.isCommander() ? COMMANDER : c.isPlaneswalker() ? PLANESWALKER : 0);
+                    if (score > bestScore) {
+                        best = c.getName();
+                        bestScore = score;
+                    }
+                }
+            }
+            return best;
+        }
+
+        static boolean nameable(final Card c, final Set<String> excluded) {
+            return !c.isToken() && !c.isFaceDown() && !excluded.contains(c.getName())
+                    && StaticData.instance().getCommonCards().getFaceByName(c.getName()) != null;
+        }
+
+        // a non-mana ability activated from the battlefield that nothing stops today (Null Rod,
+        // Collector Ouphe, Linvala, another named-card lock), asked for the card's controller
+        static boolean hasLockableAbility(final Card c) {
+            for (final SpellAbility ab : c.getSpellAbilities()) {
+                if (!ab.isActivatedAbility() || ab.isManaAbility()) {
+                    continue;
+                }
+                final ZoneType zone = ab.getRestrictions() == null ? null : ab.getRestrictions().getZone();
+                if (zone != null && zone != ZoneType.Battlefield) {
+                    continue;
+                }
+                if (!StaticAbilityCantBeCast.cantBeActivatedAbility(ab, c, c.getController())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Divine Reckoning (dead-card batch 3, row 18)
     // {2}{W}{W} Sorcery, "Each player chooses a creature they control. Destroy the rest."
     // Flashback {5}{W}{W}. AI:RemoveDeck:All hid both spell abilities (the hand cast and the
