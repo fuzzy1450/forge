@@ -42073,7 +42073,7 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15 and 16, keepOff for batch 2's row
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16 and 28, keepOff for batch 2's row
     // 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -42202,6 +42202,8 @@ public class SpecialCardAi {
                     return CallTheCoppercoats.readmit(ai, sa);
                 case PrismaticStrands.NAME:              // batch 4, row 16 (W3)
                     return PrismaticStrands.readmit(ai, sa);
+                case SylvanLibrary.NAME:                 // batch 4, row 28 (W3)
+                    return SylvanLibrary.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -49982,6 +49984,73 @@ public class SpecialCardAi {
                 }
             }
             return null;
+        }
+    }
+
+    // Sylvan Library (dead-card batch 4, row 28; All the world's power 017b879b, deck 516, commander
+    // Terra, Magical Adept, and NJcEDH Presents: SINKHOLE 2 Champion f82b6678, deck 519, commander
+    // Lumra, Bellow of the Woods: site uploads, not anchors)
+    // "At the beginning of your draw step, you may draw two additional cards. If you do, choose two cards
+    // in your hand drawn this turn. For each of those cards, pay 4 life or put the card on top of your
+    // library." ({1}{G} enchantment.) The script is the printed card: the may is the trigger's
+    // Draw<2/You> cost (a trigger with a cost is optional, its controller deciding: TriggerHandler).
+    // The script keeps AI:RemoveDeck:All, and the hint is earned: behind it the stock trigger AI takes
+    // the draw at every draw step with no deck-out or punisher guard, never pays the 4 life
+    // (ChangeZoneAi.willPayUnlessCost reads the noncreature host) and puts back getWorstAI's picks: the
+    // cheapest artifact or enchantment first, a land while land-light, the same two lands for ever (the
+    // diagnosis's hint-drop logs, 1745658 and 1986845). The hint is KEPT, so the -10 sort and every
+    // other hint reader (steal, copy, clone and tutor pickers, PlayEffect's random copies) still refuse
+    // the card, and the G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through
+    // AiController's filter, the Static Orb / Copy Enchantment shape (part 28A): the owner's own
+    // permanent spell cast from hand, never a copy or a Play-effect cast, judged by considerCast from
+    // PermanentNoncreatureAi.checkApiLogic (own Main 2, or Main 1 when castPermanentInMain1 says so).
+    // The row's later parts judge the trigger once a Library is on the battlefield: 28B the "may draw
+    // two" (ChooseCardAi.checkApiLogic), 28C the two cards put back (ChooseCardAi.chooseSingleCard).
+    // 28D (paying the 4 life) is not taken: both chosen cards always go back.
+    // RNG parity: A drops the card at the filter and never evaluates it; the readmit and every decline
+    // in considerCast read the board only (no MyRandom, no LKI copy, no card id) and return before
+    // canPlaySa's canPayCost, whose test payment rolls isManaSourceReserved per source it tries.
+    public static class SylvanLibrary {
+        public static final String NAME = "Sylvan Library";
+        static final int DRAW = 2;                    // printed
+        static final int LIBRARY_FLOOR = DRAW + 3;    // DrawAi's decking margin above the two draws
+
+        // 28A key (B3-2): the owner's own paid cast from hand, paper name (B3-3)
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && sa.isSpell() && sa.getParent() == null && sa.getApi() == ApiType.PermanentNoncreature
+                    && !sa.isCastFromPlayEffect() && !sa.isCopied()
+                    && ai.equals(host.getOwner()) && ai.equals(host.getController())
+                    && host.isInZone(ZoneType.Hand);
+        }
+
+        // RemoveDeckFilter.readmit's case: RNG-free, cheapest tests first; a refusal only waits
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isOwnHandCast(ai, sa) && RemoveDeckFilter.noManaHeld(ai, false);
+        }
+
+        // After the stock approval (PermanentAi.checkApiLogic's WillPlay). Floor: real mana pays the
+        // engine-priced {1}{G} (G2 with held sources skipped, B3-5), and the next draw step's trigger
+        // would be worth taking: a library of LIBRARY_FLOOR or more, and no opposing draw thief or draw
+        // punisher (batch 1's scan, called unchanged).
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (!manaPays(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (ai.getCardsIn(ZoneType.Library).size() < LIBRARY_FLOOR
+                    || KnollspineDragon.drawOrDiscardIsPunished(ai, sa.getHostCard())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // MoonlightBargain.manaPays' shape, a private copy (frozen helpers stay frozen, B3-4), green
+        private static boolean manaPays(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.GREEN) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
         }
     }
 

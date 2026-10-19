@@ -136,6 +136,15 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.StaticOrb.consider(ai, sa);
         }
 
+        // Sylvan Library (dead-card batch 4, row 28, part 28A) keeps AI:RemoveDeck:All; G3 lets only its
+        // owner's hand cast through, and that cast is judged here (own Main 2, or Main 1 when
+        // castPermanentInMain1 says so: PermanentAi.checkPhaseRestrictions). The gate is the readmit's
+        // own key (rule B3-2): a Play-effect cast, a copy, an exile MayPlay thief and every other host
+        // keep the stock answer.
+        if (SpecialCardAi.SylvanLibrary.isOwnHandCast(ai, sa)) {
+            return SpecialCardAi.SylvanLibrary.considerCast(ai, sa);
+        }
+
         // Lavabrink Floodgates dropped AI:RemoveDeck:All. Its own cast is judged here, after the
         // stock approval (own Main 2 in practice, PermanentAi.checkPhaseRestrictions); a Play-effect
         // cast (Etali's free cast, Nathan Drake's attack trigger) keeps the stock answer, as in A.
