@@ -75,6 +75,51 @@ public class TapAllAi extends SpellAbilityAi {
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 
+    // Dead-card batch 4, row 17 (Assassin Gauntlet). A targeted TapAll sub-ability had no
+    // chkDrawback, so SpellAbilityAi's default refused it (CantPlayAi plus its "default
+    // implementation" warning) and never chose its target:
+    //  - the non-mandatory consult of the Gauntlet's enters trigger (AiController.checkETBEffects)
+    //    failed, and saSideEffects vetoed the whole Equipment (BadEtbEffects): 0 owner casts in
+    //    1,864 held decided games over 992 libraries on 2.0.15+499e03087c5 but the 4 where an
+    //    opponent's Doorkeeper Thrull had switched that consult off;
+    //  - the stack-time call (mandatory) left the sub untargeted, so MagicStack.add refused the whole
+    //    trigger ("Couldn't add to stack, failed to target") when the Gauntlet entered by another
+    //    route (Danitha, Benalia's Hope; Ratonhnhake:ton; an opponent's Chaos Warp): neither the
+    //    attach nor the tap happened.
+    // The sub taps only cards the targeted player controls, so an opponent target can never cost us:
+    // target the targetable opponent with the most untapped matching cards (ties: the first in
+    // getOpponents order), never ourselves. No targetable opponent: TargetingFailed, as the default
+    // answers with no candidate. Draws nothing and allocates no SpellAbility id, like the CantPlayAi
+    // it replaces. The only script with a targeted TapAll sub in this cardsfolder is
+    // assassin_gauntlet.txt (Naya Charm's TapAll is a Charm mode: CharmAi approves a chosen mode
+    // without asking it; Gulf Squid, Mistbind Clique, Tempest Caller and Kiora Bests the Sea God's
+    // chapter II are trigger roots, judged by doTriggerNoCost below); a deck upload can widen that.
+    @Override
+    public AiAbilityDecision chkDrawback(final Player ai, final SpellAbility sa) {
+        if (!sa.usesTargeting()) {
+            return super.chkDrawback(ai, sa);
+        }
+        Player best = null;
+        int bestCount = -1;
+        for (final Player opp : ai.getOpponents()) {
+            if (!sa.canTarget(opp)) {
+                continue;
+            }
+            final int n = CardLists.count(AbilityUtils.filterListByType(opp.getCardsIn(ZoneType.Battlefield),
+                    sa.getParam("ValidCards"), sa), CardPredicates.UNTAPPED);
+            if (n > bestCount) {
+                best = opp;
+                bestCount = n;
+            }
+        }
+        sa.resetTargets();
+        if (best == null) {
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+        sa.getTargets().add(best);
+        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+    }
+
     private CardCollectionView getTapAllTargets(final String valid, final Card source, SpellAbility sa) {
         final Game game = source.getGame();
         CardCollectionView tmpList = game.getCardsIn(ZoneType.Battlefield);
