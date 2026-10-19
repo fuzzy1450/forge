@@ -13641,6 +13641,8 @@ public class SpecialCardAi {
             switch (name) {
                 // one case per row of the family, added by that row's own commit:
                 // case <Row>.NAME: return <Row>.consider(ai, sa);
+                case RedirectLightning.NAME: // batch 4's row 11
+                    return RedirectLightning.consider(ai, sa);
                 default:
                     return null;
             }
@@ -13654,6 +13656,8 @@ public class SpecialCardAi {
             switch (name) {
                 // one name per row of the family, added by that row's own commit:
                 // case <Row>.NAME: return true;
+                case RedirectLightning.NAME: // batch 4's row 11
+                    return true;
                 default:
                     return false;
             }
@@ -13666,6 +13670,72 @@ public class SpecialCardAi {
             }
             final forge.card.CardRules rules = host.getRules();
             return rules == null ? null : rules.getName();
+        }
+    }
+
+    // Redirect Lightning (dead-card batch 4, row 11; a case of G7's SwatFamily)
+    // "As an additional cost to cast this spell, pay 5 life or pay {2}. Change the target of target
+    // spell or ability with a single target." ChangeTargetsAi.checkApiLogic answered CantPlayAi for
+    // every ChangeTargets card but Spellskite's magnet, Deflecting Swat and Wild Ricochet, at a
+    // draw-free point: 0 owner casts in 1,849 distinct held libraries on the active engine. G7's
+    // SwatFamily.consider routes the card here. The window and floor are Deflecting Swat's (batch 1,
+    // row 27), called unchanged: an opponent's spell or triggered ability on top whose single-target,
+    // non-divided part harms its target (DealDamage, Destroy, GainControl, ChangeZone to Graveyard/
+    // Library/Hand/non-returning Exile, curse or negative Pump, curse or steal Attach), aims at our
+    // commander, a planeswalker, a creature worth a vanilla 2/2, a nonland CMC 3+ permanent or our
+    // life against lethal, is predicted to remove it (predictThreatenedObjects), and has a legal new
+    // target an opponent controls or is; TargetType$ SpellAbility.singleTarget is Swat's own
+    // canTargetSpellAbility check. Then, RNG-free (B3-5): the variant's adjusted mana, {R} or {2}{R},
+    // must fit HonestMana with held sources skipped (G1), so no unpayable window reaches canPayCost's
+    // isManaSourceReserved draws; and the 5-life variant (offered first) pays only while
+    // LIFE_AFTER_PAY or more life remains after paying, or when the part it moves aims at us (Swat
+    // admits our face only against lethal damage or poison), where the stock checkLifeCost floor of 4
+    // still applies; otherwise it declines and the {2}{R} variant, offered next, is judged on its own.
+    // A copy skips the price and the life floor (nothing is paid). An AbilitySub answers null: the
+    // stock path below G7's route. Resolution: G7's PlayerControllerAi.chooseNewTargetsFor block
+    // (SwatFamily.retargets names the card) -> DeflectingSwat.chooseNewTargets, unchanged. Draws
+    // nothing and allocates no SpellAbility id; inert for every other card (a name compare). Couplings
+    // (B3-4): a revert of DeflectingSwat (batch 1, row 27) or of G1 CommanderCastCeiling reverts this
+    // row; G7's case and name go with it.
+    public static class RedirectLightning {
+        public static final String NAME = "Redirect Lightning";
+        public static final int LIFE_AFTER_PAY = 10;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (sa instanceof AbilitySub) {
+                return null; // not this row's ability: G7 keeps the stock path
+            }
+            final AiAbilityDecision swat = DeflectingSwat.consider(ai, sa);
+            if (!swat.willingToPlay() || sa.isCopied()) {
+                return swat;
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final forge.game.cost.CostPayLife life =
+                    sa.getPayCosts().getCostPartByType(forge.game.cost.CostPayLife.class);
+            if (life != null && !ai.cantLoseForZeroOrLessLife()
+                    && ai.getLife() - life.getAbilityAmount(sa) < LIFE_AFTER_PAY && !movesItOffUs(ai, sa)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
+            }
+            return swat;
+        }
+
+        // the spell or ability consider targeted has its single target on us
+        private static boolean movesItOffUs(final Player ai, final SpellAbility sa) {
+            final SpellAbility top = sa.getTargets().getFirstTargetedSpell();
+            if (top == null) {
+                return false;
+            }
+            final SpellAbility root = top.isWrapper() ? ((WrappedAbility) top).getWrappedAbility() : top;
+            for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+                if (part.usesTargeting() && part.getTargets().size() == 1 && ai.equals(part.getTargets().get(0))) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
