@@ -36590,6 +36590,118 @@ public class SpecialCardAi {
         }
     }
 
+    // Displacer Kitten (dead-card batch 4, wave 2, row 64, a B4-14 follow-up; deck review 2026-10-17, Neera - Wild
+    // Magic 510f65b5, deck 507, the only Neera carrier)
+    // "Whenever you cast a noncreature spell, exile up to one target nonland permanent you control, then return that
+    // card to the battlefield under its owner's control." The trigger is mandatory with "up to one" target
+    // (TargetMin$ 0), so its target is chosen as it goes on the stack: prepareSingleSa -> ChangeZoneAi
+    // .doTriggerNoCost -> knownOriginTriggerAI -> isPreferredTarget. The stock blink branch there keeps only our own
+    // non-token permanents with an ETB trigger, so a spent Neera was never chosen: 0 combo blinks in 61 logged deck-507
+    // games on either engine, 76 base triggers with her on the battlefield and spent (none 48, an unkicked Skyclave
+    // Relic 25, whose ETB needs "kicked" and never fires on a blink). The returned Neera is a new card
+    // (GameAction.changeZone's copyCard) with a fresh ActivationTable, so her once-each-turn trigger fires again this
+    // turn, and her pending trigger still resolves (logged on 2.0.15+289feab346d: 1686450 T19, the probes 20261018
+    // and 20261019); in Commander exile is not replaced (903.9a is a state-based action, checked after she is back).
+    // resetTarget runs after canBouncePermanent's save (a threatened permanent, a Pacified or stunned Neera, and a
+    // second Kitten trigger stacked over a first that already aims at her are all the stock's) and ahead of the ETB
+    // pick; it keys on the host's AILogic and reads only NeeraWildMage's NAME and unspent, called unchanged (B4-7),
+    // the candidates, the combat, the stack, and G2 (HonestMana) on our own turn before attackers. The cast spends
+    // her count before any target is chosen (TriggerHandler's triggerRun, CR 603.5): 158 of 158 logged Kitten
+    // triggers with her on the battlefield found her spent, so F1's unspent test is a guard, and the blink is taken
+    // on almost every noncreature cast while both share our board, less these declines:
+    // - F1: a Neera we control, her trigger spent (no Neera, or a live trigger: a blink buys nothing);
+    // - S1: a card, controlled and owned by us (a token would not return; a stolen Neera would go home);
+    // - S2: no combat role (a blink removes her from combat);
+    // - S3: no counters (negative ones are the stock save's case), no Aura or Equipment of ours on her;
+    // - S4: no spell or ability of ours on the stack, other than a Kitten blink, aimed at her (it would fizzle); an
+    //   opponent's spell aimed at her is deliberately not excluded (the blink makes it fizzle);
+    // - F2: on our own turn before declare attackers, an untapped Neera that is not summoning sick loses her attack
+    //   to the blink, so the reset is then taken only with a nonland hand card whose mana value G2's total covers.
+    // The fresh trigger pays when the next spell is a feeder NeeraWildMage.shouldBottom bottoms (sequenceFeeder moves
+    // one first on an empty stack) or when the pending trigger's own free cast is one; a non-feeder takes it and
+    // spends it, so the Kitten recovers exactly the forfeit a decline creates. A chain needs a cast per link and ends
+    // at the first revealed card shouldBottom keeps (a library always holds one at 9/10 of its average or more).
+    // Residuals: F2 is a predictor (a castable-looking card its own AI holds, or a free cast F2 cannot see); a
+    // replacement on a creature entering is not priced (Containment Priest exiles her for good; Authority of the
+    // Consuls, Blind Obedience and Thalia, Heretic Cathar return her tapped); the Skyclave Relic untap given up is
+    // worth nothing (tapped at 5 of 39 stock Relic picks, tapped for mana again in 0). Draws nothing, writes nothing
+    // but G2's setActivatingPlayer on our own mana abilities, allocates no id; null keeps the stock pick.
+    public static class DisplacerKitten {
+        public static final String LOGIC = "DisplacerKitten";
+
+        public static Card resetTarget(final Player ai, final SpellAbility sa, final List<Card> candidates) {
+            if (!ai.isCardInPlay(NeeraWildMage.NAME) || NeeraWildMage.unspent(ai)) {
+                return null; // F1: no Neera, or her trigger is live: a blink buys nothing
+            }
+            final Game game = ai.getGame();
+            for (final Card c : candidates) {
+                if (!NeeraWildMage.NAME.equals(c.getName()) || c.isToken()
+                        || !ai.equals(c.getController()) || !ai.equals(c.getOwner())) {
+                    continue; // S1: ours, owned (she returns to her owner), and a card
+                }
+                if (game.getCombat() != null && (game.getCombat().isAttacking(c) || game.getCombat().isBlocking(c))) {
+                    continue; // S2: a blink removes her from combat
+                }
+                if (c.hasCounters() || hasOwnAttachment(ai, c) || ownStackTargets(ai, game, c)) {
+                    continue; // S3/S4: counters, our Aura or Equipment, our own spell aimed at her
+                }
+                if (!attackFloor(ai, sa, c)) {
+                    continue; // F2
+                }
+                return c;
+            }
+            return null;
+        }
+
+        // F2: on our own turn before attackers, a Neera that could attack loses that attack to the
+        // blink's summoning sickness; then a reset is taken only with an affordable follow-up in hand
+        // (G2 total >= a nonland hand card's mana value)
+        private static boolean attackFloor(final Player ai, final SpellAbility sa, final Card neera) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                    || neera.isTapped() || neera.isSick()) {
+                return true;
+            }
+            final int mana = HonestMana.of(ai, sa, true).total();
+            for (final Card h : ai.getCardsIn(ZoneType.Hand)) {
+                if (!h.isLand() && h.getCMC() <= mana) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // an Aura or Equipment we control attached to her
+        private static boolean hasOwnAttachment(final Player ai, final Card c) {
+            for (final Card a : c.getAttachedCards()) {
+                if (ai.equals(a.getController())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // a spell or ability of ours on the stack, other than a Kitten blink, that targets her (an
+        // Expedite on her would fizzle, its draw with it)
+        private static boolean ownStackTargets(final Player ai, final Game game, final Card c) {
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                for (SpellAbility s = si.getSpellAbility(); s != null; s = s.getSubAbility()) {
+                    if (s.isWrapper()) {
+                        s = ((WrappedAbility) s).getWrappedAbility();
+                    }
+                    if (LOGIC.equals(s.getParam("AILogic")) || !ai.equals(s.getActivatingPlayer())
+                            || !s.usesTargeting()) {
+                        continue;
+                    }
+                    if (s.getTargets().contains(c)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Nemata, Grove Guardian (dead-card batch 3, row 101; extension 2026-10-15; Mono-Green Food and
     // Tokens 8428b3ce)
     // "{2}{G}: Create a 1/1 green Saproling creature token. Sacrifice a Saproling: Saproling

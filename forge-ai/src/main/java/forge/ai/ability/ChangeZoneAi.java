@@ -1542,6 +1542,16 @@ public class ChangeZoneAi extends SpellAbilityAi {
 
                     return true;
                 }
+                // Displacer Kitten (dead-card batch 4, row 64): our own Neera, Wild Mage whose
+                // once-each-turn trigger is spent returns as a new object with it fresh; taken after
+                // the save above and ahead of the ETB pick below. Draws nothing; null keeps the stock.
+                if (blink && SpecialCardAi.DisplacerKitten.LOGIC.equals(sa.getParam("AILogic"))) {
+                    final Card reset = SpecialCardAi.DisplacerKitten.resetTarget(ai, sa, list);
+                    if (reset != null) {
+                        sa.getTargets().add(reset);
+                        return true;
+                    }
+                }
                 // blink logic: get my own permanents back or blink permanents with ETB effects
                 if (blink) {
                     CardCollection blinkTargets = CardLists.filter(list, c -> !c.isToken() && c.getOwner().equals(ai) && (c.getController().isOpponentOf(ai) || c.hasETBTrigger(false)));
