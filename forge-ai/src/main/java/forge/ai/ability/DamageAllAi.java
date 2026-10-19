@@ -214,6 +214,14 @@ public class  DamageAllAi extends SpellAbilityAi {
 
     @Override
     public AiAbilityDecision chkDrawback(Player ai, SpellAbility sa) {
+        if (SpecialCardAi.HourOfDevastation.isJudgedSub(sa)) {
+            // Dead-card batch 4, row 7, part 7B: Hour of Devastation's sweep, already judged whole by its
+            // AnimateAll root with indestructible stripped (HourOfDevastation.consider). The stock lists
+            // below drop indestructible creatures and read the weakest opponent only, so they would veto the
+            // boards the strip exists for. A mandatory call (Jeleva) was willing either way: MandatoryPlay(50)
+            // or WillPlay. Every other DamageAll sub pays one API test. RNG-free.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         if (SpecialCardAi.SuddenDemise.isSuddenDemise(sa)) {
             // Sudden Demise (dead-card batch 2, row 116): the damage reads the colour the root
             // ChooseColor picks at resolution, so Creature.ChosenColor matches nothing here: the
