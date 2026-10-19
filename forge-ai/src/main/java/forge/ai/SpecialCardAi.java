@@ -5303,6 +5303,66 @@ public class SpecialCardAi {
         }
     }
 
+    // Borne Upon a Wind (dead-card batch 4, row 18; carriers decks 511 Blue Farm 4Matic and 512 The
+    // Sting of Ping, site uploads, neither an anchor)
+    // "You may cast spells this turn as though they had flash. Draw a card." ({1}{U} instant.) An Effect
+    // with no AILogic: EffectAi's fallthrough refused it at every consult (0 owner casts in 1,640 held
+    // games over 696 distinct libraries on 2.0.15+499e03087c5). Its floor is the cantrip, cast with mana
+    // still open in the end step of the opponent whose next turn is ours (it untaps before we need it;
+    // DrawAi's draw-instant timing, DrawAi:309); the flash grant lets what is left cast our
+    // sorcery-speed hand in that step, through the stock handlers (PermanentCreatureAi's
+    // isEOTBeforeMyTurn branch for creatures and the commander).
+    // In order, every decline before any WillPlay:
+    // - not our own hand cast (a Play-effect cast, a copy, another zone, a host we do not own and
+    //   control): CantPlayAi, the stock answer, unchanged;
+    // - window: END_OF_TURN, not our turn, getNextTurn() is us, empty stack, else AnotherTime. O(1);
+    // - draw: canDraw, a library of LIBRARY_MIN or more (DrawAi:742 refuses the sub at 4 or fewer), a hand
+    //   no larger than the maximum (DrawAi:759), else CantPlayAi;
+    // - mana: calculateManaCost in test mode (taxes and reductions read) against HonestMana (G2, held
+    //   sources skipped, this spell's restrictions), in total and in unpaid blue shards, else CantAfford.
+    //   Never getAvailableManaEstimate (it counts Produced$ words): an approval in an unpayable window
+    //   would reach canPayCost's isManaSourceReserved roll;
+    // - else WillPlay 100.
+    // RNG: reached after EffectAi's randomReturn roll, the one draw A made at every consult; every check
+    // here is a read, so a decline is A's consult exactly. canPayCost's draws follow only a WillPlay G2
+    // called payable. Nothing is targeted, held or remembered.
+    // G2's over-counts stand: a one-shot source (a Treasure) is counted and may be spent, so the worst
+    // case is two mana for a card, one of which may not untap; a Lion's Eye Diamond our own row-51
+    // cast left on the battlefield counts 3 the payer never uses (instant-speed mana), an approval
+    // canPayCost then refuses after its draws, never a wrong cast. A direct canPlaySa probe of a
+    // no-cost copy (ManaAi's ritual look-ahead) prices 0 and is approved in the window, draw-free:
+    // an approval is not a cast.
+    public static class BorneUponAWind {
+        public static final String NAME = "Borne Upon a Wind";
+        static final int LIBRARY_MIN = 5;
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getParent() != null || sa.isCopied()
+                    || sa.isCastFromPlayEffect() || !ai.equals(host.getOwner())
+                    || !ai.equals(host.getController()) || !host.isInZone(ZoneType.Hand)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai) || !ai.equals(ph.getNextTurn())
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!ai.canDraw() || ai.getCardsIn(ZoneType.Library).size() < LIBRARY_MIN
+                    || (!ai.isUnlimitedHandSize() && ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLUE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Borrowing 100,000 Arrows (and Theft of Dreams, the identical script)
     // Draw a card for each tapped creature target opponent controls. We draw (Defined$ You); the
     // target only sizes X, so target the opponent with the most tapped creatures, sizing each one

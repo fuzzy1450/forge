@@ -109,6 +109,17 @@ public class EffectAi extends SpellAbilityAi {
         boolean randomReturn = MyRandom.getRandom().nextFloat() <= .6667;
         String logic = "";
 
+        if (SpecialCardAi.BorneUponAWind.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // "You may cast spells this turn as though they had flash. Draw a card." The no-AILogic
+            // fallthrough below refused it at every consult (dead-card batch 4, row 18). Routed after
+            // the randomReturn roll: the card has no RemoveDeck hint, so the stock engine evaluated it
+            // and drew here before refusing, and every decline in the evaluator draws nothing more.
+            // Only our own hand cast is judged; a Play-effect cast (Jeleva's theft) or a copy gets
+            // the stock CantPlayAi there. Every other Effect card takes exactly the path it took
+            // before this branch.
+            return SpecialCardAi.BorneUponAWind.consider(ai, sa);
+        }
+
         if ("Heroic Sacrifice".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             // Own-creature damage magnet. Routed after the randomReturn roll: the
             // card has no RemoveDeck hint, so the stock engine evaluated it and drew
