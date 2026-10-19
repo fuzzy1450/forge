@@ -58803,6 +58803,17 @@ public class SpecialCardAi {
                     || !game.getStack().isEmpty()) {
                 return new AiAbilityDecision(0, AiPlayDecision.AnotherTime); // O(1), RNG-free
             }
+            // Part 72B-now (dead-card batch 4, row 72): in our Main 2 a tapped engine of 2+ printed cards
+            // whose draw DrawAi takes now (TapDrawEngine.Rule.NOW_OUR_MAIN2: hand + printed <= max) comes
+            // before any mana source, under the mana untap's own blocker floor (incomingUnsafe: the Vizier
+            // stays tapped through their combat). Reads only; a null falls through to A's path below, draws
+            // included.
+            final Card nowEngine = TapDrawEngine.tapped(ai, sa, TapDrawEngine.MIN_DRAW,
+                    TapDrawEngine.Rule.NOW_OUR_MAIN2);
+            if (nowEngine != null && !incomingUnsafe(ai)) {
+                sa.getTargets().add(nowEngine);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
             // 1. our tapped, targetable mana sources (never a summoning-sick creature: its mana ability
             // stays unusable once untapped), larger production first, one per distinct production
             final List<Pair<Card, SpellAbility>> cands = new ArrayList<>();
