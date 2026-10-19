@@ -58777,6 +58777,8 @@ public class SpecialCardAi {
     //   CommanderCastCeiling.affordable: test-mode calculateManaCost against G2, both reads) before canPayCost's
     //   draws. The stock PermanentCreatureAi path judges the rest (Main 2, no X, no upkeep cost: WillPlay), so no
     //   creature hook is needed; the -10 sort puts the cast after every other spell ability, on the mana A leaves.
+    //   Part 74B2: the cast also opens while our commander with such a draw is in our command zone or our hand
+    //   (commanderHolder), so the Alchemist is cast early and is unsick when Arcanis lands.
     // Never readmitted: the face-down cast (Morph, {3}) and the turn-face-up action. Keyed on the paper name and on
     // owner and controller (rule B3-3): a thief's Alchemist, a Clone, a Mairsil grant and a copy of the ability
     // keep A's path. RNG: every check reads state only (getters, canTarget and the restrictions with the activator
@@ -58827,10 +58829,22 @@ public class SpecialCardAi {
                 return false;
             }
             final SpellAbility untap = untapOf(sa.getHostCard());
-            if (untap == null || castHolder(ai, untap) == null) {
+            if (untap == null || (castHolder(ai, untap) == null && !commanderHolder(ai))) { // 74B || 74B2
                 return false;
             }
             return CommanderCastCeiling.affordable(ai, sa);
+        }
+
+        // 74B2: our commander in our command zone or our hand whose draw is a holderDraw: it comes back as a
+        // holder, and an Alchemist cast now is unsick when it does. Read on the live zone objects (getCommanders()
+        // keeps the object of a commander's first cast); the "Commander Effect" card is not a commander.
+        static boolean commanderHolder(final Player ai) {
+            for (final Card c : ai.getCardsIn(ZoneType.Command, ZoneType.Hand)) {
+                if (c.isCommander() && ai.equals(c.getOwner()) && holderDraw(c) != null) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         // 74B: our creature or artifact on the battlefield, tapped or not, whose draw is a holderDraw that this
