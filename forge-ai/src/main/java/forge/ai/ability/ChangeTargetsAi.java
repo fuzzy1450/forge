@@ -34,6 +34,13 @@ public class ChangeTargetsAi extends SpellAbilityAi {
             // other ChangeTargets card takes exactly the path it took before.
             return SpecialCardAi.WildRicochet.consider(ai, sa);
         }
+        // Dead-card batch 4, G7: the Deflecting Swat family's route (rows 11, 40, 43 and 49 each add their
+        // card's case to SpecialCardAi.SwatFamily.consider). A non-null answer is that card's decision; null,
+        // the answer for every card no case names, keeps exactly the path below.
+        final AiAbilityDecision fam = SpecialCardAi.SwatFamily.consider(ai, sa);
+        if (fam != null) {
+            return fam;
+        }
         final Game game = sa.getHostCard().getGame();
         final SpellAbility topSa = game.getStack().isEmpty() ? null
                 : ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);

@@ -1475,6 +1475,18 @@ public class PlayerControllerAi extends PlayerController {
                 return SpecialCardAi.DeflectingSwat.chooseNewTargets(player, ability, filter);
             }
         }
+        // Dead-card batch 4, G7: the Deflecting Swat family (rows 11, 40, 43 and 49, each adding its name to
+        // SpecialCardAi.SwatFamily.retargets) resolves through Deflecting Swat's chooser, called unchanged
+        // (B3-4): only a single-target harmful part aimed at ours moves, never onto anything of ours; anything
+        // unplanned keeps its targets (null), the stub's behaviour. A host retargets does not name falls through.
+        if (game.getStack().isResolving() && !game.getStack().isEmpty()) {
+            final SpellAbility resolving = game.getStack().peekAbility();
+            if (resolving != null && resolving.getApi() == ApiType.ChangeTargets
+                    && player.equals(resolving.getActivatingPlayer())
+                    && SpecialCardAi.SwatFamily.retargets(resolving.getHostCard())) {
+                return SpecialCardAi.DeflectingSwat.chooseNewTargets(player, ability, filter);
+            }
+        }
         // AI currently can't do this. But when it can it will need to be based on Ability API
         return null;
     }

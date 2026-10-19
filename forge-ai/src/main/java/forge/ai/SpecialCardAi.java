@@ -13524,6 +13524,64 @@ public class SpecialCardAi {
         }
     }
 
+    // Deflecting Swat family (dead-card batch 4, shared generalization G7: rows 11, 40, 43 and 49)
+    // Redirect Lightning (11), Misdirection (40), Ricochet Trap (43) and Bolt Bend (49) are ChangeTargets
+    // spells the AI never cast: ChangeTargetsAi.checkApiLogic answered CantPlayAi to every ChangeTargets card
+    // but Spellskite's magnet, Deflecting Swat and Wild Ricochet, and PlayerControllerAi.chooseNewTargetsFor
+    // answered null (keep the targets) outside Deflecting Swat, so a cast would have moved nothing. Each row's
+    // fix is Deflecting Swat's window and floor (batch 1, row 27) behind its own keys, resolved through
+    // DeflectingSwat.chooseNewTargets, called unchanged (B3-4). The four rows meet the same two gates with the
+    // same callee, so this class is the one seam both gates ask, instead of four routes and four copies of the
+    // resolution block:
+    // - consider: ChangeTargetsAi.checkApiLogic asks it after the Wild Ricochet gate. A non-null answer is the
+    //   decision; null keeps the stock path below it (the magnet, the mandatory line, CantPlayAi).
+    // - retargets: PlayerControllerAi.chooseNewTargetsFor asks it, after the Swat block, for the host of a
+    //   resolving ChangeTargets ability its player activated. True moves the parts through
+    //   DeflectingSwat.chooseNewTargets; false keeps the stub's null.
+    // Both switch on the host's paper name (host.getRules().getName(), the key RemoveDeckFilter's switch reads;
+    // a face-down host's getName() is ""). Each row's own commit adds its card's case to consider (its class's
+    // consider, which answers null for an ability it does not handle: Redirect Lightning's "not an AbilitySub",
+    // Bolt Bend's own hand cast, Misdirection's pitch) and its name to retargets, and its revert takes both out
+    // (B4-18). A name no case lists answers null from consider and false from retargets: both callers' paths as
+    // they were. Reads one name: no random draw, no SpellAbility id, no write. Reverted only when rows 11, 40, 43
+    // and 49 all are, and last.
+    public static class SwatFamily {
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final String name = paperName(sa.getHostCard());
+            if (name == null) {
+                return null;
+            }
+            switch (name) {
+                // one case per row of the family, added by that row's own commit:
+                // case <Row>.NAME: return <Row>.consider(ai, sa);
+                default:
+                    return null;
+            }
+        }
+
+        public static boolean retargets(final Card host) {
+            final String name = paperName(host);
+            if (name == null) {
+                return false;
+            }
+            switch (name) {
+                // one name per row of the family, added by that row's own commit:
+                // case <Row>.NAME: return true;
+                default:
+                    return false;
+            }
+        }
+
+        // the name every face of the host answers to; null for no host or a host with no paper card
+        private static String paperName(final Card host) {
+            if (host == null) {
+                return null;
+            }
+            final forge.card.CardRules rules = host.getRules();
+            return rules == null ? null : rules.getName();
+        }
+    }
+
     // Demonic Consultation - cast only in response to our own Thassa's Oracle
     // ETB trigger: the trigger then resolves against an empty library and its
     // WinsGame sub fires (X = devotion >= Y = 0). Casting in any other window
