@@ -39855,8 +39855,11 @@ public class SpecialCardAi {
     //   (ComputerUtil.castPermanentInMain1: floating mana, an unpaired Tandem Lookout);
     // - no live mana reservation (RemoveDeckFilter.noManaHeld);
     // - G2 (HonestMana, held sources skipped) covers the engine's test-mode calculateManaCost in
-    //   total and in blue, so a readmitted spell never reaches ComputerUtilCost.canPayCost, whose
-    //   test payment draws MyRandom per source it tries, in a window that cannot pay for it.
+    //   total and in blue, and still does once the mana of the sources whose only usable mana
+    //   ability is instant-speed is taken off both (Lion's Eye Diamond: G2 counts its 3,
+    //   ComputerUtilMana.getAIPlayableMana never pays with it; instantOnlyMana, asked only after
+    //   the plain test passed), so a readmitted spell never reaches ComputerUtilCost.canPayCost,
+    //   whose test payment draws MyRandom per source it tries, in a window that cannot pay for it.
     // Value floor: the body. A 3/4 for five has no ETB, upkeep cost, additional cost or drawback,
     // so there is no worthless or self-harming moment the stock checks behind the filter miss
     // (Patron of the Nezumi's reasoning); they judge the rest (zero toughness, curses, damage on
@@ -39902,7 +39905,48 @@ public class SpecialCardAi {
             final HonestMana mana = HonestMana.of(ai, sa, true);
             final int need = cost.getConvertedManaCost();
             final int blue = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
-            return mana.total() >= need && mana.colour(MagicColor.BLUE) >= blue;
+            if (mana.total() < need || mana.colour(MagicColor.BLUE) < blue) {
+                return false; // the plain G2 test, before instantOnlyMana's second battlefield scan
+            }
+            final int unusable = instantOnlyMana(ai, sa);
+            return mana.total() - unusable >= need && mana.colour(MagicColor.BLUE) - unusable >= blue;
+        }
+
+        // G2 counts a battlefield source whose every usable mana ability is "activate only as an
+        // instant" (Lion's Eye Diamond, batch 4's row 51, in the carrier); the payment's
+        // ComputerUtilMana.getAIPlayableMana skips those abilities, so that source's best amount
+        // is taken off the total and off blue. A source with any other usable mana ability is left
+        // as G2 counted it. Errs toward under-counting (a held LED is subtracted though G2 skipped
+        // it; instant-only mana of another colour is taken off blue too), except a source that
+        // also has a zero-amount non-instant ability, which keeps G2's count (none in the carrier).
+        // Draws nothing and holds nothing; its only write is setActivatingPlayer on the mana
+        // abilities it reads, as G2's.
+        private static int instantOnlyMana(final Player ai, final SpellAbility sa) {
+            int sum = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                boolean other = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    if (ma.getRestrictions() != null && ma.getRestrictions().isInstantSpeed()) {
+                        best = Math.max(best, AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma));
+                    } else {
+                        other = true;
+                    }
+                }
+                if (!other) {
+                    sum += best;
+                }
+            }
+            return sum;
         }
     }
 
