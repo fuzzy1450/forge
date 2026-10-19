@@ -42713,6 +42713,96 @@ public class SpecialCardAi {
         }
     }
 
+    // Dizzy Spell (dead-card batch 4, wave 4, row 19; carrier The Sting of Ping 30da5b05, Vivi Ornitier)
+    // "Target creature gets -3/-0 until end of turn. Transmute {1}{U}{U}" ({U} instant). AI:RemoveDeck:All
+    // stripped both abilities at AiController.getSpellAbilityToPlay before any handler ran: 0 owner casts in
+    // 1,338 held games, 385 distinct held libraries. The hint is KEPT: the -10 sort and every other
+    // isCardRemAIDeck reader (the Mystical Tutor, Gamble and Intuition pickers; steal, copy and clone
+    // pickers) still refuse it, and the Transmute AB stays off the list (row 19C, a follow-up). readmit lets
+    // exactly one ability through: the owner's own cast from hand, in an opponent's declare-attackers step
+    // (the window PumpAiBase.getCurseCreatures' -X/-0 branch acts in) with no spell or ability of ours on top
+    // of the stack, when the unblocked attack at us would leave us below LifeFloor and the -3 prevents
+    // MIN_PREVENTED, or, below LOW_LIFE, turns a lethal attack into one we survive; no mana held;
+    // G1-affordable. The stock PumpAi path then decides and aims it.
+    // RNG: reads only (damageIfUnblocked WITHOUT abilities: the ability form test-pays pump abilities), no
+    // random number, nothing held or remembered; a refusal is the old filter. A readmitted consult's first
+    // draw is canPayCost's, in a window G1 judged payable.
+    public static class DizzySpell {
+        public static final String NAME = "Dizzy Spell";
+        static final int PRINTED_MINUS = 3;   // -3/-0
+        static final int MIN_PREVENTED = 2;   // life the cast must save outside the lethal line
+        // PumpAiBase.getCurseCreatures' own "ai.getLife() < 5" rule: a power-1 attacker is a target only below it
+        static final int LOW_LIFE = 5;
+
+        // the owner's own cast of the root spell from hand, by paper name (the rules RemoveDeckFilter's switch
+        // reads): never the Transmute AB, a copy, a Play-effect cast or a theft
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && sa.isSpell() && sa.getRootAbility() == sa && !sa.isCopied()
+                    && !sa.isCastFromPlayEffect() && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner());
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || ph.isPlayerTurn(ai)) {
+                return false; // cheapest: every other priority ends here
+            }
+            // AiController.getSpellAbilityToPlay drops every pick but a copy SA while our own spell tops the
+            // stack; a readmitted consult there could only draw in canPayCost and then be discarded
+            if (!game.getStack().isEmpty()) {
+                final SpellAbility top = game.getStack().peekAbility();
+                if (top != null && ai.equals(top.getActivatingPlayer())) {
+                    return false;
+                }
+            }
+            final Combat combat = game.getCombat();
+            if (combat == null || game.getReplacementHandler().isPreventCombatDamageThisTurn()
+                    || !ai.canLoseLife() || ai.cantLose() || ai.cantLoseForZeroOrLessLife()) {
+                return false;
+            }
+            final CardCollection attackers = combat.getAttackersOf(ai);
+            int incoming = 0;
+            int best = 0;
+            for (final Card a : attackers) {
+                incoming += ComputerUtilCombat.damageIfUnblocked(a, ai, combat, true);
+                if (sa.canTarget(a)) {
+                    best = Math.max(best, prevented(ai, a, combat));
+                }
+            }
+            final int life = ai.getLife();
+            if (best <= 0 || life - incoming >= LifeFloor.lifeToKeep(ai)) {
+                return false; // no target worth it, or the attack leaves us above the floor
+            }
+            // the lethal-survival line only for what the stock curse list will take (power 1 only below 5 life)
+            if (best < MIN_PREVENTED
+                    && !(life < LOW_LIFE && incoming >= life && incoming - best < life)) {
+                return false;
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, false)) {
+                return false; // a refusal only waits
+            }
+            return CommanderCastCeiling.affordable(ai, sa); // G1: {U} as priced, in HonestMana
+        }
+
+        // the life our -3/-0 on c keeps off us this combat
+        static int prevented(final Player ai, final Card c, final Combat combat) {
+            if (c.assignNoCombatDamage() || c.toughnessAssignsDamage() || c.negateCombatAssignedDamage()) {
+                return 0;
+            }
+            int p = Math.min(PRINTED_MINUS, Math.max(0, c.getNetCombatDamage()));
+            if (c.hasDoubleStrike()) {
+                p *= 2;
+            }
+            return Math.min(p, ComputerUtilCombat.damageIfUnblocked(c, ai, combat, true));
+        }
+    }
+
     // RemoveDeck filter dispatcher (dead-card batch 2, shared generalization G3)
     // AiController.getSpellAbilityToPlay drops every spell ability whose host carries
     // AI:RemoveDeck:All (ComputerUtilCard.isCardRemAIDeck) before any handler runs, and keeps every
@@ -42731,8 +42821,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74 and 53, keepOff for batch
-    // 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53 and 19, keepOff for
+    // batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -42870,6 +42960,8 @@ public class SpecialCardAi {
                     return AphettoAlchemist.readmit(ai, sa);
                 case FreedFromTheReal.NAME:              // batch 4, row 53 (W4)
                     return FreedFromTheReal.readmit(ai, sa);
+                case DizzySpell.NAME:                    // batch 4, row 19 (W4)
+                    return DizzySpell.readmit(ai, sa);
                 default:
                     return false;
             }
