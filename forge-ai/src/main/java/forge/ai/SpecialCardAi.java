@@ -42134,7 +42134,7 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16 and 28, keepOff for batch 2's row
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28 and 47, keepOff for batch 2's row
     // 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -42265,6 +42265,8 @@ public class SpecialCardAi {
                     return PrismaticStrands.readmit(ai, sa);
                 case SylvanLibrary.NAME:                 // batch 4, row 28 (W3)
                     return SylvanLibrary.readmit(ai, sa);
+                case SanctumPrelate.NAME:                // batch 4, row 47 (W3)
+                    return SanctumPrelate.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -44242,8 +44244,89 @@ public class SpecialCardAi {
     public static class SanctumPrelate {
         public static final String NAME = "Sanctum Prelate";
         static final int OWN_WEIGHT = 2;        // PermanentAi's Chalice of the Void: theirs >= 2 x ours
+        static final int MIN_NET = 4;           // Chalice's "more than 3" opposing cards, net of ours
         static final int COMMANDER_WEIGHT = 10; // Talion's recast weight (a private copy, B3-4)
         static final int MV_CAP = 16;           // the highest mana value counted
+
+        // Part 47B, the owner's cast. The hint stays (B3-1): the -10 sort (ComputerUtilAbility.saEvaluator)
+        // and every other isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) still
+        // refuse the card. Three checks, each answering one gate:
+        // - readmit (RemoveDeckFilter.readmit's case; DawnglareInvoker.readmit, a private copy under B3-4,
+        //   with the floor last): the owner's own creature spell from hand, not a Play-effect cast and not
+        //   a copy, in our own main phase on an empty stack; Main 2, or Main 1 where
+        //   ComputerUtil.castPermanentInMain1 holds (the stock PermanentAi wait, answered before the list
+        //   sees the spell); no live mana reservation (RemoveDeckFilter.noManaHeld); G2 (HonestMana, held
+        //   sources skipped) covering the engine's test-mode calculateManaCost in total and in white, so a
+        //   readmitted spell never reaches canPayCost's MyRandom test payment in a window that cannot pay;
+        //   then worthCasting.
+        // - ownHandProbe (ChooseNumberAi.checkApiLogic's key, the readmit's key carried to the probe,
+        //   B3-2): checkETBEffects' non-mandatory probe of the ETB ChooseNumber, for OUR OWN hand cast
+        //   only. The probe's host must be canPlaySa's LKI copy (atCastGate: no zone of its own, the
+        //   Stack as its last known zone), its cast SA a spell, not a copy and not a Play-effect cast,
+        //   owned by us and cast from our hand. A theft, a Play-effect cast (canPlayFromEffectAI hands
+        //   the real host), a copy and a held evaluation of the real card (getPossibleETBCounters) fail
+        //   the key and keep the stock MissingLogic.
+        // - worthCasting, the floor: the 2/2 body plus a lock worth a card. The best net[n] over
+        //   0..MV_CAP (47A's arrays and skip rule) must be at least MIN_NET, the stock Chalice threshold
+        //   (PermanentAi: more than 3 opposing cards, and at least twice ours).
+        // Draws nothing, holds nothing, remembers nothing: a decline anywhere is A's draws exactly. The
+        // only writes are the hand SA's activator when it has none (as getOriginalAndAltCostAbilities
+        // does right after the filter) and G2's stamps on our mana abilities (B4-4).
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first, the floor last
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || sa.isCopied() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // a theft, a Play-effect cast, a copy: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return false;
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ph.is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait, answered before the list sees the spell
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)
+                    && worthCasting(ai);
+        }
+
+        // ChooseNumberAi.checkApiLogic's key: checkETBEffects' probe of our own hand cast of the Prelate
+        public static boolean ownHandProbe(final Player ai, final SpellAbility sa) {
+            if (!NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+                return false; // every other ChooseNumber: one string compare
+            }
+            final Card host = sa.getHostCard();
+            if (host == null || !atCastGate(host)) {
+                return false; // the real card: a held evaluation or a Play-effect probe, the stock answer
+            }
+            final SpellAbility cast = host.getCastSA();
+            return cast != null && cast.isSpell() && !cast.isCopied() && !cast.isCastFromPlayEffect()
+                    && ai.equals(host.getOwner())
+                    && host.getCastFrom() != null && host.getCastFrom().is(ZoneType.Hand);
+        }
+
+        // the lock floor: the readmit's last check and the keyed probe's answer
+        public static boolean worthCasting(final Player ai) {
+            final int[] net = net(ai);
+            final int b = best(ai.getGame(), null, net, 0, MV_CAP);
+            return b >= 0 && net[b] >= MIN_NET;
+        }
 
         // AiController.chooseNumber's branch: the ETB ChooseNumber at resolution, once per entry
         public static int chooseNumber(final Player ai, final SpellAbility sa, final int min, final int max) {
@@ -44307,6 +44390,14 @@ public class SpecialCardAi {
                 }
             }
             return b;
+        }
+
+        // TheMasterFormedAnew.atCastGate, copied (private there, as TheRani's copy is): canPlaySa's LKI
+        // copy of the spell's host has no zone of its own and the Stack as its last known zone; the real
+        // card (at resolution, in getPossibleETBCounters' held evaluations, in canPlayFromEffectAI) has
+        // one. Card.isInZone reads the last known zone, so it alone cannot tell the two apart.
+        private static boolean atCastGate(final Card host) {
+            return host.getZone() == null && host.isInZone(ZoneType.Stack);
         }
     }
 

@@ -16,6 +16,14 @@ public class ChooseNumberAi extends SpellAbilityAi {
             // exactly the path it took before this branch.
             return SpecialCardAi.SqueesRevenge.consider(aiPlayer, sa);
         }
+        if (SpecialCardAi.SanctumPrelate.ownHandProbe(aiPlayer, sa)) {
+            // Dead-card batch 4, row 47: checkETBEffects' probe of OUR OWN hand cast of Sanctum Prelate gets
+            // the lock floor; a theft, a Play-effect cast, a copy or a held evaluation of the real card keeps
+            // MissingLogic below (B3-2)
+            return SpecialCardAi.SanctumPrelate.worthCasting(aiPlayer)
+                    ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
         String aiLogic = sa.getParamOrDefault("AILogic", "");
 
         if (aiLogic.isEmpty()) {
