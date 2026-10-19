@@ -133,6 +133,12 @@ public class ComputerUtil {
 
         game.getStack().freezeStack(sa);
 
+        // Empty both paying lists first, as PlaySpellAbility.playAbility does before a human pays. An activated
+        // ability is one SpellAbility for its card's life (MagicStack.add puts a copy on the stack), so the lists still
+        // hold its last activation's mana, and the rollback of a failed payment below would refund that: sources
+        // tapped for the earlier activation untapped for free, mana it spent back in the pool.
+        sa.clearManaPaid();
+        sa.getPayingManaAbilities().clear();
         final CostPayment pay = new CostPayment(cost, sa);
         if (pay.payComputerCosts(new AiCostDecision(ai, sa, false))) {
             game.getStack().addAndUnfreeze(sa);
