@@ -45887,6 +45887,10 @@ public class SpecialCardAi {
     //   a static ability of its own (Yavimaya, Cradle of Growth, the carrier's one fixer for its
     //   colourless lands); basics first, then the lowest id; never more than the library's fetchable
     //   lands, so the land count never drops.
+    // - the search (choosePick, from ChangeZoneAi.chooseCardToHiddenOriginChangeZone, after the stock
+    //   shuffle): Field of the Dead first, then a nonbasic land with a name we do not control (two or
+    //   more mana first, then the lowest id), then any other land; never a hazard (isHazard); null ends
+    //   the "up to" search (ChangeZoneAi.confirmAction answers true).
     // A thief's resolution (Chaos Wand, Mind's Dilation, Guff Rewrites History: the decider is not the
     // owner) and a copy's (the host is a copied spell) keep the stock path.
     // RNG: the resolution choosers are deterministic (zone, parameter and SVar-text reads, no random
@@ -45945,6 +45949,48 @@ public class SpecialCardAi {
                 out.add(c);
             }
             return out;
+        }
+
+        // ChangeZoneAi.chooseCardToHiddenOriginChangeZone: Field of the Dead, then a fresh-named
+        // nonbasic (two or more mana first), then any land; never a hazard; null ends the search
+        public static Card choosePick(final Player decider, final CardCollectionView fetchList) {
+            Card field = null;
+            Card fresh = null;
+            Card other = null;
+            final Set<String> controlled = new HashSet<>();
+            for (final Card c : decider.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isLand()) {
+                    controlled.add(c.getName());
+                }
+            }
+            for (final Card c : fetchList) {
+                if (!c.isLand() || isHazard(c)) {
+                    continue;
+                }
+                if (FIELD.equals(c.getName()) && !controlled.contains(FIELD)) {
+                    if (field == null || c.getId() < field.getId()) {
+                        field = c;
+                    }
+                } else if (!c.isBasicLand() && !controlled.contains(c.getName())) {
+                    if (fresh == null || better(c, fresh)) {
+                        fresh = c;
+                    }
+                } else if (other == null || better(c, other)) {
+                    other = c;
+                }
+            }
+            return field != null ? field : fresh != null ? fresh : other;
+        }
+
+        // two or more mana first, then nonbasic, then the lowest id
+        private static boolean better(final Card a, final Card b) {
+            if (multiMana(a) != multiMana(b)) {
+                return multiMana(a);
+            }
+            if (a.isBasicLand() != b.isBasicLand()) {
+                return !a.isBasicLand();
+            }
+            return a.getId() < b.getId();
         }
 
         // ---- shared reads (parameter and zone reads only) ----

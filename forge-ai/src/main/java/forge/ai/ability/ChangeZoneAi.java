@@ -2193,6 +2193,14 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 fetchList = CardLists.filter(fetchList, c1 -> !ComputerUtilCard.isCardRemAIDeck(c1) && !ComputerUtilCard.isCardRemRandomDeck(c1));
             }
         }
+        if (ZoneType.Battlefield.equals(destination) && player.equals(decider)
+                && SpecialCardAi.Scapeshift.isOwnResolution(decider, sa)) {
+            // Scapeshift (dead-card batch 4, wave 5, row 31): the owner's own search takes Field of the Dead
+            // first, then a land with a name we do not control, never a hazard; null ends the "up to"
+            // search (confirmAction answers true). After the stock shuffle and the legendary filter;
+            // RNG-free. A thief's search and a copy's keep the stock pick.
+            return SpecialCardAi.Scapeshift.choosePick(decider, fetchList);
+        }
         if (ZoneType.Exile.equals(destination) || origin.contains(ZoneType.Battlefield)
                 || (ZoneType.Library.equals(destination) && origin.contains(ZoneType.Hand))) {
             // Exiling or bouncing
