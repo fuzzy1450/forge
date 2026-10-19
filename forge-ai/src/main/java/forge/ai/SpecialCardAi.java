@@ -50042,6 +50042,11 @@ public class SpecialCardAi {
                     || KnollspineDragon.drawOrDiscardIsPunished(ai, sa.getHostCard())) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
+            // 28B: a standing CantDraw static (Narset, Parter of Veils; Leovold; Spirit of the Labyrinth)
+            // refuses the trigger's Draw<2> cost (CostDraw.canPay), so the Library would sit blank: wait.
+            if (StaticAbilityCantDraw.canDrawAmount(ai, DRAW) < DRAW) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
@@ -50051,6 +50056,34 @@ public class SpecialCardAi {
             final HonestMana mana = HonestMana.of(ai, sa, true);
             return mana.total() >= cost.getConvertedManaCost()
                     && mana.colour(MagicColor.GREEN) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+
+        // 28B key (28C's too): the trigger's own ChooseCard root on a host named Sylvan Library, paid by
+        // Draw<2>. getName, not the paper name: a copy of the Library answers to it and should get this
+        // logic. ChooseCardAi.chkDrawback's SA is an AbilitySub and is refused.
+        public static boolean isLibraryTrigger(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && NAME.equals(host.getName()) && sa.isTrigger()
+                    && !(sa instanceof AbilitySub) && sa.getApi() == ApiType.ChooseCard
+                    && sa.getPayCosts() != null
+                    && sa.getPayCosts().hasSpecificCostType(forge.game.cost.CostDraw.class);
+        }
+
+        // 28B: ChooseCardAi.checkApiLogic for the trigger. At stack time (doTrigger, mandatory) a decline
+        // still stacks it (SpellAbilityAi.doTriggerNoCost falls through to WillPlay); at resolution
+        // (PlayerControllerAi.confirmTrigger -> doTrigger(sa, false)) it declines the two draws, so the
+        // Draw<2> cost is not paid and nothing is chosen. CantDraw statics are already the cost's
+        // (CostDraw.canPay). RNG-free: reads the library size and the board.
+        public static AiAbilityDecision considerDraw(final Player ai, final SpellAbility sa) {
+            if (ai.getCardsIn(ZoneType.Library).size() < DRAW) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // the second draw would lose
+            }
+            // Notion Thief, Alms Collector (Draw replacements); Orcish Bowmasters, Consecrated Sphinx,
+            // Smothering Tithe, Faerie Mastermind, Nekusar (Drawn). Batch 1's scan, called unchanged.
+            if (KnollspineDragon.drawOrDiscardIsPunished(ai, sa.getHostCard())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
     }
 

@@ -25,6 +25,12 @@ public class ChooseCardAi extends SpellAbilityAi {
      */
     @Override
     protected AiAbilityDecision checkApiLogic(final Player ai, final SpellAbility sa) {
+        if (SpecialCardAi.SylvanLibrary.isLibraryTrigger(sa)) {
+            // Dead-card batch 4, row 28 (28B): the draw-step "may draw two", declined only when the
+            // library cannot take two draws or an opponent's draw thief or punisher would see them.
+            // Every other ChooseCard card takes exactly the path it took before.
+            return SpecialCardAi.SylvanLibrary.considerDraw(ai, sa);
+        }
         if ("Hunted by The Family".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             // Targets creatures, not players: the generic branch below only
             // looks for targetable opponents and can never build these targets.
