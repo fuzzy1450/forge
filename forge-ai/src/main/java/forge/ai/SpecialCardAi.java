@@ -43213,8 +43213,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40 and 46,
-    // keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46 and
+    // 24, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -43358,6 +43358,8 @@ public class SpecialCardAi {
                     return Misdirection.readmit(ai, sa);
                 case MaraleafRider.NAME:                 // batch 4, row 46 (W4)
                     return MaraleafRider.readmit(ai, sa);
+                case SereneMaster.NAME:                  // batch 4, row 24 (W5)
+                    return SereneMaster.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -46315,6 +46317,101 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+    }
+
+    // Serene Master (dead-card batch 4, wave 5, row 24; precon:Eternal Bargain (C13) b5f7ad04, deck 158)
+    // "Whenever Serene Master blocks, exchange its power and the power of target creature it's blocking
+    // until end of combat." ({1}{W} Creature - Human Monk, 0/2; printed text and Oracle agree.)
+    // AI:RemoveDeck:All dropped the owner's creature spell in AiController.getSpellAbilityToPlay's
+    // removeIf before any handler ran: 0 owner casts in 855 held games (76 libraries) on
+    // 2.0.15+499e03087c5. Its casts on 55e7 were thefts and Audacious Swap's free cast, Play effects that
+    // never read the hint. The hint is KEPT: the -10 sort makes it the last creature of every pass, and
+    // every other isCardRemAIDeck reader still refuses it. Behind the filter the stock path is right:
+    // PermanentCreatureAi casts it, ComputerUtilCombat names it in both power predictions (a safe
+    // blocker that kills an attacker whose power is at least its toughness), and PowerExchangeAi aims
+    // the mandatory trigger at the blocked creature.
+    // The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through: the owner's own
+    // creature spell from hand, not a Play-effect cast and not a copy:
+    // - our own main phase with an empty stack;
+    // - Main 2, or Main 1 where ComputerUtil.castPermanentInMain1 says so (the stock Main-2 wait);
+    // - no live mana reservation (RemoveDeckFilter.noManaHeld);
+    // - G2 (HonestMana, held sources skipped) covers the test-mode calculateManaCost in total and in
+    //   white, so canPayCost's MyRandom test payment is entered only in a payable window.
+    // Value floor (killableAttacker): the body is a 0/2 for two; its worth is the block. Cast it only
+    // while an opponent controls a creature that a Master block would kill: power >= 1 and >= its
+    // toughness, not indestructible, a legal target for the trigger (no shroud, hexproof or ward), able
+    // to attack us next turn, blockable by the Master alone (CantBlockBy statics: flying, fear,
+    // intimidate, shadow, horsemanship, landwalk, protection; no menace). Dawnglare Invoker's readmit
+    // with the floor appended (a private copy, B3-4). Draws nothing, holds nothing, remembers nothing;
+    // its only writes are setActivatingPlayer on a hand SA with no activator yet and on the mana
+    // abilities G2 reads. A thief's copy fails the owner and hand checks.
+    public static class SereneMaster {
+        public static final String NAME = "Serene Master";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || sa.isCopied() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // a theft, a Play-effect cast, a copy: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return false;
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ph.is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait, answered before the list sees the spell
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.WHITE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)) {
+                return false;
+            }
+            return killableAttacker(ai, host);
+        }
+
+        // the floor: an opposing creature a Master block would kill
+        static boolean killableAttacker(final Player ai, final Card host) {
+            for (final Card c : ai.getOpponents().getCreaturesInPlay()) {
+                final int power = c.getNetPower();
+                if (power < 1 || power < c.getNetToughness() || c.hasKeyword(Keyword.INDESTRUCTIBLE)) {
+                    continue; // the exchanged damage (its own power) is not lethal to it
+                }
+                if (!exchangeTargets(c, ai)) {
+                    continue; // the trigger could not target it: a 0/2 chump, not a kill
+                }
+                if (!ComputerUtilCombat.canAttackNextTurn(c, ai)) {
+                    continue; // defender, pacified, can't attack us
+                }
+                if (CombatUtil.getMinNumBlockersForAttacker(c, ai) > 1 || !CombatUtil.canBlock(c, host, true)) {
+                    continue; // menace, or evasion the Master cannot block (makeGoodBlocks skips both)
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // the block trigger can target this creature (the trigger's controller is masterController);
+        // part B reads it too. Conservative: any hexproof instance counts, ward counts as untargetable.
+        public static boolean exchangeTargets(final Card attacker, final Player masterController) {
+            if (attacker.hasKeyword(Keyword.SHROUD) || attacker.hasKeyword(Keyword.WARD)) {
+                return false;
+            }
+            return !(attacker.hasKeyword(Keyword.HEXPROOF) && attacker.getController().isOpponentOf(masterController));
         }
     }
 
