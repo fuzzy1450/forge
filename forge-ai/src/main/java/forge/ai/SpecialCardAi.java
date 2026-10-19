@@ -42364,8 +42364,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47 and 58, keepOff for batch 2's
-    // row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58 and 74, keepOff for batch
+    // 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -42499,6 +42499,8 @@ public class SpecialCardAi {
                     return SanctumPrelate.readmit(ai, sa);
                 case VedalkenPlotter.NAME:               // batch 4, row 58 (W3)
                     return VedalkenPlotter.readmit(ai, sa);
+                case AphettoAlchemist.NAME:              // batch 4, row 74 (W4)
+                    return AphettoAlchemist.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -58743,6 +58745,131 @@ public class SpecialCardAi {
                 }
             }
             return list.isEmpty() ? null : ComputerUtilCard.getWorstAI(list);
+        }
+    }
+
+    // Aphetto Alchemist (dead-card batch 4, row 74, a W1 follow-up; carrier Arcanis - i LOVE drawing cards 87715b77,
+    // deck 508, the only registered deck with the card)
+    // "{T}: Untap target artifact or creature. Morph {U}." ({1}{U} Creature 1/2.) Its AI:RemoveDeck:All hint strips
+    // the hand cast, the face-down cast and the {T} at AiController.getSpellAbilityToPlay before any handler runs (0
+    // owner casts in 2,135 held games over 45 libraries; the 4 owner casts were Play-effect casts from the library),
+    // and behind the hint stock UntapAi.untapPrefTargeting untaps our most expensive tapped artifact or creature at
+    // the first priority in any phase, whether or not the untapped card is used. The hint stays (the -10 sort, the
+    // steal, copy, clone and tutor pickers, the Illusionist's Bracers payoff 0). G3's dispatcher lets through:
+    // - the untap (part 74A, isOwnUntap): the root {T} Untap of the face-up paper card, ours to own and control, at
+    //   the opponent's end step right before our turn on an empty stack, the Alchemist untapped and unsick, while
+    //   tappedHolder finds our tapped holder: a creature or artifact of ours, tapped, not summoning sick, a legal
+    //   target of this untap (the activator stamped and put back: Lightning Greaves' shroud is not, Swiftfoot
+    //   Boots' hexproof is), whose activated, untargeted Draw costs {T} and nothing else (ArcanisTheOmnipotent
+    //   .tapDraw plus the tap-only shape: a "{T}, sacrifice" draw could still be declined at DrawAi.willPayCosts)
+    //   and prints TapDrawEngine.MIN_DRAW or more cards with no AILogic but AtOppEOT (G6's ownTiming), is legal
+    //   once untapped (G6's legalOnceUntapped), is taken at once on an opponent's turn (G6's drawsNow(ai, draw,
+    //   false), DrawAi's strict clause: canDraw, canDraw(printed), no decksUsNow on the effective count, hand <=
+    //   max) and feeds no opponent (KnollspineDragon.drawOrDiscardIsPunished). The Alchemist untaps in our untap
+    //   step anyway, so this tap costs nothing. UntapAi.checkApiLogic routes the same ability to considerUntap,
+    //   which targets the best holder: the most cards per activation (effectiveDraw: Bracers, Teferi's Ageless
+    //   Insight), then our commander, then evaluateCreature between two creatures, then battlefield order.
+    // Never readmitted: the face-down cast (Morph, {3}) and the turn-face-up action. Keyed on the paper name and on
+    // owner and controller (rule B3-3): a thief's Alchemist, a Clone, a Mairsil grant and a copy of the ability
+    // keep A's path. RNG: every check reads state only (getters, canTarget and the restrictions with the activator
+    // stamped and put back, the punisher scan, evaluateCreature) and draws nothing; outside its window each answer
+    // is A's (the readmit false), and considerUntap re-runs the readmit's predicate on the same state. Holds
+    // nothing, remembers nothing, makes no SpellAbility. G6's TapDrawEngine, W1's ArcanisTheOmnipotent and batch
+    // 1's KnollspineDragon are called, never edited.
+    public static class AphettoAlchemist {
+        public static final String NAME = "Aphetto Alchemist";
+
+        // the host's paper name (rule B3-3, G3's key): a face-down host keeps its getRules()
+        private static boolean isPaper(final Card host) {
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // 74A's key, and UntapAi.checkApiLogic's route: the root activated Untap of the face-up paper card on the
+        // battlefield, ours to own and control, not a copy
+        public static boolean isOwnUntap(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return isPaper(host) && !(sa instanceof AbilitySub) && sa.isActivatedAbility() && !sa.isCopied()
+                    && sa.getApi() == ApiType.Untap && host.isInPlay() && !host.isFaceDown()
+                    && ai.equals(host.getOwner()) && ai.equals(host.getController());
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isOwnUntap(ai, sa) && tappedHolder(ai, sa) != null; // tappedHolder opens with the window
+        }
+
+        // UntapAi.checkApiLogic's route, inside the readmit's window: target the holder, or don't
+        public static AiAbilityDecision considerUntap(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Card c = tappedHolder(ai, sa);
+            if (c == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.getTargets().add(c);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // 74A: the window, then the best tapped holder (the class comment); null outside the window or with none.
+        // O(1) outside the opponent's end step right before our turn.
+        static Card tappedHolder(final Player ai, final SpellAbility untap) {
+            final Card self = untap.getHostCard();
+            if (!TapDrawEngine.oppEndStepBeforeOurs(ai) || !ai.getGame().getStack().isEmpty()
+                    || self.isTapped() || self.isSick()) {
+                return null;
+            }
+            Card best = null;
+            int bestN = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isTapped() || c.isSick() || !ai.equals(c.getController())
+                        || !(c.isCreature() || c.isArtifact())) {
+                    continue;
+                }
+                final SpellAbility draw = holderDraw(c);
+                if (draw == null || !canTargetStamped(ai, untap, c) || !TapDrawEngine.legalOnceUntapped(ai, c, draw)
+                        || !TapDrawEngine.drawsNow(ai, draw, false)
+                        || KnollspineDragon.drawOrDiscardIsPunished(ai, c)) {
+                    continue;
+                }
+                final int n = ArcanisTheOmnipotent.effectiveDraw(ai, draw);
+                if (best == null || n > bestN || (n == bestN && beats(c, best))) {
+                    best = c;
+                    bestN = n;
+                }
+            }
+            return best;
+        }
+
+        // the holder's draw: ArcanisTheOmnipotent.tapDraw (activated, untargeted, a tap and no mana) whose whole
+        // cost is the tap, printing MIN_DRAW or more cards, with no AILogic but AtOppEOT; null when c has none
+        static SpellAbility holderDraw(final Card c) {
+            final SpellAbility draw = ArcanisTheOmnipotent.tapDraw(c);
+            if (draw == null || !draw.getPayCosts().hasOnlySpecificCostType(CostTap.class)
+                    || !TapDrawEngine.ownTiming(draw) || TapDrawEngine.printed(draw) < TapDrawEngine.MIN_DRAW) {
+                return null;
+            }
+            return draw;
+        }
+
+        // untap.canTarget(c) with untap's activator stamped as ai and put back (B4-4: hexproof and the "you" checks
+        // read the activator, and an ability carries whatever player last stamped it)
+        static boolean canTargetStamped(final Player ai, final SpellAbility untap, final Card c) {
+            final Player stamped = untap.getActivatingPlayer();
+            untap.setActivatingPlayer(ai);
+            try {
+                return untap.canTarget(c);
+            } finally {
+                untap.setActivatingPlayer(stamped);
+            }
+        }
+
+        // the tie after effectiveDraw: our commander first, then the better of two creatures (evaluateCreature),
+        // else battlefield order (the first holder stays)
+        private static boolean beats(final Card c, final Card best) {
+            if (c.isCommander() != best.isCommander()) {
+                return c.isCommander();
+            }
+            return c.isCreature() && best.isCreature()
+                    && ComputerUtilCard.evaluateCreature(c) > ComputerUtilCard.evaluateCreature(best);
         }
     }
 

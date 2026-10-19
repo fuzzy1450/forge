@@ -109,6 +109,16 @@ public class UntapAi extends SpellAbilityAi {
             }
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
+        if (SpecialCardAi.AphettoAlchemist.isOwnUntap(ai, sa)) {
+            // Dead-card batch 4, row 74, part 74A. Aphetto Alchemist's "{T}: Untap target artifact or creature"
+            // carries AI:RemoveDeck:All; G3's readmit puts it back only at the opponent's end step right before our
+            // turn, on an empty stack, while a tapped creature or artifact of ours has a {T} draw that DrawAi takes
+            // at once there (SpecialCardAi.AphettoAlchemist.tappedHolder). untapPrefTargeting below would untap our
+            // most expensive tapped permanent at the first priority in any phase. Keyed on the paper name, owner
+            // and controller (rule B3-3): a thief's Alchemist, a Clone, a Mairsil grant and a copy of the ability
+            // keep this stock path. Draws nothing.
+            return SpecialCardAi.AphettoAlchemist.considerUntap(ai, sa);
+        }
         final Card source = sa.getHostCard();
 
         if (sa.usesTargeting()) {
