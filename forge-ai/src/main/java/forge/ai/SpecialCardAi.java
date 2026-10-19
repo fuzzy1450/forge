@@ -54492,6 +54492,12 @@ public class SpecialCardAi {
                     && ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin()) {
                 return false; // the stock guard's draw-win (DrawAi.targetAI's Laboratory Maniac exemption): A's path
             }
+            // Part 76C: a Teferi's Ageless Insight-doubled draw that would leave 3 or fewer cards in our library (W1's
+            // decksUsNow: the stock guard, numCards >= library - 3 unless Laboratory Maniac, on the effective count;
+            // DrawAi's own guard reads the printed X, so A cast it and decked itself). Read-verified only.
+            if (ArcanisTheOmnipotent.decksUsNow(ai, sa)) {
+                return true;
+            }
             return draws < MIN_DRAWS;
         }
     }
