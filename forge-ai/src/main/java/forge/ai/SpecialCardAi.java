@@ -30431,6 +30431,256 @@ public class SpecialCardAi {
         }
     }
 
+    // Lion's Eye Diamond (dead-card batch 4, row 51; carriers decks 511 Blue Farm 4Matic, 512 The Sting of
+    // Ping, 514 Ping King, 515 PackAStax, 516 All the world's power and 517 Crackhead Math, site uploads,
+    // none an anchor)
+    // "Discard your hand, Sacrifice Lion's Eye Diamond: Add three mana of any one color. Activate only as an
+    // instant." ({0} artifact; printed text = Oracle = script.) AI:RemoveDeck:All dropped both of its
+    // spell abilities in AiController.getSpellAbilityToPlay's filter, so its owner never cast it from
+    // hand (5 owner casts in 7,444 rows on 2.0.15+499e03087c5, every one a Play effect: Guff Rewrites
+    // History, Tibalt's Trickery, The Seventh Doctor; about 1,250 distinct held libraries, 1,115 of them
+    // fresh). The hint is KEPT: every other isCardRemAIDeck reader (tutor, steal, exchange and copy
+    // pickers) stays as it was. Stock never cracks it (ManaAi has no logic for it, the payer skips
+    // instant-speed mana, the LED ruling in SpellAbilityRestriction), so on the battlefield it is an
+    // artifact and nothing more; the crack stays filtered. 51A readmits its owner's hand cast only where
+    // being cast or being an artifact pays:
+    // - our own hand cast (not a Play-effect cast, not a copy), in our own Main 2 on an empty stack
+    //   (Main 2: stock would cast a {0} in Main 1 before any payoff exists; held, it is our discard
+    //   fodder for rummage, Gamble and Harnfel);
+    // - free: the engine's test-mode cost is {0} and no AI_SpellsNeedExtraMana tax is live, so
+    //   canPayCost's test payment touches no source (ComputerUtilMana's pool short-circuit) and draws
+    //   nothing;
+    // - unanswered: no trigger working where it is that this cast would fire counters it or hurts us
+    //   (ours: Vexing Bauble, Chalice; TriggeredActivator damage, drain, edict, discard; a Defined$ You
+    //   life loss or damage at 3 life or less, Lotho), no OPPOSING cast trigger sees it at all (Rhystic
+    //   Study, Mystic Remora, Esper Sentinel, Kraum, Ruric Thar, Eidolon of the Great Revel: taxes and
+    //   their payoffs), no opposing "Nth spell each turn" trigger fires on our NEXT spell because this
+    //   one came first (Mangara, Monologue Tax, Trouble in Pairs, Kraum: tested one spell ahead), and no
+    //   one-spell cap (Eidolon of Rhetoric, Archon of Emeria, Deafening Silence) would spend our spell
+    //   on it;
+    // - a payoff: a cast trigger of ours that this cast fires (Vivi Ornitier, Birgi, Hullbreaker Horror,
+    //   Black Mage's Rod, Coruscation Mage, Dragon's Rage Channeler, Lotho or Ledger Shredder when this
+    //   is our second spell; prowess excluded: its pump is spent in Main 2), or a card of ours that
+    //   reads our artifact count (Mox Opal's Metalcraft, a Construct's Count$Valid Artifact.YouCtrl).
+    // A trigger that reads how the spell was cast (Card.!wasCastFromYourHand: Shadow of the Goblin,
+    // Unstable Amulet; wasCastFrom..., CastSa) is not decidable before the cast: an uncast card matches
+    // !wasCastFromYourHand and the real hand cast does not. It is never a payoff and always an answer. A
+    // payoff trigger carrying a param this test does not model (TargetsValid, IsSingleTarget,
+    // HasXManaCost, ...) does not count; as an answer it may over-veto.
+    // Sort: the free cast sorts ahead of every costed spell (ComputerUtilAbility's "use 0 cmc abilities
+    // first"); the hint's -10 orders it only against other cmc-0 abilities. So a readmitted LED is the
+    // first thing cast in a Main 2 where the floor holds, and the floor is read again at every pass (a
+    // second-spell payoff casts it only on the pass where it is itself the second spell).
+    // Draws nothing, holds nothing, remembers nothing and allocates no SpellAbility id (trigger chains
+    // are read as SVar text, never ensureAbility). Its only write is setActivatingPlayer on a hand SA
+    // with no activator yet (as getOriginalAndAltCostAbilities does right after the filter; Bosh). A
+    // false is the old filter exactly.
+    public static class LionsEyeDiamond {
+        public static final String NAME = "Lion's Eye Diamond";
+        static final int MAX_CHAIN = 8;      // SubAbility$ links followed through a trigger's text
+        static final int LOW_LIFE = 3;       // an own trigger's Defined$ You life loss or damage at this life or less
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner()) || sa.isCopied() || sa instanceof AbilitySub) {
+                return false; // every opponent and every thief keeps the filter
+            }
+            if (sa.isSpell()) {
+                return readmitCast(ai, sa, host);
+            }
+            return false; // the crack stays filtered (51B, not taken)
+        }
+
+        // 51A
+        static boolean readmitCast(final Player ai, final SpellAbility sa, final Card host) {
+            final Game game = ai.getGame();
+            if (sa.getApi() != ApiType.PermanentNoncreature || sa.isCastFromPlayEffect()
+                    || !host.isInZone(ZoneType.Hand) || !ai.canCastSorcery()
+                    || !game.getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return false; // our own Main 2 on an empty stack, from our hand only
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (spellsNeedExtraMana(game)) {
+                return false; // canPayCost's extra mana (Nether Void, Chancellor, Spelltithe): never free
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (cost.getConvertedManaCost() > 0) {
+                return false; // Thalia, Sphere, Damping Sphere: an artifact that does nothing is not worth a mana
+            }
+            return !answered(ai, sa, host) && !capped(ai, host) && payoff(ai, sa, host);
+        }
+
+        // a SpellCast trigger, working where it is, that this cast of ours would fire: the engine's own
+        // match (getDamageForPlaying's order: mode, zone, requirements, ValidActivatingPlayer, ValidCard),
+        // plus ValidSA, and ActivatorThisTurnCast against our casts this turn plus this one, plus shift
+        // more (TriggerSpellAbilityCastOrCopy.performTest). forPayoff: a payoff must be sure, an answer
+        // may over-veto.
+        static boolean fires(final Trigger t, final Card c, final Player ai, final SpellAbility sa, final Card host,
+                final boolean forPayoff, final int shift) {
+            final Game game = ai.getGame();
+            if ((t.getMode() != TriggerType.SpellCast && t.getMode() != TriggerType.SpellCastOrCopy)
+                    || !t.zonesCheck(game.getZoneOf(c)) || !t.requirementsCheck(game)
+                    || !t.matchesValidParam("ValidActivatingPlayer", ai)) {
+                return false;
+            }
+            // the host is still in hand and unannounced: a test that reads how it was cast (Card.!wasCastFromYourHand:
+            // Shadow of the Goblin, Unstable Amulet) matches an uncast card and not the real hand cast. Undecidable
+            // here: never a payoff, always an answer.
+            if (castState(t)) {
+                return !forPayoff;
+            }
+            // params performTest reads that this method does not model; a permanent spell of value 0 has no target
+            // and no X: a payoff must be sure, an answer may over-veto
+            if (forPayoff && (t.hasParam("TargetsValid") || t.hasParam("CanTargetOtherCondition")
+                    || t.hasParam("IsSingleTarget") || t.hasParam("HasXManaCost") || t.hasParam("ValidSAonCard")
+                    || t.hasParam("SnowSpentForCardsColor") || t.hasParam("ActivatorThisTurnCastEach"))) {
+                return false;
+            }
+            if (!t.matchesValidParam("ValidCard", host)
+                    || (t.hasParam("ValidSA") && !t.matchesValidParam("ValidSA", sa))) {
+                return false;
+            }
+            final String nth = t.getParam("ActivatorThisTurnCast");
+            if (nth != null) {
+                final List<Card> cast = CardUtil.getThisTurnCast(t.getParamOrDefault("ValidCard", "Card"), c, t, c.getController());
+                final int n = CardLists.filterControlledByAsList(cast, ai).size() + 1 + shift; // this cast, and shift more
+                if (!forge.util.Expressions.compare(n, nth, Integer.parseInt(nth.substring(2)))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean castState(final Trigger t) {
+            for (final String p : new String[] {"ValidCard", "ValidSA", "ValidSAonCard"}) {
+                final String v = t.getParamOrDefault(p, "");
+                if (v.contains("wasCast") || v.contains("CastSa")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // any opposing cast trigger it fires, or an opposing ordinal trigger it moves onto our next spell;
+        // ours only when its chain counters the spell or hurts its caster
+        static boolean answered(final Player ai, final SpellAbility sa, final Card host) {
+            for (final Card c : ai.getGame().getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final boolean theirs = c.getController() == null || c.getController().isOpponentOf(ai);
+                for (final Trigger t : c.getTriggers()) {
+                    if (fires(t, c, ai, sa, host, false, 0)) {
+                        if (theirs) {
+                            return true; // a tax, a punisher, their payoff
+                        }
+                        if (t.hasParam("Execute") && chainAnswers(ai, t, t.getParam("Execute"))) {
+                            return true; // ours: a counter, Eidolon of the Great Revel, Lotho at low life
+                        }
+                    } else if (theirs && t.hasParam("ActivatorThisTurnCast") && fires(t, c, ai, sa, host, false, 1)) {
+                        return true; // LED sorts first (cmc 0): it makes our next spell this one's ordinal (Mangara, Kraum)
+                    }
+                }
+            }
+            return false;
+        }
+
+        // the harm rule for our own triggers, read from the chain's SVar text (Mishra's Bauble's design, a
+        // private copy, B3-4), plus a Defined$ You life loss or damage at low life
+        private static boolean chainAnswers(final Player ai, final Trigger t, String svar) {
+            for (int i = 0; svar != null && i < MAX_CHAIN; i++) {
+                final String text = t.getSVar(svar);
+                if (text == null || text.isEmpty()) {
+                    return false;
+                }
+                final Map<String, String> p = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                final String api = p.get("DB");
+                if ("Counter".equals(api)) {
+                    return true;
+                }
+                if (("DealDamage".equals(api) || "LoseLife".equals(api) || "Sacrifice".equals(api)
+                        || "Discard".equals(api)) && text.contains("TriggeredActivator")) {
+                    return true;
+                }
+                if (("DealDamage".equals(api) || "LoseLife".equals(api)) && text.contains("Defined$ You")
+                        && ai.getLife() <= LOW_LIFE) {
+                    return true; // Lotho: our own second-spell trigger costs us life; at 1 life that is a loss
+                }
+                svar = p.get("SubAbility");
+            }
+            return false;
+        }
+
+        // a one-spell cap that this cast would spend (Eidolon of Rhetoric, Archon of Emeria, Rule of Law,
+        // Deafening Silence); Ethersworn Canonist's nonartifact cap does not match an artifact
+        static boolean capped(final Player ai, final Card host) {
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (st.checkMode(StaticAbilityMode.CantBeCast) && st.hasParam("NumLimitEachTurn")
+                            && st.checkConditions(StaticAbilityMode.CantBeCast)
+                            && st.matchesValidParam("ValidCard", host) && st.matchesValidParam("Caster", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // (a) a cast trigger of ours this cast fires (prowess excluded); (b) a card of ours reading our artifacts
+        static boolean payoff(final Player ai, final SpellAbility sa, final Card host) {
+            for (final Card c : ai.getGame().getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                if (!ai.equals(c.getController())) {
+                    continue;
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (!t.isKeyword(Keyword.PROWESS) && fires(t, c, ai, sa, host, true, 0)) {
+                        return true;
+                    }
+                }
+            }
+            for (final Card c : ai.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Hand))) {
+                if (c != host && readsOurArtifacts(c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean readsOurArtifacts(final Card c) {
+            for (final SpellAbility a : c.getSpellAbilities()) {
+                if ((a.getRestrictions() != null && a.getRestrictions().isMetalcraft())
+                        || (a.getConditions() != null && a.getConditions().isMetalcraft())) {
+                    return true; // Mox Opal
+                }
+            }
+            for (final String v : c.getSVars().values()) {
+                if (v.contains("Count$Valid Artifact.YouCtrl")) {
+                    return true; // a Construct token, Thought Monitor-style counts
+                }
+            }
+            return false;
+        }
+
+        // Mishra's Bauble's spellsNeedExtraMana (its design, a private copy): canPayCost's extra-mana scan
+        private static boolean spellsNeedExtraMana(final Game game) {
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (!org.apache.commons.lang3.StringUtils.isBlank(c.getSVar("AI_SpellsNeedExtraMana"))) {
+                    return true;
+                }
+            }
+            for (final Card c : game.getCardsIn(ZoneType.Command)) {
+                if (!org.apache.commons.lang3.StringUtils.isBlank(c.getSVar("SpellsNeedExtraManaEffect"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Living Death (and other similar cards using AILogic LivingDeath or AILogic ReanimateAll)
     public static class LivingDeath {
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
@@ -40897,8 +41147,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's row 23, keepOff for batch 2's row 68 (Trench Gorger;
-    // batch 3's row 68 is Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23 and 51, keepOff for batch 2's row 68 (Trench
+    // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -41018,6 +41268,8 @@ public class SpecialCardAi {
                     return NemataGroveGuardian.readmit(ai, sa);
                 case QuicksilverElemental.NAME:          // batch 4, row 23 (W2)
                     return QuicksilverElemental.readmit(ai, sa);
+                case LionsEyeDiamond.NAME:               // batch 4, row 51 (W2)
+                    return LionsEyeDiamond.readmit(ai, sa);
                 default:
                     return false;
             }
