@@ -21140,6 +21140,8 @@ public class SpecialCardAi {
     //   payment draws. AttachAi.checkApiLogic calls consider() for that window only: it enchants bestHolder and
     //   prices the cast again with the target in place. The hint's -10 sorts the cast after every other spell
     //   ability, so it takes only the mana A leaves.
+    //   Part 53R adds the counter reserve to the cast (keepsCounterMana): a counterspell in hand that the mana casts
+    //   now stays castable after the {2}{U}.
     // - the untap (part 53B, isOwnUntap): the root {U} Untap of the face-up paper card on the battlefield, ours to
     //   own, control and activate, not a copy, at the opponent's end step right before our turn (G6's
     //   oppEndStepBeforeOurs) on an empty stack, while untapWindow finds the enchanted creature ours, tapped and not
@@ -21215,7 +21217,8 @@ public class SpecialCardAi {
                     || !game.getStack().isEmpty() || !RemoveDeckFilter.noManaHeld(ai, true)) {
                 return false;
             }
-            return bestHolder(ai, sa) != null && CommanderCastCeiling.affordable(ai, sa);
+            return bestHolder(ai, sa) != null && CommanderCastCeiling.affordable(ai, sa)
+                    && keepsCounterMana(ai, sa); // 53R: a counterspell castable now stays castable after the {2}{U}
         }
 
         // AttachAi.checkApiLogic, inside the readmit's window: enchant the holder, or don't cast
