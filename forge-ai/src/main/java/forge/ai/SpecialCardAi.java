@@ -38224,6 +38224,54 @@ public class SpecialCardAi {
         }
     }
 
+    // Palinchron (dead-card batch 4, wave 2, row 44; in Kinnan's Winnin c5c1ce2d, deck 510, not an
+    // anchor)
+    // "Flying. When Palinchron enters, untap up to seven lands. {2}{U}{U}: Return Palinchron to its
+    // owner's hand." ({5}{U}{U} 4/5.) Never cast, by its owner or anyone, on 2.0.15+499e03087c5 (0
+    // owner casts in 157 distinct held libraries). UntapAi.doTriggerNoCost reads an untargeted untap
+    // as an untap of Defined cards; with no Defined$ that is Self (AbilityUtils.getDefinedCards), the
+    // spell's untapped LKI copy, so the pre-cast ETB consult (AiController.checkETBEffects, not
+    // mandatory) answered MissingNeededCards and the spell was refused BadEtbEffects in every own
+    // Main 2. For an UntapUpTo untap, Defined$ names the choosing players (UntapEffect.untapChoose).
+    // The script's AILogic$ Always on SVar:TrigUntap (Nadaar's idiom, batch 3 row 103) lets the
+    // consult through SpellAbilityAi.doTriggerNoCostWithSubs; the resolution's land choice
+    // (UntapAi.chooseSingleCard: our best tapped lands, up to seven) reads no AILogic and stays
+    // stock, and the real trigger is mandatory and was WillPlay already. That veto answered before
+    // ComputerUtilCost.canPayCost, whose test payment draws MyRandom per source it tries;
+    // castAffordable answers an unpayable window first: G1 (CommanderCastCeiling.affordable, called
+    // unchanged under G4's widened contract; its frozen caller list does not name this row), the
+    // engine's test-mode calculateManaCost against HonestMana (G2, held sources skipped), total and
+    // {U}{U}. A Play-effect cast skips it (the precedent). Value floor: the body, a 4/5 flyer for
+    // seven whose enters trigger untaps up to seven of our tapped lands, so the cast usually refunds
+    // most of its cost the same phase. The stock creature checks judge the rest (own Main 2 unless
+    // castPermanentInMain1). Its {2}{U}{U} bounce and Deadeye Navigator's flicker stay
+    // ChangeZoneAi's saves from a threat on the stack, never a loop.
+    // RNG parity: A drew nothing on its decline path; B's first new draw is canPayCost's, on a
+    // G1-affordable window only. The ceiling sits in the handler, not after canPlaySa: the
+    // placement B3x-3 grandfathers for the ETB-trigger rows 87 and 103, whose shape this is.
+    // Residual (B3x-3): a G1 decline skips the LKI and exSA copies A made, so later SpellAbility
+    // ids, and the order of a hash-keyed SA collection, may differ from A's (the 973410 family,
+    // rare; 43 declines in four logged games were clean). Contingency, not taken: should a no-cast
+    // game flip at a first divergence that is neither a Palinchron cast nor its canPayCost, the
+    // test moves to canPlayAndPayForFace after canPlaySa (Ambitious Dragonborn's placement).
+    // G1's known over-count at an exactly-seven boundary: HonestMana counts a ManaReflected source
+    // (Mox Amber with no legendary creature in play) as 1, so G1 can pass where canPayCost then
+    // fails after its draws: a no-cast flip, never a wrong cast. Its under-counts (Kinnan's extra
+    // mana, Nyxbloom Ancient's triple, Simic Signet, Delighted Halfling's legendary-only mana) only
+    // delay a cast a turn. Same carrier (B3-12, B4-15): rows 52 (Mindbreak Trap), 62 (Hullbreaker
+    // Horror), 65 (Scroll Rack) and 69 (Mystic Remora's follow-up) share deck 510 and inherit this
+    // fix in both arms (62's and 65's gates are Neera's, inert there). The same UntapAi misread
+    // silences Cloud of Faeries, Peregrine Drake and Great Whale; only Cloud of Faeries is in a
+    // registered deck (two anchor precons), so the general repair is a follow-up. Draws nothing,
+    // holds nothing.
+    public static class Palinchron {
+        public static final String NAME = "Palinchron";
+
+        public static boolean castAffordable(final Player ai, final SpellAbility sa) {
+            return CommanderCastCeiling.affordable(ai, sa);
+        }
+    }
+
     // Path of the Pyromancer
     // "Discard all the cards in your hand. Add {R} for each card discarded this
     // way, then draw that many cards plus one." Card-neutral by construction
