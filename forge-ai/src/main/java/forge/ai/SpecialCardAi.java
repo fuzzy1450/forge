@@ -24434,8 +24434,9 @@ public class SpecialCardAi {
     // consider judges the sweep as it resolves, indestructible stripped: AnimateAllEffect strips it
     // from every battlefield creature with a fresh timestamp, so it beats a static grant, and a
     // planeswalker at 0 loyalty dies regardless. A victim is a card of the DamageAll sub's ValidCards
-    // on a battlefield that predictDamageTo(NumDmg) kills by getDamageToKill (lethal damage, or
-    // loyalty), unless a shield counter or a regeneration shield saves it. Its value is
+    // on a battlefield that predictDamageTo kills by getDamageToKill (lethal damage, or loyalty) at the
+    // whole cast's damage, NumDmg x (1 + the copies our own permanents make of it: retry 1, below),
+    // unless a shield counter or a regeneration shield saves it. Its value is
     // evaluateCreature (a planeswalker: 50 + 30 x mana value + 10 x loyalty, Act of Authority's pick
     // value), plus COMMANDER_TAX for a commander and PILE_CARD per extra card of a mutated pile; 0 for
     // SacMe and for a body that returns (hasActiveUndyingOrPersist). Cast only when, in order:
@@ -24463,12 +24464,25 @@ public class SpecialCardAi {
     // passes the sub through (isJudgedSub, part 7B): consider judged the spell whole, while the
     // stock sub lists drop indestructible creatures and read the weakest opponent only, so they
     // would veto the boards the strip exists for.
+    // Retry 1 (b4/hour-of-devastation/verdict-w2-n24.md): the copies our own permanents make of this
+    // cast resolve first, each a whole Hour (indestructible stripped again, NumDmg more), and the stock
+    // trigger path stacks them with no AI consulted (orderAndPlaySimultaneousSa), so otherOnStack never
+    // meets them: wave 2 saw 11 such copies over a stacked Hour kill the 6-10 toughness bodies the
+    // 5-damage floor spared (Neera 2/7, Ovika 6/6). ownCopies counts them from names, a zone and the
+    // spells-cast count: one per Swarm Intelligence we control (its optional trigger is AILogic$
+    // Always, which CopySpellAbilityAi.doTriggerNoCost turns into WillPlay), one per Storm of Saruman
+    // when this is our second spell this turn (ActivatorThisTurnCast$ EQ2: getSpellsCastThisTurn() ==
+    // 1), one per Melek, Izzet Paragon when the host is in a library (wasCastFromYourLibrary: Melek's
+    // top-of-library cast, and Neera's reveal, which leaves the card there while it is offered). Every
+    // victim on both sides, and so the drain's dying list, is judged at NumDmg x (1 + copies); every
+    // clause and constant is unchanged.
     // RNG: a removed decline. A drew nothing for the card, and every decline here draws nothing: the
     // zone, stack and restriction reads, getValidCards, predictDamageTo, getDamageToKill,
     // evaluateCreature, trigger params (parsed, never built: no SpellAbility id, B3x-3), the
     // test-mode calculateManaCost, and HonestMana, whose only write is setActivatingPlayer on our own
     // mana abilities. So B equals A up to its first approval, which goes on to canPayCost's test
     // payment (it draws) in a window G2 calls payable. Nothing is held, remembered or targeted; no X.
+    // Retry 1's copy count reads names, a zone and the spells-cast count: it draws nothing either.
     // Reach: the host's paper name and the root shape, for whichever AI controls the cast: deck
     // 507's own hand cast, Neera's reveal and Arcane Bombardment's copies; a thief's optional Play
     // or MayPlay cast (Mind Seize, Grand Larceny, Planar Portal, sen-triplets, the Nathan Drake
@@ -24480,6 +24494,10 @@ public class SpecialCardAi {
     // loss); the single-kill tempo of a Main-1 Hour ahead of a Main-2 Neera; HonestMana under-counting
     // a thief's any-colour mana (a decline, never an over-cast); a thief seat's prevention read
     // against the host's controller; a paid Play-effect cast judged with the free card term.
+    // Retry 1 leaves unmodelled: Primal Wellspring's copy (it depends on which mana pays) and opponents'
+    // copy effects; embalm, eternalize and other graveyard value back (1745123); the tokens this very
+    // cast makes (Ovika's, Shark Typhoon's) dying to it; a thief's Melek counted on a cast from another
+    // player's library; a per-event damage reduction read once on the summed damage.
     // Spectacular Pileup has the same shape (not in the store) and is not touched.
     public static class HourOfDevastation {
         public static final String NAME = "Hour of Devastation";
@@ -24542,13 +24560,15 @@ public class SpecialCardAi {
             if (dmg <= 0) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
+            // retry 1: the whole cast's damage, this card's and that of each copy our own permanents make
+            final int kill = dmg * (1 + ownCopies(ai, host));
             final String valid = sweep.getParamOrDefault("ValidCards", "");
             final int margin = MARGIN / ai.getOpponents().size();
             final CardCollection dying = new CardCollection(); // every victim, returners included (the drain)
             int oppV = 0, oppC2 = 0, oppKills = 0;
             boolean commanderKill = false;
             for (final Card c : CardLists.getValidCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), valid, ai, host, sweep)) {
-                if (!dies(c, dmg, host)) {
+                if (!dies(c, kill, host)) {
                     continue;
                 }
                 dying.add(c);
@@ -24565,7 +24585,7 @@ public class SpecialCardAi {
             }
             int myV = 0, myC2 = 0;
             for (final Card c : CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), valid, ai, host, sweep)) {
-                if (!dies(c, dmg, host)) {
+                if (!dies(c, kill, host)) {
                     continue;
                 }
                 dying.add(c);
@@ -24632,6 +24652,23 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+
+        // retry 1: the copies our own permanents make of this cast (the class comment), from names, a zone
+        // and the spells-cast count, RNG-free; a thief's own copiers count from its own seat
+        private static int ownCopies(final Player ai, final Card host) {
+            int copies = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                final String n = c.getName();
+                if ("Swarm Intelligence".equals(n)) {
+                    copies++; // optional, AILogic$ Always: CopySpellAbilityAi.doTriggerNoCost's WillPlay
+                } else if ("Storm of Saruman".equals(n) && ai.getSpellsCastThisTurn() == 1) {
+                    copies++; // mandatory, ActivatorThisTurnCast$ EQ2: this cast is our second spell
+                } else if ("Melek, Izzet Paragon".equals(n) && host.isInZone(ZoneType.Library)) {
+                    copies++; // mandatory, wasCastFromYourLibrary: Melek's top card, Neera's reveal
+                }
+            }
+            return copies;
         }
 
         // Firespout's deathDrain, chainDrain, partDrain and amount, private copies (accepted rows' helpers are
