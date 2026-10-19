@@ -10608,6 +10608,181 @@ public class SpecialCardAi {
         }
     }
 
+    // Steal Enchantment (dead-card batch 4, wave 5, row 25; carriers The Sting of Ping 30da5b05 and
+    // Yuriko Midrange 8718e1d2, uploads, not anchors)
+    // "Enchant enchantment. You control enchanted enchantment." {U}{U} Aura. AI:RemoveDeck:All is KEPT:
+    // the stock GainControl chooser (AttachAi.attachAIControlPreference -> getMostExpensivePermanentAI)
+    // has no floor for a noncreature enchantment. G3 readmits exactly one ability: the Aura spell from its
+    // owner's own hand, in its own Main 2 with an empty stack, with no mana reservation live
+    // (RemoveDeckFilter.noManaHeld) and {U}{U} as the engine prices it within G2 (CommanderCastCeiling,
+    // G1, called unchanged), and only when bestTarget finds an enchantment worth the card. So the list
+    // gains it only for a cast it will make. AttachAi.checkApiLogic asks consider() for the same key and
+    // window. The hint keeps every other isCardRemAIDeck reader (steal, copy, clone and tutor pickers,
+    // CopyPermanentAi, PlayEffect) and the -10 sort. RNG: nothing here draws (param reads,
+    // CopyEnchantment.copySafe, evaluateCreature, calculateManaCost in test mode, HonestMana); a decline
+    // is the old filter. bestTarget walks the opponents' battlefields and never asks
+    // CardUtil.getValidCardsToTarget, which drops every card already in sa.getTargets(): the Aura spell is
+    // the card's own cached ability, and a stock probe outside the window (TapAi's shockland
+    // hasReasonToPlayCardThisTurn) or an approval that is not cast leaves its pick there, so the readmit
+    // and consider() read the same candidates whatever the SA holds. Residual: ongoingForController reads
+    // an opposing permanent's abilities, which a permanent never enumerated since it entered builds
+    // lazily (a SpellAbility id).
+    public static class StealEnchantment {
+        public static final String NAME = "Steal Enchantment";
+        static final int MIN_MV = 2;                 // a noncreature steal is worth the card's own {U}{U}
+        static final int MIN_CREATURE_VALUE = 130;   // AttachAi.acceptableChoice's own bar (Control Magic)
+
+        // the readmit's own key: our Aura spell, from our own hand, not a Play effect, not a copy
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && sa.isSpell() && sa.getApi() == ApiType.Attach
+                    && !sa.isCastFromPlayEffect() && !sa.isCopied()
+                    && ai.equals(host.getOwner()) && ai.equals(host.getController())
+                    && host.isInZone(ZoneType.Hand);
+        }
+
+        // the key and the window both gates share: our own Main 2, sorcery timing (empty stack)
+        public static boolean handles(final Player ai, final SpellAbility sa) {
+            return isOwnHandCast(ai, sa) && ai.canCastSorcery()
+                    && ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai);
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first (the skeptic's SK2 order)
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!handles(ai, sa) || !opposingNonAura(ai) || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) {   // G1, rule B3-5: before canPayCost's draws
+                return false;
+            }
+            return bestTarget(ai, sa) != null;
+        }
+
+        // AttachAi.checkApiLogic's name gate: steal the best enchantment worth it, or don't cast
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Card pick = bestTarget(ai, sa);
+            if (pick == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the readmit's one-loop precheck: an opponent controls an enchantment that is not an Aura (no
+        // canTarget, no copySafe); our Main 2 with no such card is the common case
+        static boolean opposingNonAura(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    if (c.isEnchantment() && !c.isAura()) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // the stock pick (getBestAI: best creature if all are creatures, else highest mana value) among
+        // the opponents' enchantments that pass the floor; null when none. The opponents' battlefields in
+        // turn order (game.getCardsIn's order for them), never CardUtil.getValidCardsToTarget, which drops
+        // the cards already in sa.getTargets() and scans graveyards (the skeptic's SK1)
+        static Card bestTarget(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final CardCollection worth = new CardCollection();
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    if (c.isEnchantment() && c.canBeAttached(host, null)
+                            && sa.canTarget(c) && worthStealing(ai, c)) {
+                        worth.add(c);
+                    }
+                }
+            }
+            return worth.isEmpty() ? null : ComputerUtilCard.getBestAI(worth);
+        }
+
+        static boolean worthStealing(final Player ai, final Card c) {
+            if (c.isAura() || c.hasSVar("OblivionRing")) {
+                return false; // an Aura does to its object what it did before; an O-Ring's exile stays put
+            }
+            if (!c.canBeControlledBy(ai) || c.hasKeyword(Keyword.WARD)) {
+                return false; // a can't-gain-control static leaves the Aura doing nothing; an unpaid ward counters it
+            }
+            if (c.hasChosenType() || c.hasChosenColor() || c.hasChosenNumber() || !c.getNamedCard().isEmpty()) {
+                return false; // the previous controller's choice (Kindred Discovery's type, for their deck)
+            }
+            if (!CopyEnchantment.copySafe(ai, c)) {
+                return false; // Saga, World, RemoveDeck, end-step leaver, legend clash, NonStacking duplicate,
+                              // cumulative upkeep / echo / fading / vanishing, a root trigger that hurts its controller
+            }
+            if (c.isCreature()) {
+                return !ComputerUtilCard.isUselessCreature(ai, c)
+                        && ComputerUtilCard.evaluateCreature(c) >= MIN_CREATURE_VALUE;
+            }
+            return c.getCMC() >= MIN_MV && ongoingForController(c);
+        }
+
+        // Control matters only if some ongoing ability reads its controller: an activated ability usable on
+        // the battlefield (only the controller activates), or a static, replacement or non-keyword trigger
+        // whose params or root effect name a controller-relative player/card set. Its own enter and leave
+        // triggers do not count (spent, or the O-Ring's return).
+        static boolean ongoingForController(final Card c) {
+            for (final SpellAbility ab : c.getSpellAbilities()) {
+                if (ab.isActivatedAbility() && ab.getRestrictions() != null
+                        && ab.getRestrictions().getZone() == ZoneType.Battlefield) {
+                    return true; // Greed, Vampiric Rites-style; cycling (zone Hand) does not count
+                }
+            }
+            if (!c.getManaAbilities().isEmpty()) {
+                return true;
+            }
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (st.getKeyword() == null && namesController(st.getMapParams())) {
+                    return true; // anthems, Propaganda, Commander's Insignia
+                }
+            }
+            for (final ReplacementEffect re : c.getReplacementEffects()) {
+                if (re.getKeyword() == null && namesController(re.getMapParams())) {
+                    return true; // Doubling Season, Leyline of the Void
+                }
+            }
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getKeyword() != null) {
+                    continue; // ward and the like
+                }
+                if (t.getMode() == TriggerType.ChangesZone && t.getParamOrDefault("ValidCard", "").contains("Card.Self")) {
+                    continue;
+                }
+                if (namesController(t.getMapParams())) {
+                    return true; // Rhystic Study, Smothering Tithe, Call of the Ring, Swarm Intelligence
+                }
+                final Map<String, String> p = EspersToMagicite.rootParams(t); // read, never built
+                if (p != null && namesController(p)) {
+                    return true;
+                }
+            }
+            return false; // symmetric (Spiteful Visions, Rites of Flourishing, Bad Moon) or spent (Journey to Nowhere)
+        }
+
+        private static final Set<String> CONTROLLER_WORDS =
+                Set.of("You", "YouCtrl", "YouOwn", "Opponent", "OppCtrl", "OppOwn");
+
+        // a param value (descriptions skipped) holds a controller-relative token: "Creature.YouCtrl+nonToken",
+        // "Player.Opponent", "Card.OppOwn", "You,Planeswalker.YouCtrl", "Defined$ You", "TokenOwner$ You"
+        private static boolean namesController(final Map<String, String> params) {
+            for (final Map.Entry<String, String> e : params.entrySet()) {
+                if (e.getKey().endsWith("Description")) {
+                    continue;
+                }
+                for (final String tok : e.getValue().split("[\\s,.+&|]")) {
+                    if (CONTROLLER_WORDS.contains(tok)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Cosmic Intervention
     // "If a permanent you control would be put into a graveyard from the battlefield this
     // turn, exile it instead. Return it to the battlefield under its owner's control at the
@@ -43213,8 +43388,9 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46 and
-    // 24, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24
+    // and 25, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a
+    // readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -43360,6 +43536,8 @@ public class SpecialCardAi {
                     return MaraleafRider.readmit(ai, sa);
                 case SereneMaster.NAME:                  // batch 4, row 24 (W5)
                     return SereneMaster.readmit(ai, sa);
+                case StealEnchantment.NAME:              // batch 4, row 25 (W5)
+                    return StealEnchantment.readmit(ai, sa);
                 default:
                     return false;
             }

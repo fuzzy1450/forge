@@ -171,6 +171,16 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.FreedFromTheReal.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.StealEnchantment.NAME.equals(source.getName())
+                && SpecialCardAi.StealEnchantment.handles(ai, sa)) {
+            // Dead-card batch 4, wave 5, row 25. Judged whole in SpecialCardAi.StealEnchantment: the stock
+            // GainControl preference steals the opponent's most expensive enchantment of any kind (an Aura on
+            // their own creature, an O-Ring, a Saga) with no floor. Only the readmit's own key and window
+            // come here (our hand, our Main 2, empty stack). A thief's or Play-effect cast and a copy keep
+            // the stock path. Draws nothing; a decline writes no ATTACHED_THIS_TURN.
+            return SpecialCardAi.StealEnchantment.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {
