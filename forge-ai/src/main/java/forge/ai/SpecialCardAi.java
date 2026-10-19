@@ -1663,6 +1663,35 @@ public class SpecialCardAi {
         }
     }
 
+    // Arcanis the Omnipotent under "no maximum hand size" (dead-card batch 4, row 70: a follow-up to row 3)
+    // DrawAi.targetAI refuses any untargeted draw while the hand is already above getMaxHandSize() (its "Don't
+    // make my hand size get too big if already at max" refusal), and getMaxHandSize() stays 7 under "You have no
+    // maximum hand size" (Reliquary Tower, Thought Vessel, Nezahal, Primal Tide, Decanter of Endless Water, Body of
+    // Knowledge, Finale of Revelation at X >= 10: StaticAbilityContinuous sets only Player.unlimitedHandSize), so
+    // cleanup never trims the hand again and Arcanis's {T} draw was refused on every turn for the rest of the game
+    // (on W1's build: 14 attacks at more than 12 life released by row 3's hold and 9 refused turn cycles in 13 of
+    // 16 logged deck-508 games). Calls ArcanisTheOmnipotent's helpers and KnollspineDragon's punisher test,
+    // editing neither (other rows call them). Reads game state only: no random draw, no SpellAbility id, no
+    // mutation (legalFor puts the activator stamp back).
+    public static class ArcanisTheOmnipotentHandSize {
+        // 70A: true for Arcanis's own {T} draw (on the battlefield, not a copy, not a trigger) while we have no
+        // maximum hand size, we can draw, its real count (Bracers copies, Ageless Insight) leaves at least four
+        // cards in our library (row 3's decksUsNow refuses at effective >= library - 3; Laboratory Maniac exempt)
+        // and no opponent's card takes or punishes the draw. DrawAi asks it only inside that refusal, which only
+        // an opponent's turn reaches (on ours the hand + draw guard above it refuses first and the draw waits, as
+        // at a hand of 5-7), and only from their Main 2 on (checkPhaseRestrictions' Main-2 gate): after their
+        // combat, the stock opponent-turn draw window. G6's TapDrawEngine.drawWillBeTaken ORs it in (this part's
+        // own disjunct there), so rows 53, 72 and 74 read the same lift.
+        public static boolean drawsPastMaxHand(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && ArcanisTheOmnipotent.NAME.equals(host.getName()) && host.isInPlay()
+                    && !sa.isCopied() && !sa.isTrigger() && ArcanisTheOmnipotent.isTapDraw(sa)
+                    && ai.isUnlimitedHandSize() && ai.canDraw()
+                    && !ArcanisTheOmnipotent.decksUsNow(ai, sa)
+                    && !KnollspineDragon.drawOrDiscardIsPunished(ai, host);
+        }
+    }
+
     // Archangel of Strife
     // "As this enters, each player chooses war or peace." Every AI chooser takes the first choice
     // (ChooseGenericAi.chooseSingleSpellAbility -> War), and a human opponent is modelled the same
@@ -52725,7 +52754,8 @@ public class SpecialCardAi {
         // 70's 70A adds its own disjunct here (drawsPastMaxHand: our tap-draw commander under no maximum hand
         // size, the state W1's last clause refuses) in its own commit, and a 70A revert takes it back out.
         public static boolean drawWillBeTaken(final Player ai, final SpellAbility draw) {
-            return ArcanisTheOmnipotent.drawWouldBeTaken(ai, draw);
+            return ArcanisTheOmnipotent.drawWouldBeTaken(ai, draw)
+                    || ArcanisTheOmnipotentHandSize.drawsPastMaxHand(ai, draw); // row 70, part 70A's disjunct
         }
 
         // DrawAi.targetAI's untargeted, non-mandatory refusals (DrawAi.java:733-764) for this draw now. canDraw;

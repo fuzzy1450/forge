@@ -756,8 +756,13 @@ public class DrawAi extends SpellAbilityAi {
                      return false;
                  }
 
-                if (computerHandSize > computerMaxHandSize) {
+                if (computerHandSize > computerMaxHandSize
+                        && !SpecialCardAi.ArcanisTheOmnipotentHandSize.drawsPastMaxHand(ai, sa)) {
                     // Don't make my hand size get too big if already at max
+                    // (Arcanis the Omnipotent, dead-card batch 4, row 70, part 70A: not for its own {T} draw under
+                    // "no maximum hand size", where cleanup never trims the hand and this refusal locked that draw
+                    // for the rest of the game; the floor leaves at least four cards in the library. RNG-free; a
+                    // false keeps the stock refusal.)
                     return false;
                 }
             }
