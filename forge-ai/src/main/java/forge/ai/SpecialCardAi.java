@@ -38364,6 +38364,22 @@ public class SpecialCardAi {
                 if (TheWaterCrystal.holdMill(ai, testSa) && !testSa.getHostCard().isTapped()) {
                     continue;
                 }
+                // Dead-card batch 4, row 74, part 74N (B4-8): a spell ability the main loop's RemoveDeck filter
+                // drops (G3's dispatcher in AiController.getSpellAbilityToPlay: a hinted host no readmit case
+                // takes back, or an unhinted one a keep-off case takes off) is no reason to make devotion mana.
+                // This direct canPlaySa scanner read its stock approval instead (Aphetto Alchemist's creature
+                // spell and its face-down {3}, Freed from the Real's Aura), and the pool emptied unspent with {2}
+                // of lands and Nykthos tapped through the opponent's turn (W1's build: 8 such orphans in 3 of 8
+                // logged deck-508 games). The filter's own answer, as ManifoldKey.filteredOut and
+                // VizierOfTumblingSands.filteredOut ask it, after the activator stamp above (G1's contract);
+                // readmit and keepOff draw nothing and hold nothing (G3's contract). Unchanged for every unhinted
+                // card no keep-off case names (keepOff false): deck 112, the other Nykthos deck, lists no hinted
+                // or keep-off card. A skipped consult, divergent by design from the first skip (B4-9).
+                final Card testHost = testSa.getHostCard();
+                if (testHost != null && (ComputerUtilCard.isCardRemAIDeck(testHost)
+                        ? !RemoveDeckFilter.readmit(ai, testSa) : RemoveDeckFilter.keepOff(ai, testSa))) {
+                    continue;
+                }
                 if (((PlayerControllerAi) ai.getController()).getAi().canPlaySa(testSa) == AiPlayDecision.WillPlay) {
                     // the AI is willing to play the spell
                     return true;
