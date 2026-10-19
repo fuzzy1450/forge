@@ -21124,6 +21124,243 @@ public class SpecialCardAi {
         }
     }
 
+    // Freed from the Real (dead-card batch 4, row 53, a near-dead card; carrier Arcanis - i LOVE drawing cards
+    // 87715b77, deck 508, the only registered deck with the card)
+    // "Enchant creature. {U}: Tap enchanted creature. {U}: Untap enchanted creature." ({2}{U} Aura.) Its
+    // AI:RemoveDeck:All hint strips the hand cast and both abilities at AiController.getSpellAbilityToPlay before any
+    // handler runs (0 owner casts in 2,270 held games over 49 libraries; the one owner cast on record was a free
+    // Play-effect cast from the library), and behind the hint the stock Pump preference
+    // (AttachAi.attachAIPumpPreference -> getBestAI) enchants our best attacker, which need not have a {T} ability at
+    // all: the Aura grants nothing, and its value is untapping a creature whose {T} draws. The hint stays (the -10
+    // sort, the steal, copy, clone and tutor pickers). G3's dispatcher lets through:
+    // - the cast (part 53A, isOwnHandCast): our own face-up Aura spell from our hand (not a Play-effect cast, not a
+    //   copy), in our Main 2 on an empty stack with no held mana (G3's noManaHeld), while bestHolder finds our
+    //   creature whose {T} draw prints MIN_DRAW or more cards (Arcanis the Omnipotent: 3), and only when G1's
+    //   CommanderCastCeiling.affordable says the {2}{U} as the engine prices it is paid, before canPayCost's test
+    //   payment draws. AttachAi.checkApiLogic calls consider() for that window only: it enchants bestHolder and
+    //   prices the cast again with the target in place. The hint's -10 sorts the cast after every other spell
+    //   ability, so it takes only the mana A leaves.
+    // The {U}: Tap ability is never readmitted. Keyed on the paper name and on owner and controller (rule B3-3): a
+    // thief's Freed (Xanathar, Nathan Drake, Obscura Operation cast it through Play effects), the owner's own
+    // Play-effect casts and a copy keep A's path. RNG: every check reads state only (getters, the phase and the
+    // stack, AiCardMemory through noManaHeld, canBeAttached, canTarget and the draw's restrictions with the activator
+    // stamped and put back, the punisher scan, evaluateCreature, test-mode calculateManaCost and HonestMana) and
+    // draws nothing; outside its window each answer is A's (the readmit false, and the AttachAi gate carries the
+    // readmit, so every other probe of the hand card meets the stock path). Holds nothing, remembers nothing, makes
+    // no SpellAbility. G1, G2 (through G1 and the counter reserve), G3's noManaHeld, G6's TapDrawEngine, W1's
+    // ArcanisTheOmnipotent and batch 1's KnollspineDragon are called, never edited.
+    public static class FreedFromTheReal {
+        public static final String NAME = "Freed from the Real";
+        static final int MIN_DRAW = 2; // printed cards per activation of the holder's {T} draw (Arcanis: 3)
+
+        // the host's paper name (rule B3-3, G3's key): RemoveDeckFilter.paperName's reading
+        private static boolean isPaper(final Card host) {
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // 53A's key, and AttachAi.checkApiLogic's: our own face-up Aura spell in our hand, ours to own and control
+        // and to cast (every reader of G3 stamps the activator first: G1's contract), not a Play-effect cast, not a
+        // copy
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return isPaper(host) && sa.isSpell() && sa.getApi() == ApiType.Attach && !sa.isCastFromPlayEffect()
+                    && !sa.isCopied() && host.isInZone(ZoneType.Hand) && !host.isFaceDown()
+                    && ai.equals(sa.getActivatingPlayer()) && ai.equals(host.getOwner())
+                    && ai.equals(host.getController());
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (isOwnHandCast(ai, sa)) {
+                return castWindow(ai, sa); // 53A
+            }
+            return false; // the {U} abilities stay filtered
+        }
+
+        // 53A: the cast's window, cheapest first: our Main 2 on an empty stack, no held mana, a holder, then G1's
+        // ceiling, so a window it calls unpayable is refused before canPayCost's test payment draws
+        static boolean castWindow(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            if (!ai.canCastSorcery() || !game.getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !game.getStack().isEmpty() || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            return bestHolder(ai, sa) != null && CommanderCastCeiling.affordable(ai, sa);
+        }
+
+        // AttachAi.checkApiLogic, inside the readmit's window: enchant the holder, or don't cast
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Card holder = bestHolder(ai, sa);
+            if (holder == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(holder);
+            if (!CommanderCastCeiling.affordable(ai, sa)) { // priced with the target in place
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // 53A: our creature whose {T} ability with no mana is an untargeted Draw (ArcanisTheOmnipotent.tapDraw) of
+        // MIN_DRAW or more printed cards; then, cheapest first (skeptic A1): the Aura can be attached to it and can
+        // target it (attachable: Lightning Greaves' shroud refuses, Swiftfoot Boots' hexproof does not), its draw is
+        // not forbidden (G6's legalOnceUntapped: not suppressed or detained, its restrictions met, no CantBeActivated
+        // static; tapped or not), it does not deck us now (W1's decksUsNow on the effective count), no opponent
+        // profits from it (drawOrDiscardIsPunished), and no Freed from the Real enchants it already
+        // (NonStackingAttachEffect). The most cards per activation (effectiveDraw: Bracers, Teferi's Ageless
+        // Insight), then our commander, then evaluateCreature, then battlefield order. Summoning sickness does not
+        // matter: the engine runs from the next untap. Null when none; a creature with no abilities stops at tapDraw.
+        static Card bestHolder(final Player ai, final SpellAbility sa) {
+            final Card aura = sa.getHostCard();
+            Card best = null;
+            int bestN = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                final SpellAbility draw = ArcanisTheOmnipotent.tapDraw(c);
+                if (draw == null || TapDrawEngine.printed(draw) < MIN_DRAW || !attachable(ai, sa, aura, c)
+                        || !TapDrawEngine.legalOnceUntapped(ai, c, draw) || ArcanisTheOmnipotent.decksUsNow(ai, draw)
+                        || KnollspineDragon.drawOrDiscardIsPunished(ai, c) || c.isEnchantedBy(NAME)) {
+                    continue;
+                }
+                final int n = ArcanisTheOmnipotent.effectiveDraw(ai, draw);
+                if (best == null || n > bestN || (n == bestN && beats(c, best))) {
+                    best = c;
+                    bestN = n;
+                }
+            }
+            return best;
+        }
+
+        // the Aura spell can be attached to c and can target it, with its activator stamped as ai and put back
+        // (B4-4: hexproof and the "you" checks read the activator, and an ability carries whatever player last
+        // stamped it)
+        private static boolean attachable(final Player ai, final SpellAbility sa, final Card aura, final Card c) {
+            final Player stamped = sa.getActivatingPlayer();
+            sa.setActivatingPlayer(ai);
+            try {
+                return c.canBeAttached(aura, sa) && sa.canTarget(c);
+            } finally {
+                sa.setActivatingPlayer(stamped);
+            }
+        }
+
+        // the tie after effectiveDraw: our commander first, then the better creature (evaluateCreature), else
+        // battlefield order (the first holder stays)
+        private static boolean beats(final Card c, final Card best) {
+            if (c.isCommander() != best.isCommander()) {
+                return c.isCommander();
+            }
+            return ComputerUtilCard.evaluateCreature(c) > ComputerUtilCard.evaluateCreature(best);
+        }
+
+        // The counter reserve, which part 53C's own-Main-2 untap and part 53R's cast ask: true when no counterspell
+        // of ours is castable now, or one still is after paying sa ("if any counterspell is castable now, at least
+        // one is castable after", skeptic A1). A counterspell: an instant in our hand whose root spell's API is
+        // Counter, or a Charm with a Counter choice. The Charm's choices are read as scripted
+        // (getAdditionalAbilityList "Choices"), not through CharmEffect.makePossibleOptions: both windows have an
+        // empty stack, and makePossibleOptions drops a targeted mode with no candidate (603.3c, getNumCandidates),
+        // so it would never show Cryptic Command's Counter mode here; it also rewrites the modes' CharmOrder SVars.
+        // Skipped: a card with an AlternativeCost static of its own whose cost spends no mana (Foil's discards: it
+        // never needs the mana), and a spell whose price is not RNG-free (an X cost, skeptic A1; Announce$ NumTimes,
+        // Assist, Delve, Convoke, Improvise, TapCreaturesForMana and Waterbend, G1's exclusions: their adjustments
+        // ask a controller, and Delve's clears the host's delved cards). Prices are the engine's (test-mode
+        // calculateManaCost, each spell's activator stamped as ai and put back, B4-4) against HonestMana in total
+        // and in blue, and the payment is priced pessimistically (skeptic A1: HonestMana is a count, not an
+        // assignment, and the payer may spend Islands on the generic part): total - cmc, and blue - min(blue, cmc).
+        // The only error is an over-hold. O(hand); draws nothing.
+        static boolean keepsCounterMana(final Player ai, final SpellAbility sa) {
+            int pay = -1; // sa's mana value as the engine prices it, read once a counterspell is castable now
+            boolean castableNow = false;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (!c.isInstant() || needsNoMana(c)) {
+                    continue;
+                }
+                for (final SpellAbility sp : c.getSpells()) {
+                    if (!isCounter(sp) || !priceable(sp)) {
+                        continue;
+                    }
+                    final ManaCostBeingPaid cost = price(ai, sp);
+                    final HonestMana mana = HonestMana.of(ai, sp, true);
+                    if (!fits(mana, cost, 0)) {
+                        continue; // not castable now: nothing to keep
+                    }
+                    castableNow = true;
+                    if (pay < 0) {
+                        pay = price(ai, sa).getConvertedManaCost();
+                    }
+                    if (fits(mana, cost, pay)) {
+                        return true;
+                    }
+                }
+            }
+            return !castableNow;
+        }
+
+        // a root spell that counters: API Counter, or a Charm with a Counter choice as scripted
+        private static boolean isCounter(final SpellAbility sp) {
+            if (!sp.isSpell() || sp.getApi() == null) {
+                return false;
+            }
+            if (sp.getApi() == ApiType.Counter) {
+                return true;
+            }
+            if (sp.getApi() == ApiType.Charm) {
+                for (final AbilitySub mode : sp.getAdditionalAbilityList("Choices")) {
+                    if (mode.getApi() == ApiType.Counter) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // an AlternativeCost static of the card's own whose cost spends no mana ("Cost$ 0", Foil's discards, Force
+        // of Will's life and exile, Daze's Island); the template's ConvertedManaCost read as the engine reads it
+        private static boolean needsNoMana(final Card c) {
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (!st.checkMode(StaticAbilityMode.AlternativeCost) || !st.hasParam("Cost")) {
+                    continue;
+                }
+                final String template = st.getParam("Cost").replace("ConvertedManaCost", Integer.toString(c.getCMC()));
+                if (new Cost(template, false).getTotalMana().isZero()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // a cost the engine prices without asking a controller (skeptic A1's X; G1's exclusions)
+        private static boolean priceable(final SpellAbility sp) {
+            final Card host = sp.getHostCard();
+            final Cost cost = sp.getPayCosts();
+            return host != null && cost != null && cost.getTotalMana().countX() == 0 && cost.getMaxWaterbend() == null
+                    && !"NumTimes".equals(sp.getParam("Announce")) && !sp.hasParam("TapCreaturesForMana")
+                    && !host.hasKeyword(Keyword.ASSIST) && !host.hasKeyword(Keyword.DELVE)
+                    && !host.hasKeyword(Keyword.CONVOKE) && !host.hasKeyword(Keyword.IMPROVISE);
+        }
+
+        // the engine's test-mode price of s for ai, its activator stamped as ai and put back (B4-4: CostAdjustment
+        // reads it, and a hand card's spell carries whatever player last stamped it)
+        private static ManaCostBeingPaid price(final Player ai, final SpellAbility s) {
+            final Player stamped = s.getActivatingPlayer();
+            s.setActivatingPlayer(ai);
+            try {
+                return ComputerUtilMana.calculateManaCost(s.getPayCosts(), s, ai, true, 0, false);
+            } finally {
+                s.setActivatingPlayer(stamped);
+            }
+        }
+
+        // cost fits mana after a payment of pay mana, priced pessimistically: pay comes out of the total, and out of
+        // blue up to all of it (skeptic A1)
+        private static boolean fits(final HonestMana mana, final ManaCostBeingPaid cost, final int pay) {
+            final int blue = mana.colour(MagicColor.BLUE);
+            return mana.total() - pay >= cost.getConvertedManaCost()
+                    && blue - Math.min(blue, pay) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+    }
+
     // Frenetic Sliver
     // "All Slivers have '{0}: If this permanent is on the battlefield, flip a coin. If you win the
     // flip, exile this permanent and return it to the battlefield under its owner's control at the
@@ -42364,7 +42601,7 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58 and 74, keepOff for batch
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74 and 53, keepOff for batch
     // 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -42501,6 +42738,8 @@ public class SpecialCardAi {
                     return VedalkenPlotter.readmit(ai, sa);
                 case AphettoAlchemist.NAME:              // batch 4, row 74 (W4)
                     return AphettoAlchemist.readmit(ai, sa);
+                case FreedFromTheReal.NAME:              // batch 4, row 53 (W4)
+                    return FreedFromTheReal.readmit(ai, sa);
                 default:
                     return false;
             }

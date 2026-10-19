@@ -160,6 +160,17 @@ public class AttachAi extends SpellAbilityAi {
             return SpecialCardAi.DogUmbra.consider(ai, sa);
         }
 
+        if (isAuraSpell(sa) && SpecialCardAi.FreedFromTheReal.isOwnHandCast(ai, sa)
+                && SpecialCardAi.FreedFromTheReal.readmit(ai, sa)) {
+            // Dead-card batch 4, row 53. Judged in SpecialCardAi.FreedFromTheReal: the Aura grants nothing, so the
+            // stock Pump preference (attachAIPumpPreference -> getBestAI) enchants our best attacker, which need not
+            // have a {T} ability at all; its value is untapping a creature whose {T} draws. Only the G3 readmit's own
+            // window comes here (our hand cast in our Main 2, a holder, the mana): every other probe of the hand card
+            // (a direct canPlaySa scan outside the window, a Play-effect or a thief's cast through doTriggerNoCost)
+            // keeps the stock path and its answer. Draws nothing; a decline writes no ATTACHED_THIS_TURN.
+            return SpecialCardAi.FreedFromTheReal.consider(ai, sa);
+        }
+
         // Attach spells always have a target
         final TargetRestrictions tgt = sa.getTargetRestrictions();
         if (tgt != null) {
