@@ -2512,6 +2512,41 @@ public class SpecialCardAi {
         }
     }
 
+    // Assassin Gauntlet (dead-card batch 4, row 17; carriers Assassins fa3c2514, Dimir Historic
+    // Voltron 048c480b, Esper Modified Voltron ddea4ad4 and Esper Assassins & Equipment e5ef311a)
+    // "When Assassin Gauntlet enters, attach it to up to one target creature you control. Tap all
+    // creatures target opponent controls." ({2}{U} Artifact - Equipment: +1/+1 and a combat-damage
+    // loot, Equip {2}.) Its enters trigger's targeted TapAll sub had no chkDrawback, so the base
+    // class default refused it and AiController.saSideEffects vetoed every cast (BadEtbEffects
+    // from checkETBEffects' non-mandatory consult of the trigger); part 17A's
+    // TapAllAi.chkDrawback targets an opponent instead. This class only names the card for the
+    // cast ceiling that lift needs.
+    // RNG and ability-id parity: the card is unhinted, so A ran all of canPlaySa for it in every
+    // own main phase its timing allows (Main 2, or Main 1 under castPermanentInMain1's Equipment
+    // branch) and declined at saSideEffects, drawing nothing, after checkETBEffectsPreparedCard's
+    // exSA.copy of the trigger had taken a SpellAbility id (and, in a pod, after the attach
+    // preference's choosePreferredDefenderPlayer had drawn). With the veto lifted, B goes on to
+    // canPayCost, whose test payment rolls ComputerUtilMana.isManaSourceReserved per source it
+    // tries (every AI profile sets RESERVE_MANA_FOR_MAIN2_CHANCE=100, and percentTrue(100) still
+    // calls nextInt; in Main 2 it also clears HELD_MANA_SOURCES_FOR_MAIN2), so every unpayable
+    // window would re-roll a held game with no visible cast. The ceiling
+    // (CommanderCastCeiling.affordable, G1 under G4's contract: test-mode calculateManaCost against
+    // HonestMana, in total and in each coloured shard; reads only, no draw, no ability id)
+    // therefore sits in AiController.canPlayAndPayForFace, right after canPlaySa approves and
+    // before canPayCost, beside Ambitious Dragonborn's (batch 3, row 95; rule B3x-3). B has by then
+    // run exactly A's canPlaySa, the same draws and the same ids, and the decline reason
+    // (CantAfford for BadEtbEffects) is the only difference. A decline in
+    // PermanentNoncreatureAi.checkApiLogic (ManifestDreadEquipment's place) would sit before the
+    // enters-trigger consult and skip A's work there, the pod draw included. Only a G1-affordable
+    // window goes on to canPayCost's roll. A Play-effect cast skips the gate and stays stock; a
+    // MayPlay caster's paid cast is priced for its caster. G1's residuals apply (a multicolour
+    // source counts toward each colour it can make; hand sources and mana multipliers are not
+    // counted); the Gauntlet's single {U} pip keeps the colour one from biting. No AiCardMemory, no
+    // mana hold, no targets.
+    public static class AssassinGauntlet {
+        public static final String NAME = "Assassin Gauntlet";
+    }
+
     // Bathe in Light (dead-card batch 2, row 117; precon:Heavenly Inferno (CMA))
     // "Radiance - Choose a color. Target creature and each other creature that shares a color with
     // it gain protection from the chosen color until end of turn." ({1}{W} Instant.) Never cast by

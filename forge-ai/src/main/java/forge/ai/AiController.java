@@ -874,6 +874,19 @@ public class AiController {
             return AiPlayDecision.CantAfford;
         }
 
+        // Dead-card batch 4, row 17: Assassin Gauntlet. TapAllAi.chkDrawback lifted its enters-trigger
+        // veto, so canPlaySa now approves the cast where A returned BadEtbEffects at saSideEffects, and
+        // canPayCost below would run its test payment (isManaSourceReserved draws MyRandom per source)
+        // in windows that cannot pay: a held game would re-roll with no visible cast. G1 refuses those
+        // first, drawing nothing, as A's decline drew nothing after canPlaySa. Placed after canPlaySa so
+        // B has made exactly A's evaluation (checkETBEffectsPreparedCard's copy and attach preference)
+        // before the decline. Own paid casts (from hand, or a MayPlay caster's); a Play-effect cast never
+        // comes here. G1 under G4's contract, called not edited. A name compare: inert for every other SA.
+        if (sa.isSpell() && host != null && SpecialCardAi.AssassinGauntlet.NAME.equals(host.getName())
+                && !sa.isCastFromPlayEffect() && !SpecialCardAi.CommanderCastCeiling.affordable(player, sa)) {
+            return AiPlayDecision.CantAfford;
+        }
+
         if (!ComputerUtilCost.canPayCost(sa, player, sa.isTrigger())) {
             // for dependent costs with X, e.g. Repeal, which require a valid target to be specified before a decision can be made
             // on whether the cost can be paid, this can only be checked late after canPlaySa has been run (or the AI will misplay)
