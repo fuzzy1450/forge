@@ -35474,6 +35474,8 @@ public class SpecialCardAi {
     // worth a card, with a legal new target an opponent controls or is. TargetType$ Spell.singleTarget is
     // Swat's own canTargetSpellAbility check, so abilities and multi-target spells never open it. Never a
     // save the AI itself marks as better in the graveyard (SacMe, DiscardMe: the carrier's Wonder).
+    // Part 40B adds a second window arm, libraryWindow: removal to the library (Chaos Warp, Condemn), which
+    // Swat's predictThreatenedObjects never flags, so Swat's window never opens on it.
     // Two variants, in getOriginalAndAltCostAbilities' order, each priced RNG-free before canPayCost (B3-5):
     // - the mana spell: no live mana reservation (RemoveDeckFilter.noManaHeld) and G1
     //   (CommanderCastCeiling.affordable) on the engine's adjusted {3}{U}{U};
@@ -35555,12 +35557,72 @@ public class SpecialCardAi {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
-        // Swat's window (it targets the top spell on approval), minus graveyard-hinted saves.
+        // Swat's window, or (40B) the library arm Swat's window never opens; either targets the top spell
+        // on approval. Minus graveyard-hinted saves.
         private static boolean window(final Player ai, final SpellAbility sa) {
-            if (!DeflectingSwat.consider(ai, sa).willingToPlay()) {
+            if (!DeflectingSwat.consider(ai, sa).willingToPlay() && !libraryWindow(ai, sa)) {
                 return false;
             }
             return !graveyardHinted(savedObject(sa.getTargets().getFirstTargetedSpell()));
+        }
+
+        // 40B: removal to the library (Chaos Warp, Condemn). ComputerUtil.predictThreatenedObjects flags a
+        // ChangeZone threat only for Destination$ Exile, so Swat's window never opens on it, though Swat's own
+        // harmsItsTarget counts Library as harm and DeflectingSwat.chooseNewTargets moves such a part. Swat's
+        // other conditions, privately copied (B3-4): an opponent's spell on top that this spell can target
+        // (Spell.singleTarget); its one targeted part a ChangeZone from the battlefield to the library, aimed
+        // at a permanent we control that is worth a card; a legal new target an opponent controls or is
+        // (getAllCandidates, Swat's opponentCandidates test). On approval it targets the top spell, as Swat's
+        // consider does. Draw-free: getAllCandidates, evaluateCreature, canTargetSpellAbility.
+        private static boolean libraryWindow(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final SpellAbility top = ComputerUtilAbility.getTopSpellAbilityOnStack(game, sa);
+            if (top == null || !top.isSpell() || top.getActivatingPlayer() == null
+                    || !top.getActivatingPlayer().isOpponentOf(ai) || ai.getYourTeam().contains(top.getActivatingPlayer())) {
+                return false;
+            }
+            sa.resetTargets();
+            if (!sa.canTargetSpellAbility(top)) {
+                return false;
+            }
+            for (SpellAbility part = top; part != null; part = part.getSubAbility()) {
+                if (!part.usesTargeting() || part.getTargets().size() != 1) {
+                    continue;
+                }
+                final GameObject old = part.getTargets().get(0);
+                if (part.getApi() != ApiType.ChangeZone || part.getActivatingPlayer() == null
+                        || !"Battlefield".equals(part.getParam("Origin"))
+                        || !"Library".equals(part.getParam("Destination"))
+                        || !(old instanceof Card c) || !c.isInPlay() || !ai.equals(c.getController())
+                        || !worthACard(c)) {
+                    return false;
+                }
+                for (final GameEntity ge : part.getTargetRestrictions().getAllCandidates(part, false)) {
+                    if (ge.equals(old)) {
+                        continue;
+                    }
+                    final Player ctrl = ge instanceof Card o ? (o.isInPlay() ? o.getController() : null)
+                            : ge instanceof Player p ? p : null;
+                    if (ctrl != null && ctrl.isOpponentOf(ai) && !ai.getYourTeam().contains(ctrl)) {
+                        sa.getTargets().add(top);
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return false;
+        }
+
+        // Swat's worthSaving for a card, privately copied (B3-4): our commander or a planeswalker; a creature
+        // at DeflectingSwat.MIN_CREATURE_VALUE; else a nonland permanent of DeflectingSwat.MIN_PERMANENT_CMC
+        private static boolean worthACard(final Card c) {
+            if (c.isCommander() || c.isPlaneswalker()) {
+                return true;
+            }
+            if (c.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(c) >= DeflectingSwat.MIN_CREATURE_VALUE;
+            }
+            return !c.isLand() && c.getCMC() >= DeflectingSwat.MIN_PERMANENT_CMC;
         }
 
         private static boolean manaPriced(final Player ai, final SpellAbility sa) {
