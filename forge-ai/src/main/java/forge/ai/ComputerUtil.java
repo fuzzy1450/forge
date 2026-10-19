@@ -174,6 +174,12 @@ public class ComputerUtil {
                     back.updateStateForView();
                 }
             }
+            // A skip lasts one choice (AiController.getSpellAbilityToPlay un-skips what it skipped last time), so two
+            // failing casts alternate, and a failing alternative-cost copy never carries the flag at all: tell the AI
+            // to stop offering this card for the rest of the phase once it has failed twice in it.
+            if (ai.getController() instanceof PlayerControllerAi pca) {
+                pca.getAi().rememberFailedCast(source);
+            }
             return false;
         }
         if (host != null && hz != null && hz.is(ZoneType.Stack)) {
