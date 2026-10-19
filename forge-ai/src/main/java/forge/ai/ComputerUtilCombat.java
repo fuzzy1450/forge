@@ -875,8 +875,9 @@ public class ComputerUtilCombat {
     public static int predictPowerBonusOfBlocker(final Card attacker, final Card blocker, boolean withoutAbilities) {
         int power = 0;
 
-        // Serene Master switches power with attacker
-        if (blocker.getName().equals("Serene Master")) {
+        // Serene Master switches power with attacker, when its block trigger can target it
+        if (blocker.getName().equals("Serene Master")
+                && SpecialCardAi.SereneMaster.exchangeTargets(attacker, blocker.getController())) {
             power += attacker.getNetPower() - blocker.getNetPower();
         } else if (blocker.getName().equals("Shape Stealer")) {
             power += attacker.getNetPower() - blocker.getNetPower();
@@ -1149,7 +1150,8 @@ public class ComputerUtilCombat {
         int power = 0;
 
         // Serene Master switches power with attacker
-        if (blocker!= null && blocker.getName().equals("Serene Master")) {
+        if (blocker != null && blocker.getName().equals("Serene Master")
+                && SpecialCardAi.SereneMaster.exchangeTargets(attacker, blocker.getController())) {
             power += blocker.getNetPower() - attacker.getNetPower();
         } else if (blocker != null && attacker.getName().equals("Shape Stealer")) {
             power += blocker.getNetPower() - attacker.getNetPower();
