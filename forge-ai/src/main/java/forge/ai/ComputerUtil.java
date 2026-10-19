@@ -85,6 +85,10 @@ public class ComputerUtil {
         final Game game = source.getGame();
         final Card host = sa.getHostCard();
         final Zone hz = host.isCopiedSpell() ? null : host.getZone();
+        // what a failed payment needs to undo the cast, kept as PlaySpellAbility.playAbility keeps it for a human
+        final boolean refreeze = game.getStack().isFrozen();
+        Zone fromZone = null;
+        int zonePosition = 0;
         source.setSplitStateToPlayAbility(sa);
 
         if (sa.isSpell() && !source.isCopiedSpell()) {
@@ -100,6 +104,10 @@ public class ComputerUtil {
                 }
             }
 
+            fromZone = game.getZoneOf(source);
+            if (fromZone != null) {
+                zonePosition = fromZone.getCards().indexOf(source);
+            }
             sa.setHostCard(game.getAction().moveToStack(source, sa));
         }
 
@@ -136,6 +144,23 @@ public class ComputerUtil {
         // FIXME: Should not arrive here, though the card seems to be stuck on stack zone and invalidated and nowhere to be found, try to put back to original zone and maybe try to cast again if possible at later time?
         System.out.println("[" + sa.getActivatingPlayer() + "] AI failed to play " + sa.getHostCard() + " [" + sa.getHostCard().getZone() + "]");
         sa.setSkip(true);
+        if (!refreeze) {
+            // Undo the cast as a human's cancelled cast is undone (PlaySpellAbility.playAbility): the card goes back
+            // where it was cast from, with its convoke creatures untapped, the mana refunded and the waiting triggers
+            // dropped, and the stack frozen above is unfrozen. Left frozen, every later spell went onto the frozen
+            // stack until the next step began, and a step that gives no priority (first-strike damage with no first
+            // striker) then held those spells' cast triggers back for ever: walk 14's seed-offset-11 timeouts, a
+            // failed Angel of Salvation in Divine Convocation. Its spells sit out the AI's next choice, as the stock
+            // branch below meant them to.
+            GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, pay, source);
+            game.getStack().unfreezeStack();
+            if (fromZone != null) {
+                for (SpellAbility csa : sa.getHostCard().getSpellAbilities()) {
+                    csa.setSkip(true);
+                }
+            }
+            return false;
+        }
         if (host != null && hz != null && hz.is(ZoneType.Stack)) {
             Card c = game.getAction().moveTo(hz.getZoneType(), host, null, null);
             for (SpellAbility csa : c.getSpellAbilities()) {
