@@ -42723,7 +42723,8 @@ public class SpecialCardAi {
     // (the window PumpAiBase.getCurseCreatures' -X/-0 branch acts in) with no spell or ability of ours on top
     // of the stack, when the unblocked attack at us would leave us below LifeFloor and the -3 prevents
     // MIN_PREVENTED, or, below LOW_LIFE, turns a lethal attack into one we survive; no mana held;
-    // G1-affordable. The stock PumpAi path then decides and aims it.
+    // G1-affordable. The stock PumpAi path then decides, and narrowTargets (PumpAi.pumpTgtAI, part 19B)
+    // aims it at the attacker at us whose -3 prevents the most.
     // RNG: reads only (damageIfUnblocked WITHOUT abilities: the ability form test-pays pump abilities), no
     // random number, nothing held or remembered; a refusal is the old filter. A readmitted consult's first
     // draw is canPayCost's, in a window G1 judged payable.
@@ -42800,6 +42801,32 @@ public class SpecialCardAi {
                 p *= 2;
             }
             return Math.min(p, ComputerUtilCombat.damageIfUnblocked(c, ai, combat, true));
+        }
+
+        // 19B: the stock curse list narrowed to the attackers at us whose -3 prevents the most; the stock list
+        // when that is empty (decision-neutral for direct canPlaySa callers)
+        public static CardCollection narrowTargets(final Player ai, final SpellAbility sa,
+                final CardCollection list) {
+            final Combat combat = ai.getGame().getCombat();
+            if (combat == null) {
+                return list;
+            }
+            final CardCollection mine = new CardCollection();
+            int best = 0;
+            for (final Card c : list) {
+                if (!combat.isAttacking(c, ai)) {
+                    continue;
+                }
+                final int p = prevented(ai, c, combat);
+                if (p > best) {
+                    best = p;
+                    mine.clear();
+                }
+                if (p == best && p > 0) {
+                    mine.add(c);
+                }
+            }
+            return mine.isEmpty() ? list : mine;
         }
     }
 

@@ -706,6 +706,12 @@ public class PumpAi extends PumpAiBase {
                 }
             }
             list = getCurseCreatures(ai, sa, defense, attack, keywords);
+            // Dead-card batch 4, row 19 (19B): the readmitted Dizzy Spell cast aims at the attacker at us whose
+            // -3/-0 prevents the most (DizzySpell.readmit priced that one); the stock list when none. A name
+            // compare first (isOwnHandCast): inert for every other curse. Draws nothing.
+            if (SpecialCardAi.DizzySpell.isOwnHandCast(ai, sa)) {
+                list = SpecialCardAi.DizzySpell.narrowTargets(ai, sa, list);
+            }
         } else {
             if (sa.canTarget(ai)) {
                 sa.getTargets().add(ai);
