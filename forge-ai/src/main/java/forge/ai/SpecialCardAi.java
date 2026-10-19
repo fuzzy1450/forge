@@ -36642,11 +36642,18 @@ public class SpecialCardAi {
     // resetTarget runs after canBouncePermanent's save (a threatened permanent, a Pacified or stunned Neera, and a
     // second Kitten trigger stacked over a first that already aims at her are all the stock's) and ahead of the ETB
     // pick; it keys on the host's AILogic and reads only NeeraWildMage's NAME and unspent, called unchanged (B4-7),
-    // the candidates, the combat, the stack, and G2 (HonestMana) on our own turn before attackers. The cast spends
-    // her count before any target is chosen (TriggerHandler's triggerRun, CR 603.5): 158 of 158 logged Kitten
-    // triggers with her on the battlefield found her spent, so F1's unspent test is a guard, and the blink is taken
-    // on almost every noncreature cast while both share our board, less these declines:
+    // our own battlefield (S5), the candidates, the combat, the stack, and G2 (HonestMana) on our own turn before
+    // attackers. The cast spends her count before any target is chosen (TriggerHandler's triggerRun, CR 603.5): 158
+    // of 158 logged Kitten triggers with her on the battlefield found her spent, so F1's unspent test is a guard,
+    // and the blink is taken on almost every noncreature cast while both share our board, less these declines:
     // - F1: a Neera we control, her trigger spent (no Neera, or a live trigger: a blink buys nothing);
+    // - S5 (retry 1): no Hullbreaker Horror on our battlefield. Its cast trigger ("return target nonland permanent to
+    //   its owner's hand") joins the same batch after the Kitten's, and its stock bounce (ChangeZoneAi
+    //   .canBouncePermanent via ComputerUtil.predictThreatenedObjects) reads our pending blink of her as a threat
+    //   and returns her to our hand: the blink fizzles and the bounce is spent on her (5 times in 4 W2 B games,
+    //   1654483, 1663586, 1719515 twice, 1731702; 0 on the control, whose Kitten never aimed at her). S4 cannot
+    //   see it: the Horror's target is chosen after the Kitten's. An opponent's Horror triggers only on its own
+    //   controller's casts, so it never joins our Kitten's batch;
     // - S1: a card, controlled and owned by us (a token would not return; a stolen Neera would go home);
     // - S2: no combat role (a blink removes her from combat);
     // - S3: no counters (negative ones are the stock save's case), no Aura or Equipment of ours on her;
@@ -36658,17 +36665,25 @@ public class SpecialCardAi {
     // one first on an empty stack) or when the pending trigger's own free cast is one; a non-feeder takes it and
     // spends it, so the Kitten recovers exactly the forfeit a decline creates. A chain needs a cast per link and ends
     // at the first revealed card shouldBottom keeps (a library always holds one at 9/10 of its average or more).
-    // Residuals: F2 is a predictor (a castable-looking card its own AI holds, or a free cast F2 cannot see); a
-    // replacement on a creature entering is not priced (Containment Priest exiles her for good; Authority of the
-    // Consuls, Blind Obedience and Thalia, Heretic Cathar return her tapped); the Skyclave Relic untap given up is
-    // worth nothing (tapped at 5 of 39 stock Relic picks, tapped for mana again in 0). Draws nothing, writes nothing
-    // but G2's setActivatingPlayer on our own mana abilities, allocates no id; null keeps the stock pick.
+    // Residuals: nothing kept is lost, except with our Hullbreaker out, where the hook keeps the stock (no reset that
+    // turn, and the stock pick may be Skyclave Relic, which the Horror then bounces: stock behaviour); F2 is a
+    // predictor (a castable-looking card its own AI holds, or a free cast F2 cannot see); a replacement on a creature
+    // entering is not priced (Containment Priest exiles her for good; Authority of the Consuls, Blind Obedience and
+    // Thalia, Heretic Cathar return her tapped); the Skyclave Relic untap given up is worth nothing (tapped at 5 of 39
+    // stock Relic picks, tapped for mana again in 0). Draws nothing, writes nothing but G2's setActivatingPlayer on our
+    // own mana abilities, allocates no id; null keeps the stock pick.
     public static class DisplacerKitten {
         public static final String LOGIC = "DisplacerKitten";
+        static final String HULLBREAKER = "Hullbreaker Horror";
 
         public static Card resetTarget(final Player ai, final SpellAbility sa, final List<Card> candidates) {
             if (!ai.isCardInPlay(NeeraWildMage.NAME) || NeeraWildMage.unspent(ai)) {
                 return null; // F1: no Neera, or her trigger is live: a blink buys nothing
+            }
+            if (ai.isCardInPlay(HULLBREAKER)) {
+                return null; // S5: our Hullbreaker Horror's cast trigger joins this batch after the Kitten's, and
+                             // its stock bounce (canBouncePermanent via predictThreatenedObjects) reads our blink of
+                             // her as a threat and returns her to hand: the blink fizzles, the bounce is spent on her
             }
             final Game game = ai.getGame();
             for (final Card c : candidates) {
