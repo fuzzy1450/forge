@@ -33321,6 +33321,61 @@ public class SpecialCardAi {
         }
     }
 
+    // Maraleaf Rider (dead-card batch 4, row 46; Everybody Eats 282e581f, Ygra, Eater of All)
+    // {1}{G} Creature - Elf Knight 3/1. "Sacrifice a Food: Target creature blocks Maraleaf Rider this
+    // turn if able." (Throne of Eldraine; the Oracle text and the script agree.) AI:RemoveDeck:All
+    // dropped the owner's creature spell in AiController.getSpellAbilityToPlay's removeIf before any
+    // handler ran, so its owner never cast it. The script keeps the hint: the -10 sort and every other
+    // isCardRemAIDeck reader (steal, exchange, copy, clone and tutor pickers) still refuse it, and the
+    // MustBlock ability stays off the list. Under the carrier's Ygra every other creature is a Food, so
+    // Sac<1/Food> would feed it a creature, the Rider itself included. The G3 dispatcher
+    // (RemoveDeckFilter.readmit) lets exactly one ability through: the owner's own creature spell from
+    // hand, not a Play-effect cast and not a copy, in Reckless Barbarian's window (a private copy, B3-4,
+    // green for red): our own main phase with an empty stack; Main 2, or Main 1 when the stock
+    // PermanentAi.checkPhaseRestrictions would cast it there (ComputerUtil.castPermanentInMain1); no
+    // live mana reservation (RemoveDeckFilter.noManaHeld); G2 (HonestMana, held sources skipped)
+    // covering the engine's test-mode calculateManaCost in total and in green.
+    // Value floor: the body. A 3/1 for two has no enters trigger, upkeep cost or drawback, so the stock
+    // checks behind the filter (PermanentCreatureAi: zero toughness under a static) judge the rest.
+    // Draws nothing, holds nothing, remembers nothing; its only writes are setActivatingPlayer on a
+    // hand SA with no activator yet (as getOriginalAndAltCostAbilities does right after the filter)
+    // and on the mana abilities G2 reads.
+    public static class MaraleafRider {
+        public static final String NAME = "Maraleaf Rider";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || sa.isCopied() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // the MustBlock ability, a theft, a Play-effect cast: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return false;
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ph.is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait, answered before the list sees the spell
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.GREEN) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+    }
+
     // Marath, Will of the Wild (dead-card batch 2, row 1; the commander of precon:Nature of the
     // Beast)
     // Its AI:RemoveDeck:All hint stripped the command-zone spell at
@@ -43123,8 +43178,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19 and 40, keepOff
-    // for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40 and 46,
+    // keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -43266,6 +43321,8 @@ public class SpecialCardAi {
                     return DizzySpell.readmit(ai, sa);
                 case Misdirection.NAME:                  // batch 4, row 40 (W4)
                     return Misdirection.readmit(ai, sa);
+                case MaraleafRider.NAME:                 // batch 4, row 46 (W4)
+                    return MaraleafRider.readmit(ai, sa);
                 default:
                     return false;
             }
