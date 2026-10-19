@@ -210,6 +210,12 @@ public class ChooseCardAi extends SpellAbilityAi {
             // Every other ChooseCard card takes exactly the path it took before.
             return SpecialCardAi.DruidOfPurification.chooseCard(ai, sa, options);
         }
+        if (SpecialCardAi.SylvanLibrary.isLibraryTrigger(sa)) {
+            // Dead-card batch 4, row 28 (28C): the two cards to put back, ranked by what the hand needs;
+            // WorstCard's getWorstAI returned the cheapest artifact or enchantment first and lands while
+            // land-light. Every other ChooseCard card takes exactly the path it took before.
+            return SpecialCardAi.SylvanLibrary.chooseReturn(ai, sa, options);
+        }
         final Card host = sa.getHostCard();
         final Player ctrl = host.getController();
         String logic = sa.getParamOrDefault("AILogic", "");

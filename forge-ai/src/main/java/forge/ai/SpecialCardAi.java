@@ -50085,6 +50085,59 @@ public class SpecialCardAi {
             }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
+
+        // 28C: ChooseCardAi.chooseSingleCard for the trigger's choice. AiController.chooseCardsForEffect
+        // asks once per pick with the cards not yet chosen; this returns the one the hand wants least.
+        // keepRank is a function of the board and the hand (nothing moves between the two picks), so the
+        // two picks are the two lowest-ranked drawn cards and the card left is the best. Every land
+        // counts as a land drop (the skeptic's amendment: a fetchland, Urza's Saga, Fabled Passage or
+        // Evolving Wilds has no mana ability and is still the land the hand needs). Ties: pool order.
+        // RNG-free, O(hand + battlefield).
+        public static Card chooseReturn(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            final Card host = sa.getHostCard();
+            final CardCollectionView hand = ai.getCardsIn(ZoneType.Hand);
+            final CardCollection drawn = CardLists.getValidCards(hand, sa.getParam("Choices"), ai, host, sa);
+            int landsInHand = 0; // lands in hand that are not among this turn's drawn cards
+            for (final Card c : hand) {
+                if (!drawn.contains(c) && c.isLand()) {
+                    landsInHand++;
+                }
+            }
+            final CardCollectionView inPlay = ai.getCardsIn(ZoneType.Battlefield);
+            final int landsInPlay = CardLists.count(inPlay, CardPredicates.LANDS_PRODUCING_MANA);
+            final int target = AiProfileUtil.getIntProperty(ai, AiProps.SCRY_NUM_LANDS_TO_NOT_NEED_MORE);
+            final boolean shortOfLands = landsInPlay + landsInHand < target;
+            final boolean wantLand = shortOfLands && landsInHand == 0;
+            // AiController.getCardsToDiscard's near-term window: mana permanents, a land drop, one more
+            final int manaPermanents = landsInPlay
+                    + CardLists.count(inPlay, c -> !c.isLand() && !c.getManaAbilities().isEmpty());
+            final boolean landDrop = landsInHand > 0 || drawn.anyMatch(CardPredicates.LANDS);
+            final int nearTerm = manaPermanents + 1 + (landDrop ? 1 : 0);
+            Card worst = null;
+            int worstRank = Integer.MAX_VALUE;
+            for (final Card c : options) {
+                final int r = keepRank(c, wantLand, shortOfLands, nearTerm);
+                if (r < worstRank) {
+                    worst = c;
+                    worstRank = r;
+                }
+            }
+            return worst;
+        }
+
+        // higher = keep: a wanted land; a nonland castable in the near term (a mana rock or dork first
+        // while short of lands, then mana value high to low); another land while short; a nonland out of
+        // reach (cheapest first); spare lands last
+        static int keepRank(final Card c, final boolean wantLand, final boolean shortOfLands, final int nearTerm) {
+            final boolean makesMana = !c.getManaAbilities().isEmpty();
+            if (c.isLand()) {
+                return wantLand ? 5000 : shortOfLands ? 3000 : 1000;
+            }
+            if (c.getCMC() <= nearTerm) {
+                return 4000 + (shortOfLands && makesMana ? 100 : 0) + Math.min(c.getCMC(), 99);
+            }
+            return 2000 - Math.min(c.getCMC(), 99);
+        }
     }
 
     // Sylvan Offering (Dead-card batch 3, row 6; Evan's 2026-10-13 ruling "cut neither", re-designed from
