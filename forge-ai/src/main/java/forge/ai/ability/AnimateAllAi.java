@@ -31,6 +31,12 @@ public class AnimateAllAi extends SpellAbilityAi {
             // before this branch.
             return SpecialCardAi.BiomassMutation.consider(aiPlayer, sa);
         }
+        if (SpecialCardAi.HourOfDevastation.handles(sa)) {
+            // Dead-card batch 4, row 7: the sweep is the DamageAll sub; the root is judged as that sweep
+            // with indestructible stripped. Every other AnimateAll card pays one API test and one name
+            // compare, and takes exactly the path it took before this branch.
+            return SpecialCardAi.HourOfDevastation.consider(aiPlayer, sa, false);
+        }
         String logic = sa.getParamOrDefault("AILogic", "");
 
         if ("Predators' Hour".equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
@@ -67,6 +73,11 @@ public class AnimateAllAi extends SpellAbilityAi {
     protected AiAbilityDecision doTriggerNoCost(Player aiPlayer, SpellAbility sa, boolean mandatory) {
         if (mandatory) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+        if (SpecialCardAi.HourOfDevastation.handles(sa)) {
+            // a free cast (Neera's reveal, Arcane Bombardment / Mnemonic Deluge copies, a thief's optional
+            // Play effect): judged on the board as it stands, cost-free. Mandatory calls keep the WillPlay.
+            return SpecialCardAi.HourOfDevastation.consider(aiPlayer, sa, true);
         }
         return canPlay(aiPlayer, sa);
     }

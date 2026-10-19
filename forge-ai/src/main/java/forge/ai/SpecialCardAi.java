@@ -24413,6 +24413,303 @@ public class SpecialCardAi {
         }
     }
 
+    // Hour of Devastation (dead-card batch 4, row 7; Neera - Wild Magic)
+    // "All creatures lose indestructible until end of turn. Hour of Devastation deals 5 damage to
+    // each creature and each non-Bolas planeswalker." ({3}{R}{R} Sorcery.) The script
+    // (h/hour_of_devastation.txt) matches the printed text clause for clause, with no AI hint and no
+    // AILogic: its root SP$ AnimateAll (ValidCards$ Creature, RemoveKeywords$ Indestructible)
+    // carries the sweep as its DamageAll sub (ValidCards$ Creature,Planeswalker.nonBolas, NumDmg$
+    // 5). AnimateAllAi.canPlay knows no name and no AILogic for it, so every consult of the root
+    // fell through to its closing CantPlayAi, RNG-free and before any cost check, and the free casts
+    // (Neera's reveal, Arcane Bombardment's copies, a thief's optional Play effect) ended at the same
+    // line through doTriggerNoCost's canPlay: the owner never cast it. Only a mandatory Play
+    // (Jeleva's) cast it, through doTriggerNoCost's WillPlay, which stays.
+    // Not taken: AILogic$ PlayForSub (Exterminatus' idiom) hands the decision to
+    // DamageAllAi.chkDrawback, which approves every board where we lose nothing, the empty board
+    // included, and is not read on the free path (doTriggerNoCostWithSubs reads only Always);
+    // AILogic$ Always has no floor; a script reorder (DamageAll first, rules-equivalent because the
+    // lethal-damage state-based actions run after the whole resolution) changes a correct script for
+    // the AI's sake and leaves the stock DamageAllAi blind to indestructible creatures and
+    // planeswalkers, reading the weakest opponent only, with a floorless free path.
+    // consider judges the sweep as it resolves, indestructible stripped: AnimateAllEffect strips it
+    // from every battlefield creature with a fresh timestamp, so it beats a static grant, and a
+    // planeswalker at 0 loyalty dies regardless. A victim is a card of the DamageAll sub's ValidCards
+    // on a battlefield that predictDamageTo(NumDmg) kills by getDamageToKill (lethal damage, or
+    // loyalty), unless a shield counter or a regeneration shield saves it. Its value is
+    // evaluateCreature (a planeswalker: 50 + 30 x mana value + 10 x loyalty, Act of Authority's pick
+    // value), plus COMMANDER_TAX for a commander and PILE_CARD per extra card of a mutated pile; 0 for
+    // SacMe and for a body that returns (hasActiveUndyingOrPersist). Cast only when, in order:
+    //  1. a paid cast: the base restriction check (AnimateAllAi.canPlay skips it; MassDiminish's
+    //     mirror), an empty stack (DamageAllAi's own wait), and G2 (HonestMana, held sources skipped)
+    //     covering the engine's adjusted cost (test-mode calculateManaCost: taxes, Goblin
+    //     Electromancer) in total and in red (B3-5);
+    //  2. no other Hour of Devastation on the stack: a copy probe of a stacked one, or a second
+    //     Mnemonic Deluge copy, would sweep a board the first one clears (HarshMercy's shape);
+    //  3. it kills something of theirs, and their kills alone reach the margin (before our side is
+    //     listed);
+    //  4. the wrath margin: the opponents' dying value beats ours by MARGIN / #opponents (the stock
+    //     DamageAllAi minGain and DestroyAllAi's CREATURE_EVAL_THRESHOLD, as Toxic Deluge, Black
+    //     Sun's Zenith and Firespout use it);
+    //  5. never a card down: a token is half a card, and the card itself counts on a paid cast but
+    //     not on a free one (Toxic Deluge's count, a private copy);
+    //  6. the kills are worth a card: two or more worth MULTI_KILL_VALUE, one worth
+    //     SINGLE_KILL_VALUE, or an opposing commander (Fire Covenant's floors);
+    //  7. lazily, once 3-6 pass: the opposing death-trigger drain of everything that dies, returners
+    //     included (Firespout's deathDrain, private copies: parsed, never built), leaves life at or
+    //     above max(4, AI_IN_DANGER_MAX_THRESHOLD). Hour pays no life, so a zero drain never
+    //     declines.
+    // A free cast (doTriggerNoCost, not mandatory) skips 1 and the card term of 5 and is judged on
+    // the board as it stands; a mandatory Play keeps AnimateAllAi's WillPlay. DamageAllAi.chkDrawback
+    // passes the sub through (isJudgedSub, part 7B): consider judged the spell whole, while the
+    // stock sub lists drop indestructible creatures and read the weakest opponent only, so they
+    // would veto the boards the strip exists for.
+    // RNG: a removed decline. A drew nothing for the card, and every decline here draws nothing: the
+    // zone, stack and restriction reads, getValidCards, predictDamageTo, getDamageToKill,
+    // evaluateCreature, trigger params (parsed, never built: no SpellAbility id, B3x-3), the
+    // test-mode calculateManaCost, and HonestMana, whose only write is setActivatingPlayer on our own
+    // mana abilities. So B equals A up to its first approval, which goes on to canPayCost's test
+    // payment (it draws) in a window G2 calls payable. Nothing is held, remembered or targeted; no X.
+    // Reach: the host's paper name and the root shape, for whichever AI controls the cast: deck
+    // 507's own hand cast, Neera's reveal and Arcane Bombardment's copies; a thief's optional Play
+    // or MayPlay cast (Mind Seize, Grand Larceny, Planar Portal, sen-triplets, the Nathan Drake
+    // family), judged from the thief's own seat. The direct canPlaySa scanners (B3-2) see this
+    // answer. Mizzix's Mastery never offers it (MizzixsMastery.partsSafe refuses an *All API).
+    // Residuals (named follow-ups, not modelled): survivors' lethal on our next turn after our
+    // blockers die; the opponents' death value (Thragtusk, Wurmcoil); a lord of ours dying under a
+    // 6+ toughness creature it props up; a free copy over our own stacked sweeper (a waste, never a
+    // loss); the single-kill tempo of a Main-1 Hour ahead of a Main-2 Neera; HonestMana under-counting
+    // a thief's any-colour mana (a decline, never an over-cast); a thief seat's prevention read
+    // against the host's controller; a paid Play-effect cast judged with the free card term.
+    // Spectacular Pileup has the same shape (not in the store) and is not touched.
+    public static class HourOfDevastation {
+        public static final String NAME = "Hour of Devastation";
+        private static final int MARGIN = 200;            // DamageAllAi minGain; DestroyAllAi CREATURE_EVAL_THRESHOLD, per opponent
+        private static final int MULTI_KILL_VALUE = 320;  // Fire Covenant: two or more kills worth this...
+        private static final int SINGLE_KILL_VALUE = 220; // ...or one kill worth this, or an opposing commander
+        private static final int COMMANDER_TAX = 100;     // the recast tax (Toxic Deluge, Black Sun's Zenith)
+        private static final int PILE_CARD = 100;         // each extra card of a mutated pile dies too
+        private static final int UNKNOWN_DRAIN = 3;       // a death drain whose amount is not a number
+
+        // the root AnimateAll of the card (a copy included); the host's card name, as HarshMercy and
+        // Black Sun's Zenith key their spells (B3-3's getOriginalHost concern is for granted abilities)
+        public static boolean handles(final SpellAbility sa) {
+            final Card host = sa == null ? null : sa.getHostCard();
+            return host != null && sa.getApi() == ApiType.AnimateAll && sa.getParent() == null
+                    && NAME.equals(host.getName());
+        }
+
+        // part 7B: DamageAllAi.chkDrawback's pass-through for the sweep a handled root judged
+        public static boolean isJudgedSub(final SpellAbility sa) {
+            return sa.getParent() != null && sa.getApi() == ApiType.DamageAll && handles(sa.getRootAbility());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean free) {
+            final SpellAbility root = sa.getRootAbility();
+            final Card host = root.getHostCard();
+            final Game game = ai.getGame();
+            if (host == null || ai.getOpponents().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (!free) {
+                // the base canPlay's restriction check, which AnimateAllAi.canPlay skips (MassDiminish's mirror)
+                if (root.getRestrictions() != null && !root.getRestrictions().canPlay(host, root)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+                }
+                if (!game.getStack().isEmpty()) {
+                    return new AiAbilityDecision(0, AiPlayDecision.StackNotEmpty); // DamageAllAi's own wait
+                }
+                // B3-5: the engine-adjusted cost (tax, Goblin Electromancer) against G2, in total and in red
+                final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+                final HonestMana hm = HonestMana.of(ai, root, true);
+                if (hm.total() < cost.getConvertedManaCost()
+                        || hm.colour(MagicColor.RED) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+            }
+            if (otherOnStack(ai, root)) {
+                // a copy probe of a stacked Hour, a second Deluge copy: the first sweep clears this board
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            SpellAbility sweep = root;
+            while (sweep != null && sweep.getApi() != ApiType.DamageAll) {
+                sweep = sweep.getSubAbility();
+            }
+            if (sweep == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final String numDmg = sweep.getParam("NumDmg");
+            final int dmg = numDmg == null ? 0 : AbilityUtils.calculateAmount(host, numDmg, sweep);
+            if (dmg <= 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final String valid = sweep.getParamOrDefault("ValidCards", "");
+            final int margin = MARGIN / ai.getOpponents().size();
+            final CardCollection dying = new CardCollection(); // every victim, returners included (the drain)
+            int oppV = 0, oppC2 = 0, oppKills = 0;
+            boolean commanderKill = false;
+            for (final Card c : CardLists.getValidCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), valid, ai, host, sweep)) {
+                if (!dies(c, dmg, host)) {
+                    continue;
+                }
+                dying.add(c);
+                if (ComputerUtilCard.hasActiveUndyingOrPersist(c)) {
+                    continue; // returns: no value, no card
+                }
+                oppV += value(c);
+                oppC2 += cardsX2(c);
+                oppKills++;
+                commanderKill |= c.isCommander();
+            }
+            if (oppKills == 0 || oppV < margin) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // before our side is listed
+            }
+            int myV = 0, myC2 = 0;
+            for (final Card c : CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), valid, ai, host, sweep)) {
+                if (!dies(c, dmg, host)) {
+                    continue;
+                }
+                dying.add(c);
+                if (ComputerUtilCard.hasActiveUndyingOrPersist(c)) {
+                    continue;
+                }
+                myV += value(c);
+                myC2 += cardsX2(c);
+            }
+            if (oppV - myV < margin                                   // (a) the wrath margin
+                    || oppC2 < myC2 + (free ? 0 : 2)                  // (b) never a card down (this card, when paid)
+                    || !((oppKills >= 2 && oppV >= MULTI_KILL_VALUE)  // (c) the kills are worth a card
+                        || (oppKills == 1 && oppV >= SINGLE_KILL_VALUE) || commanderKill)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            int drain = 0;                                            // (d) lazily, once (a)-(c) pass
+            for (final Card d : dying) {
+                drain += deathDrain(ai, d);
+            }
+            final int safety = Math.max(4, AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD));
+            if (drain > 0 && ai.getLife() - drain < safety) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // a victim of the sweep as it resolves: indestructible ignored (the root strips it from every
+        // creature; a planeswalker at 0 loyalty dies regardless), a shield counter or a regeneration shield
+        // saving it; lethal damage or loyalty by getDamageToKill, prevention by predictDamageTo
+        private static boolean dies(final Card c, final int dmg, final Card host) {
+            if (c.getCounters(CounterEnumType.SHIELD) > 0) {
+                return false;
+            }
+            if (c.isCreature() && !c.isPlaneswalker() && c.getShieldCount() > 0 && c.canBeShielded()) {
+                return false;
+            }
+            return ComputerUtilCombat.predictDamageTo(c, dmg, host, false) >= ComputerUtilCombat.getDamageToKill(c, false);
+        }
+
+        // evaluateCreature, or Act of Authority's pick value for a planeswalker; + the commander tax and the
+        // pile; 0 for SacMe (the stock predicate)
+        private static int value(final Card c) {
+            if (c.hasSVar("SacMe")) {
+                return 0;
+            }
+            final int base = c.isCreature() ? ComputerUtilCard.evaluateCreature(c)
+                    : 50 + 30 * c.getCMC() + 10 * c.getCurrentLoyalty();
+            return base + (c.isCommander() ? COMMANDER_TAX : 0)
+                    + (c.hasMergedCard() ? PILE_CARD * Math.max(0, c.getMergedCards().size() - 1) : 0);
+        }
+
+        private static int cardsX2(final Card c) { // Toxic Deluge's, a private copy: a token is half a card
+            if (c.isToken()) {
+                return 1;
+            }
+            return 2 * (c.hasMergedCard() ? Math.max(1, c.getMergedCards().size()) : 1);
+        }
+
+        private static boolean otherOnStack(final Player ai, final SpellAbility root) { // HarshMercy's shape
+            for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+                final SpellAbility other = si.getSpellAbility();
+                if (other != root && other.getHostCard() != null && NAME.equals(other.getHostCard().getName())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Firespout's deathDrain, chainDrain, partDrain and amount, private copies (accepted rows' helpers are
+        // private; never shared, never edited: B3-4): parsed, never calculateAmount, never building a trigger
+        private static int deathDrain(final Player ai, final Card d) {
+            int drain = 0;
+            for (final Card host : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : host.getTriggers()) {
+                    final String valid;
+                    if (t.getMode() == TriggerType.ChangesZone) {
+                        valid = "ValidCard";
+                    } else if (t.getMode() == TriggerType.ChangesZoneAll) {
+                        valid = "ValidCards";
+                    } else {
+                        continue;
+                    }
+                    final String origin = t.getParamOrDefault("Origin", "Any");
+                    final String destination = t.getParamOrDefault("Destination", "Any");
+                    if (!("Any".equals(origin) || origin.contains("Battlefield"))
+                            || !("Any".equals(destination) || destination.contains("Graveyard"))
+                            || !t.matchesValidParam(valid, d)) {
+                        continue;
+                    }
+                    drain += chainDrain(t);
+                }
+            }
+            return drain;
+        }
+
+        private static int chainDrain(final Trigger t) {
+            int drain = 0;
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                for (SpellAbility part = built; part != null; part = part.getSubAbility()) {
+                    final ApiType api = part.getApi();
+                    drain += partDrain(api == null ? null : api.name(), part.getParam("LifeAmount"), part.getParam("NumDmg"));
+                }
+                return drain;
+            }
+            final Set<String> seen = new HashSet<>();
+            String svar = t.hasParam("Execute") ? t.getParam("Execute") : null;
+            while (svar != null && seen.add(svar)) {
+                final String text = t.getSVar(svar);
+                if (text.isEmpty()) {
+                    break;
+                }
+                final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                String api = params.get("DB");
+                if (api == null) {
+                    api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+                }
+                drain += partDrain(api, params.get("LifeAmount"), params.get("NumDmg"));
+                svar = params.get("SubAbility");
+            }
+            return drain;
+        }
+
+        private static int partDrain(final String api, final String lifeAmount, final String numDmg) {
+            if (ApiType.LoseLife.name().equals(api)) {
+                return amount(lifeAmount);
+            }
+            if (ApiType.DealDamage.name().equals(api) || ApiType.DamageAll.name().equals(api)) {
+                return amount(numDmg);
+            }
+            if (ApiType.Sacrifice.name().equals(api) || ApiType.SacrificeAll.name().equals(api)) {
+                return 1;
+            }
+            return 0;
+        }
+
+        private static int amount(final String s) {
+            if (s == null || !s.trim().matches("\\d{1,6}")) {
+                return UNKNOWN_DRAIN;
+            }
+            return Integer.parseInt(s.trim());
+        }
+    }
+
     // Hour of Eternity
     // "Exile X target creature cards from your graveyard. For each card exiled this way, create
     // a token that's a copy of that card, except it's a 4/4 black Zombie." ({X}{X}{U}{U}{U}
