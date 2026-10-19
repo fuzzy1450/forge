@@ -13643,6 +13643,8 @@ public class SpecialCardAi {
                 // case <Row>.NAME: return <Row>.consider(ai, sa);
                 case RedirectLightning.NAME: // batch 4's row 11
                     return RedirectLightning.consider(ai, sa);
+                case Misdirection.NAME:      // batch 4's row 40
+                    return Misdirection.consider(ai, sa);
                 default:
                     return null;
             }
@@ -13657,6 +13659,8 @@ public class SpecialCardAi {
                 // one name per row of the family, added by that row's own commit:
                 // case <Row>.NAME: return true;
                 case RedirectLightning.NAME: // batch 4's row 11
+                    return true;
+                case Misdirection.NAME:      // batch 4's row 40
                     return true;
                 default:
                     return false;
@@ -35458,6 +35462,215 @@ public class SpecialCardAi {
         }
     }
 
+    // Misdirection (dead-card batch 4, row 40; a case of G3's RemoveDeckFilter and of G7's SwatFamily)
+    // "You may exile a blue card from your hand rather than pay this spell's mana cost. / Change the
+    // target of target spell with a single target." {3}{U}{U} Instant, AI:RemoveDeck:All, one carrier
+    // (Yuriko Midrange 8718e1d2, deck 513, a site upload, not an anchor). Three gates kept every cast out
+    // (0 owner casts in 485 held rows over 20 distinct held libraries on 2.0.15+499e03087c5): G3's filter
+    // dropped the hinted spell (no readmit case), ChangeTargetsAi.checkApiLogic answered CantPlayAi, and
+    // PlayerControllerAi.chooseNewTargetsFor was a stub outside Deflecting Swat, so a cast moved nothing.
+    // The window and floor are Deflecting Swat's (batch 1, row 27), called unchanged: an opponent's spell
+    // on top whose single target is ours or us, harmed by its part (Swat's list), predicted removed,
+    // worth a card, with a legal new target an opponent controls or is. TargetType$ Spell.singleTarget is
+    // Swat's own canTargetSpellAbility check, so abilities and multi-target spells never open it. Never a
+    // save the AI itself marks as better in the graveyard (SacMe, DiscardMe: the carrier's Wonder).
+    // Two variants, in getOriginalAndAltCostAbilities' order, each priced RNG-free before canPayCost (B3-5):
+    // - the mana spell: no live mana reservation (RemoveDeckFilter.noManaHeld) and G1
+    //   (CommanderCastCeiling.affordable) on the engine's adjusted {3}{U}{U};
+    // - the pitch copy: G1 (a tax raises it), and the card the payment will exile, exactly
+    //   ComputerUtil.chooseExileFrom's pick (Taigam's idiom: no payment hook), must be pitchable (never a
+    //   commander or a planeswalker, a creature card only when dead, a land-backed modal card only with a
+    //   land card in hand) and is priced: a dead pick asks no more than Swat's floor; any other only for a
+    //   premium save (our commander, a planeswalker, our life, a creature at evaluateCreature 200, a
+    //   nonland noncreature permanent of mana value 4 or more).
+    // readmit is the owner's own hand cast in a window consider approves, so the pitch copy that
+    // getOriginalAndAltCostAbilities rebuilds (a fresh SpellAbility id, B3x-3) exists only where B casts.
+    // Routes: G3's RemoveDeckFilter.readmit case (the filter sees the base spell only); G7's
+    // SwatFamily.consider case (both variants; null for an ability handles refuses, so a copy, a theft
+    // and a copyWithNoManaCost probe keep the stock path below G7's route); G7's SwatFamily.retargets
+    // name, so a resolving Misdirection this player activated moves the part through
+    // DeflectingSwat.chooseNewTargets, unchanged. Draws nothing, holds nothing, allocates no SpellAbility
+    // id; inert for every other card. Couplings (B3-4): a revert of DeflectingSwat or of G1 reverts this
+    // row, and its G3 case and its G7 case and name go with it.
+    public static class Misdirection {
+        public static final String NAME = "Misdirection";
+        static final int PREMIUM_VALUE = 200;          // Tower Defense / Flare of Fortitude's premium save
+        static final int PREMIUM_PERMANENT_CMC = 4;
+
+        // the root spell from its owner's hand, in one of its two printed cost shapes (B3-13: misdirection.txt)
+        public static boolean handles(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return sa.isSpell() && !(sa instanceof AbilitySub) && host != null && host.getRules() != null
+                    && NAME.equals(host.getRules().getName()) && ownHandCast(ai, sa)
+                    && (manaSpell(sa) || pitchCost(sa.getPayCosts()) != null);
+        }
+
+        // RemoveDeckFilter.readmit's case (the filter sees the base spell only). RNG-free; holds nothing:
+        // the target consider sets in the window test is cleared again, A's untouched SA.
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!handles(ai, sa) || !manaSpell(sa)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty()) {
+                return false;                                   // O(1) refusals first
+            }
+            final SpellAbility top = game.getStack().peekAbility();
+            if (top == null || !top.isSpell() || top.getActivatingPlayer() == null
+                    || !top.getActivatingPlayer().isOpponentOf(ai)) {
+                return false;
+            }
+            final boolean open = window(ai, sa);
+            final SpellAbility targeted = sa.getTargets().getFirstTargetedSpell();
+            sa.resetTargets();
+            if (!open) {
+                return false;
+            }
+            if (manaPriced(ai, sa)) {
+                return true;
+            }
+            final CostExile pitch = scriptPitch(sa.getHostCard());
+            return pitch != null && pitchPays(ai, sa, pitch, targeted);
+        }
+
+        // G7 SwatFamily.consider's case (ChangeTargetsAi.checkApiLogic's route): null for an ability this
+        // class does not handle, the stock path below G7's route. Every decline before WillPlay draws nothing.
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (!handles(ai, sa)) {
+                return null;
+            }
+            if (!window(ai, sa)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final SpellAbility top = sa.getTargets().getFirstTargetedSpell();
+            final CostExile pitch = pitchCost(sa.getPayCosts());
+            final boolean priced = pitch == null ? manaPriced(ai, sa)
+                    : CommanderCastCeiling.affordable(ai, sa) && pitchPays(ai, sa, pitch, top);
+            if (!priced) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, pitch == null ? AiPlayDecision.CantAfford
+                        : AiPlayDecision.CostNotAcceptable);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // Swat's window (it targets the top spell on approval), minus graveyard-hinted saves.
+        private static boolean window(final Player ai, final SpellAbility sa) {
+            if (!DeflectingSwat.consider(ai, sa).willingToPlay()) {
+                return false;
+            }
+            return !graveyardHinted(savedObject(sa.getTargets().getFirstTargetedSpell()));
+        }
+
+        private static boolean manaPriced(final Player ai, final SpellAbility sa) {
+            return RemoveDeckFilter.noManaHeld(ai, false) && CommanderCastCeiling.affordable(ai, sa);
+        }
+
+        // the payment's own pick (ComputerUtil.chooseExileFrom, Taigam's idiom), pitchable and priced
+        private static boolean pitchPays(final Player ai, final SpellAbility sa, final CostExile pitch,
+                                         final SpellAbility top) {
+            final CardCollection paid = ComputerUtil.chooseExileFrom(ai, pitch, sa.getHostCard(), 1, sa, false);
+            if (paid == null || paid.size() != 1 || !pitchable(ai, paid.get(0))) {
+                return false;
+            }
+            return dead(ai, paid.get(0)) || premium(savedObject(top));
+        }
+
+        // never our commander (Yuriko is often in hand) or a planeswalker (Kaito); a creature card only
+        // when dead (the ninjas are the deck's engine, Thassa's Oracle its win); a modal card with a land
+        // back only while a land card is in hand (else it is the next land drop: Sickening Shoal's rule)
+        private static boolean pitchable(final Player ai, final Card c) {
+            if (c.isCommander() || c.isPlaneswalker() || (c.isCreature() && !dead(ai, c))) {
+                return false;
+            }
+            return c.isLand() || !c.hasPlayableLandFace()
+                    || !CardLists.filter(ai.getCardsIn(ZoneType.Hand), CardPredicates.LANDS).isEmpty();
+        }
+
+        // worse than a random draw: Path of the Pyromancer's predicate, privately copied (B3-4), without
+        // DiscardMe (that card wants the graveyard; this cost exiles it)
+        private static boolean dead(final Player ai, final Card c) {
+            return !c.hasSVar("DiscardMe") && ComputerUtil.isWorseThanDraw(ai, c) && (c.isLand() || c.getCMC() > 1);
+        }
+
+        private static boolean premium(final GameObject o) {
+            if (o instanceof Player) {
+                return true; // Swat's floor admits us only against lethal damage or poison
+            }
+            if (!(o instanceof Card c)) {
+                return false;
+            }
+            if (c.isCommander() || c.isPlaneswalker()) {
+                return true;
+            }
+            return c.isCreature() ? ComputerUtilCard.evaluateCreature(c) >= PREMIUM_VALUE
+                    : !c.isLand() && c.getCMC() >= PREMIUM_PERMANENT_CMC;
+        }
+
+        private static boolean graveyardHinted(final GameObject o) {
+            return o instanceof Card c && (c.hasSVar("SacMe") || c.hasSVar("DiscardMe"));
+        }
+
+        // the single target of the targeted spell's chain (Spell.singleTarget: exactly one)
+        private static GameObject savedObject(final SpellAbility top) {
+            if (top == null) {
+                return null;
+            }
+            final SpellAbility root = top.isWrapper() ? ((WrappedAbility) top).getWrappedAbility() : top;
+            for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+                if (part.usesTargeting() && part.getTargets().size() == 1) {
+                    return part.getTargets().get(0);
+                }
+            }
+            return null;
+        }
+
+        private static boolean manaSpell(final SpellAbility sa) {
+            final Cost cost = sa.getPayCosts();
+            return cost != null && cost.isOnlyManaCost() && !cost.getTotalMana().isZero();
+        }
+
+        // the pitch copy's shape: nothing to pay in mana (copyWithNoMana's zero part allowed) and exactly
+        // one exile from hand, nothing else
+        private static CostExile pitchCost(final Cost cost) {
+            if (cost == null || !cost.getTotalMana().isZero()) {
+                return null;
+            }
+            CostExile pitch = null;
+            for (final CostPart part : cost.getCostParts()) {
+                if (part instanceof CostPartMana) {
+                    continue;
+                }
+                if (!(part instanceof CostExile ex) || pitch != null
+                        || ex.getFrom().size() != 1 || ex.getFrom().get(0) != ZoneType.Hand) {
+                    return null;
+                }
+                pitch = ex;
+            }
+            return pitch;
+        }
+
+        // the card's own AlternativeCost exile, read from its static (a Cost object, no SpellAbility made)
+        private static CostExile scriptPitch(final Card host) {
+            for (final StaticAbility st : host.getStaticAbilities()) {
+                if (st.checkMode(StaticAbilityMode.AlternativeCost) && st.hasParam("Cost")) {
+                    return pitchCost(new Cost(st.getParam("Cost"), false));
+                }
+            }
+            return null;
+        }
+
+        // Artillerize's ownHandCast, privately copied (B3-4): our own copy, from our own hand, paying its
+        // cost; copyWithNoManaCost probes (WithoutManaCost) and every other caster stay stock
+        private static boolean ownHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Player activator = sa.getActivatingPlayer();
+            return host != null && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner())
+                    && (activator == null || ai.equals(activator)) && !sa.hasParam("WithoutManaCost");
+        }
+    }
+
     // Misleading Signpost (dead-card batch 2, row 86)
     // "Flash / When this artifact enters during the declare attackers step, you may reselect
     // which player or permanent target attacking creature is attacking. / {T}: Add {U}."
@@ -42848,8 +43061,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53 and 19, keepOff for
-    // batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19 and 40, keepOff
+    // for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -42989,6 +43202,8 @@ public class SpecialCardAi {
                     return FreedFromTheReal.readmit(ai, sa);
                 case DizzySpell.NAME:                    // batch 4, row 19 (W4)
                     return DizzySpell.readmit(ai, sa);
+                case Misdirection.NAME:                  // batch 4, row 40 (W4)
+                    return Misdirection.readmit(ai, sa);
                 default:
                     return false;
             }
