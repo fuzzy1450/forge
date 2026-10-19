@@ -40266,6 +40266,321 @@ public class SpecialCardAi {
         }
     }
 
+    // Prismatic Strands (dead-card batch 4, row 16; precon:Mystic Intellect (C19), an anchor, whose
+    // commander is Sevinne, the Chronoclasm)
+    // "Prevent all damage that sources of the color of your choice would deal this turn.
+    // Flashback--Tap an untapped white creature you control." ({2}{W} instant.) Its owner never
+    // cast it, from hand or by flashback (0 owner casts in 1,230 held games on 2.0.15+499e03087c5,
+    // over 79 distinct libraries; the 3 casts were thieves' Play-effect casts), through two gates:
+    // - AI:RemoveDeck:All dropped both spell abilities in AiController.getSpellAbilityToPlay's
+    //   removeIf before any handler ran: no G3 case named it;
+    // - behind it there is no value logic at all: ChooseColorAi.checkApiLogic has no
+    //   MostProminentInHumanDeck branch (an unconditional WillPlay at the first priority with
+    //   {2}{W}), and ComputerUtilCard.chooseColor names the strongest opponent's most prominent
+    //   colour over that player's whole pool, not over the attack.
+    // The script keeps the hint (B3-1), so the -10 sort and every other isCardRemAIDeck reader
+    // (the copy, steal and tutor pickers) still refuse it. The G3 case (readmit) admits the
+    // owner's own cast, from hand or by flashback, only in the window, and
+    // ChooseColorAi.checkApiLogic routes the same key here (routes: the readmit's own key, B3-2):
+    // - window: an opponent's declare-blockers step after blocks, on an empty stack, the
+    //   attacking player our opponent, and something attacking us or a creature of ours
+    //   blocking (FogAi's and Riot Control's window);
+    // - cost, else CantAfford (B3-5): the engine's test-mode cost (taxes and reductions) against
+    //   G2's HonestMana with held sources skipped, in total and in white (0 for the flashback),
+    //   and the flashback's untapped white creature (checkTapTypeCost, whose chooseTapType pick is
+    //   deterministic);
+    // - the fog, else CantPlayAi: Riot Control's danger reading of the declared attack after
+    //   blocks (batch 3, row 26; its loop, poisonIfUnblocked and shield are private copies here,
+    //   B3-4), split by attacker colour: line i < NONE has every preventable attacker of colour
+    //   MagicColor.WUBRG[i] stopped, poison included, and NONE is the no-cast line. Poison starts
+    //   at our current counters on every line, as RiotControl's does. The attack after blocks
+    //   must be LETHAL (a live commander reaching 21, poison reaching the loss count, no life
+    //   left) or in DANGER (life below min(AI_IN_DANGER_MAX_THRESHOLD, life), poison over max(7,
+    //   current), an unblocked MustBeBlocked attacker whose preventable damage lands), and the
+    //   colour must leave it not LETHAL and, when it was only DANGER, not in DANGER: the cast must
+    //   change the outcome. cantLose, Worship with a creature and Elderscale Wurm at 7+ refuse,
+    //   as in lifeInDanger.
+    // The colour (chooseColor, asked by ComputerUtilCard.chooseColor for our own Strands and for
+    // any copy we control, Sevinne's) is read again at resolution from the same state, the spell
+    // on the stack: a fog colour first, then the most life left, the least poison, the most power
+    // of opposing creatures of that colour whose damage to us is still unprevented (so the second
+    // Strands of a pair, the original resolving after Sevinne's copy, names a colour the first
+    // left open instead of repeating it), the fewest of our own blockers of that colour (their
+    // damage would be prevented too), then WUBRG order. Outside an opponent's declare-blockers
+    // step it answers null and the stock pick stands. No blocker-save floor: a fog for our
+    // blockers alone is a follow-up row, as is pricing a Sevinne pair as two colours.
+    // RNG: A never evaluated the card (the filter removed it), so every decline here draws
+    // nothing: the window tests, calculateManaCost in test mode, HonestMana, checkTapTypeCost,
+    // damageIfUnblocked(..., true) (withoutAbilities: predictPowerBonusOfAttacker returns before
+    // its canPayCost scan), predictDamageTo, predictExtraPoisonWithDamage, the private poisonIfUnblocked
+    // (withoutAbilities) and shield, and staticDamagePrevention; never lifeInDanger, never
+    // getBestAI. Draws come only after an approval, in canPayCost. Nothing is held, remembered
+    // or targeted; the only write is G2's setActivatingPlayer on the mana abilities it reads.
+    public static class PrismaticStrands {
+        public static final String NAME = "Prismatic Strands";
+        private static final int NONE = 5;   // the no-cast line; 0-4 index MagicColor.WUBRG
+
+        // the owner's own cast of the card, from hand or by flashback; never a copy or a Play-effect cast
+        static boolean ownCast(final Player ai, final SpellAbility sa) {
+            if (sa == null || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())) {
+                return false; // the paper name, RemoveDeckFilter.paperName's reading
+            }
+            return ai.equals(host.getOwner())
+                    && (host.isInZone(ZoneType.Hand) || host.isInZone(ZoneType.Graveyard));
+        }
+
+        // an opponent's declare-blockers step after blocks, an empty stack, an attack on us or a
+        // blocker of ours (FogAi's and Riot Control's window); O(1) outside it
+        static boolean window(final Player ai) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            if (combat == null || ph.isPlayerTurn(ai) || !ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                    || !game.getStack().isEmpty()) {
+                return false;
+            }
+            final Player attacker = combat.getAttackingPlayer();
+            if (attacker == null || !attacker.isOpponentOf(ai)) {
+                return false;
+            }
+            if (!combat.getAttackersOf(ai).isEmpty()) {
+                return true;
+            }
+            for (final Card b : combat.getAllBlockers()) {
+                if (ai.equals(b.getController())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // RemoveDeckFilter.readmit's case: draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return ownCast(ai, sa) && window(ai);
+        }
+
+        // ChooseColorAi.checkApiLogic's route: the readmit's own key (B3-2)
+        public static boolean routes(final Player ai, final SpellAbility sa) {
+            return readmit(ai, sa);
+        }
+
+        // ComputerUtilCard.chooseColor's hook: our own Strands at resolution (the owner's cast, or a
+        // copy we control: Sevinne's), never a Play-effect cast (thieves keep the stock pick)
+        public static boolean choosesFor(final Player ai, final SpellAbility sa) {
+            if (sa == null || sa.isCastFromPlayEffect()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && ai.equals(sa.getActivatingPlayer()) && (sa.isCopied() || ai.equals(host.getOwner()));
+        }
+
+        // reached only through routes, so inside the window
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // 1. the cost from real resources (B3-5): the engine's test-mode cost against G2, held
+            //    sources skipped, in total and in white, and the flashback's untapped white creature
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.WHITE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)
+                    || !ComputerUtilCost.checkTapTypeCost(ai, sa.getPayCosts(), sa.getHostCard(), sa,
+                            new CardCollection())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // 2. a colour whose fog changes the outcome of the declared attack
+            return bestColour(ai, ai.getGame().getCombat(), MagicColor.Constant.ONLY_COLORS, true) == null
+                    ? new AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                    : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // At resolution the spell is still on the stack: no empty-stack test, the same reads. Outside
+        // an opponent's declare-blockers step (a forced or odd state) null keeps the stock pick.
+        public static String chooseColor(final Player ai, final SpellAbility sa, final List<String> choices) {
+            final Game game = ai.getGame();
+            final Combat combat = game.getCombat();
+            if (combat == null || game.getPhaseHandler().isPlayerTurn(ai)
+                    || !game.getPhaseHandler().is(PhaseType.COMBAT_DECLARE_BLOCKERS)) {
+                return null;
+            }
+            return bestColour(ai, combat, choices, false);
+        }
+
+        // floor = true (consider): only a colour whose fog changes the outcome, else null. floor = false
+        // (the chooser): the same ranking over every colour offered, null only when none is offered.
+        private static String bestColour(final Player ai, final Combat combat, final List<String> choices,
+                final boolean floor) {
+            // RiotControl.consider's per-attacker reading, split by colour
+            final Game game = ai.getGame();
+            final int[] life = new int[NONE + 1];
+            final int[] poison = new int[NONE + 1];
+            Arrays.fill(poison, ai.getPoisonCounters()); // RiotControl's baseline: int poison = ai.getPoisonCounters()
+            final boolean[] liveCommander = new boolean[NONE + 1];
+            final boolean[] mustBeBlocked = new boolean[NONE + 1];
+            final boolean lifeCounts = ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife();
+            final boolean poisonable = ai.canReceiveCounters(CounterEnumType.POISON);
+            for (final Card c : combat.getAttackersOf(ai)) {
+                final CardCollection blockers = combat.getBlockers(c);
+                int dealt = 0;
+                int poisoned = 0;
+                if (blockers.isEmpty() || forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked
+                        .assignCombatDamageAsUnblocked(c)) {
+                    dealt = ComputerUtilCombat.damageIfUnblocked(c, ai, combat, true); // 0 behind a shield up
+                    if (poisonable) {
+                        poisoned = poisonIfUnblocked(c, ai);
+                    }
+                } else if (c.hasKeyword(Keyword.TRAMPLE)) {
+                    final int over = Math.max(0, ComputerUtilCombat.getAttack(c) - shield(blockers));
+                    dealt = over > 0 ? ComputerUtilCombat.predictDamageTo(ai, over, c, true) : 0;
+                    if (dealt > 0 && poisonable) {
+                        poisoned = (c.isInfectDamage(ai) ? dealt : 0)
+                                + ComputerUtilCombat.predictExtraPoisonWithDamage(c, ai, dealt);
+                    }
+                }
+                final int lifeDealt = (dealt > 0 && !c.hasKeyword(Keyword.INFECT)) ? dealt : 0;
+                final boolean cmdrLethal = c.isCommander() && dealt > 0 && dealt + ai.getCommanderDamage(c) >= 21;
+                // lifeInDanger's three MustBeBlocked readings, only for damage that lands now and that a
+                // prevention can stop
+                boolean mbb = false;
+                if (blockers.isEmpty() && !c.getSVar("MustBeBlocked").isEmpty()
+                        && (dealt > 0 || poisoned > 0) && c.canDamagePrevented(true)) {
+                    final String v = c.getSVar("MustBeBlocked");
+                    final boolean atPlayer = combat.getDefenderByAttacker(c) instanceof Player;
+                    if ("true".equalsIgnoreCase(v) || ("attackingplayer".equalsIgnoreCase(v) && atPlayer)
+                            || ("attackingplayerconservative".equalsIgnoreCase(v) && atPlayer
+                                && ai.getCreaturesInPlay().size() >= 3
+                                && ai.getCreaturesInPlay().size() > c.getController().getCreaturesInPlay().size())) {
+                        mbb = true;
+                    }
+                }
+                final boolean preventable = c.canDamagePrevented(true);
+                for (int i = 0; i <= NONE; i++) {
+                    if (i < NONE && preventable && c.getColor().hasAnyColor(MagicColor.WUBRG[i])) {
+                        continue; // this colour's Strands stops all of it, poison included
+                    }
+                    life[i] += lifeDealt;
+                    poison[i] += poisoned;
+                    liveCommander[i] |= cmdrLethal;
+                    mustBeBlocked[i] |= mbb;
+                }
+            }
+            final int toLose = game.getRules().getPoisonCountersToLose();
+            final int threshold = Math.min(AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD),
+                    ai.getLife());
+            final boolean[] lethal = new boolean[NONE + 1];
+            final boolean[] danger = new boolean[NONE + 1];
+            for (int i = 0; i <= NONE; i++) {
+                lethal[i] = liveCommander[i] || poison[i] >= toLose || (lifeCounts && ai.getLife() - life[i] < 1);
+                danger[i] = lethal[i] || mustBeBlocked[i] || poison[i] > Math.max(7, ai.getPoisonCounters())
+                        || (lifeCounts && ai.getLife() - life[i] < threshold);
+            }
+            // lifeInDanger's own special cases (Riot Control's): Worship with a creature, Elderscale Wurm at 7+
+            final CardCollectionView otb = ai.getCardsIn(ZoneType.Battlefield);
+            final boolean fogBlocked = ai.cantLose()
+                    || (otb.anyMatch(CardPredicates.nameEquals("Worship")) && !ai.getCreaturesInPlay().isEmpty())
+                    || (otb.anyMatch(CardPredicates.nameEquals("Elderscale Wurm")) && ai.getLife() >= 7);
+            // tie-breaks: the power of opposing creatures of colour i whose damage to us is still
+            // unprevented (a read-only forecast; a Strands effect already up reads as prevention), and
+            // our own blockers of colour i, whose damage colour i's Strands would prevent too
+            final int[] threat = new int[NONE];
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCreaturesInPlay()) {
+                    final int power = c.getNetPower();
+                    if (power <= 0 || ai.staticDamagePrevention(power, 0, c, false) <= 0) {
+                        continue;
+                    }
+                    for (int i = 0; i < NONE; i++) {
+                        if (c.getColor().hasAnyColor(MagicColor.WUBRG[i])) {
+                            threat[i] += power;
+                        }
+                    }
+                }
+            }
+            final int[] ownSilenced = new int[NONE];
+            for (final Card b : combat.getAllBlockers()) {
+                if (!ai.equals(b.getController())) {
+                    continue;
+                }
+                for (int i = 0; i < NONE; i++) {
+                    if (b.getColor().hasAnyColor(MagicColor.WUBRG[i])) {
+                        ownSilenced[i]++;
+                    }
+                }
+            }
+            // rank: a fog colour first; then the most life left, the least poison, the most unprevented
+            // opposing power, the fewest own blockers silenced; then WUBRG order (deterministic: no getBestAI)
+            int best = -1;
+            boolean bestFog = false;
+            for (int i = 0; i < NONE; i++) {
+                if (!choices.contains(MagicColor.toLongString(MagicColor.WUBRG[i]))) {
+                    continue;
+                }
+                final boolean fog = !fogBlocked && danger[NONE] && !lethal[i] && (lethal[NONE] || !danger[i]);
+                if (floor && !fog) {
+                    continue;
+                }
+                if (best < 0 || ranksAbove(fog, bestFog, life[i], life[best], poison[i], poison[best],
+                        threat[i], threat[best], ownSilenced[i], ownSilenced[best])) {
+                    best = i;
+                    bestFog = fog;
+                }
+            }
+            return best < 0 ? null : MagicColor.toLongString(MagicColor.WUBRG[best]);
+        }
+
+        // strictly ahead in the ranking (a full tie keeps the earlier colour in WUBRG order)
+        private static boolean ranksAbove(final boolean fog, final boolean bestFog, final int dmg, final int bestDmg,
+                final int poison, final int bestPoison, final int threat, final int bestThreat,
+                final int silenced, final int bestSilenced) {
+            if (fog != bestFog) {
+                return fog;
+            }
+            if (dmg != bestDmg) {
+                return dmg < bestDmg;          // the most life left
+            }
+            if (poison != bestPoison) {
+                return poison < bestPoison;
+            }
+            if (threat != bestThreat) {
+                return threat > bestThreat;
+            }
+            return silenced < bestSilenced;
+        }
+
+        // RiotControl.poisonIfUnblocked (IllusionistsGambit's), a private copy (accepted helpers stay
+        // private): ComputerUtilCombat.poisonIfUnblocked with the attacker's activated pumps left out.
+        private static int poisonIfUnblocked(final Card attacker, final Player ai) {
+            final int damage = attacker.getNetCombatDamage()
+                    + ComputerUtilCombat.predictPowerBonusOfAttacker(attacker, null, null, true);
+            int poison = 0;
+            if (attacker.isInfectDamage(ai)) {
+                final int pd = ComputerUtilCombat.predictDamageTo(ai, damage, attacker, true);
+                if (pd > 1 || !attacker.getController().getOpponents().getCardsIn(ZoneType.Battlefield)
+                        .anyMatch(CardPredicates.nameEquals("Vorinclex, Monstrous Raider"))) {
+                    poison = attacker.hasDoubleStrike() ? pd * 2 : pd;
+                }
+            }
+            if (damage > 0) {
+                poison += ComputerUtilCombat.predictExtraPoisonWithDamage(attacker, ai, damage);
+            }
+            return poison;
+        }
+
+        // RiotControl.shield (IllusionistsGambit's), a private copy: ComputerUtilCombat.totalShieldDamage
+        // without its destroy-before-damage predictor and without flanking, so trample damage reaching
+        // us is understated.
+        private static int shield(final List<Card> blockers) {
+            int total = 0;
+            for (final Card b : blockers) {
+                total += b.getLethalDamage() + b.getKeywordMagnitude(Keyword.BUSHIDO);
+            }
+            return total;
+        }
+    }
+
     // Prisoner's Dilemma
     // "Each opponent secretly chooses silence or snitch..." - Forge's chooser
     // (ChooseGenericAi.chooseSingleSpellAbility, no AILogic) always answers
@@ -41698,7 +42013,7 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65 and 15, keepOff for batch 2's row
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15 and 16, keepOff for batch 2's row
     // 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -41825,6 +42140,8 @@ public class SpecialCardAi {
                     return ScrollRack.readmit(ai, sa);
                 case CallTheCoppercoats.NAME:            // batch 4, row 15 (W3)
                     return CallTheCoppercoats.readmit(ai, sa);
+                case PrismaticStrands.NAME:              // batch 4, row 16 (W3)
+                    return PrismaticStrands.readmit(ai, sa);
                 default:
                     return false;
             }

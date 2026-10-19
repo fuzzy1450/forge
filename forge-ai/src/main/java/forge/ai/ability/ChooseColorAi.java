@@ -29,6 +29,15 @@ public class ChooseColorAi extends SpellAbilityAi {
             return SpecialCardAi.BraveTheElements.consider(ai, sa);
         }
 
+        // Prismatic Strands (dead-card batch 4, row 16): the owner's own cast from hand or by
+        // flashback, inside the window G3's readmit opens (the readmit's own key, rule B3-2), is
+        // judged whole in SpecialCardAi.PrismaticStrands (a per-colour fog floor). Every other
+        // consult -- Play-effect casts (Etali, Nathan Drake), copies, thieves, and the direct
+        // canPlaySa scanners outside the window -- keeps the stock path below, which draws nothing.
+        if (SpecialCardAi.PrismaticStrands.routes(ai, sa)) {
+            return SpecialCardAi.PrismaticStrands.consider(ai, sa);
+        }
+
         if (!sa.hasParam("AILogic")) {
             return new AiAbilityDecision(0, AiPlayDecision.MissingLogic);
         }

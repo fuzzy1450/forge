@@ -1147,6 +1147,16 @@ public class ComputerUtilCard {
             chosen.add(SpecialCardAi.BraveTheElements.chooseColor(ai, sa, colorChoices));
             return chosen;
         }
+        // Prismatic Strands (dead-card batch 4, row 16): the colour the cast was judged on, read
+        // again from the blocks, and from any Strands effect already up (Sevinne's copy resolves
+        // first, so the original names a colour it left open). null keeps the stock pick.
+        if (SpecialCardAi.PrismaticStrands.choosesFor(ai, sa)) {
+            final String pick = SpecialCardAi.PrismaticStrands.chooseColor(ai, sa, colorChoices);
+            if (pick != null) {
+                chosen.add(pick);
+                return chosen;
+            }
+        }
         // Sudden Demise (dead-card batch 2, row 116): the cast's scoring again at the X paid (the
         // stock MostProminentHumanCreatures pick ignores X and our own creatures, which take the
         // same damage). null (X is 0, nothing dies): the stock pick stands.
