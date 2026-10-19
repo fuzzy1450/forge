@@ -39829,6 +39829,83 @@ public class SpecialCardAi {
         }
     }
 
+    // Quicksilver Elemental (dead-card batch 4, row 23; The Sting of Ping)
+    // "{U}: Quicksilver Elemental gains all activated abilities of target creature until end of
+    // turn. (If any of the abilities use that creature's name, use this creature's name instead.)
+    // You may spend blue mana as though it were mana of any color to pay the activation costs of
+    // Quicksilver Elemental's abilities." ({3}{U}{U} creature, 3/4 Elemental.) AI:RemoveDeck:All
+    // dropped both of its abilities, the creature spell and the {U} grant, in
+    // AiController.getSpellAbilityToPlay's removeIf before any handler ran, so nobody ever cast it
+    // (0 owner casts and 0 casts of any kind in 918 held rows, 150 distinct held libraries, 121 of
+    // them fresh, on 2.0.15+499e03087c5). The script keeps the hint:
+    // - the {U} grant stays off the list for every controller: EffectAi has no logic for it (a
+    //   randomReturn roll, then the no-AILogic CantPlayAi, at every consult); its one use in the
+    //   carrier, gaining the commander Vivi Ornitier's {0} mana ability, is combo work for a later
+    //   row;
+    // - the -10 sort (ComputerUtilAbility.saEvaluator) and every other isCardRemAIDeck reader
+    //   (steal, exchange, copy, clone and tutor pickers) still refuse it.
+    // The G3 dispatcher (RemoveDeckFilter.readmit) lets exactly one ability through AiController's
+    // filter: the owner's own face-up creature spell from hand, not a face-down cast, not a
+    // Play-effect cast, not a copy and not an escape from the graveyard, and only in a window the
+    // stock path casts it in and real mana with {U}{U} pays for, so every other pass is the stock
+    // pass:
+    // - our own main phase with an empty stack (canCastTiming's window for a sorcery-speed
+    //   creature; PermanentCreatureAi's flash branches are never entered);
+    // - Main 2, or Main 1 when the stock PermanentAi.checkPhaseRestrictions would cast it there
+    //   (ComputerUtil.castPermanentInMain1: floating mana, an unpaired Tandem Lookout);
+    // - no live mana reservation (RemoveDeckFilter.noManaHeld);
+    // - G2 (HonestMana, held sources skipped) covers the engine's test-mode calculateManaCost in
+    //   total and in blue, so a readmitted spell never reaches ComputerUtilCost.canPayCost, whose
+    //   test payment draws MyRandom per source it tries, in a window that cannot pay for it.
+    // Value floor: the body. A 3/4 for five has no ETB, upkeep cost, additional cost or drawback,
+    // so there is no worthless or self-harming moment the stock checks behind the filter miss
+    // (Patron of the Nezumi's reasoning); they judge the rest (zero toughness, curses, damage on
+    // the cast). The kept -10 key sorts it after every unhinted spell, and sortCreatureSpells'
+    // re-deal leaves it in its own (last) creature slot at hand sizes up to 9, so it gets only the
+    // mana every other spell declined. With 10 or more cards in hand the hand-size bonus can lift
+    // it past the command-zone commander, and with 11 or more past the 2-3 drops: harmless (any
+    // cast sheds the card the cleanup would discard) and rare. Under-counts lose a window. Draws
+    // nothing, holds nothing, remembers nothing; its only writes are setActivatingPlayer on a hand
+    // SA with no activator yet (as getOriginalAndAltCostAbilities does right after the filter) and
+    // on the mana abilities G2 reads. A thief's copy fails the owner and hand checks, and a
+    // Play-effect cast never reaches this filter (canPlayFromEffectAI).
+    public static class QuicksilverElemental {
+        public static final String NAME = "Quicksilver Elemental";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFaceDown() || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand) || !ai.equals(host.getOwner())) {
+                return false; // the {U} grant, a theft, an escape, a copy: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return false;
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ph.is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait, answered before the list sees the spell
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int need = cost.getConvertedManaCost();
+            final int blue = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+            return mana.total() >= need && mana.colour(MagicColor.BLUE) >= blue;
+        }
+    }
+
     // Read the Runes
     // "Draw X cards. For each card drawn this way, discard a card unless you sacrifice a
     // permanent." ({X}{U} instant.) Reached from DrawAi.checkApiLogic's name gate; a Play-effect
@@ -40728,8 +40805,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is
-    // Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's row 23, keepOff for batch 2's row 68 (Trench Gorger;
+    // batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -40847,6 +40924,8 @@ public class SpecialCardAi {
                     return RecklessBarbarian.readmit(ai, sa);
                 case NemataGroveGuardian.NAME:           // batch 3 extension, row 101 (W13)
                     return NemataGroveGuardian.readmit(ai, sa);
+                case QuicksilverElemental.NAME:          // batch 4, row 23 (W2)
+                    return QuicksilverElemental.readmit(ai, sa);
                 default:
                     return false;
             }
