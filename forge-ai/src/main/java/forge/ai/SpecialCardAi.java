@@ -7469,6 +7469,67 @@ public class SpecialCardAi {
         }
     }
 
+    // Bumi's Feast Lecture (dead-card batch 4, row 38; carrier Everybody Eats 282e581f, Ygra)
+    // {1}{G} Sorcery - Lesson, "Create a Food token. Then earthbend X, where X is twice the number
+    // of Foods you control." The root is the stock TokenAi: our own Main 2 (the Food is no creature
+    // and has no haste, castSpellInMain1 is false), the profile's TOKEN_GENERATION_ABILITY_CHANCE
+    // roll, doTriggerNoCost on a Play-effect route. The rider DB$ Earthbend is targeted
+    // (EarthbendEffect.buildSpellAbility sets Land.YouCtrl), EarthbendAi had no chkDrawback, and
+    // the inherited SpellAbilityAi.chkDrawback refuses every targeted sub with a candidate: every
+    // root TokenAi approved was dropped at AiController.canPlaySa. X is counted at resolution,
+    // after the Food, so the rider puts at least two counters on a land that returns tapped when
+    // it dies or is exiled: pure upside, and the floor is the stock TokenAi's plus a targetable
+    // land of ours and the payable window:
+    // - shape bound: the targeted Earthbend sub of a Token spell root activated by the deciding
+    //   AI; else null (the caller's stock answer);
+    // - the sub's targets are reset before anything else, so every refusal leaves the sub
+    //   untargeted, as A left it (Shatter the Oath's idiom);
+    // - no land of ours we can target: null (A's TargetingFailed);
+    // - G1 (CommanderCastCeiling.affordable, called unchanged under G4's widened contract) on the
+    //   ROOT for a cast priced here: canPayCost's test payment draws MyRandom
+    //   (ComputerUtilMana.isManaSourceReserved) and A never reached it for this card, so an
+    //   unaffordable window answers CantPlayAi, A's answer, drawing nothing. A Play-effect root
+    //   (isCastFromPlayEffect) skips G1, as Hexhaven Battalion's and Sunfall's do: its caller
+    //   prices or waives the cost;
+    // - the land: ComputerUtilCard.getBestLandToAnimate over our targetable lands (it prefers an
+    //   untapped basic that is not already a creature and not enchanted), the stock fallback of
+    //   EarthbendAi.canPlay. canPlay's sacrifice-land preference is left out: it test-pays each
+    //   land's ability (canPayCost draws), and the counters, the rider's value, are lost when such
+    //   a land is sacrificed.
+    // Residual: the land is chosen before the cost is paid and the payment may tap it, so that
+    // body may not block on the next opposing turn (the stock root Earthbend path has the same
+    // property). RNG-free and id-free on every path (shape tests, one canTarget per land, one
+    // test-mode calculateManaCost of a plain {1}{G}, one HonestMana walk, one
+    // getBestLandToAnimate); nothing held or remembered; no X set.
+    public static class BumisFeastLecture {
+        public static final String NAME = "Bumi's Feast Lecture";
+
+        // the host's paper name (B3-3); only the Earthbend sub of this card
+        public static boolean handles(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return sa.getApi() == ApiType.Earthbend && host != null && NAME.equals(host.getName());
+        }
+
+        // null = not the expected shape, or no land to target (the caller keeps the stock answer)
+        public static AiAbilityDecision chooseLand(final Player ai, final SpellAbility sa) {
+            final SpellAbility root = sa.getRootAbility();
+            if (root == null || root == sa || !root.isSpell() || root.getApi() != ApiType.Token
+                    || !ai.equals(root.getActivatingPlayer()) || !sa.usesTargeting()) {
+                return null;
+            }
+            sa.resetTargets();
+            final CardCollection lands = CardLists.filter(ai.getLandsInPlay(), sa::canTarget);
+            if (lands.isEmpty()) {
+                return null;
+            }
+            if (!root.isCastFromPlayEffect() && !CommanderCastCeiling.affordable(ai, root)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.getTargets().add(ComputerUtilCard.getBestLandToAnimate(lands));
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Calamity of the Titans
     // "As an additional cost to cast this spell, reveal a colorless creature card from your hand. Exile each
     // creature and planeswalker with mana value less than the revealed card's mana value."

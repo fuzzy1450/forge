@@ -58,4 +58,20 @@ public class EarthbendAi extends SpellAbilityAi {
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
 
+    @Override
+    public AiAbilityDecision chkDrawback(final Player aiPlayer, final SpellAbility sa) {
+        // Bumi's Feast Lecture (dead-card batch 4, row 38): "Create a Food token. Then earthbend X".
+        // The rider is a targeted sub (EarthbendEffect.buildSpellAbility sets Land.YouCtrl), and the
+        // inherited SpellAbilityAi.chkDrawback refuses every targeted sub that has a candidate, so the
+        // Token root TokenAi approved was never cast. Answered only for this card's rider; a shape
+        // outside the expected one gets null and keeps the stock answer. Draws nothing, takes no id.
+        if (SpecialCardAi.BumisFeastLecture.handles(sa)) {
+            final AiAbilityDecision d = SpecialCardAi.BumisFeastLecture.chooseLand(aiPlayer, sa);
+            if (d != null) {
+                return d;
+            }
+        }
+        return super.chkDrawback(aiPlayer, sa);
+    }
+
 }
