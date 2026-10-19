@@ -120,6 +120,22 @@ public class CharmAi extends SpellAbilityAi {
             // scan, hasReasonToPlayCardThisTurn, the Nykthos and Spectral Searchlight scanners)
             // outside the window; inside it such a scan meets this chooser instead (skeptic amendment 4).
             chosenList = SpecialCardAi.JundCharm.chooseModes(ai, sa, choices);
+        } else if (SpecialCardAi.SecretIdentity.routes(ai, sa)) {
+            // Dead-card batch 4, row 36 (W5). Unhinted, so A took the stock else below at every
+            // evaluation: its shuffle drew one nextInt(2) (num 1 below the two modes; nothing when no
+            // creature of ours leaves makePossibleOptions empty), and chooseOptionsAi asked AnimateAi of
+            // each mode, which refuses every response window (checkPhaseRestrictions) and targets nothing
+            // in the two it leaves open (animateTgtAI's CantPlayAi fallthrough). Neither draws unless a
+            // Sacrifice is on top of the stack (AnimateAi's edict branch test-pays), which routes() leaves
+            // to the stock path. So this branch draws that same shuffle first, then asks the card's
+            // chooser, which draws nothing. Play-effect casts (an Isochron Scepter copy, declined: the
+            // Scepter's own ability is on top), copies, a thief's cast and the hand scans that call
+            // canPlaySa (ManaAi's ritual scan, hasReasonToPlayCardThisTurn, the Nykthos scanners) come
+            // here too; triggers never do.
+            if (num < choices.size()) {
+                Collections.shuffle(choices, MyRandom.getRandom());
+            }
+            chosenList = SpecialCardAi.SecretIdentity.chooseModes(ai, sa, choices);
         } else {
             // only randomize if not all possible together
             if (num < choices.size()) {

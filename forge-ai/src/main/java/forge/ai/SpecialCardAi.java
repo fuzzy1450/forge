@@ -46753,6 +46753,133 @@ public class SpecialCardAi {
         }
     }
 
+    // Secret Identity (dead-card batch 4, wave 5, row 36; carrier The Sting of Ping 30da5b05, Vivi Ornitier,
+    // an upload, not an anchor)
+    // "Choose one - Conceal: until end of turn, target creature you control becomes a Citizen with base power
+    // and toughness 1/1 and gains hexproof. / Reveal: until end of turn, target creature you control becomes
+    // a Hero with base power and toughness 3/4 and gains flying and vigilance." ({U} instant.) Unhinted and
+    // never cast: CharmAi's stock chooser asks AnimateAi of each mode, whose checkPhaseRestrictions closes
+    // every response window and whose animateTgtAI has no branch for a targeted Animate of a creature with
+    // subtype-only Types$ and Keywords$ (CantPlayAi at its fallthrough). Routed from CharmAi.checkApiLogic,
+    // after JundCharm's branch, after the stock shuffle. One mode, one window: Conceal, in response to an
+    // opponent's spell or ability on top of the stack that TARGETS a creature of ours (through any link) and
+    // that predictThreatenedObjects (top only) says kills, exiles, steals or shrinks to death. Floor: that
+    // creature is our commander or BrokersConfluence.isWorthSaving (a creature at MIN_SAVE_EVAL, 180);
+    // Conceal can target it; it survives becoming base 1/1 with its marked damage; through the combat damage
+    // step it is not blocking, not a blocked attacker and not an attacker before declare blockers (a 1/1 can
+    // still be blocked and killed: the skeptic's F1); the cast is affordable (G1,
+    // CommanderCastCeiling.affordable, called unchanged, G2 HonestMana inside; skipped for a Play-effect
+    // cast), so an unpayable window never reaches canPayCost's isManaSourceReserved draws. Commander first,
+    // else the best evaluateCreature. Reveal is never chosen: its values (Vivi's mana, an evasive attack) need
+    // a sequencing plan.
+    // Reach: the one registered deck. A thief's or a Play-effect cast meets the same floor for its own
+    // creatures. An Isochron Scepter copy is cast while the Scepter's ability resolves on top of the stack,
+    // ours, so it is always declined. The hand scans that call canPlaySa (ManaAi's ritual scan,
+    // hasReasonToPlayCardThisTurn, the Nykthos scanners) meet this chooser and approve only inside the
+    // window, as the cast does.
+    // RNG (B4-9, a decline after A's draws): the caller draws A's stock shuffle first, and every decline here
+    // reads state only (the stack, the predictor, evaluateCreature, combat, G1's test-mode calculateManaCost
+    // and HonestMana), so a decline has drawn exactly what A drew; an approval diverges by design. No
+    // AiCardMemory write, no SpellAbility id; the shared mode objects get the activator (as the stock first
+    // pass) and fresh targets.
+    public static class SecretIdentity {
+        public static final String NAME = "Secret Identity";
+
+        // this card's own root evaluation, any cast route, never a trigger; a Sacrifice on top of the stack keeps
+        // AnimateAi's stock edict branch (its test payment draws, its animated copy takes a timestamp)
+        public static boolean routes(final Player ai, final SpellAbility sa) {
+            if (!NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa)) || sa.isTrigger()
+                    || !ai.equals(sa.getActivatingPlayer())) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            return game.getStack().isEmpty() || game.getStack().peekAbility().getApi() != ApiType.Sacrifice;
+        }
+
+        // RNG-free: the caller has drawn the stock shuffle already.
+        public static List<AbilitySub> chooseModes(final Player ai, final SpellAbility sa, final List<AbilitySub> choices) {
+            final List<AbilitySub> chosen = Lists.newArrayList();
+            AbilitySub conceal = null;
+            for (final AbilitySub sub : choices) {
+                sub.setActivatingPlayer(ai); // as the stock chooser's first pass
+                if (sub.usesTargeting()) {
+                    sub.resetTargets(); // nothing stale from an earlier window
+                }
+                if (sub.getApi() == ApiType.Animate && "Hexproof".equals(sub.getParam("Keywords"))) {
+                    conceal = sub;
+                }
+            }
+            if (conceal == null) {
+                return chosen; // no creature of ours to target (makePossibleOptions dropped it), or the script drifted
+            }
+
+            // 1. the window, O(1): an opponent's object on top of the stack
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty()) {
+                return chosen;
+            }
+            final SpellAbility top = game.getStack().peekAbility();
+            if (top == null || top.getActivatingPlayer() == null || !top.getActivatingPlayer().isOpponentOf(ai)) {
+                return chosen;
+            }
+            // 2. what it targets, every link: hexproof stops only targeting
+            final CardCollection targeted = new CardCollection();
+            for (SpellAbility s = top; s != null; s = s.getSubAbility()) {
+                if (s.usesTargeting()) {
+                    targeted.addAll(s.getTargets().getTargetCards());
+                }
+            }
+            if (targeted.isEmpty()) {
+                return chosen;
+            }
+            // 3. a creature of ours it targets and kills, exiles, steals or shrinks to death, worth the card
+            Card best = null;
+            int bestValue = -1;
+            for (final GameObject o : ComputerUtil.predictThreatenedObjects(ai, null, true)) {
+                if (!(o instanceof Card c) || !c.isCreature() || !c.isInPlay() || !ai.equals(c.getController())
+                        || !targeted.contains(c) || !conceal.canTarget(c) || !BrokersConfluence.isWorthSaving(c)) {
+                    continue;
+                }
+                // base 1/1 keeps every modifier: the creature must outlast its marked damage
+                if (c.getNetToughness() - c.getCurrentToughness() + 1 <= c.getDamage()) {
+                    continue;
+                }
+                // a combatant facing combat damage would trade the save for a combat death
+                if (facesCombatDamage(game, c)) {
+                    continue;
+                }
+                final int value = c.isCommander() ? Integer.MAX_VALUE : ComputerUtilCard.evaluateCreature(c);
+                if (value > bestValue) {
+                    best = c;
+                    bestValue = value;
+                }
+            }
+            if (best == null) {
+                return chosen;
+            }
+            // 4. G1 (G2 inside): an unpayable window never reaches canPayCost's draws
+            if (!sa.isCastFromPlayEffect() && !CommanderCastCeiling.affordable(ai, sa)) {
+                return chosen;
+            }
+            conceal.getTargets().add(best);
+            chosen.add(conceal);
+            return chosen;
+        }
+
+        private static boolean facesCombatDamage(final Game game, final Card c) {
+            final Combat combat = game.getCombat();
+            if (combat == null || game.getPhaseHandler().getPhase().isAfter(PhaseType.COMBAT_DAMAGE)) {
+                return false;
+            }
+            if (combat.isBlocking(c) || (combat.isAttacking(c) && combat.isBlocked(c))) {
+                return true; // a 1/1 blocker or blocked attacker trades the save for a combat death
+            }
+            // an attacker not yet blocked: Conceal's base 1/1 can still be blocked and killed (F1)
+            return combat.isAttacking(c)
+                    && game.getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS);
+        }
+    }
+
     // Secret Rendezvous (dead-card batch 2, row 21)
     // {1}{W}{W} sorcery: "You and target opponent each draw three cards." DrawAi never targets an
     // opponent with a non-curse draw, and the Wedding's symmetric chooser keeps the stock refusal for
