@@ -45859,6 +45859,150 @@ public class SpecialCardAi {
         }
     }
 
+    // Scapeshift (dead-card batch 4, wave 5, row 31; NJcEDH Presents: SINKHOLE 2 Champion f82b6678,
+    // deck 519, Lumra, Bellow of the Woods, a site upload and the only carrier)
+    // "Sacrifice any number of lands. Search your library for up to that many land cards, put them onto
+    // the battlefield tapped, then shuffle." {2}{G}{G} Sorcery. The script is the printed card: a
+    // Sacrifice root (Defined$ You, SacValid$ Land, Amount$ SacX = every land we control, Optional$ True,
+    // RememberSacrificed$ True) and a ChangeZone sub (Library -> Battlefield, ChangeType$ Land,
+    // ChangeNum$ ShiftX = the remembered count, Tapped$ True). AI:RemoveDeck:All is KEPT.
+    // Stock behind the hint (rule B3-1): AiController's filter drops the owner's cast before any handler
+    // (0 owner casts on 2.0.15+499e03087c5). A bare readmit would be worse than the hint:
+    // SacrificeAi.sacrificeTgtAI's Defined$ You branch approves on any land (a land evaluates 110 <= 135),
+    // so the spell would go in Main 1 at the first four spare mana; ComputerUtil.choosePermanentsToSacrifice
+    // takes EVERY land (min 0, max SacX, the caster is no opponent of itself), untapped ones and creature
+    // lands included (Ashaya, Soul of the Wild makes Lumra and every nontoken creature a Forest land; an
+    // earthbent Ba Sing Se); and the fetch (ChangeZoneAi.chooseCardToHiddenOriginChangeZone, Battlefield
+    // branch -> ComputerUtilCard.getBestLandAI) is a random nonbasic, The Tabernacle at Pendrell Vale,
+    // Lotus Field (sacrifice two lands), Arid Archway (return a land) and City of Traitors included.
+    // Three parts that land and revert together: 31B the sacrifice chooser, 31C the search pick, 31A the
+    // cast decision (G3's readmit case and SacrificeAi.canPlay's route). 31B and 31C alone are inert on
+    // every stored game: they answer only a resolution of a Scapeshift its owner cast (0 owner casts).
+    // The resolution (isOwnResolution: a Scapeshift its owner cast, a Play-effect cast of its own
+    // included, the reviewed script, not a copy):
+    // - the sacrifice (chooseSacrifice, from ComputerUtil.choosePermanentsToSacrifice): only TAPPED
+    //   lands go, the mana already spent this turn, the lands that paid for this spell included; never a
+    //   creature land, Field of the Dead, a land making two or more mana (Gaea's Cradle, Ancient Tomb,
+    //   Lotus Field, City of Traitors, Crystal Vein, Castle Garenbrig), an enchanted land or a land with
+    //   a static ability of its own (Yavimaya, Cradle of Growth, the carrier's one fixer for its
+    //   colourless lands); basics first, then the lowest id; never more than the library's fetchable
+    //   lands, so the land count never drops.
+    // A thief's resolution (Chaos Wand, Mind's Dilation, Guff Rewrites History: the decider is not the
+    // owner) and a copy's (the host is a copied spell) keep the stock path.
+    // RNG: the resolution choosers are deterministic (zone, parameter and SVar-text reads, no random
+    // draw) and run only at a resolution of the owner's own Scapeshift, which A never reached.
+    public static class Scapeshift {
+        public static final String NAME = "Scapeshift";
+        static final String FIELD = "Field of the Dead";
+        static final String TABERNACLE = "The Tabernacle at Pendrell Vale";
+
+        // ---- shape and keys (O(1) on every consult) ----
+
+        // the reviewed script: a Sacrifice root of our lands, remembered, then a tapped land search
+        static boolean reviewedShape(final SpellAbility root) {
+            if (root == null || root.getApi() != ApiType.Sacrifice || !"Land".equals(root.getParam("SacValid"))
+                    || !root.hasParam("Optional") || !root.hasParam("RememberSacrificed")) {
+                return false;
+            }
+            final AbilitySub shift = root.getSubAbility();
+            return shift != null && shift.getApi() == ApiType.ChangeZone
+                    && "Library".equals(shift.getParam("Origin")) && "Battlefield".equals(shift.getParam("Destination"))
+                    && "Land".equals(shift.getParam("ChangeType")) && shift.hasParam("Tapped");
+        }
+
+        // a resolution of the owner's own Scapeshift (the root or its search), not a copy
+        public static boolean isOwnResolution(final Player decider, final SpellAbility sa) {
+            if (sa == null) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && !host.isCopiedSpell() && !sa.isCopied()
+                    && decider.equals(host.getOwner()) && decider.equals(sa.getActivatingPlayer())
+                    && reviewedShape(sa.getRootAbility());
+        }
+
+        // ---- the resolution (owner only) ----
+
+        // ComputerUtil.choosePermanentsToSacrifice: our tapped, sacrificable lands, basics first, at most
+        // as many as the library can replace
+        public static CardCollection chooseSacrifice(final Player ai, final CardCollectionView cardlist) {
+            final CardCollection pool = new CardCollection();
+            for (final Card c : cardlist) {
+                if (c.isLand() && ai.equals(c.getController()) && c.isTapped() && sacrificable(c)) {
+                    pool.add(c);
+                }
+            }
+            final int cap = fetchable(ai).size();
+            final List<Card> order = new ArrayList<>(pool);
+            order.sort((a, b) -> a.isBasicLand() != b.isBasicLand() ? (a.isBasicLand() ? -1 : 1)
+                    : Integer.compare(a.getId(), b.getId()));
+            final CardCollection out = new CardCollection();
+            for (final Card c : order) {
+                if (out.size() >= cap) {
+                    break;
+                }
+                out.add(c);
+            }
+            return out;
+        }
+
+        // ---- shared reads (parameter and zone reads only) ----
+
+        // a land the swap may sacrifice: no creature, not Field of the Dead, no Aura on it, at most one
+        // mana, and no static ability of its own (Yavimaya, Cradle of Growth's "each land is a Forest")
+        static boolean sacrificable(final Card c) {
+            return c.isLand() && !c.isCreature() && !FIELD.equals(c.getName()) && !c.isEnchanted() && !multiMana(c)
+                    && c.getStaticAbilities().isEmpty();
+        }
+
+        // a mana ability making two or more mana: Amount$ 2, 3, 6 or X (Gaea's Cradle)
+        static boolean multiMana(final Card c) {
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final String amount = ma.getParam("Amount");
+                if (amount != null && !"1".equals(amount)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the library's lands the search may take: no hazard, no legendary land we control
+        static CardCollection fetchable(final Player ai) {
+            final CardCollection out = new CardCollection();
+            for (final Card c : ai.getCardsIn(ZoneType.Library)) {
+                if (c.isLand() && !isHazard(c) && !(c.getType().isLegendary() && ai.isCardInPlay(c.getName()))) {
+                    out.add(c);
+                }
+            }
+            return out;
+        }
+
+        // a land that costs us on arrival or later: an enters trigger that sacrifices lands (Lotus Field)
+        // or returns one to hand (Arid Archway, the Karoos), a land-play trigger that sacrifices it (City of
+        // Traitors), or The Tabernacle at Pendrell Vale (an upkeep tax on every creature, our Zombies too)
+        static boolean isHazard(final Card c) {
+            if (TABERNACLE.equals(c.getName())) {
+                return true;
+            }
+            for (final Trigger t : c.getTriggers()) {
+                final String exec = t.getParam("Execute");
+                final String body = exec == null ? "" : c.getSVar(exec);
+                if (t.getMode() == TriggerType.ChangesZone && "Battlefield".equals(t.getParam("Destination"))
+                        && "Card.Self".equals(t.getParam("ValidCard"))
+                        && (body.contains("DB$ Sacrifice")
+                            || (body.contains("DB$ ChangeZone") && body.contains("Origin$ Battlefield")
+                                && body.contains("Destination$ Hand")))) {
+                    return true;
+                }
+                if (t.getMode() == TriggerType.LandPlayed && body.contains("DB$ Sacrifice")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Scrap Mastery (dead-card batch 3, row 59; precon:Built from Scratch (C14), an implicit anchor)
     // "Each player exiles all artifact cards from their graveyard, then sacrifices all artifacts
     // they control, then puts all cards they exiled this way onto the battlefield." ({3}{R}{R}

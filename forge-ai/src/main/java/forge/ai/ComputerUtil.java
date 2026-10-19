@@ -927,6 +927,14 @@ public class ComputerUtil {
             }
         }
 
+        // Scapeshift (dead-card batch 4, wave 5, row 31): the owner's own resolution sacrifices only the
+        // lands the swap can spare (tapped; no creature land, Field of the Dead, enchanted, multi-mana or
+        // static-ability land; at most what the library replaces). The stock pick below takes every land.
+        // Deterministic, no random draw; a thief's or a copy's resolution keeps the stock pick.
+        if (!destroy && isOptional && SpecialCardAi.Scapeshift.isOwnResolution(ai, source)) {
+            return SpecialCardAi.Scapeshift.chooseSacrifice(ai, cardlist);
+        }
+
         if ("OpponentOnly".equals(source.getParam("AILogic"))) {
             if (!source.getActivatingPlayer().isOpponentOf(ai)) {
                 return sacrificed; // sacrifice none
