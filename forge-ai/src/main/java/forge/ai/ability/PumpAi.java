@@ -873,6 +873,15 @@ public class PumpAi extends PumpAiBase {
                 return crab;
             }
         }
+        if (SpecialCardAi.VedalkenPlotter.LOGIC.equals(sa.getParam("AILogic"))) {
+            // Dead-card batch 4, row 58. Vedalken Plotter's enters trigger: the land we give and the
+            // land we take are one decision (SpecialCardAi.VedalkenPlotter). pumpTgtAI below hands over
+            // our BEST land (getBestAI -> getBestLandAI, Aggregates.random among our nonbasics).
+            // Mandatory: the best pair whatever it scores; an optional consult (checkETBEffects for a
+            // cast) only a pair that loses nothing; no eligible pair: TargetingFailed, never the stock
+            // path. Any controller (a thief, a copy). No random draw.
+            return SpecialCardAi.VedalkenPlotter.chooseGive(ai, sa, mandatory);
+        }
         if (sa.usesTargeting() && SpecialCardAi.CarpetOfFlowers.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
             // Carpet of Flowers' main-phase trigger counts the Islands of the opponent it targets: aim it
             // at the one with the most, where the cast floor looked (stock: the first targetable one,

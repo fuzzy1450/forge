@@ -57105,6 +57105,422 @@ public class SpecialCardAi {
         }
     }
 
+    // Vedalken Plotter (dead-card batch 4, row 58; carrier precon:Political Puppets (CMD), deck 210, an
+    // anchor and the only registered deck that lists it)
+    // {2}{U} 1/1, "When Vedalken Plotter enters, exchange control of target land you control and target
+    // land an opponent controls." (printed = Oracle = script; the trigger is mandatory: no
+    // OptionalDecider). AI:RemoveDeck:All keeps the owner's hand cast off
+    // AiController.getSpellAbilityToPlay's list (2,605 held rows, 0 owner casts while held), and the hint
+    // is KEPT. The card's only owner cast and all 19 thefts on the active engine were Play-effect casts
+    // (Guff Rewrites History, Nathan Drake, Etali, the Neera seat), which never meet that filter, and
+    // there the stock trigger handed over our BEST land: PumpAi.pumpTgtAI -> ComputerUtilCard.getBestAI
+    // -> getBestLandAI, Aggregates.random among our nonbasics (Boros Garrison and Shadowblood Ridge in the
+    // logs; on an all-basic board the untapped land of our least represented basic type, often a sole
+    // colour source), with ControlExchangeAi.chkDrawback skipping its Defined comparison for a mandatory
+    // trigger.
+    // This class is the trigger's pair chooser, for ANY controller (the owner's Play-effect cast, a thief,
+    // a Clone or a copy of the trigger): TrigTarget and DBExchange carry AILogic$ VedalkenPlotter, so
+    // PumpAi.doTriggerNoCost asks chooseGive and ControlExchangeAi.chkDrawback asks chooseTake against the
+    // give actually chosen.
+    // A pair (give g, ours; take t, the opponent o's) scores
+    //   worth(t) - worth(g)
+    //   + COLOUR_VALUE x (identity colours our other mana sources plus t make - those plus g make)
+    //   - COLOUR_VALUE x max(0, o's identity colours o's other sources plus g make - those plus t make)
+    // so our only source of an identity colour is never given for less than COLOUR_VALUE, and a land that
+    // hands the receiver an identity colour it would otherwise lack costs COLOUR_VALUE (denial, the
+    // receiver losing a colour, is not scored).
+    // worth = GameStateEvaluator.evaluateLand's constants (3, 100 a net mana, 3 a colour, 50 a repeatable
+    // {T} ability, 25 an ability without {T}, 10 a {T}-and-sacrifice one, 6 a static), mirrored privately
+    // with three corrections:
+    // - a land with no mana ability counts as one mana: a fetch finds a land, and Maze of Ith is not 53;
+    // - only abilities activatable on the battlefield count: cycling is +25 to evaluateLand;
+    // - restricted mana (RestrictValid$, Gallifrey Council Chamber's Any) makes no colour.
+    // The mirror reads getOrigProduced's words (Combo through getComboColors, Chosen through the chosen
+    // colour) with amountOfManaGenerated(true), and counts a Special part or a ManaReflected ability as
+    // mana with no colour: it never calls AbilityManaPart.mana, whose Special branch writes
+    // lastExpressChoice (ManaEffect.handleSpecialMana).
+    // Identity = the player's commander colour identity, every colour without a commander; Any and Combo
+    // ColorIdentity stand for the identity of the player who would hold the land.
+    // Floors: the mandatory trigger (the AI puts every trigger on the stack with mandatory = true,
+    // PlayerControllerAi.orderAndPlaySimultaneousSa) takes the best pair whatever it scores, so it always
+    // loses the least; an optional consult (checkETBEffects' probe of a cast, a Play-effect or theft cast
+    // included, and a Strionic copy's retarget of our own trigger) needs a pair scoring 0 or more: never a
+    // losing swap by choice. No eligible pair answers TargetingFailed, mandatory or not (skeptic A2): the
+    // trigger is not put on the stack (both its targets are required), and the stock random pick never
+    // runs.
+    // Eligibility:
+    // - a give is ours, not phased out, not our commander, with no Aura or Equipment of ours on it, and
+    //   one the receiver can control (ControlExchangeEffect.resolve aborts the exchange otherwise);
+    // - a take is an opponent's, not phased out, one we can control, not RemoveDeck-hinted (stock
+    //   ControlExchangeAi never grabs one), with no ward (a trigger cannot pay it) and no Aura of ours on
+    //   it.
+    // Targeting is exact at the trigger (canTarget on the live Pump and exchange) and conservative where
+    // no ability is given (no shroud or protection on a give; no hexproof, shroud or protection on a
+    // take). chooseTake re-checks the give the Pump carries (a copy's retarget may have set it).
+    // Ties (strict >, skeptic A1; secondary keys only, the score never moves): give tapped over untapped;
+    // give owned over merely controlled (Zedruu counts the permanents we OWN that opponents control); give
+    // whose identity colours we hold the most mana sources of (a colourless or off-identity give first);
+    // take untapped over tapped; then battlefield order, our lands in turn, the opponents in turn order.
+    // Zedruu the Greathearted, the carrier's commander, gains Puppets X life and draws X cards each upkeep,
+    // X = permanents it owns that opponents control: with Zedruu out an owned land given is worth about a
+    // card and a life per upkeep. It is not scored (no carrier term): extra upside only (skeptic A3).
+    // Reads only: no random number, no held mana, no memory write. Every mana-ability activator a read
+    // stamps is put back (B4-4). Worths and colour masks are computed once per call (skeptic A4: local
+    // maps keyed by Card and Player, looked up and never iterated, discarded at return), so a scan is one
+    // read per land and mana source plus O(gives x takes) arithmetic. The chooser replaces stock picks
+    // that drew Aggregates.random.
+    public static class VedalkenPlotter {
+        public static final String NAME = "Vedalken Plotter";
+        public static final String LOGIC = "VedalkenPlotter";
+        static final int COLOUR_VALUE = 200;   // NantukoCultivator.NEW_COLOUR_BONUS, a private twin
+
+        // PumpAi.doTriggerNoCost (TrigTarget): the land we give. Never null (skeptic A2).
+        public static AiAbilityDecision chooseGive(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            final Swap best = bestPair(ai, sa, sa.getSubAbility());
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            if (!mandatory && best.score < 0) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // never a losing swap by choice
+            }
+            sa.getTargets().add(best.give);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // ControlExchangeAi.chkDrawback (DBExchange): the land we take, against the give chosen. No floor
+        // here: chooseGive already refused an optional consult, and a mandatory one takes the best. A give
+        // that is not eligibleGive (set by a path other than chooseGive) is refused (skeptic A2).
+        public static AiAbilityDecision chooseTake(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final SpellAbility parent = sa.getParent();
+            final Card give = parent == null ? null : parent.getTargetCard();
+            if (give == null || !eligibleGive(ai, give, parent)) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            final Scan scan = new Scan(ai, sa);
+            final Swap best = bestFor(scan, give);
+            if (best == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            sa.getTargets().add(best.take);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // The best pair over every eligible give, in battlefield order (strict >). giveSa / takeSa null =
+        // the conservative keyword test.
+        static Swap bestPair(final Player ai, final SpellAbility giveSa, final SpellAbility takeSa) {
+            final Scan scan = new Scan(ai, takeSa);
+            if (scan.takes.isEmpty()) {
+                return null;
+            }
+            Swap best = null;
+            for (final Card g : ai.getLandsInPlay()) {
+                if (!eligibleGive(ai, g, giveSa)) {
+                    continue;
+                }
+                final Swap s = bestFor(scan, g);
+                if (s != null && s.beats(best)) {
+                    best = s;
+                }
+            }
+            return best;
+        }
+
+        // The best take for one give, over the opponents in order and each one's lands in order.
+        private static Swap bestFor(final Scan scan, final Card give) {
+            Swap best = null;
+            for (final Card t : scan.takes) {
+                if (!give.canBeControlledBy(t.getController())) {
+                    continue; // ControlExchangeEffect would abort the exchange
+                }
+                final Swap s = new Swap(scan, give, t);
+                if (s.beats(best)) {
+                    best = s;
+                }
+            }
+            return best;
+        }
+
+        private static boolean eligibleGive(final Player ai, final Card c, final SpellAbility giveSa) {
+            return c.isLand() && ai.equals(c.getController()) && !c.isPhasedOut()
+                    && !(c.isCommander() && ai.equals(c.getOwner())) // never our commander
+                    // our Aura or Equipment would stay ours on their land
+                    && !c.getEnchantedBy().anyMatch(CardPredicates.isController(ai))
+                    && !c.getEquippedBy().anyMatch(CardPredicates.isController(ai))
+                    && (giveSa != null ? giveSa.canTarget(c)
+                        : !c.hasKeyword(Keyword.SHROUD) && !c.hasKeyword(Keyword.PROTECTION));
+        }
+
+        private static boolean eligibleTake(final Player ai, final Card c, final SpellAbility takeSa) {
+            return c.isLand() && !c.isPhasedOut() && c.canBeControlledBy(ai)
+                    // stock ControlExchangeAi.checkApiLogic never grabs a RemoveDeck card
+                    && !ComputerUtilCard.isCardRemAIDeck(c)
+                    // a triggered ability cannot pay ward: the trigger is countered
+                    && !c.hasKeyword(Keyword.WARD)
+                    // our own Aura on it would come back to us crippled
+                    && !c.getEnchantedBy().anyMatch(CardPredicates.isController(ai))
+                    && (takeSa != null ? takeSa.canTarget(c)
+                        : !c.hasKeyword(Keyword.HEXPROOF) && !c.hasKeyword(Keyword.SHROUD)
+                          && !c.hasKeyword(Keyword.PROTECTION));
+        }
+
+        // One candidate pair and its tie-break keys (skeptic A1).
+        static final class Swap {
+            final Card give;
+            final Card take;
+            final int score;
+            final boolean giveTapped;
+            final boolean giveOwned;
+            final int giveSpare;      // our fewest sources of an identity colour the give makes
+            final boolean takeUntapped;
+
+            Swap(final Scan scan, final Card give, final Card take) {
+                this.give = give;
+                this.take = take;
+                this.score = scan.score(give, take);
+                this.giveTapped = give.isTapped();
+                this.giveOwned = scan.ai.equals(give.getOwner());
+                this.giveSpare = scan.spare(give);
+                this.takeUntapped = !take.isTapped();
+            }
+
+            // strictly better than other: the score, then the A1 keys; a full tie keeps the earlier pair
+            boolean beats(final Swap other) {
+                if (other == null) {
+                    return true;
+                }
+                if (score != other.score) {
+                    return score > other.score;
+                }
+                if (giveTapped != other.giveTapped) {
+                    return giveTapped;
+                }
+                if (giveOwned != other.giveOwned) {
+                    return giveOwned;
+                }
+                if (giveSpare != other.giveSpare) {
+                    return giveSpare > other.giveSpare;
+                }
+                if (takeUntapped != other.takeUntapped) {
+                    return takeUntapped;
+                }
+                return false;
+            }
+        }
+
+        // One call's reads (skeptic A4): the eligible takes, each land's worth, each card's colour mask
+        // for a player, and each player's per-colour count of battlefield mana sources. Lookups only.
+        static final class Scan {
+            final Player ai;
+            final List<Card> takes = new ArrayList<>();
+            private final Map<Card, Integer> worths = new HashMap<>();
+            private final Map<Player, Map<Card, Byte>> masks = new HashMap<>();
+            private final Map<Player, int[]> counts = new HashMap<>();
+
+            Scan(final Player ai, final SpellAbility takeSa) {
+                this.ai = ai;
+                for (final Player o : ai.getOpponents()) {
+                    for (final Card t : o.getLandsInPlay()) {
+                        if (eligibleTake(ai, t, takeSa)) {
+                            takes.add(t);
+                        }
+                    }
+                }
+            }
+
+            int score(final Card g, final Card t) {
+                final Player o = t.getController();
+                final byte ours = others(ai, g);
+                final int ourGain = cover(ai, (byte) (ours | mask(t, ai))) - cover(ai, (byte) (ours | mask(g, ai)));
+                final byte theirs = others(o, t);
+                final int theirGain = Math.max(0,
+                        cover(o, (byte) (theirs | mask(g, o))) - cover(o, (byte) (theirs | mask(t, o))));
+                return worth(t) - worth(g) + COLOUR_VALUE * ourGain - COLOUR_VALUE * theirGain;
+            }
+
+            // our fewest mana sources of an identity colour g makes; none (colourless, off-identity): max
+            int spare(final Card g) {
+                final byte m = (byte) (mask(g, ai) & identity(ai));
+                final int[] n = counts(ai);
+                int spare = Integer.MAX_VALUE;
+                for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                    if ((m & MagicColor.WUBRG[i]) != 0) {
+                        spare = Math.min(spare, n[i]);
+                    }
+                }
+                return spare;
+            }
+
+            int worth(final Card land) {
+                Integer w = worths.get(land);
+                if (w == null) {
+                    w = VedalkenPlotter.worth(land);
+                    worths.put(land, w);
+                }
+                return w;
+            }
+
+            byte mask(final Card c, final Player p) {
+                final Map<Card, Byte> mine = masks.computeIfAbsent(p, k -> new HashMap<>());
+                Byte m = mine.get(c);
+                if (m == null) {
+                    m = colours(c, p, identity(p));
+                    mine.put(c, m);
+                }
+                return m;
+            }
+
+            // otherMask(p, x): the colours p's battlefield mana sources other than x make (x is p's)
+            byte others(final Player p, final Card x) {
+                final int[] n = counts(p);
+                final byte mx = mask(x, p);
+                byte out = 0;
+                for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                    final byte bit = MagicColor.WUBRG[i];
+                    if (n[i] - ((mx & bit) != 0 ? 1 : 0) > 0) {
+                        out |= bit;
+                    }
+                }
+                return out;
+            }
+
+            private int[] counts(final Player p) {
+                int[] n = counts.get(p);
+                if (n == null) {
+                    n = new int[MagicColor.WUBRG.length];
+                    for (final Card src : p.getCardsIn(ZoneType.Battlefield)) {
+                        if (src.getManaAbilities().isEmpty()) {
+                            continue;
+                        }
+                        final byte m = mask(src, p);
+                        for (int i = 0; i < n.length; i++) {
+                            if ((m & MagicColor.WUBRG[i]) != 0) {
+                                n[i]++;
+                            }
+                        }
+                    }
+                    counts.put(p, n);
+                }
+                return n;
+            }
+
+            private static int cover(final Player p, final byte m) {
+                return Integer.bitCount(m & identity(p) & 0xFF);
+            }
+        }
+
+        // the commander colour identity; every colour without a commander
+        private static byte identity(final Player p) {
+            final ColorSet id = p.getCommanderColorID();
+            return id == null ? MagicColor.ALL_COLORS : id.getColor();
+        }
+
+        // The colours a card's printed mana abilities make for p (NantukoCultivator.producedColours, a
+        // private copy): getOrigProduced words, Combo letters, Chosen through the chosen colour; Any and
+        // Combo ColorIdentity = p's identity; a restricted part (RestrictValid$) makes none, and reflected
+        // and Special production count as none. The activator is set to p and put back (B4-4).
+        private static byte colours(final Card c, final Player p, final byte identity) {
+            byte mask = 0;
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                if (mp == null || !restrictions(mp).isEmpty()) {
+                    continue;
+                }
+                final Player stamped = ma.getActivatingPlayer();
+                ma.setActivatingPlayer(p);
+                try {
+                    if (mp.isAnyMana() || mp.getOrigProduced().contains("ColorIdentity")) {
+                        mask |= identity;
+                        continue;
+                    }
+                    final String letters = mp.isComboMana() ? mp.getComboColors(ma)
+                            : mp.getOrigProduced().replace("Chosen", mp.getChosenColor(ma));
+                    for (final String t : letters.split(" ")) {
+                        if (t.length() == 1) {
+                            mask |= MagicColor.fromName(t.charAt(0));
+                        }
+                    }
+                } finally {
+                    ma.setActivatingPlayer(stamped);
+                }
+            }
+            return mask;
+        }
+
+        // GameStateEvaluator.evaluateLand's constants, mirrored privately with the class comment's three
+        // corrections, never calling AbilityManaPart.mana. The mana activators are stamped with the land's
+        // controller, as evaluateLand does, and put back (B4-4).
+        static int worth(final Card land) {
+            final Player controller = land.getController();
+            int value = 3;
+            int maxProduced = 0;
+            boolean hasMana = false;
+            byte colourMask = 0;
+            boolean colourless = false;
+            boolean any = false;
+            for (final SpellAbility m : land.getManaAbilities()) {
+                hasMana = true;
+                final Player stamped = m.getActivatingPlayer();
+                m.setActivatingPlayer(controller);
+                try {
+                    final int cost = m.getPayCosts() == null ? 0 : m.getPayCosts().getTotalMana().getCMC();
+                    maxProduced = Math.max(maxProduced, m.amountOfManaGenerated(true) - cost);
+                    if (m.getApi() == ApiType.ManaReflected) {
+                        continue; // mana, no colour
+                    }
+                    for (final forge.game.spellability.AbilityManaPart mp : m.getAllManaParts()) {
+                        if (mp.isSpecialMana() || !restrictions(mp).isEmpty()) {
+                            continue; // Special: mana, no colour; restricted: no colour
+                        }
+                        if (mp.isAnyMana()) {
+                            any = true;
+                            continue;
+                        }
+                        final String words = mp.isComboMana() ? mp.getComboColors(m)
+                                : mp.getOrigProduced().replace("Chosen", mp.getChosenColor(m));
+                        for (final String w : words.split(" ")) {
+                            if ("C".equals(w)) {
+                                colourless = true;
+                            } else if (w.length() == 1) {
+                                colourMask |= MagicColor.fromName(w.charAt(0));
+                            }
+                        }
+                    }
+                } finally {
+                    m.setActivatingPlayer(stamped);
+                }
+            }
+            if (!hasMana) {
+                maxProduced = 1; // a fetch finds a land; Maze of Ith is not 53
+            }
+            value += 100 * maxProduced;
+            final int size = Integer.bitCount(colourMask & 0xFF) + (colourless ? 1 : 0);
+            value += 3 * Math.max(size, any ? 5 : 0);
+            for (final SpellAbility m : land.getNonManaAbilities()) {
+                if (m.isLandAbility() || m.getRestrictions() == null
+                        || m.getRestrictions().getZone() != ZoneType.Battlefield) {
+                    continue; // cycling, channel and the land play are not the land's on the battlefield
+                }
+                final Cost cost = m.getPayCosts();
+                if (cost == null || !cost.hasTapCost()) {
+                    value += 25; // probably a manland
+                } else if (cost.hasSpecificCostType(CostSacrifice.class)) {
+                    value += 10; // not repeatable
+                } else {
+                    value += 50; // a repeatable utility land
+                }
+            }
+            value += 6 * land.getStaticAbilities().size(); // a static ability each
+            return value;
+        }
+
+        private static String restrictions(final forge.game.spellability.AbilityManaPart mp) {
+            final String r = mp.getManaRestrictions();
+            return r == null ? "" : r;
+        }
+    }
+
     // Veil of Summer
     public static class VeilOfSummer {
         public static boolean consider(final Player ai, final SpellAbility sa) {

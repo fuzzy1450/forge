@@ -91,6 +91,13 @@ public class ControlExchangeAi extends SpellAbilityAi {
             // pick below is their best against the parent's target with no margin. No random draw.
             return SpecialCardAi.ChromeshellCrab.chooseTake(aiPlayer, sa);
         }
+        if (SpecialCardAi.VedalkenPlotter.LOGIC.equals(sa.getParam("AILogic"))) {
+            // Dead-card batch 4, row 58. Vedalken Plotter's exchange: the land we take, against the give
+            // the Pump parent chose (SpecialCardAi.VedalkenPlotter). The stock pick below is their best
+            // by getBestLandAI (Aggregates.random), with no comparison for a mandatory trigger. No random
+            // draw.
+            return SpecialCardAi.VedalkenPlotter.chooseTake(aiPlayer, sa);
+        }
 
         // for TrigTwoTargets logic, only get the opponents' cards for the first target
         CardCollectionView unfilteredList = "TrigTwoTargets".equals(sa.getParam("AILogic")) ?
