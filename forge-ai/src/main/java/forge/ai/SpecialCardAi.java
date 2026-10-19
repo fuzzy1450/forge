@@ -43500,9 +43500,9 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24
-    // and 25, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a
-    // readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
+    // 25 and 31, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard,
+    // a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -43650,6 +43650,8 @@ public class SpecialCardAi {
                     return SereneMaster.readmit(ai, sa);
                 case StealEnchantment.NAME:              // batch 4, row 25 (W5)
                     return StealEnchantment.readmit(ai, sa);
+                case Scapeshift.NAME:                    // batch 4, row 31 (W5)
+                    return Scapeshift.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -45893,12 +45895,39 @@ public class SpecialCardAi {
     //   the "up to" search (ChangeZoneAi.confirmAction answers true).
     // A thief's resolution (Chaos Wand, Mind's Dilation, Guff Rewrites History: the decider is not the
     // owner) and a copy's (the host is a copied spell) keep the stock path.
+    // The cast (31A): G3's readmit puts the owner's own hand cast back on the playable list only in its
+    // own Main 2 with an empty stack, and SacrificeAi.canPlay routes that cast (isOwnHandCast, the
+    // readmit's own key, rule B3-2) to consider, an RNG-free floor. Value line: Field of the Dead. Our
+    // Field on the battlefield, or in the library (the first pick), and seven or more lands with
+    // different names after the swap -> one 2/2 Zombie per land entering, MIN_ZOMBIES (3) or more. The
+    // swap costs nothing but the card: the lands it takes were tapped already, and their replacements
+    // come in tapped in a Main 2 that needs no more mana.
+    // Declines: outside the window or under a live mana hold (AnotherTime); the engine's price over the
+    // honest count, in total or in green (CantAfford); then CantPlayAi for a library search the
+    // opponents punish or take over (B3-7: SearchedLibrary triggers, ControlOpponentsSearchingLibrary,
+    // our LimitSearchLibrary, any Shuffled trigger our shuffle fires, canSearchLibraryWith), an opposing
+    // permanent that triggers on a land entering or a land going to a graveyard and is not limited to
+    // its own controller's lands (Ankh of Mishra, Dingus Egg, Zo-Zu the Punisher), a battlefield effect
+    // on nonbasic lands (Blood Moon, Magus of the Moon, Harbinger of the Seas, Back to Basics), The
+    // Tabernacle at Pendrell Vale on any battlefield (every Zombie would cost {1} each upkeep for the
+    // rest of the game, and the AI pays it), and fewer than MIN_ZOMBIES Zombies by the lower bound.
+    // A Play-effect cast (a thief's Chaos Wand, Mind's Dilation or Guff Rewrites History, through
+    // canPlayFromEffectAI -> SacrificeAi.doTriggerNoCost, or one of the owner's own), a copy and a cast
+    // by a controller who is not the owner keep the stock decision; the hint keeps CopySpellAbilityAi
+    // off the card.
     // RNG: the resolution choosers are deterministic (zone, parameter and SVar-text reads, no random
     // draw) and run only at a resolution of the owner's own Scapeshift, which A never reached.
+    // readmit and consider draw no random number either (zone, phase and parameter reads, AiCardMemory
+    // reads, the test-mode calculateManaCost, HonestMana and the same per-ability reads for the
+    // forced-tap count); nothing is held or remembered, and the only write is the setActivatingPlayer
+    // HonestMana makes on the mana abilities it reads. The first new draws are canPayCost's, after a
+    // WillPlay.
     public static class Scapeshift {
         public static final String NAME = "Scapeshift";
         static final String FIELD = "Field of the Dead";
         static final String TABERNACLE = "The Tabernacle at Pendrell Vale";
+        static final int FIELD_NAMES = 7;   // Field of the Dead: "seven or more lands with different names"
+        static final int MIN_ZOMBIES = 3;   // three 2/2s for {2}{G}{G} and the card
 
         // ---- shape and keys (O(1) on every consult) ----
 
@@ -45914,6 +45943,29 @@ public class SpecialCardAi {
                     && "Land".equals(shift.getParam("ChangeType")) && shift.hasParam("Tapped");
         }
 
+        // the owner's own paid cast of the root spell from hand (the readmit's key, rule B3-2)
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())
+                    || !sa.isSpell() || sa.getParent() != null || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !ai.equals(host.getOwner()) || !ai.equals(host.getController())
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false;
+            }
+            return reviewedShape(sa);
+        }
+
+        // our Main 2 with an empty stack
+        static boolean inWindow(final Player ai) {
+            final Game game = ai.getGame();
+            return game.getPhaseHandler().is(PhaseType.MAIN2, ai) && game.getStack().isEmpty();
+        }
+
+        // G3's case (RemoveDeckFilter.readmit): the owner's hand spell joins the list only in the window
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isOwnHandCast(ai, sa) && inWindow(ai);
+        }
+
         // a resolution of the owner's own Scapeshift (the root or its search), not a copy
         public static boolean isOwnResolution(final Player decider, final SpellAbility sa) {
             if (sa == null) {
@@ -45924,6 +45976,103 @@ public class SpecialCardAi {
                     && !host.isCopiedSpell() && !sa.isCopied()
                     && decider.equals(host.getOwner()) && decider.equals(sa.getActivatingPlayer())
                     && reviewedShape(sa.getRootAbility());
+        }
+
+        // ---- the decision (SacrificeAi.canPlay, behind isOwnHandCast) ----
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (!inWindow(ai) || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // the cost as the engine prices it (rule B3-5), against the honest count (G2)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int cmc = cost.getConvertedManaCost();
+            if (mana.total() < cmc
+                    || mana.colour(MagicColor.GREEN) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            if (!ai.canSearchLibraryWith(sa, ai) || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)
+                    || landPunished(ai) || nonbasicHosed(ai) || tabernacleOut(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // the lands the resolution will sacrifice, a lower bound: those tapped now, plus the ones the
+            // payment must tap when every other source pays first. An untapped land the honest count
+            // cannot tap for this spell (no usable mana ability: Urza's Saga before its chapter II, a
+            // land whose mana this spell may not spend) is never forced, so it is not counted.
+            int tapped = 0;
+            int untapped = 0;
+            final Set<String> kept = new HashSet<>();
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isLand()) {
+                    continue;
+                }
+                if (!sacrificable(c)) {
+                    kept.add(c.getName());
+                } else if (c.isTapped()) {
+                    tapped++;
+                } else if (paysFor(ai, c, sa)) {
+                    untapped++;
+                }
+            }
+            final int others = Math.max(0, mana.total() - untapped);
+            final int shift = Math.min(fetchable(ai).size(), tapped + Math.min(untapped, Math.max(0, cmc - others)));
+            final int zombies = zombies(ai, kept, shift);
+            if (zombies < MIN_ZOMBIES) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // HonestMana's per-ability test for one untapped land of ours: a mana ability it can activate now,
+        // with no mana in its own cost, its conditions met, whose mana this spell may spend (G2's own
+        // reads and its own activator stamp; a sacrificable land makes one mana an activation, since
+        // multiMana keeps every other land out of the sacrifice)
+        private static boolean paysFor(final Player ai, final Card c, final SpellAbility sa) {
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                if (mp == null) {
+                    continue;
+                }
+                ma.setActivatingPlayer(ai);
+                if (ma.canPlay() && !ma.getPayCosts().hasManaCost() && ma.metConditions()
+                        && mp.meetsManaRestrictions(sa)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the Zombies the swap of `shift` lands makes: one per land entering while Field of the Dead is
+        // ours (kept, or fetched first) and the lands' different names reach FIELD_NAMES. The names are a
+        // lower bound: the lands never sacrificed, plus one new name per pick while the library has
+        // fetchable nonbasic names we do not control (the picks prefer them). A land that may enter as a
+        // copy of another (copies: Vesuva, Echoing Deeps) is no fresh name, since Field's count is all or
+        // nothing at seven and the copy may take a name we already control.
+        static int zombies(final Player ai, final Set<String> kept, final int shift) {
+            if (shift <= 0) {
+                return 0;
+            }
+            final Set<String> controlled = new HashSet<>();
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isLand()) {
+                    controlled.add(c.getName());
+                }
+            }
+            boolean field = controlled.contains(FIELD);
+            final Set<String> fresh = new HashSet<>();
+            for (final Card c : fetchable(ai)) {
+                if (!c.isBasicLand() && !controlled.contains(c.getName()) && !copies(c)) {
+                    fresh.add(c.getName());
+                }
+                if (FIELD.equals(c.getName())) {
+                    field = true;
+                }
+            }
+            if (!field || kept.size() + Math.min(shift, fresh.size()) < FIELD_NAMES) {
+                return 0;
+            }
+            return shift;
         }
 
         // ---- the resolution (owner only) ----
@@ -46043,6 +46192,99 @@ public class SpecialCardAi {
                 }
                 if (t.getMode() == TriggerType.LandPlayed && body.contains("DB$ Sacrifice")) {
                     return true;
+                }
+            }
+            return false;
+        }
+
+        // a land that may enter as a copy of another land (Vesuva, Echoing Deeps: K:ETBReplacement:Copy
+        // over a DB$ Clone SVar), so the name it enters with is not known; SVar text only, and any
+        // DB$ Clone SVar counts (a conservative read: fewer fresh names)
+        static boolean copies(final Card c) {
+            for (final String v : c.getSVars().values()) {
+                if (v.startsWith("DB$ Clone")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The Tabernacle at Pendrell Vale on any battlefield: "All creatures have 'At the beginning of
+        // your upkeep, destroy this creature unless you pay {1}.'" The AI pays it for every Zombie (stored
+        // game 1745658: 76 Zombie upkeep taxes resolved, each after a mana tap), so the swap's tokens
+        // would be a standing tax, not a floor. The skeptic's FINAL amendment: decline, instead of the
+        // diagnosis' halved count.
+        static boolean tabernacleOut(final Player ai) {
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (TABERNACLE.equals(c.getName())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // an opposing permanent whose trigger fires on a land entering or going to a graveyard from the
+        // battlefield and is not limited to its controller's own lands (Ankh of Mishra, Dingus Egg)
+        static boolean landPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() != TriggerType.ChangesZone) {
+                            continue;
+                        }
+                        final String valid = t.getParamOrDefault("ValidCard", "");
+                        final String dest = t.getParamOrDefault("Destination", "");
+                        if (valid.contains("Land") && !valid.contains("YouCtrl") && !valid.contains("YouOwn")
+                                && !valid.contains("Card.Self")
+                                && ("Battlefield".equals(dest)
+                                    || ("Graveyard".equals(dest) && "Battlefield".equals(t.getParam("Origin"))))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // a battlefield effect on nonbasic lands (Blood Moon, Magus of the Moon, Harbinger of the Seas: a
+        // basic type that takes Field of the Dead's trigger; Back to Basics: the picks never untap)
+        static boolean nonbasicHosed(final Player ai) {
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final StaticAbility st : c.getStaticAbilities()) {
+                    if (st.getParamOrDefault("Affected", "").contains("Land.nonBasic")) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getParamOrDefault("ValidCard", "").contains("Land.nonBasic")) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // LongTermPlans.searchPunished, a private verbatim copy (an accepted helper is not shared)
+        private static boolean searchPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.SearchedLibrary) {
+                            return true;
+                        }
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (st.hasParam("ControlOpponentsSearchingLibrary")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Shuffled && t.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
                 }
             }
             return false;

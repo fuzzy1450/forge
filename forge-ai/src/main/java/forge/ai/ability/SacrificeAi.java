@@ -43,6 +43,12 @@ public class SacrificeAi extends SpellAbilityAi {
             // cast keeps the stock branch.
             return SpecialCardAi.EdictForAll.consider(ai, sa);
         }
+        if (SpecialCardAi.Scapeshift.isOwnHandCast(ai, sa)) {
+            // Scapeshift (dead-card batch 4, wave 5, row 31): the owner's own hand cast, the one cast G3's
+            // readmit puts back on the list, judged by the RNG-free Field of the Dead floor (rule B3-2: the
+            // readmit's own key). A Play-effect cast, a copy or a thief's cast keeps the stock branch.
+            return SpecialCardAi.Scapeshift.consider(ai, sa);
+        }
         return sacrificeTgtAI(ai, sa, false);
     }
 
