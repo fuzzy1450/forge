@@ -54447,6 +54447,46 @@ public class SpecialCardAi {
         }
     }
 
+    // Flow of Knowledge (dead-card batch 4, row 76: a W1 follow-up; deck review 2026-10-17, Arcanis F9; carrier
+    // Arcanis - i LOVE drawing cards 87715b77, deck 508)
+    // "{4}{U} Instant: Draw a card for each Island you control, then discard two cards." DrawAi approves it as a
+    // plain draw: targetAI's untargeted branch refuses only 0 cards, the library guard and the own-turn hand cap,
+    // and canLoot only a net loss counted as hand - 1 + X < 2, which ignores the spell itself and the two
+    // discards. So deck 508 cast it at its first affordable window, our Main 2 after the land drop that makes five
+    // mana, at 2-4 Islands: 5 mana for -1 to +1 cards, and with no spare land in a small hand getCardsToDiscard
+    // threw engine cards (Lightning Greaves, Search for Azcanta, Psychic Corrosion, Illusionist's Bracers; base
+    // logs 1616417, 1618545, 1671173).
+    // Part 76A: holds keeps the AI's own paid cast until it draws five (net +2), counting Teferi's Ageless Insight
+    // (W1's ArcanisTheOmnipotent.effectiveDraw, called not edited: the same calculateAmount of X that DrawAi reads,
+    // shifted left once per Insight we control). A draw that empties our library under the stock guard's
+    // Laboratory Maniac exemption (DrawAi.targetAI) keeps A's path: a win line.
+    // Callers:
+    // - AiController.canPlayAndPayForFace, after OwnCommanderBounce.declines and so AFTER canPayCost (A's
+    //   test-payment draws ran), answering AnotherTime.
+    // Keyed on the host's paper name (B3-3): a thief's paid cast counts the thief's Islands, as the spell does.
+    // Free casts and copies (canPlayFromEffectAI -> doTriggerNoCost: a Play effect, Kefnet the Mindful's copy)
+    // never reach canPlayAndPayForFace, and holds answers false for them as well. RNG-free: it reads state only,
+    // allocates no SpellAbility id and makes no LKI copy.
+    public static class FlowOfKnowledge {
+        public static final String NAME = "Flow of Knowledge";
+        static final int MIN_DRAWS = 5; // net +2 after the spell itself and its two discards
+
+        // true = not this window (the caller declines it); false = A's path
+        public static boolean holds(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !NAME.equals(host.getName()) || !sa.isSpell() || sa instanceof AbilitySub
+                    || sa.getApi() != ApiType.Draw || sa.isCopied() || sa.isCastFromPlayEffect()) {
+                return false; // every other SA: A's path
+            }
+            final int draws = ArcanisTheOmnipotent.effectiveDraw(ai, sa); // X = Count$Valid Island.YouCtrl, << TAI
+            if (draws >= ai.getCardsIn(ZoneType.Library).size()
+                    && ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin()) {
+                return false; // the stock guard's draw-win (DrawAi.targetAI's Laboratory Maniac exemption): A's path
+            }
+            return draws < MIN_DRAWS;
+        }
+    }
+
     // Thief of Blood
     // "As it enters, remove all counters from all permanents; it enters with a
     // +1/+1 counter for each counter removed." Symmetric and mandatory, so the

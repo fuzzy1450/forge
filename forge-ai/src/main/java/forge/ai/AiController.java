@@ -912,6 +912,14 @@ public class AiController {
             return AiPlayDecision.CantPlayAi;
         }
 
+        // Dead-card batch 4, row 76, part 76A: Flow of Knowledge. DrawAi approved it whatever the Island count, and
+        // canPayCost above ran A's test payment, draws included; FlowOfKnowledge.holds keeps it until it draws five
+        // (net +2 after the spell and its two discards). A name compare: inert for every other SA. Draws nothing.
+        // See the class comment.
+        if (SpecialCardAi.FlowOfKnowledge.holds(player, sa)) {
+            return AiPlayDecision.AnotherTime;
+        }
+
         return AiPlayDecision.WillPlay;
     }
 
