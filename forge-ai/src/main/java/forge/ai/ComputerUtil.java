@@ -85,6 +85,7 @@ public class ComputerUtil {
         final Game game = source.getGame();
         final Card host = sa.getHostCard();
         final Zone hz = host.isCopiedSpell() ? null : host.getZone();
+        final boolean castFaceDown = sa.isCastFaceDown();
         // what a failed payment needs to undo the cast, kept as PlaySpellAbility.playAbility keeps it for a human
         final boolean refreeze = game.getStack().isFrozen();
         Zone fromZone = null;
@@ -163,6 +164,14 @@ public class ComputerUtil {
             if (fromZone != null) {
                 for (SpellAbility csa : sa.getHostCard().getSpellAbilities()) {
                     csa.setSkip(true);
+                }
+                if (castFaceDown) {
+                    // a morph or disguise cast turned the card face down before the move, and the rollback turns
+                    // its state back but not the flag: PlaySpellAbility.playSpellAbility turns it face up after its
+                    // rollback, so it does here too, or the card sits back in its zone flagged face down
+                    final Card back = game.getCardState(source);
+                    back.setFaceDown(false);
+                    back.updateStateForView();
                 }
             }
             return false;
