@@ -910,9 +910,27 @@ public class AiController {
         // a Play-effect cast never comes here. The paper name is compared here, not 32B1's
         // GiftsUngiven.NAME, so this block stands if 32B1 is reverted alone. G1 under G4's contract,
         // called not edited. A name compare: inert for every other SA.
+        // Retry 1: the AI's own item on top of the stack (logged case 1716826 T10, Tymna's trigger).
+        // There getSpellAbilityToPlay keeps a chosen SA only if it is the list's first copy SA (its
+        // topOwnedByAI && !mustRespond test, copied here), so a Gifts approval is never a cast: it only
+        // ran canPayCost's isManaSourceReserved rolls and shadowed a later copy SA (Twincast, Flare of
+        // Duplication) that A's list walk reached. A refused every such consult inside canPlaySa and no B
+        // canPlaySa consult draws, so declining right after it is A's draws and A's walk. Stack reads
+        // only, before G1; the mustRespond windows (Sensei's Divining Top's AIRespondsToOwnAbility, an
+        // Evoke sacrifice trigger) go on to G1 as before.
         if (sa.isSpell() && host != null && "Gifts Ungiven".equals(host.getName())
-                && !sa.isCastFromPlayEffect() && !SpecialCardAi.CommanderCastCeiling.affordable(player, sa)) {
-            return AiPlayDecision.CantAfford;
+                && !sa.isCastFromPlayEffect()) {
+            if (!game.getStack().isEmpty()) {
+                final SpellAbility stackTop = game.getStack().peekAbility();
+                if (stackTop.getActivatingPlayer().equals(player)
+                        && !stackTop.hasParam("AIRespondsToOwnAbility")
+                        && !(stackTop.isTrigger() && stackTop.getTrigger().isKeyword(Keyword.EVOKE))) {
+                    return AiPlayDecision.AnotherTime;
+                }
+            }
+            if (!SpecialCardAi.CommanderCastCeiling.affordable(player, sa)) {
+                return AiPlayDecision.CantAfford;
+            }
         }
 
         if (!ComputerUtilCost.canPayCost(sa, player, sa.isTrigger())) {

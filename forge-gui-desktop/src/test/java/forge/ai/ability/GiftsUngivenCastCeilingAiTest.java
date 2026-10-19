@@ -27,6 +27,11 @@ import org.testng.annotations.Test;
  * before. The seat plays the Default profile, as the stored games do: its RESERVE_MANA_FOR_MAIN2_CHANCE
  * of 100 is what makes canPayCost's test payment draw (ComputerUtilMana.isManaSourceReserved), and a
  * profile-less seat reads 0 and never draws there.
+ * <p>
+ * Retry 1: with the AI's own item on top of the stack and no mustRespond mark, the same block declines
+ * before G1, drawing nothing (getSpellAbilityToPlay drops every choice there but the first copy SA, so a
+ * Gifts approval was never a cast); an opponent's item on top, or an own item the AI responds to
+ * (Sensei's Divining Top's AIRespondsToOwnAbility), goes on to G1 as before.
  */
 public class GiftsUngivenCastCeilingAiTest extends AITest {
 
@@ -46,6 +51,44 @@ public class GiftsUngivenCastCeilingAiTest extends AITest {
         AssertJUnit.assertEquals(AiPlayDecision.WillPlay, canPlayAndPayFor(setup(4)));
     }
 
+    @Test
+    public void declinesUnderItsOwnItemOnTheStackDrawingNothing() throws ReflectiveOperationException {
+        Player ai = setup(4);
+        castOntoStack(ai, "Runeclaw Bear");
+        long before = MyRandom.callCount();
+        AssertJUnit.assertEquals(AiPlayDecision.AnotherTime, canPlayAndPayFor(ai));
+        AssertJUnit.assertEquals("the own-stack-top decline drew from MyRandom", before, MyRandom.callCount());
+        // canPlaySa itself approves there, so the decline is the block's, after canPlaySa
+        AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+        AssertJUnit.assertEquals(AiPlayDecision.WillPlay, aic.canPlaySa(gifts(ai)));
+    }
+
+    @Test
+    public void castsOverAnOpponentsItem() throws ReflectiveOperationException {
+        Player ai = setup(4);
+        castOntoStack(ai.getGame().getPlayers().get(0), "Runeclaw Bear");
+        AssertJUnit.assertEquals(AiPlayDecision.WillPlay, canPlayAndPayFor(ai));
+    }
+
+    @Test
+    public void castsOverAnOwnItemItRespondsTo() throws ReflectiveOperationException {
+        Player ai = setup(4);
+        Card top = addCard("Sensei's Divining Top", ai);
+        SpellAbility look = null;
+        for (SpellAbility ab : top.getSpellAbilities()) {
+            if (ab.hasParam("AIRespondsToOwnAbility")) {
+                look = ab;
+            }
+        }
+        AssertJUnit.assertNotNull(look);
+        look.setActivatingPlayer(ai);
+        ai.getGame().getStack().add(look);
+        SpellAbility onTop = ai.getGame().getStack().peekAbility();
+        AssertJUnit.assertEquals(ai, onTop.getActivatingPlayer());
+        AssertJUnit.assertTrue(onTop.hasParam("AIRespondsToOwnAbility"));
+        AssertJUnit.assertEquals(AiPlayDecision.WillPlay, canPlayAndPayFor(ai));
+    }
+
     // ai: player 1 on the Default profile in its own Main 2, `islands` untapped Islands, Gifts in hand,
     // eight different names in the library (so canPlaySa's floor approves)
     private Player setup(int islands) {
@@ -63,7 +106,19 @@ public class GiftsUngivenCastCeilingAiTest extends AITest {
         return ai;
     }
 
-    private AiPlayDecision canPlayAndPayFor(Player ai) throws ReflectiveOperationException {
+    // `name`'s spell on the stack, cast by `caster` (unpaid: only the top of the stack matters here)
+    private void castOntoStack(Player caster, String name) {
+        Game game = caster.getGame();
+        Card card = createCard(name, caster);
+        card.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(card);
+        SpellAbility spell = card.getFirstSpellAbility();
+        spell.setActivatingPlayer(caster);
+        game.getStack().add(spell);
+        AssertJUnit.assertEquals(caster, game.getStack().peekAbility().getActivatingPlayer());
+    }
+
+    private SpellAbility gifts(Player ai) {
         Card gifts = null;
         for (Card c : ai.getCardsIn(ZoneType.Hand)) {
             if ("Gifts Ungiven".equals(c.getName())) {
@@ -73,6 +128,11 @@ public class GiftsUngivenCastCeilingAiTest extends AITest {
         AssertJUnit.assertNotNull(gifts);
         SpellAbility sa = gifts.getFirstSpellAbility();
         sa.setActivatingPlayer(ai);
+        return sa;
+    }
+
+    private AiPlayDecision canPlayAndPayFor(Player ai) throws ReflectiveOperationException {
+        SpellAbility sa = gifts(ai);
         AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
         // the regular-cast entry the playable list uses (private): canPlayFromHost, then canPlayAndPayForFace
         Method m = AiController.class.getDeclaredMethod("canPlayAndPayFor", SpellAbility.class);
