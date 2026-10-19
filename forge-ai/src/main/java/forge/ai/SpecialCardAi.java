@@ -58733,6 +58733,15 @@ public class SpecialCardAi {
     // and canPlaySa on an in-band spell, only with the Vizier untapped on our battlefield (a cast, a
     // Herald of the Forgotten or Sun Titan return, a theft). No AiCardMemory, no mana hold; targets
     // are reset on entry and set only on WillPlay.
+    // Dead-card batch 4, row 72 (a W1 follow-up, B4-14: "Clever Conjurer and Vizier untapping Arcanis"; carriers
+    // Arcanis - i LOVE drawing cards 87715b77, deck 508, and precon:Timeless Wisdom 38f87420, deck 241, an anchor,
+    // through Niv-Mizzet, the Firemind): the window above opens only in our own main phase and untaps only mana,
+    // so the Vizier sat idle through the opponent's end step right before our turn, the one window where its {T}
+    // costs nothing (it untaps in our untap step and stayed home through their combat), beside a tapped Arcanis
+    // the Omnipotent that would draw three. Part 72A takes that window first: our tapped creature whose
+    // untargeted, mana-free {T} Draw DrawAi takes at once there (G6's TapDrawEngine.tapped, Rule.NOW_OPP_TURN,
+    // one printed card enough), on an empty stack; with none, the consult keeps the window's AnotherTime. G6's
+    // helpers are called, never edited.
     public static class VizierOfTumblingSands {
         public static final String NAME = "Vizier of Tumbling Sands";
 
@@ -58778,6 +58787,18 @@ public class SpecialCardAi {
             final Game game = ai.getGame();
             final PhaseHandler ph = game.getPhaseHandler();
             sa.resetTargets();
+            // Part 72A (dead-card batch 4, row 72): the opponent's end step right before our turn, on an empty
+            // stack: our tapped creature whose {T} draw DrawAi takes at once (TapDrawEngine.Rule.NOW_OPP_TURN:
+            // hand <= max; one printed card is enough, so Niv-Mizzet's counts). The Vizier untaps in our untap
+            // step before any other use and stayed home through their combat, so this tap costs nothing. A
+            // answered AnotherTime here (below), draw-free; with no engine the consult keeps that answer.
+            if (TapDrawEngine.oppEndStepBeforeOurs(ai) && game.getStack().isEmpty()) {
+                final Card engine = TapDrawEngine.tapped(ai, sa, 1, TapDrawEngine.Rule.NOW_OPP_TURN);
+                if (engine != null) {
+                    sa.getTargets().add(engine);
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
             if (!ph.isPlayerTurn(ai) || ph.getPhase() == null || !ph.getPhase().isMain()
                     || !game.getStack().isEmpty()) {
                 return new AiAbilityDecision(0, AiPlayDecision.AnotherTime); // O(1), RNG-free
