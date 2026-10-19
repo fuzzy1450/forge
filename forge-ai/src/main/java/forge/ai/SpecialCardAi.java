@@ -42134,8 +42134,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28 and 47, keepOff for batch 2's row
-    // 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47 and 58, keepOff for batch 2's
+    // row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -42267,6 +42267,8 @@ public class SpecialCardAi {
                     return SylvanLibrary.readmit(ai, sa);
                 case SanctumPrelate.NAME:                // batch 4, row 47 (W3)
                     return SanctumPrelate.readmit(ai, sa);
+                case VedalkenPlotter.NAME:               // batch 4, row 58 (W3)
+                    return VedalkenPlotter.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -57122,6 +57124,15 @@ public class SpecialCardAi {
     // a Clone or a copy of the trigger): TrigTarget and DBExchange carry AILogic$ VedalkenPlotter, so
     // PumpAi.doTriggerNoCost asks chooseGive and ControlExchangeAi.chkDrawback asks chooseTake against the
     // give actually chosen.
+    // Part 58B: the G3 dispatcher (RemoveDeckFilter.readmit) readmits only the owner's face-up hand cast
+    // (BoshIronGolem.readmit's shape, cheapest checks first): a creature spell from our hand, not a
+    // Play-effect cast, not a copy, not face down, owned by us with no other activator; our own main
+    // phase on an empty stack; Main 2, or Main 1 where ComputerUtil.castPermanentInMain1 holds (the stock
+    // PermanentAi wait, answered before the list sees the spell); no live mana reservation
+    // (RemoveDeckFilter.noManaHeld); the engine's test-mode price within G2 (HonestMana, held sources
+    // skipped) in total and in blue (ChromeshellCrab.price / fits, private copies); and last, the land
+    // scan: a best pair (conservative targeting) scoring MIN_GAIN or more. The hint is KEPT, so the -10
+    // sort sorts the Plotter last and every other isCardRemAIDeck reader still refuses it.
     // A pair (give g, ours; take t, the opponent o's) scores
     //   worth(t) - worth(g)
     //   + COLOUR_VALUE x (identity colours our other mana sources plus t make - those plus g make)
@@ -57141,7 +57152,9 @@ public class SpecialCardAi {
     // lastExpressChoice (ManaEffect.handleSpecialMana).
     // Identity = the player's commander colour identity, every colour without a commander; Any and Combo
     // ColorIdentity stand for the identity of the player who would hold the land.
-    // Floors: the mandatory trigger (the AI puts every trigger on the stack with mandatory = true,
+    // Floors: the readmit (a paid cast from hand) needs score >= MIN_GAIN: a manland, a utility land, a
+    // two-mana land or a new identity colour over our worst give, never a dual for a basic.
+    // The mandatory trigger (the AI puts every trigger on the stack with mandatory = true,
     // PlayerControllerAi.orderAndPlaySimultaneousSa) takes the best pair whatever it scores, so it always
     // loses the least; an optional consult (checkETBEffects' probe of a cast, a Play-effect or theft cast
     // included, and a Strionic copy's retarget of our own trigger) needs a pair scoring 0 or more: never a
@@ -57168,11 +57181,44 @@ public class SpecialCardAi {
     // stamps is put back (B4-4). Worths and colour masks are computed once per call (skeptic A4: local
     // maps keyed by Card and Player, looked up and never iterated, discarded at return), so a scan is one
     // read per land and mana source plus O(gives x takes) arithmetic. The chooser replaces stock picks
-    // that drew Aggregates.random.
+    // that drew Aggregates.random. A readmit refusal is the old filter (every gate before the land scan is
+    // a read, and the scan reads), and the first new draw in an admitted window is canPayCost's
+    // reservation roll, in a window G2 judged payable.
     public static class VedalkenPlotter {
         public static final String NAME = "Vedalken Plotter";
         public static final String LOGIC = "VedalkenPlotter";
+        static final int MIN_GAIN = 20;        // uncalibrated
         static final int COLOUR_VALUE = 200;   // NantukoCultivator.NEW_COLOUR_BONUS, a private twin
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first (BoshIronGolem.readmit's shape)
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.getApi() != ApiType.PermanentCreature
+                    || sa.isCastFromPlayEffect() || sa.isCopied() || sa.isCastFaceDown()
+                    || !host.isInZone(ZoneType.Hand) || !ai.equals(host.getOwner())) {
+                return false; // a theft, a Play-effect cast, a copy: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return false;
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (ph.is(PhaseType.MAIN1) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // the stock Main-2 wait, answered before the list sees the spell
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true) || !fits(ai, sa, price(ai, sa))) {
+                return false; // a refusal only waits
+            }
+            final Swap best = bestPair(ai, null, null); // last: the land scan
+            return best != null && best.score >= MIN_GAIN;
+        }
 
         // PumpAi.doTriggerNoCost (TrigTarget): the land we give. Never null (skeptic A2).
         public static AiAbilityDecision chooseGive(final Player ai, final SpellAbility sa, final boolean mandatory) {
@@ -57518,6 +57564,24 @@ public class SpecialCardAi {
         private static String restrictions(final forge.game.spellability.AbilityManaPart mp) {
             final String r = mp.getManaRestrictions();
             return r == null ? "" : r;
+        }
+
+        // the cost as the engine prices it, RNG-free (test mode: CostAdjustment only); ChromeshellCrab.price,
+        // a private copy
+        private static ManaCostBeingPaid price(final Player ai, final SpellAbility sa) {
+            return ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+        }
+
+        // G2 (HonestMana, held sources skipped) covers the price in total and in blue; ChromeshellCrab.fits,
+        // a private copy
+        private static boolean fits(final Player ai, final SpellAbility sa, final ManaCostBeingPaid cost) {
+            final int total = cost.getConvertedManaCost();
+            final int blue = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+            if (total <= 0 && blue <= 0) {
+                return true; // free: nothing to count
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= total && mana.colour(MagicColor.BLUE) >= blue;
         }
     }
 
