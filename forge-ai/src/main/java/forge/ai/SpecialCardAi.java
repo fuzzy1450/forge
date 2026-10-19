@@ -58892,6 +58892,16 @@ public class SpecialCardAi {
                     }
                     if (!ComputerUtilCost.canPayCost(testSa, ai, false)
                             && aic.canPlaySa(testSa) == AiPlayDecision.WillPlay) {
+                        // Part 72B-hold (dead-card batch 4, row 72): A untaps the mana source here. A tapped
+                        // engine of 2+ printed cards whose draw is taken by our next untap
+                        // (TapDrawEngine.Rule.BY_NEXT_UNTAP) keeps the Vizier for 72A at the opponent's end
+                        // step instead: three cards (six with Bracers) outrank the one spell this untap brings
+                        // a turn early. A veto at A's approval, after A's own draws, so every decline before it
+                        // is A's.
+                        if (TapDrawEngine.tapped(ai, sa, TapDrawEngine.MIN_DRAW,
+                                TapDrawEngine.Rule.BY_NEXT_UNTAP) != null) {
+                            return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+                        }
                         sa.getTargets().add(p.getLeft()); // we want this spell and can only afford it with the untap
                         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
                     }
