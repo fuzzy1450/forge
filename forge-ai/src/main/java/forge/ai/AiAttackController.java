@@ -1585,6 +1585,13 @@ public class AiAttackController {
                 && SpecialCardAi.ArcanisTheOmnipotent.holdForDraw(ai, attacker, defender)) {
             return false;
         }
+        // Arcanis (dead-card batch 4, row 70, part 70B): the hold above releases under "no maximum hand size"
+        // with a hand above getMaxHandSize(), because DrawAi refused that draw; part 70A takes it on the
+        // opponent's turn, so hold there too. After the stock evaluation and after holdForDraw; reads state only.
+        if (attack && SpecialCardAi.ArcanisTheOmnipotent.NAME.equals(attacker.getName())
+                && SpecialCardAi.ArcanisTheOmnipotentHandSize.holdPastMaxHand(ai, attacker, defender)) {
+            return false;
+        }
         return attack;
     }
 

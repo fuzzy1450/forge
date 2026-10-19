@@ -1690,6 +1690,31 @@ public class SpecialCardAi {
                     && !ArcanisTheOmnipotent.decksUsNow(ai, sa)
                     && !KnollspineDragon.drawOrDiscardIsPunished(ai, host);
         }
+
+        // 70B: row 3's hold (ArcanisTheOmnipotent.holdForDraw) released the attack in exactly this state, because
+        // DrawAi refused the draw it holds for (drawWouldBeTaken's last clause, the Tower clause). With 70A that
+        // draw is taken on the opponent's turn, so hold here too: holdForDraw's clauses in its order (vigilance,
+        // four hits of the weakest opponent, commander-damage lethal, legalFor), then 70A's floor (canDraw,
+        // decksUsNow, the punishers). AiAttackController.shouldAttack asks it only after the stock evaluation
+        // approved the attack and holdForDraw declined to hold; the common path costs two reads.
+        public static boolean holdPastMaxHand(final Player ai, final Card attacker, final GameEntity defender) {
+            if (!ai.isUnlimitedHandSize() || ai.getCardsIn(ZoneType.Hand).size() <= ai.getMaxHandSize()) {
+                return false; // not the state the Tower clause released
+            }
+            if (attacker.hasKeyword(Keyword.VIGILANCE)
+                    || attacker.getCurrentPower() * ArcanisTheOmnipotent.HOLD_HITS >= ai.getOpponentsSmallestLifeTotal()) {
+                return false;
+            }
+            if (defender instanceof Player p && attacker.isCommander()
+                    && p.getCommanderDamage(attacker) + attacker.getNetCombatDamage() >= 21) {
+                return false;
+            }
+            final SpellAbility draw = ArcanisTheOmnipotent.tapDraw(attacker);
+            if (draw == null || !ArcanisTheOmnipotent.legalFor(ai, attacker, draw)) {
+                return false;
+            }
+            return drawsPastMaxHand(ai, draw); // canDraw, decksUsNow, the punishers
+        }
     }
 
     // Archangel of Strife
