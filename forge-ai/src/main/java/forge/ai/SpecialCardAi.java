@@ -5322,16 +5322,21 @@ public class SpecialCardAi {
     //   sources skipped, this spell's restrictions), in total and in unpaid blue shards, else CantAfford.
     //   Never getAvailableManaEstimate (it counts Produced$ words): an approval in an unpayable window
     //   would reach canPayCost's isManaSourceReserved roll;
+    // - mana the payment cannot use (the row-18 retry), asked only once that plain test passed: the
+    //   same test again with unusableMana's sources taken off, else CantAfford. G2 counts two kinds of
+    //   source ComputerUtilMana's payment never spends here: instant-speed-only mana (a Lion's Eye
+    //   Diamond our own row-51 cast left on the battlefield: off the total and blue) and a reflection
+    //   that reflects nothing now (Mox Amber with no legendary creature or planeswalker of ours, game
+    //   1707867 with Vivi in the command zone; an unimprinted Chrome Mox; an Exotic Orchard facing no
+    //   coloured land: off the total only, G2 gives a reflection no colour);
     // - else WillPlay 100.
     // RNG: reached after EffectAi's randomReturn roll, the one draw A made at every consult; every check
     // here is a read, so a decline is A's consult exactly. canPayCost's draws follow only a WillPlay G2
-    // called payable. Nothing is targeted, held or remembered.
-    // G2's over-counts stand: a one-shot source (a Treasure) is counted and may be spent, so the worst
-    // case is two mana for a card, one of which may not untap; a Lion's Eye Diamond our own row-51
-    // cast left on the battlefield counts 3 the payer never uses (instant-speed mana), an approval
-    // canPayCost then refuses after its draws, never a wrong cast. A direct canPlaySa probe of a
-    // no-cost copy (ManaAi's ritual look-ahead) prices 0 and is approved in the window, draw-free:
-    // an approval is not a cast.
+    // and unusableMana called payable. Nothing is targeted, held or remembered.
+    // G2's other over-counts stand: a one-shot source (a Treasure, a Mana Vault) is counted and may be
+    // spent, so the worst case is two mana for a card, one of which may not untap; a pain source the
+    // payment refuses at low life is counted. A direct canPlaySa probe of a no-cost copy (ManaAi's
+    // ritual look-ahead) prices 0 and is approved in the window, draw-free: an approval is not a cast.
     public static class BorneUponAWind {
         public static final String NAME = "Borne Upon a Wind";
         static final int LIBRARY_MIN = 5;
@@ -5359,7 +5364,71 @@ public class SpecialCardAi {
                     || mana.colour(MagicColor.BLUE) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
+            final int[] off = unusableMana(ai, sa); // the second scan, only where the plain G2 test passed
+            if (mana.total() - off[0] < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLUE) - off[1] < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // {total off, blue off}: the mana G2 counted that ComputerUtilMana's payment never spends on
+        // this spell now. It reads every battlefield source of ours G2 counted (HonestMana.isHeld's
+        // sources skipped, as G2 skips them; isHeld is called, not edited) and, under G2's own filter,
+        // its usable mana abilities (setActivatingPlayer, canPlay, no mana in the cost, metConditions,
+        // meetsManaRestrictions, Amount > 0). A source comes off only when every one of them is
+        // - instant-speed only (getRestrictions().isInstantSpeed(): Lion's Eye Diamond; a private copy
+        //   of 23A1's QuicksilverElemental.instantOnlyMana test, whose abilities
+        //   ComputerUtilMana.getAIPlayableMana and canPayShardWithSpellAbility skip): its amount comes
+        //   off the total and off blue (G2 counts Produced$ Any in every colour), or
+        // - a ManaReflected ability with ReflectProperty Is or Produce whose
+        //   CardUtil.getReflectableManaColors is empty (the payment's reflected branch finds no colour
+        //   to make): its amount comes off the total only (G2 gives a reflection no colour).
+        // The source gives its best such amount. A source with any other usable ability keeps G2's
+        // count, and a Produced reflection (a read of a triggering object) is left as G2 counted it.
+        // Errs toward under-counting as 23A1's copy does (instant-only mana of another colour comes
+        // off blue too). Draws nothing and holds nothing; its only writes are setActivatingPlayer on
+        // the mana abilities it reads, as G2's, and the reflection read's own stamps, as the payment's.
+        private static int[] unusableMana(final Player ai, final SpellAbility sa) {
+            int total = 0;
+            int blue = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (HonestMana.isHeld(ai, src)) {
+                    continue;
+                }
+                int instantBest = 0;
+                int reflectedBest = 0;
+                boolean other = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    if (ma.getRestrictions() != null && ma.getRestrictions().isInstantSpeed()) {
+                        instantBest = Math.max(instantBest, amount);
+                    } else if (ma.getApi() == ApiType.ManaReflected
+                            && ("Is".equals(ma.getParam("ReflectProperty")) || "Produce".equals(ma.getParam("ReflectProperty")))
+                            && CardUtil.getReflectableManaColors(ma).isEmpty()) {
+                        reflectedBest = Math.max(reflectedBest, amount);
+                    } else {
+                        other = true;
+                    }
+                }
+                if (!other) {
+                    total += Math.max(instantBest, reflectedBest);
+                    blue += instantBest;
+                }
+            }
+            return new int[] {total, blue};
         }
     }
 
