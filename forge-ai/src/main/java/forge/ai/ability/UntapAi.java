@@ -81,6 +81,25 @@ public class UntapAi extends SpellAbilityAi {
             // and stays stock.
             return SpecialCardAi.VizierOfTumblingSands.considerUntap(ai, sa);
         }
+        if (SpecialCardAi.CleverConjurer.isTapUntap(sa)) {
+            // Dead-card batch 4, row 72 (with the Vizier's amendment above), part 72C-engine. Clever Conjurer's
+            // sorcery-speed "{T}: Untap target permanent not named Clever Conjurer". Stock untapPrefTargeting
+            // below, with a tapped Arcanis the Omnipotent, still took a pricier permanent (Nezahal) or, with only
+            // creatures tapped, the best creature (a Kraken token). First our tapped draw engine
+            // (SpecialCardAi.CleverConjurer.engine); else exactly the stock targeted path below. Keyed on the
+            // host's paper name (rule B3-3). Draw-free: the engine scan reads state, and untapPrefTargeting
+            // draws nothing; with no engine this is A's path and answer.
+            final Card engine = SpecialCardAi.CleverConjurer.engine(ai, sa);
+            if (engine != null) {
+                sa.resetTargets();
+                sa.getTargets().add(engine);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            if (untapPrefTargeting(ai, sa, false)) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
         final Card source = sa.getHostCard();
 
         if (sa.usesTargeting()) {

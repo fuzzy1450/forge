@@ -8784,6 +8784,30 @@ public class SpecialCardAi {
         }
     }
 
+    // Clever Conjurer (dead-card batch 4, row 72, with the Vizier of Tumbling Sands amendment; carrier Arcanis - i
+    // LOVE drawing cards 87715b77, deck 508, the only registered deck with the card)
+    // "Mage Hand -- {T}: Untap target permanent not named Clever Conjurer. Activate only as a sorcery." ({2}{U}
+    // 2/3.) Stock UntapAi.untapPrefTargeting never targeted a tapped Arcanis the Omnipotent ahead of a pricier
+    // permanent (Nezahal) or a bigger creature (a Kraken token: with only creatures tapped it takes the best one),
+    // and fired at the first main-phase priority anything of ours was tapped, usually a land in Main 1 before
+    // Arcanis drew in Main 2 (1700915, 1689744). engine() (part 72C-engine): our tapped creature whose {T} draw
+    // (no mana, 2+ printed cards) is taken before our next untap (G6's TapDrawEngine.Rule.BY_NEXT_UNTAP);
+    // UntapAi.checkApiLogic targets it first and otherwise runs the stock targeted path. Keyed on the host's
+    // paper name (rule B3-3). RNG-free; no AiCardMemory; targets reset before an engine is set.
+    public static class CleverConjurer {
+        public static final String NAME = "Clever Conjurer";
+
+        public static boolean isTapUntap(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return !(sa instanceof AbilitySub) && sa.isActivatedAbility() && host != null && host.getRules() != null
+                    && NAME.equals(host.getRules().getName());
+        }
+
+        public static Card engine(final Player ai, final SpellAbility sa) {
+            return TapDrawEngine.tapped(ai, sa, TapDrawEngine.MIN_DRAW, TapDrawEngine.Rule.BY_NEXT_UNTAP);
+        }
+    }
+
     // Clone Legion
     // "For each creature target player controls, create a token that's a copy
     // of that creature." CopyPermanentAi's DuplicatePerms count reads
