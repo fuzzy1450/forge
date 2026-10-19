@@ -51569,6 +51569,85 @@ public class SpecialCardAi {
         }
     }
 
+    // Pyroblast (dead-card batch 4, row 13); Hydroblast is the same script for red
+    // "Choose one -- Counter target spell if it's blue. / Destroy target permanent if it's blue." ({R}
+    // Instant.) Each mode targets any spell or permanent (ValidTgts$ Card / Permanent: the colour is
+    // checked on resolution) and carries ConditionDefined$ Targeted | ConditionPresent$ <colour>, with
+    // AITgts$ Card.Blue keeping the AI's own targets blue. CharmAi.checkApiLogic cuts the charm's chain
+    // (setSubAbility(null)) before chooseOptionsAi asks each mode's handler with the mode DETACHED: its
+    // parent is the charm, but it is not the charm's subAbility. So the handler picks its own target
+    // (CounterAi: an opponent's counterable spell on top whose host passes AITgts; DestroyAi: the
+    // opponents' permanents through filterAITgts, strict), and SpellAbilityAi.checkConditions then
+    // reads Targeted through getAllTargetChoices, which walks root -> subAbility and never reaches the
+    // mode: no target, 0 < 1, ConditionsNotMet for both modes at every evaluation. The stock engine
+    // never cast the card, by anyone (0 casts in 3,395 game rows on 2.0.15+499e03087c5, 2,499 held
+    // games over 1,069 distinct libraries); its census logged 621 such vetoes in four games, each one
+    // true when re-read chained. Red Elemental Blast, the same charm with ValidTgts$ Card.Blue and no
+    // condition, is cast in 995 of 1,765 holds (these three decks and Blue Farm 4Matic).
+    // vetoedByDetachment is the shape gate. chooseOptionsAi's first pass asks it only for a refused
+    // mode, and it is true only when, in order:
+    // - the mode's decision is ConditionsNotMet, which canPlayWithoutRestrict returns only after
+    //   checkApiLogic approved and set this evaluation's targets (an AbilitySub has no cost to
+    //   judge), so a stale target never reaches the re-read; and the charm chooses exactly one mode
+    //   (num == 1 and min == 1: choose exactly one, no entwine);
+    // - the charm is a spell with no chain, and it is the mode's parent;
+    // - the mode reads ConditionDefined$ Targeted, targets, and has a target;
+    // - its condition holds with the mode chained under the charm, as CharmEffect.chainAbilities
+    //   chains the one chosen mode for resolution: this is the condition the spell will meet. The
+    //   chain is restored in finally (setSubAbility re-sets the parent the mode already has).
+    // CharmAi then takes the first such mode only when no mode was chosen and CommanderCastCeiling
+    // (G1, called unchanged) affords the charm. G1's contract here: it is called from a shape gate on
+    // a checkApiLogic path with the activator set (chooseOptionsAi is reached only when choiceForOpp
+    // is false, i.e. sa.getActivatingPlayer() is the AI), and for a no-mana-cost copy (PlayEffect's,
+    // targetPlayableSpellCard's copyWithNoManaCost) it prices the zero cost that cast really pays and
+    // passes. RNG-free for {R} and {U}: no Announce$, no cost feature that asks a controller.
+    // The floor is the stock handlers' and Red Elemental Blast's, and it is never re-asked: once the
+    // chosen list is set, CharmAi.chkDrawbackWithSubs returns WillPlay for the chained mode, so neither
+    // CounterAi.chkDrawback (which would take the first opposing spell with no AITgts) nor
+    // DestroyAi.chkDrawback re-aims it, and the cast resolves the first pass's strict AITgts targets:
+    // an opponent's counterable blue spell on top (the profile's CMC 1-3 chances and
+    // MIN_SPELL_CMC_TO_COUNTER applied), or an opponent's blue permanent past DestroyAi's
+    // indestructible, shield, regenerate, sacrifice, undying and dies-this-turn filters,
+    // getBestRemovalTargetAI and useRemovalNow's floor and roll. Never a non-blue object (the chained
+    // re-read is the second lock), never our own.
+    // RNG parity: every mode was evaluated as before and the stock loop did not break (no mode passed),
+    // so a decline (no detached-only mode, or a window G1 refuses) has drawn exactly the stock draws;
+    // the re-read and G1 draw nothing (setSubAbility rebuilds the view's description, no draw, no id).
+    // An affordable window goes on to the cast path's canPayCost: the intended divergence.
+    // Shape reach (B3-13): four charm scripts have a ConditionDefined$ Targeted mode; this takes two,
+    // p/pyroblast.txt and h/hydroblast.txt. b/brilliance_unleashed.txt and g/getaway_glamer.txt
+    // (CharmNum$ 2 | MinCharmNum$ 1) are refused at num and stay stock. Every other charm's refused
+    // mode stops at the first test, a field read.
+    // Residuals: SpellAbilityAi.checkApiLogic's 80% roll still applies to a same-turn recast; G1 is a
+    // ceiling, not a payability test, so a window it passes that canPayCost then fails draws there and
+    // declines; the direct canPlaySa hand scans (ComputerUtil.hasReasonToPlayCardThisTurn from TapAi,
+    // ComputerUtil.targetPlayableSpellCard's copies, ManaAi's ritual scan, which then skips instants)
+    // now read WillPlay in an affordable window with a blue target, as they already do for Red
+    // Elemental Blast in these decks.
+    public static class TargetedIfColor {
+        // CharmAi.chooseOptionsAi's first pass, for a mode its handler refused: true when the refusal
+        // was only the detached Targeted read and the chained re-read holds.
+        public static boolean vetoedByDetachment(final SpellAbility charm, final AbilitySub mode,
+                final AiAbilityDecision decision, final int num, final int min) {
+            if (decision.decision() != AiPlayDecision.ConditionsNotMet || num != 1 || min != 1) {
+                return false;
+            }
+            if (!charm.isSpell() || charm.getSubAbility() != null || mode.getParent() != charm) {
+                return false;
+            }
+            if (!"Targeted".equals(mode.getConditions().getPresentDefined())
+                    || !mode.usesTargeting() || mode.getTargets().isEmpty()) {
+                return false;
+            }
+            try {
+                charm.setSubAbility(mode); // the chain CharmEffect.chainAbilities builds for resolution
+                return mode.getConditions().areMet(mode);
+            } finally {
+                charm.setSubAbility(null);
+            }
+        }
+    }
+
     // Teferi's Reproach (dead-card batch 3, row 45; precon:Multiverse Reforged (FRC))
     // "Choose target opponent. Until that player's next turn, they gain protection from everything
     // and their life total can't change. All nonland permanents they control phase out. (They phase

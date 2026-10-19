@@ -205,13 +205,17 @@ public class CharmAi extends SpellAbilityAi {
             Collections.reverse(choices);
         }
         int pawprintAmount = 0;
+        // Dead-card batch 4, row 13 (SpecialCardAi.TargetedIfColor): the first mode in shuffled order
+        // that its handler approved and only the detached ConditionDefined$ Targeted read refused.
+        AbilitySub detachedOnly = null;
 
         // First pass using standard canPlayAi() for good choices
         for (AbilitySub sub : choices) {
             handleDependentModes(sa, chosen, sub);
             sub.setActivatingPlayer(ai);
             // TODO instead of shuffling check all to sort by AiAbilityDecision rating
-            if (SpellApiToAi.Converter.get(sub).canPlayWithSubs(ai, sub).willingToPlay() && canPayForAdditionalMode(sa, chosen, sub, ai)) {
+            final AiAbilityDecision modeDecision = SpellApiToAi.Converter.get(sub).canPlayWithSubs(ai, sub);
+            if (modeDecision.willingToPlay() && canPayForAdditionalMode(sa, chosen, sub, ai)) {
                 if (pawprintLimit > 0) {
                     int curPawprintAmount = AbilityUtils.calculateAmount(sub.getHostCard(), sub.getParamOrDefault("Pawprint", "0"), sub);
                     if (pawprintAmount + curPawprintAmount > pawprintLimit) {
@@ -224,7 +228,17 @@ public class CharmAi extends SpellAbilityAi {
                     // maximum choices reached
                     break;
                 }
+            } else if (detachedOnly == null && !isTrigger
+                    && SpecialCardAi.TargetedIfColor.vetoedByDetachment(sa, sub, modeDecision, num, min)) {
+                detachedOnly = sub;
             }
+        }
+        // Every mode was evaluated exactly as before (the stock loop never broke early here, since no
+        // mode passed), so a decline below has drawn what the stock engine drew. The chained re-read
+        // and the G1 mana ceiling draw nothing; only an affordable window takes the mode, and only then
+        // does the cast path's canPayCost run.
+        if (chosen.isEmpty() && detachedOnly != null && SpecialCardAi.CommanderCastCeiling.affordable(ai, sa)) {
+            chosen.add(detachedOnly);
         }
         if (isTrigger && chosen.size() < min) {
             // Second pass using doTrigger(false) to fulfill minimum choice
