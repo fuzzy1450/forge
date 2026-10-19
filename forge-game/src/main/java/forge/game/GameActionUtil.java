@@ -951,6 +951,22 @@ public final class GameActionUtil {
     }
 
     public static void rollbackAbility(SpellAbility ability, final Zone fromZone, final int zonePosition, CostPayment payment, Card oldCard) {
+        if (!rollbackCast(ability, fromZone, zonePosition, payment, oldCard)) {
+            return;
+        }
+        final Game game = ability.getActivatingPlayer().getGame();
+        game.getStack().clearFrozen();
+        game.getTriggerHandler().clearWaitingTriggers();
+    }
+
+    /**
+     * rollbackAbility without its last two steps: the frozen stack and the waiting triggers are left alone, for a cast
+     * that fails inside a resolution (a spell cast by a play effect), whose resolving stack is frozen and holds what
+     * the resolution has put there and triggered so far.
+     *
+     * @return false when the whole game state was restored from a snapshot instead, as rollbackAbility then does nothing more
+     */
+    public static boolean rollbackCast(SpellAbility ability, final Zone fromZone, final int zonePosition, CostPayment payment, Card oldCard) {
         // cancel ability during target choosing
         final Game game = ability.getActivatingPlayer().getGame();
 
@@ -958,7 +974,7 @@ public final class GameActionUtil {
             // If we're able to restore the whole game state when rolling back an ability don't try to manually roll back
             System.out.println("Restored state from snapshot! Rolled back: " + ability.getHostCard().getName() + " - " + ability.getActivatingPlayer());
 
-            return;
+            return false;
         }
 
         if (fromZone != null && !fromZone.is(ZoneType.None)) { // and not a copy
@@ -1019,9 +1035,7 @@ public final class GameActionUtil {
         //ability.clearTargets();
         ability.resetOnceResolved();
         payment.refundPayment();
-
-        game.getStack().clearFrozen();
-        game.getTriggerHandler().clearWaitingTriggers();
+        return true;
     }
 
 }

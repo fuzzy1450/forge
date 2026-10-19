@@ -264,7 +264,8 @@ public class ComputerUtil {
             zonePosition = fromZone.getCards().indexOf(source);
         }
 
-        if (sa.isSpell() && !source.isCopiedSpell()) {
+        final boolean moved = sa.isSpell() && !source.isCopiedSpell();
+        if (moved) {
             sa.setHostCard(game.getAction().moveToStack(source, sa));
             sa = GameActionUtil.addExtraKeywordCost(sa);
         }
@@ -281,6 +282,15 @@ public class ComputerUtil {
         if (pay.payComputerCosts(new AiCostDecision(ai, sa, false))) {
             game.getStack().add(sa);
             return true;
+        }
+        if (moved) {
+            // A spell a play effect casts (playSaFromPlayEffect) whose payment fails goes back where it was cast
+            // from, its convoke creatures untapped and its mana refunded, instead of staying in the Stack zone with
+            // no stack entry, lost to the game. The resolving stack stays frozen, with the spells and the triggers
+            // the resolution has put on it so far: rollbackCast is rollbackAbility without its clearFrozen and
+            // clearWaitingTriggers, which would drop them in the middle of the resolution.
+            System.out.println("[" + sa.getActivatingPlayer() + "] AI failed to play " + sa.getHostCard() + " [" + sa.getHostCard().getZone() + "]");
+            GameActionUtil.rollbackCast(sa, fromZone, zonePosition, pay, source);
         }
         return false;
     }
