@@ -525,6 +525,23 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.TrashForTreasure.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.GiftsUngiven.handles(sa)) {
+            // Dead-card batch 4, row 32: Gifts Ungiven. After cardsToChoose().clear() above, which A
+            // reached at every consult (the per-game scratch an Intuition resolution reads, and both
+            // carriers run Intuition), so a decline here leaves that scratch exactly as A left it. The
+            // card has no AILogic, so the stock hidden-origin judgement below was its whole path: run it
+            // first, unchanged, so a decline makes A's draws (none with one opponent;
+            // choosePreferredDefenderPlayer's Aggregates.random in a pod), then the RNG-free floor
+            // (SpecialCardAi.GiftsUngiven.worthSearching) on an approval only. Play-effect casts and
+            // copies (doTriggerNoCost -> hiddenTriggerAI) never come here. Every other ChangeZone card
+            // takes exactly the path it took before this branch.
+            final AiAbilityDecision stock = hiddenOriginCanPlayAI(aiPlayer, sa);
+            if (stock.willingToPlay() && !SpecialCardAi.GiftsUngiven.worthSearching(aiPlayer, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return stock;
+        }
+
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {

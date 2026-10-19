@@ -29098,6 +29098,137 @@ public class SpecialCardAi {
         }
     }
 
+    // Gifts Ungiven (dead-card batch 4, row 32; Blue Farm 4Matic and All the world's power, site uploads)
+    // "Search your library for up to four cards with different names and reveal them. Target opponent
+    // chooses two of those cards. Put the chosen cards into your graveyard and the rest into your hand.
+    // Then shuffle." ({3}{U} Instant.) Never owner-cast: before Main 2 the root's hidden-origin timing
+    // gate (ChangeZoneAi.hiddenOriginCanPlayAI, a Library destination) refused it, and from Main 2 on the
+    // cast died on its sub-ability, DBChangeZone1 (ValidTgts$ Opponent), which carried no IsCurse$:
+    // ChangeZoneAi.hiddenOriginPlayDrawbackAI aimed the non-curse at the AI itself, could not, and
+    // answered TargetingFailed. Part 32A puts IsCurse$ True on that line, and the stock sub then targets
+    // choosePreferredDefenderPlayer. The resolution needs nothing: the root has no AILogic, so the
+    // caster's four picks are the stock tutor pick (no shared scratch read), and the targeted opponent's
+    // two are the stock Graveyard-destination pick, its getBestAI: the adversarial one.
+    // This floor (32B1) is asked from ChangeZoneAi.checkApiLogic, after the per-game cardsToChoose()
+    // clear A reached at every consult (the scratch an Intuition resolution reads; both carriers run
+    // Intuition) and only after the stock hiddenOriginCanPlayAI, called first and unchanged, approved.
+    // worthSearching declines, cheapest check first:
+    // - F1: a library under SEARCHED + LIBRARY_KEEP: four cards leave it and at least four must stay
+    //   (DrawAi's own self-draw refusal, numCards >= library - 3);
+    // - F3: a search an opponent controls (Opposition Agent's ControlOpponentsSearchingLibrary, recorded
+    //   on us for as long as the Agent is out: the pile would be exiled for its controller);
+    // - our LimitSearchLibrary (Aven Mindcensor: the search sees only the top four, so F2's count over
+    //   the whole library would not hold);
+    // - F4 (separable): no room in hand for the two cards, by DrawAi's hand rule with the host not
+    //   counted while it is in hand: on our turn the hand would go over the maximum before cleanup; on an
+    //   opponent's turn it is over the maximum already. No check under "no maximum hand size";
+    // - a punished search (searchPunished, LongTermPlans' private verbatim copy, rule B3-7): an opposing
+    //   SearchedLibrary trigger (Archivist of Oghma, Wan Shi Tong: a card and a life for them per
+    //   search), an opposing ControlOpponentsSearchingLibrary static, or a Shuffled trigger on any
+    //   battlefield whose ValidPlayer matches us (Widespread Panic: the closing shuffle fires it);
+    // - F2, last, stopping at four: fewer than four different names in the library (with three, one
+    //   card reaches the hand; with two, none).
+    // A cast is then four different-named cards of our own library, two of them to our hand and two to
+    // our graveyard (the carriers' recursion: Reanimate, Yawgmoth's Will, Underworld Breach, Sevinne's
+    // Reclamation), at {3}{U} for one card. The stock checks stay where they are: an unsearchable library
+    // (canSearchLibraryWith: Stranglehold, Leonin Arbiter, Ashiok) in hiddenOriginCanPlayAI, an opponent
+    // the sub cannot target (Leyline of Sanctity) at its TargetingFailed.
+    // handles() reads the source name, the host's name or the card state's name, so a face-down cast from
+    // exile (a Gonti-class thief) meets the floor too (HourOfEternity.isHour's idiom, rule B3-3); the
+    // consulting player is the caster, a thief included (Mnemonic Betrayal, Commandeer). Play-effect casts
+    // and copies (Twincast, Flare of Duplication) go through doTriggerNoCost -> hiddenTriggerAI and never
+    // reach checkApiLogic.
+    // RNG: reads only (zone sizes and names, keywords, the search-control record, the phase, trigger and
+    // static parameters); no draw, no write, no SpellAbility allocated. A decline returns after the
+    // stock call, so it ends with A's draws and A's scratch: none with one opponent; in a pod the root's
+    // choosePreferredDefenderPlayer roll, and the sub's one skipped (no pod game is stored).
+    public static class GiftsUngiven {
+        public static final String NAME = "Gifts Ungiven";
+        static final int SEARCHED = 4;      // "up to four cards with different names"
+        static final int TO_HAND = 2;       // the opponent bins two, the rest reach the hand
+        static final int LIBRARY_KEEP = 4;  // DrawAi's refusal, numCards >= library - 3
+
+        // the root spell, by its source name, its host's name (the face-up LKI canPlayAndPayFor switched
+        // in) or the card state's name: getAbilitySourceName reads "" for a card cast face down from exile
+        public static boolean handles(final SpellAbility sa) {
+            if (sa instanceof AbilitySub || !sa.isHidden()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        // RNG-free. ai = the consulting player: the caster, or a thief casting it.
+        public static boolean worthSearching(final Player ai, final SpellAbility sa) {
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            // F1: never decks its caster -- four leave the library, at least four stay
+            if (library.size() < SEARCHED + LIBRARY_KEEP) {
+                return false;
+            }
+            // F3: an opponent's Opposition Agent controls the search: the pile is exiled for them
+            if (ai.getControlledWhileSearching() != null) {
+                return false;
+            }
+            // Aven Mindcensor: the search sees only the top four
+            if (ai.hasKeyword("LimitSearchLibrary")) {
+                return false;
+            }
+            // F4: DrawAi's hand rule for the two cards to hand -- no cleanup discard on our own turn; on
+            // an opponent's turn, never above the maximum already
+            if (!ai.isUnlimitedHandSize()) {
+                final Card host = sa.getHostCard();
+                final int handExcl = ai.getCardsIn(ZoneType.Hand).size()
+                        - (host != null && host.isInZone(ZoneType.Hand) ? 1 : 0);
+                final boolean ourTurn = ai.getGame().getPhaseHandler().isPlayerTurn(ai);
+                if (ourTurn ? handExcl + TO_HAND > ai.getMaxHandSize() : handExcl > ai.getMaxHandSize()) {
+                    return false;
+                }
+            }
+            // B3-7: nobody profits from the search or the closing shuffle
+            if (searchPunished(ai)) {
+                return false;
+            }
+            // F2, last: four different names, so two cards reach the hand (with three, one; with two,
+            // none); it stops at the fourth
+            final Set<String> names = new HashSet<>();
+            for (final Card c : library) {
+                final String name = c.getName();
+                if (name != null && !name.isEmpty() && names.add(name) && names.size() >= SEARCHED) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // LongTermPlans.searchPunished, a private verbatim copy (an accepted helper is not shared)
+        private static boolean searchPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.SearchedLibrary) {
+                            return true;
+                        }
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (st.hasParam("ControlOpponentsSearchingLibrary")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Shuffled && t.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Ion Storm
     // "{1}{R}, Remove a +1/+1 counter or a charge counter from a permanent you control: Ion
     // Storm deals 2 damage to any target." The script splits the "or" into two AB$ DealDamage
