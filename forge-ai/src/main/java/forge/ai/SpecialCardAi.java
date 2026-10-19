@@ -13855,6 +13855,8 @@ public class SpecialCardAi {
                     return RedirectLightning.consider(ai, sa);
                 case Misdirection.NAME:      // batch 4's row 40
                     return Misdirection.consider(ai, sa);
+                case RicochetTrap.NAME:      // batch 4's row 43
+                    return RicochetTrap.consider(ai, sa);
                 default:
                     return null;
             }
@@ -13871,6 +13873,8 @@ public class SpecialCardAi {
                 case RedirectLightning.NAME: // batch 4's row 11
                     return true;
                 case Misdirection.NAME:      // batch 4's row 40
+                    return true;
+                case RicochetTrap.NAME:      // batch 4's row 43
                     return true;
                 default:
                     return false;
@@ -13950,6 +13954,67 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+    }
+
+    // Ricochet Trap (dead-card batch 4, row 43; a case of G7's SwatFamily)
+    // "If an opponent cast a blue spell this turn, you may pay {R} rather than pay this spell's mana
+    // cost. Change the target of target spell with a single target." ChangeTargetsAi.checkApiLogic
+    // answered CantPlayAi for every ChangeTargets card but Spellskite's magnet, Deflecting Swat and
+    // Wild Ricochet, at a draw-free point: 0 owner casts in 357 distinct held libraries on the active
+    // engine. G7's SwatFamily.consider routes the card here. First the step-aside: with anything on
+    // the stack, a Deflecting Swat in our hand while we control a commander (its free alternative
+    // cost, IsPresent$ Card.IsCommander+YouCtrl, is live) makes this card decline (CantPlayAi). Swat's
+    // window contains this card's (its TargetType$ Spell,Activated,Triggered admits every
+    // Spell.singleTarget top) and its floor is the same consider, judged right after this card (CMC 3
+    // sorts after 4), so the free Swat answers every window this card would, for no mana: a {3}{R}
+    // paid from Mana Vault, Grim Monolith or Lotus Petal never buys what Swat does free, and every
+    // free Swat cast stays the one A made. The stack test comes first, so an empty-stack consult stays
+    // O(1). Then the window and floor are Deflecting Swat's (batch 1, row 27), called unchanged: an
+    // opponent's spell on top whose single-target, non-divided part harms its target (DealDamage,
+    // Destroy, GainControl, ChangeZone to Graveyard/Library/Hand/non-returning Exile, curse or
+    // negative Pump, curse or steal Attach), aims at our commander, a planeswalker, a creature worth a
+    // vanilla 2/2, a nonland CMC 3+ permanent or our life against lethal, is predicted to remove it
+    // (predictThreatenedObjects), and has a legal new target an opponent controls or is; TargetType$
+    // Spell.singleTarget is Swat's own canTargetSpellAbility check, so an ability, a two-target spell
+    // or a chain with two targets never opens it. Then the price, RNG-free (B3-5): the variant's
+    // adjusted mana, {R} (an opponent cast a blue spell this turn; a blue removal spell on top is
+    // one) or {3}{R}, must fit HonestMana with held sources skipped (G1), so no unpayable window
+    // reaches canPayCost's isManaSourceReserved draws. A copy skips the step-aside and the price
+    // (nothing is paid). An AbilitySub answers null: the stock path below G7's route. Resolution: G7's
+    // PlayerControllerAi.chooseNewTargetsFor block (SwatFamily.retargets names the card) ->
+    // DeflectingSwat.chooseNewTargets, unchanged. RNG class (B4-9): gates on a path A refused at a
+    // draw-free point; every decline draws nothing and allocates no SpellAbility id; inert for every
+    // other card (a name compare). Couplings (B3-4): a revert of DeflectingSwat (batch 1, row 27) or
+    // of G1 CommanderCastCeiling reverts this row; G7's case and name go with it.
+    public static class RicochetTrap {
+        public static final String NAME = "Ricochet Trap";
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (sa instanceof AbilitySub) {
+                return null; // not this row's ability: G7 keeps the stock path
+            }
+            // The step-aside: a free Deflecting Swat answers every window this card does, for no mana
+            // (see the class comment). Guarded by the stack test so an empty-stack consult stays O(1);
+            // a copy pays nothing.
+            if (!sa.isCopied() && !ai.getGame().getStack().isEmpty() && freeSwatHeld(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final AiAbilityDecision swat = DeflectingSwat.consider(ai, sa);
+            if (!swat.willingToPlay() || sa.isCopied()) {
+                return swat;
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return swat;
+        }
+
+        // Deflecting Swat in hand with its free alternative cost live (IsPresent$ Card.IsCommander+YouCtrl)
+        private static boolean freeSwatHeld(final Player ai) {
+            return ai.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.nameEquals("Deflecting Swat"))
+                    && ai.getCardsIn(ZoneType.Battlefield).anyMatch(Card::isCommander);
         }
     }
 
