@@ -899,6 +899,22 @@ public class AiController {
             return AiPlayDecision.CantAfford;
         }
 
+        // Dead-card batch 4, row 32, part 32B2: Gifts Ungiven. In A its sub-ability's targeting
+        // (ChangeZoneAi.hiddenOriginPlayDrawbackAI, a non-curse that could only target opponents) refused
+        // every consult inside canPlaySa, so canPayCost never ran for it; with IsCurse$ on that sub (32A)
+        // canPlaySa approves from Main 2 on, and an unpayable window would now draw canPayCost's
+        // isManaSourceReserved rolls (the IsCurse-only prototype left A's stream 1-4 turns before its
+        // first cast in all three logged games). G1 refuses those windows first, drawing nothing, as A's
+        // decline drew nothing after canPlaySa. Placed after canPlaySa, so B has made exactly A's
+        // evaluation first. Own paid casts (from hand, or a thief's or graveyard caster's regular cast);
+        // a Play-effect cast never comes here. The paper name is compared here, not 32B1's
+        // GiftsUngiven.NAME, so this block stands if 32B1 is reverted alone. G1 under G4's contract,
+        // called not edited. A name compare: inert for every other SA.
+        if (sa.isSpell() && host != null && "Gifts Ungiven".equals(host.getName())
+                && !sa.isCastFromPlayEffect() && !SpecialCardAi.CommanderCastCeiling.affordable(player, sa)) {
+            return AiPlayDecision.CantAfford;
+        }
+
         if (!ComputerUtilCost.canPayCost(sa, player, sa.isTrigger())) {
             // for dependent costs with X, e.g. Repeal, which require a valid target to be specified before a decision can be made
             // on whether the cost can be paid, this can only be checked late after canPlaySa has been run (or the AI will misplay)
