@@ -58769,6 +58769,14 @@ public class SpecialCardAi {
     //   step anyway, so this tap costs nothing. UntapAi.checkApiLogic routes the same ability to considerUntap,
     //   which targets the best holder: the most cards per activation (effectiveDraw: Bracers, Teferi's Ageless
     //   Insight), then our commander, then evaluateCreature between two creatures, then battlefield order.
+    // - the cast (part 74B, isOwnHandCast): our own face-up creature spell from our hand (not a Play-effect cast,
+    //   not a copy, not face down), in our Main 2 on an empty stack with no held mana (G3's noManaHeld), while
+    //   castHolder finds a creature or artifact of ours on the battlefield, tapped or not, whose draw is a
+    //   holderDraw that this card's untap could target now (no shroud) and that does not deck us now (W1's
+    //   decksUsNow), and the {1}{U} as the engine prices it fits HonestMana in total and blue (G1's
+    //   CommanderCastCeiling.affordable: test-mode calculateManaCost against G2, both reads) before canPayCost's
+    //   draws. The stock PermanentCreatureAi path judges the rest (Main 2, no X, no upkeep cost: WillPlay), so no
+    //   creature hook is needed; the -10 sort puts the cast after every other spell ability, on the mana A leaves.
     // Never readmitted: the face-down cast (Morph, {3}) and the turn-face-up action. Keyed on the paper name and on
     // owner and controller (rule B3-3): a thief's Alchemist, a Clone, a Mairsil grant and a copy of the ability
     // keep A's path. RNG: every check reads state only (getters, canTarget and the restrictions with the activator
@@ -58793,9 +58801,62 @@ public class SpecialCardAi {
                     && ai.equals(host.getOwner()) && ai.equals(host.getController());
         }
 
+        // 74B's key: our own face-up creature spell in our hand, ours to own and control and to cast (every reader
+        // of G3 stamps the activator first: G1's contract), not a Play-effect cast, not a copy, not face down
+        static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return isPaper(host) && sa.isSpell() && sa.getApi() == ApiType.PermanentCreature
+                    && !sa.isCastFaceDown() && !sa.isCastFromPlayEffect() && !sa.isCopied()
+                    && !host.isFaceDown() && host.isInZone(ZoneType.Hand) && ai.equals(sa.getActivatingPlayer())
+                    && ai.equals(host.getOwner()) && ai.equals(host.getController());
+        }
+
         // RemoveDeckFilter.readmit's case, cheapest checks first; draws nothing, holds nothing
         public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (isOwnHandCast(ai, sa)) {
+                return castWindow(ai, sa); // 74B
+            }
             return isOwnUntap(ai, sa) && tappedHolder(ai, sa) != null; // tappedHolder opens with the window
+        }
+
+        // 74B: the cast's window, cheapest first: our Main 2 on an empty stack, no held mana, a holder (castHolder),
+        // then G1's ceiling, so a window it calls unpayable is refused before canPayCost's test payment draws
+        static boolean castWindow(final Player ai, final SpellAbility sa) {
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false;
+            }
+            final SpellAbility untap = untapOf(sa.getHostCard());
+            if (untap == null || castHolder(ai, untap) == null) {
+                return false;
+            }
+            return CommanderCastCeiling.affordable(ai, sa);
+        }
+
+        // 74B: our creature or artifact on the battlefield, tapped or not, whose draw is a holderDraw that this
+        // card's untap could target now (canTargetStamped: Greaves' shroud is not) and that does not deck us now
+        // (W1's decksUsNow on the effective count); null when none
+        static Card castHolder(final Player ai, final SpellAbility untap) {
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!ai.equals(c.getController()) || !(c.isCreature() || c.isArtifact())) {
+                    continue;
+                }
+                final SpellAbility draw = holderDraw(c);
+                if (draw != null && canTargetStamped(ai, untap, c) && !ArcanisTheOmnipotent.decksUsNow(ai, draw)) {
+                    return c;
+                }
+            }
+            return null;
+        }
+
+        // the card's own root {T} Untap ability, read off the hand card (canTargetStamped stamps its activator)
+        static SpellAbility untapOf(final Card host) {
+            for (final SpellAbility s : host.getSpellAbilities()) {
+                if (s.isActivatedAbility() && s.getApi() == ApiType.Untap && !(s instanceof AbilitySub)) {
+                    return s;
+                }
+            }
+            return null;
         }
 
         // UntapAi.checkApiLogic's route, inside the readmit's window: target the holder, or don't
