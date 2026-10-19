@@ -21148,6 +21148,9 @@ public class SpecialCardAi {
     //   effective count, hand <= max) and feeding no opponent (drawOrDiscardIsPunished), with no held mana and G1's
     //   {U}. UntapAi's stock Defined branch then approves, drawing nothing, and DrawAi takes the draw in the same
     //   step. The mana would empty unspent before our untap step, so the {U} costs nothing.
+    //   Part 53C opens the same untap in our own Main 2 on an empty stack, under DrawAi's own-turn hand guard
+    //   (drawsNow with ourTurn: hand + printed <= max) and the counter reserve (keepsCounterMana): the mana left in
+    //   our Main 2 is the mana that stays up through the opponents' turn.
     // The {U}: Tap ability is never readmitted. Keyed on the paper name and on owner and controller (rule B3-3): a
     // thief's Freed (Xanathar, Nathan Drake, Obscura Operation cast it through Play effects), the owner's own
     // Play-effect casts and a copy keep A's path. RNG: every check reads state only (getters, the phase and the
@@ -21197,6 +21200,9 @@ public class SpecialCardAi {
             }
             if (TapDrawEngine.oppEndStepBeforeOurs(ai)) {
                 return untapWindow(ai, sa, false); // 53B
+            }
+            if (ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai)) {
+                return untapWindow(ai, sa, true) && keepsCounterMana(ai, sa); // 53C, with the counter reserve
             }
             return false;
         }
