@@ -36702,6 +36702,204 @@ public class SpecialCardAi {
         }
     }
 
+    // Scroll Rack (dead-card batch 4, wave 2, row 65, a B4-14 follow-up; deck review 2026-10-17, Neera - Wild Magic
+    // 510f65b5, deck 507, the only Neera carrier)
+    // "{1}, {T}: Exile any number of cards from your hand face down. Put that many cards from the top of your
+    // library into your hand. Then look at the exiled cards and put them on top of your library in any order."
+    // ({2} artifact; the script omits only "face down", which no AI reads.) AI:RemoveDeck:All drops its hand cast
+    // and its ability in getSpellAbilityToPlay's removeIf before any handler runs: its owner casts on
+    // 2.0.15+499e03087c5 are Neera reveals (of a Rack never held, or of one Brainstorm put back), and a revealed
+    // Rack sits on the battlefield unused. The script keeps the hint (the -10 sort and every other
+    // isCardRemAIDeck reader stay as they are); the G3 dispatcher readmits 65A, the Neera feeder: our own hand
+    // cast (not a copy, not a Play-effect cast) in our main phase on an empty stack (Main 2, or Main 1 where
+    // castPermanentInMain1 says so: PermanentAi's hold answered first, by the function it asks itself) while a
+    // Neera we control is unspent and 1A's take rule judged before the cast (takenPreCast) will bottom it, with
+    // no live mana reservation, and with the costliest own-hand instant or flash spell G2 pays now kept payable
+    // beside the {2}, colours included: {2} for one reveal (cast 93% of the time, 3.47 average MV in deck 507).
+    // takenPreCast (hand, MV 2) and shouldBottom (stack, MV 2) read the same cheap(ai, 2) against the same
+    // library, the Rack in neither, and the Rack has no target, so the readmit and the trigger agree.
+    // 1B never moves a Rack (reusablePermanent, Sensei's Divining Top's rule) and the hint sorts it last, so
+    // sequenceFeeder moves it to just ahead of b, the first own-hand spell in sorted order that is timing-legal,
+    // payable by G2 at its adjusted cost and not a counterspell (the loop skips those on its normal pass), when
+    // G2 pays b, the Rack and b's reserve in total and b and the reserve in colour. A b that is itself a taken
+    // feeder (1B's move or the sort already feeds Neera), a b whose pricing asks a controller, or no b leave the
+    // list as it is: the Rack, sorted last, is then the cast only if every other SA declines. Where A spent the
+    // trigger on a 6-7 drop that 1A declines to bottom, the Rack now takes it and the AI still casts that drop,
+    // or a better spell the free cast found, in the same Main 2.
+    // Residuals: the move keeps b and the reserve payable, not a third spell A would cast after b; the engine's
+    // payment of the {2} may tap a coloured source b or the reserve needed (G2 judges totals and colours, not the
+    // payer's pick). RNG-free: draws nothing, holds nothing, remembers nothing, allocates no SpellAbility id; its
+    // writes are setActivatingPlayer on our hand SAs with no activator yet (the value
+    // getOriginalAndAltCostAbilities writes next; 1B writes the same) and G2's. A thief fails the owner check.
+    // The {1},{T} ability stays filtered (65B, the activation, is cut: ChangeZoneAi's XFetch misread and the
+    // stock whole-hand exile stay behind the hint). W1's NeeraWildMage (NAME, unspent, takenPreCast), G2 and
+    // RemoveDeckFilter.noManaHeld are called unchanged; ownHandCast, pays and asksController are private copies
+    // of NeeraWildMage's (B3-4).
+    public static class ScrollRack {
+        public static final String NAME = "Scroll Rack";
+
+        private record Reserve(boolean asks, ManaCostBeingPaid cost) {} // cost null = no instant to keep
+
+        // RemoveDeckFilter.readmit's case: the spell goes to feederCast; the ability stays filtered (65B is cut)
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (sa.isSpell()) {
+                return feederCast(ai, sa);
+            }
+            return false;
+        }
+
+        // 65A: our hand cast inside Neera's window, cheapest checks first
+        static boolean feederCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || sa.isCopied() || sa.isCastFromPlayEffect() || !host.isInZone(ZoneType.Hand)
+                    || !ai.equals(host.getOwner())) {
+                return false; // a theft, a copy, a Play-effect cast: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (!ai.canCastSorcery() || !ai.isCardInPlay(NeeraWildMage.NAME) || !NeeraWildMage.unspent(ai)) {
+                return false; // O(1) or one battlefield scan on every other pass
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2) && !ComputerUtil.castPermanentInMain1(ai, sa)) {
+                return false; // PermanentAi.checkPhaseRestrictions' Main-1 hold, answered first
+            }
+            if (!NeeraWildMage.takenPreCast(ai, sa) || !RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // 1A would keep it; or a live reservation (a refusal only waits)
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana m = HonestMana.of(ai, sa, true);
+            final Reserve r = reserve(ai, m, host);
+            return !r.asks() && pays(m, cost, r.cost());
+        }
+
+        // 65A's move (AiController.chooseSpellAbilityToPlayFromList, right after NeeraWildMage.sequenceFeeder):
+        // while our Neera is unspent on an empty stack, our readmitted Rack goes to just ahead of b, the first
+        // payable non-counter own-hand spell, unless b is itself a taken feeder, when G2 pays b, the Rack and b's
+        // reserve. Nothing else moves.
+        public static void sequenceFeeder(final Player ai, final List<SpellAbility> all) {
+            if (!ai.getGame().getStack().isEmpty() || !ai.isCardInPlay(NeeraWildMage.NAME)
+                    || !NeeraWildMage.unspent(ai)) {
+                return;
+            }
+            int r = -1;
+            for (int i = all.size() - 1; i >= 0 && r < 0; i--) {
+                final SpellAbility s = all.get(i);
+                if (ownHandCast(ai, s) && NAME.equals(s.getHostCard().getName())) {
+                    r = i; // our readmitted Rack (it sorts last; only the filtered list can hold one)
+                }
+            }
+            if (r < 0) {
+                return;
+            }
+            final SpellAbility rack = all.get(r);
+            for (int i = 0; i < r; i++) {
+                final SpellAbility s = all.get(i);
+                if (!ownHandCast(ai, s) || s.getApi() == ApiType.Counter) {
+                    continue; // the loop skips counters on its normal pass (skipCounter)
+                }
+                s.setActivatingPlayer(ai); // the value getOriginalAndAltCostAbilities writes next
+                if (!s.canCastTiming(ai) || s.getPayCosts() == null) {
+                    continue;
+                }
+                if (asksController(s)) {
+                    return; // 1B's rule: its pricing would ask a controller or test-pay
+                }
+                final ManaCostBeingPaid b = ComputerUtilMana.calculateManaCost(s.getPayCosts(), s, ai, true, 0, false);
+                final HonestMana m = HonestMana.of(ai, s, true);
+                if (!pays(m, b, null)) {
+                    continue;
+                }
+                if (NeeraWildMage.takenPreCast(ai, s)) {
+                    return; // a feeder already goes first (1B's move or the sort): the Rack waits
+                }
+                final ManaCostBeingPaid rc =
+                        ComputerUtilMana.calculateManaCost(rack.getPayCosts(), rack, ai, true, 0, false);
+                final Reserve res = reserve(ai, m, s.getHostCard());
+                final int keep = res.cost() == null ? 0 : res.cost().getConvertedManaCost();
+                if (!res.asks() && pays(m, b, res.cost())
+                        && m.total() >= b.getConvertedManaCost() + rc.getConvertedManaCost() + keep) {
+                    all.add(i, all.remove(r)); // r > i: i is not shifted
+                }
+                return;
+            }
+        }
+
+        // the costliest own-hand instant or flash spell G2 pays now (colours included), every Rack and `exclude`
+        // aside; asks = its pricing would ask a controller or test-pay (none in deck 507): the caller declines
+        private static Reserve reserve(final Player ai, final HonestMana m, final Card exclude) {
+            ManaCostBeingPaid best = null;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.isLand() || c.equals(exclude) || NAME.equals(c.getName())
+                        || !(c.isInstant() || c.hasKeyword(Keyword.FLASH))) {
+                    continue;
+                }
+                for (final SpellAbility s : c.getSpellAbilities()) {
+                    if (!s.isSpell() || s.getPayCosts() == null) {
+                        continue;
+                    }
+                    if (asksController(s)) {
+                        return new Reserve(true, null);
+                    }
+                    if (s.getActivatingPlayer() == null) {
+                        s.setActivatingPlayer(ai);
+                    }
+                    final ManaCostBeingPaid cc =
+                            ComputerUtilMana.calculateManaCost(s.getPayCosts(), s, ai, true, 0, false);
+                    if (pays(m, cc, null)
+                            && (best == null || cc.getConvertedManaCost() > best.getConvertedManaCost())) {
+                        best = cc;
+                    }
+                }
+            }
+            return new Reserve(false, best);
+        }
+
+        // NeeraWildMage.ownHandCast, a private copy (B3-4)
+        private static boolean ownHandCast(final Player ai, final SpellAbility s) {
+            final Card h = s.getHostCard();
+            return h != null && s.isSpell() && !s.isCopied() && !s.isCastFromPlayEffect()
+                    && h.isInZone(ZoneType.Hand) && ai.equals(h.getOwner());
+        }
+
+        // NeeraWildMage.pays, a private copy (B3-4): G2 total and each colour against one or two adjusted costs
+        private static boolean pays(final HonestMana m, final ManaCostBeingPaid a, final ManaCostBeingPaid b) {
+            if (m.total() < a.getConvertedManaCost() + (b == null ? 0 : b.getConvertedManaCost())) {
+                return false;
+            }
+            final byte[] col = {MagicColor.WHITE, MagicColor.BLUE, MagicColor.BLACK, MagicColor.RED, MagicColor.GREEN};
+            final forge.card.mana.ManaCostShard[] sh = {forge.card.mana.ManaCostShard.WHITE,
+                    forge.card.mana.ManaCostShard.BLUE, forge.card.mana.ManaCostShard.BLACK,
+                    forge.card.mana.ManaCostShard.RED, forge.card.mana.ManaCostShard.GREEN};
+            for (int k = 0; k < col.length; k++) {
+                if (m.colour(col[k]) < a.getUnpaidShards(sh[k]) + (b == null ? 0 : b.getUnpaidShards(sh[k]))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // NeeraWildMage.asksController (itself SylvanOffering's), a private copy (B3-4): a cost whose test-mode
+        // pricing asks a controller or test-pays (Convoke, Delve, Improvise, Assist, Emerge, Offering, Waterbend;
+        // the Announce$ NumTimes loop's canPayManaCost test payments can draw MyRandom). None in deck 507.
+        private static boolean asksController(final SpellAbility s) {
+            final Card h = s.getHostCard();
+            if (h != null && (h.hasKeyword(Keyword.CONVOKE) || h.hasKeyword(Keyword.DELVE) || h.hasKeyword(Keyword.IMPROVISE)
+                    || h.hasKeyword(Keyword.ASSIST) || h.hasKeyword(Keyword.EMERGE) || h.hasKeyword(Keyword.OFFERING))) {
+                return true;
+            }
+            if (s.getPayCosts() != null && s.getPayCosts().getMaxWaterbend() != null) {
+                return true;
+            }
+            final String announce = s.getParam("Announce");
+            return announce != null && announce.contains("NumTimes");
+        }
+    }
+
     // Nemata, Grove Guardian (dead-card batch 3, row 101; extension 2026-10-15; Mono-Green Food and
     // Tokens 8428b3ce)
     // "{2}{G}: Create a 1/1 green Saproling creature token. Sacrifice a Saproling: Saproling
@@ -41303,8 +41501,8 @@ public class SpecialCardAi {
     // class: readmit for batch 2's rows 36, 41, 60, 63, 82, 89 and 104 and batch 3's rows 3, 5, 6,
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
-    // rows 93, 101 and 111 and batch 4's rows 23 and 51, keepOff for batch 2's row 68 (Trench
-    // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
+    // rows 93, 101 and 111 and batch 4's rows 23, 51 and 65, keepOff for batch 2's row 68
+    // (Trench Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -41426,6 +41624,8 @@ public class SpecialCardAi {
                     return QuicksilverElemental.readmit(ai, sa);
                 case LionsEyeDiamond.NAME:               // batch 4, row 51 (W2)
                     return LionsEyeDiamond.readmit(ai, sa);
+                case ScrollRack.NAME:                    // batch 4, row 65 (W2)
+                    return ScrollRack.readmit(ai, sa);
                 default:
                     return false;
             }

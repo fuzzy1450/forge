@@ -1806,6 +1806,11 @@ public class AiController {
         // unspent. Inert (an empty-stack test and one isCardInPlay) otherwise; draws nothing, makes no
         // card; either moves that one feeder or leaves the list exactly as it is.
         SpecialCardAi.NeeraWildMage.sequenceFeeder(player, all);
+        // Dead-card batch 4, wave 2, row 65, part 65A (Scroll Rack): 1B never moves a Rack (a reusable
+        // permanent), so a readmitted Rack moves itself ahead of the first payable non-feeder hand spell while
+        // our Neera is unspent. Inert (an empty-stack test, one isCardInPlay and Neera's trigger scan, one list
+        // scan) otherwise; draws nothing, makes no card; either moves the Rack or leaves the list exactly as it is.
+        SpecialCardAi.ScrollRack.sequenceFeeder(player, all);
 
         FutureTask<SpellAbility> future = new FutureTask<>(() -> {
             //avoid ComputerUtil.aiLifeInDanger in loops as it slows down a lot.. call this outside loops will generally be fast...
