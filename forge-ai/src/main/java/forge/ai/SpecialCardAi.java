@@ -36546,6 +36546,50 @@ public class SpecialCardAi {
         }
     }
 
+    // Neera, Wild Mage's free cast of a Flash creature (dead-card batch 4, row 62, a B4-14 follow-up; Hullbreaker
+    // Horror in Neera - Wild Magic 510f65b5, deck 507, the only Neera carrier)
+    // "... You may cast that card without paying its mana cost. Then put all revealed cards not cast this way on
+    // the bottom of your library in a random order." Neera's DBPlay (Defined$ Imprinted, ValidZone$ Library,
+    // WithoutManaCost$ True, Optional$ True) asks PlayAi.chooseSingleCard, which judges the spell through
+    // canPlayFromEffectAI -> PermanentAi.doTriggerNoCost -> PermanentCreatureAi.checkPhaseRestrictions. A
+    // printed-Flash creature takes the flash branch there (the non-Flash clause already exempts a Play-effect
+    // cast) and doAdvancedFlashLogic, a hold-for-later rule, answers no everywhere but the opponent's end step
+    // before our turn (its last line), so the reveal it holds goes to the bottom: 337 declined Hullbreaker
+    // reveals against at most 143 free casts in Neera games on 2.0.15+499e03087c5 (72 and 55 libraries).
+    // castNow is that offer and nothing else: a Play-effect spell without mana cost whose card is a creature
+    // still in our library that a Neera we control has imprinted (DigUntil ImprintFound; DBCleanup clears it),
+    // worth at least a vanilla 2/2 two-drop (MIN_EVAL, TitansPresence's floor). The caller then applies
+    // PermanentAi.checkPhaseRestrictions (MayFlashSac; the Main-2 wait a free cast skips), as for a non-Flash
+    // reveal, and everything after is the stock judgement (checkApiLogic's legend and zero-toughness vetoes,
+    // saSideEffects' ETB-damage, BadEtb and curse vetoes, chooseSingleCard's target and cost checks).
+    // Asked only after the stock answer said no; RNG-free (a battlefield scan, a contains, one evaluateCreature),
+    // writes nothing. A Play effect from another host (Plargg and Nassari, Guff Rewrites History, cascade,
+    // discover, Mind's Dilation) keeps the stock path.
+    // The Play effect judges the spell twice, in chooseSingleCard and again in PlayerControllerAi
+    // .playSaFromPlayEffect (canPlayFromEffectAI on a copyWithNoManaCost copy: isCastFromPlayEffect is cloned,
+    // WithoutManaCost re-added, the host is still the library card and the imprint not yet cleared), so castNow
+    // answers both consults alike. Misses, never misfires: a Neera that left the battlefield before her trigger
+    // resolved keeps the imprint on an object no battlefield scan finds, and a front-face non-creature MDFC with
+    // a Flash creature back fails isCreature; both keep the stock decline. MIN_EVAL is inert for Hullbreaker
+    // (about 320) and only stricter than a non-Flash reveal, which meets no floor.
+    public static class NeeraWildMageReveal {
+        public static final int MIN_EVAL = 160; // a vanilla 2/2 two-drop (TitansPresence.MIN_EVAL)
+
+        public static boolean castNow(final Player ai, final SpellAbility sa) {
+            final Card c = sa.getHostCard();
+            if (c == null || !sa.isSpell() || !sa.isCastFromPlayEffect() || !sa.hasParam("WithoutManaCost")
+                    || !c.isCreature() || !c.isInZone(ZoneType.Library)) {
+                return false;
+            }
+            for (final Card n : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (NeeraWildMage.NAME.equals(n.getName()) && n.getImprintedCards().contains(c)) {
+                    return ComputerUtilCard.evaluateCreature(c) >= MIN_EVAL;
+                }
+            }
+            return false;
+        }
+    }
+
     // Nemata, Grove Guardian (dead-card batch 3, row 101; extension 2026-10-15; Mono-Green Food and
     // Tokens 8428b3ce)
     // "{2}{G}: Create a 1/1 green Saproling creature token. Sacrifice a Saproling: Saproling

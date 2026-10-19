@@ -87,7 +87,13 @@ public class PermanentCreatureAi extends PermanentAi {
         boolean advancedFlash = AiProfileUtil.getBoolProperty(ai, AiProps.FLASH_ENABLE_ADVANCED_LOGIC);
         if (card.hasKeyword(Keyword.FLASH) || (!ai.canCastSorcery() && sa.canCastTiming(ai) && !sa.isCastFromPlayEffect())) {
             if (advancedFlash) {
-                return doAdvancedFlashLogic(card, ai, sa);
+                // Dead-card batch 4, row 62: a Flash creature Neera, Wild Mage reveals is cast now or never (a
+                // declined reveal goes to the bottom of the library), so the hold for an opponent's end step
+                // below does not apply to it. The stock answer is asked first, with its draws; only its no is
+                // overridden, by an RNG-free test, and the creature then meets the phase rule a non-Flash
+                // reveal meets. See SpecialCardAi.NeeraWildMageReveal.
+                return doAdvancedFlashLogic(card, ai, sa)
+                        || (SpecialCardAi.NeeraWildMageReveal.castNow(ai, sa) && super.checkPhaseRestrictions(ai, sa, ph));
             }
             // save cards with flash for surprise blocking
             if ((ai.isUnlimitedHandSize() || ai.getCardsIn(ZoneType.Hand).size() <= ai.getMaxHandSize()
