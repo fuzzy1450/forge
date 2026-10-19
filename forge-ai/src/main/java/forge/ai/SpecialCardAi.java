@@ -52572,6 +52572,148 @@ public class SpecialCardAi {
         }
     }
 
+    // Tap-draw engines (dead-card batch 4, shared generalization G6: rows 53, 70, 72 and 74)
+    // A creature of ours whose activated, untargeted Draw costs {T} and no mana (ArcanisTheOmnipotent.tapDraw:
+    // Arcanis the Omnipotent's three, Niv-Mizzet, the Firemind's one) turns an untap into cards. Rows 72 (Vizier
+    // of Tumbling Sands, Clever Conjurer), 74 (Aphetto Alchemist) and 53 (Freed from the Real) each untap such an
+    // engine and ask the same questions: which tapped engine an untap makes draw, whether DrawAi takes that draw
+    // now or by our next untap, whether the draw is legal once untapped. One copy serves the three, so a revert of
+    // one row strands no other (B3-4): it landed once, before its callers, and is reverted only when rows 53, 70,
+    // 72 and 74 all are, and last (B4-18).
+    // drawWillBeTaken is the one answer that moves with a row: W1's ArcanisTheOmnipotent.drawWouldBeTaken as it
+    // lands, plus the ArcanisTheOmnipotentHandSize.drawsPastMaxHand disjunct that row 70's own 70A commit adds,
+    // so a 70A revert hands BY_NEXT_UNTAP and the rows that ask it W1's answer back.
+    // Calls, never edits: W1's ArcanisTheOmnipotent.tapDraw / effectiveDraw / decksUsNow / drawWouldBeTaken /
+    // legalFor, and KnollspineDragon.drawOrDiscardIsPunished (private; nested classes share access, as W1 reaches
+    // it). Reads state only: no random draw, no SpellAbility id, no AiCardMemory; legalFor / legalOnceUntapped
+    // stamp the activator and put it back (B4-4).
+    public static class TapDrawEngine {
+        // printed cards a window must draw when it displaces a stock use (72B, 72C); the free window (72A) takes 1
+        public static final int MIN_DRAW = 2;
+        public enum Rule {
+            NOW_OPP_TURN,  // DrawAi takes it at once on an opponent's turn: hand <= max
+            NOW_OUR_MAIN2, // DrawAi takes it at once in our Main 2: hand + printed <= max
+            BY_NEXT_UNTAP  // taken before our next untap step: now, or at the opponent's Main 2 / end step after
+                           // our cleanup trims the hand (drawWillBeTaken)
+        }
+
+        public static boolean oppEndStepBeforeOurs(final Player ai) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            return ph.is(PhaseType.END_OF_TURN) && !ph.isPlayerTurn(ai) && ai.equals(ph.getNextTurn());
+        }
+
+        // Our tapped creature that this untap makes draw: on our battlefield, tapped, not summoning sick (haste
+        // counts: Card.hasSickness), a legal target of `untap` (Greaves' shroud is not), its draw legal once
+        // untapped, minDraw+ printed cards, no AILogic but AtOppEOT on the draw (an engine with its own timing
+        // logic keeps it), no opponent profiting (drawOrDiscardIsPunished), and taken under `rule`. The most
+        // cards per activation (effectiveDraw: Bracers, Ageless Insight), then our commander, then battlefield
+        // order. Null when none.
+        public static Card tapped(final Player ai, final SpellAbility untap, final int minDraw, final Rule rule) {
+            Card best = null;
+            int bestN = 0;
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (!c.isTapped() || c.isSick() || !untap.canTarget(c)) {
+                    continue;
+                }
+                final SpellAbility draw = ArcanisTheOmnipotent.tapDraw(c);
+                if (draw == null || !ownTiming(draw) || printed(draw) < minDraw || !legalOnceUntapped(ai, c, draw)
+                        || !taken(ai, draw, rule) || KnollspineDragon.drawOrDiscardIsPunished(ai, c)) {
+                    continue;
+                }
+                final int n = ArcanisTheOmnipotent.effectiveDraw(ai, draw);
+                if (best == null || n > bestN || (n == bestN && c.isCommander() && !best.isCommander())) {
+                    best = c;
+                    bestN = n;
+                }
+            }
+            return best;
+        }
+
+        // The hold (72C): our untapped engine, ready now (legalFor: untapped, not sick, restrictions), a legal
+        // target of `untap` once tapped, minDraw+ printed, that DrawAi takes in our Main 2 with the hand we hold
+        // now (hand + printed <= max: casting only shrinks it). Our turn, Main 2 or earlier only. Null when none.
+        public static Card readyThisTurn(final Player ai, final SpellAbility untap, final int minDraw) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || ph.getPhase() == null || ph.getPhase().isAfter(PhaseType.MAIN2)) {
+                return null;
+            }
+            for (final Card c : ai.getCreaturesInPlay()) {
+                if (c.isTapped() || !untap.canTarget(c)) {
+                    continue;
+                }
+                final SpellAbility draw = ArcanisTheOmnipotent.tapDraw(c);
+                if (draw != null && ownTiming(draw) && printed(draw) >= minDraw
+                        && ArcanisTheOmnipotent.legalFor(ai, c, draw) && drawsNow(ai, draw, true)
+                        && !KnollspineDragon.drawOrDiscardIsPunished(ai, c)) {
+                    return c;
+                }
+            }
+            return null;
+        }
+
+        static boolean taken(final Player ai, final SpellAbility draw, final Rule rule) {
+            switch (rule) {
+                case NOW_OPP_TURN:
+                    return drawsNow(ai, draw, false);
+                case NOW_OUR_MAIN2:
+                    return ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai) && drawsNow(ai, draw, true);
+                default:
+                    return drawWillBeTaken(ai, draw);
+            }
+        }
+
+        // "Will DrawAi take this draw within the turn cycle": BY_NEXT_UNTAP's answer, and the one rows 53, 72 and
+        // 74 ask in place of W1's drawWouldBeTaken (row 70's skeptic, item 6). It is W1's answer, unchanged; row
+        // 70's 70A adds its own disjunct here (drawsPastMaxHand: our tap-draw commander under no maximum hand
+        // size, the state W1's last clause refuses) in its own commit, and a 70A revert takes it back out.
+        public static boolean drawWillBeTaken(final Player ai, final SpellAbility draw) {
+            return ArcanisTheOmnipotent.drawWouldBeTaken(ai, draw);
+        }
+
+        // DrawAi.targetAI's untargeted, non-mandatory refusals (DrawAi.java:733-764) for this draw now. canDraw;
+        // the library guard on the effective count (decksUsNow: Bracers, Ageless Insight; Lab Maniac exempt);
+        // the hand guard on the printed count, as DrawAi applies it. canDraw(printed) too (row 72's skeptic S4,
+        // row 53's A4): under a draw limit (Narset, Parter of Veils; Leovold) DrawAi still draws one card of
+        // three while canDraw() stays true until a card has been drawn that turn, so the stricter gate keeps a
+        // 2+ card engine from being untapped for one card; it is a no-op wherever no draw limit applies. (Row
+        // 53's drawsNow; one copy.)
+        static boolean drawsNow(final Player ai, final SpellAbility draw, final boolean ourTurn) {
+            if (!ai.canDraw() || ArcanisTheOmnipotent.decksUsNow(ai, draw)) {
+                return false;
+            }
+            final int n = printed(draw);
+            final int hand = ai.getCardsIn(ZoneType.Hand).size();
+            return n > 0 && ai.canDraw(n)
+                    && (ourTurn ? hand + n <= ai.getMaxHandSize() : hand <= ai.getMaxHandSize());
+        }
+
+        // AbilityActivated.canPlay (AbilityActivated.java:73) minus the tap, which canPayAdditionalCosts checks and
+        // which is tapped now: not suppressed (CardTraitBase.java:286) or detained (Card.java:6627), restrictions met
+        // (SpellAbilityRestriction.canPlay, :547), no CantBeActivated static (checkRestrictions); activator stamped
+        // as ai and put back (B4-4). Row 53's legalOnceUntapped, verbatim; one copy.
+        static boolean legalOnceUntapped(final Player ai, final Card host, final SpellAbility draw) {
+            final Player stamped = draw.getActivatingPlayer();
+            draw.setActivatingPlayer(ai);
+            try {
+                return !draw.isSuppressed() && !host.isDetained() && draw.getRestrictions().canPlay(host, draw)
+                        && draw.checkRestrictions(host, ai);
+            } finally {
+                draw.setActivatingPlayer(stamped);
+            }
+        }
+
+        static int printed(final SpellAbility draw) {
+            return AbilityUtils.calculateAmount(draw.getHostCard(), draw.getParamOrDefault("NumCards", "1"), draw);
+        }
+
+        // DrawAi's timing for a draw with no AILogic is the stock phase gate these rules mirror; AtOppEOT
+        // (Niv-Mizzet) is the window 72A acts in. Any other logic times itself.
+        private static boolean ownTiming(final SpellAbility draw) {
+            final String logic = draw.getParam("AILogic");
+            return logic == null || "AtOppEOT".equals(logic);
+        }
+    }
+
     // Pyroblast (dead-card batch 4, row 13); Hydroblast is the same script for red
     // "Choose one -- Counter target spell if it's blue. / Destroy target permanent if it's blue." ({R}
     // Instant.) Each mode targets any spell or permanent (ValidTgts$ Card / Permanent: the colour is
