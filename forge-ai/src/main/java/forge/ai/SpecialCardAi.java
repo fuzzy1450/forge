@@ -38671,6 +38671,13 @@ public class SpecialCardAi {
                     continue;
                 }
                 if (((PlayerControllerAi) ai.getController()).getAi().canPlaySa(testSa) == AiPlayDecision.WillPlay) {
+                    // Dead-card batch 4, row 76, part 76B (B4-8): a Flow of Knowledge the main loop holds right now
+                    // (FlowOfKnowledge.holds, asked by AiController.canPlayAndPayForFace after canPayCost) is no
+                    // reason to make devotion mana. After A's approval: A's draws ran. A name compare: inert for
+                    // every other testSa; RNG-free.
+                    if (FlowOfKnowledge.holds(ai, testSa)) {
+                        continue;
+                    }
                     // the AI is willing to play the spell
                     return true;
                 }
@@ -54463,6 +54470,8 @@ public class SpecialCardAi {
     // Callers:
     // - AiController.canPlayAndPayForFace, after OwnCommanderBounce.declines and so AFTER canPayCost (A's
     //   test-payment draws ran), answering AnotherTime.
+    // - part 76B (B4-8): NykthosShrineToNyx.consider and VizierOfTumblingSands.considerUntap's mana-untap chooser,
+    //   each AFTER its own canPlaySa approval, so a held Flow is no reason to make or free mana.
     // Keyed on the host's paper name (B3-3): a thief's paid cast counts the thief's Islands, as the spell does.
     // Free casts and copies (canPlayFromEffectAI -> doTriggerNoCost: a Play effect, Kefnet the Mindful's copy)
     // never reach canPlayAndPayForFace, and holds answers false for them as well. RNG-free: it reads state only,
@@ -59474,7 +59483,11 @@ public class SpecialCardAi {
                         continue; // still short even with it back
                     }
                     if (!ComputerUtilCost.canPayCost(testSa, ai, false)
-                            && aic.canPlaySa(testSa) == AiPlayDecision.WillPlay) {
+                            && aic.canPlaySa(testSa) == AiPlayDecision.WillPlay
+                            // Part 76B (dead-card batch 4, row 76): a Flow of Knowledge the main loop holds right
+                            // now (FlowOfKnowledge.holds) is no reason to untap a mana source. Last, after A's
+                            // canPayCost and canPlaySa, so a held Flow falls to the break below, A's own decline.
+                            && !FlowOfKnowledge.holds(ai, testSa)) {
                         // Part 72B-hold (dead-card batch 4, row 72): A untaps the mana source here. A tapped
                         // engine of 2+ printed cards whose draw is taken by our next untap
                         // (TapDrawEngine.Rule.BY_NEXT_UNTAP) keeps the Vizier for 72A at the opponent's end
