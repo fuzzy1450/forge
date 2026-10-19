@@ -96,6 +96,15 @@ public class UntapAi extends SpellAbilityAi {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             if (untapPrefTargeting(ai, sa, false)) {
+                // Part 72C-hold: the stock pick fires at the first main-phase priority anything of ours is
+                // tapped, usually a land in Main 1, before Arcanis draws in Main 2 (DrawAi holds every draw back
+                // to Main 2). While an untapped engine of ours will draw in our Main 2 with the hand we hold now
+                // (SpecialCardAi.CleverConjurer.holdForDraw), the pick waits, so the Conjurer is spent on that
+                // engine after its draw (72C-engine above). A veto after the draw-free stock pick; targets reset.
+                if (SpecialCardAi.CleverConjurer.holdForDraw(ai, sa)) {
+                    sa.resetTargets();
+                    return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+                }
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);

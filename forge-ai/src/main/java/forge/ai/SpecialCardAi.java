@@ -8806,6 +8806,15 @@ public class SpecialCardAi {
         public static Card engine(final Player ai, final SpellAbility sa) {
             return TapDrawEngine.tapped(ai, sa, TapDrawEngine.MIN_DRAW, TapDrawEngine.Rule.BY_NEXT_UNTAP);
         }
+
+        // Part 72C-hold: a veto of the stock pick while an untapped such engine of ours, a legal target once
+        // tapped, draws in our Main 2 with the hand we hold now (G6's TapDrawEngine.readyThisTurn: our turn, Main 2
+        // or earlier, ready now, hand + printed <= max), so the Conjurer is spent on that engine after its draw
+        // (engine() above) rather than on a land before it. UntapAi.checkApiLogic asks it after untapPrefTargeting
+        // chose, and resets the targets on a hold.
+        public static boolean holdForDraw(final Player ai, final SpellAbility sa) {
+            return TapDrawEngine.readyThisTurn(ai, sa, TapDrawEngine.MIN_DRAW) != null;
+        }
     }
 
     // Clone Legion
