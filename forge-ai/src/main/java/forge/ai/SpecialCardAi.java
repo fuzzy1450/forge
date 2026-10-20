@@ -40280,6 +40280,24 @@ public class SpecialCardAi {
     // W1's NeeraWildMage (NAME, unspent, takenPreCast, movable) and G2 HonestMana are called unchanged (B3-4, B4-7);
     // pays and asksController are private copies of NeeraWildMage's (B3-4), as ScrollRack and FaithlessLooting keep
     // theirs. No static state but the name constants (the serve JVM shares statics).
+    // 68C, commanderInMainOne (PermanentCreatureAi.checkPhaseRestrictions, before its return to PermanentAi's Main-2
+    // wait; true passes the phase gate): our own commander Neera's spell from the command zone (not a copy, not a
+    // Play-effect cast) in our Main 1 on an empty stack, with no Neera already on our battlefield, is not held for
+    // Main 2 when real mana pays her taxed cost (G1 CommanderCastCeiling.affordable: the engine's test-mode price, the
+    // commander tax included, against G2). She then meets the stock checkApiLogic (the legend rule), saSideEffects and
+    // canPayCost at her sorted position, so a Main-1-approved spell the cost sort puts above her (Aminatou's Augury,
+    // Blasphemous Act at its printed 9) is still cast first, and the other creatures stay held for Main 2, where the
+    // re-deal (sortCreatureSpells' body score: a 5/4 Plargg and Nassari outranks the 2/7 Neera) no longer decides
+    // between her and them: she is out. The 2/7 engine gains nothing by waiting for combat, and once she resolves in
+    // Main 1 the turn's later spells meet an unspent Neera (1A, 1B and 68B decide those). Her trade (Neera now instead
+    // of a cheaper Main-1 play, or of a Main-2 creature, when only one fits; Main-1 mana A kept through our combat) is
+    // the part's judgment, which the store cannot price. A gate on a path A refused at a draw-free point, G1-guarded
+    // (B4-9): the template answers MissingPhaseRestrictions before preventRunAwayActivations and checkApiLogic, G1
+    // refuses an unpayable window before canPayCost's test payment, and the castPermanentInMain1 this skips draws
+    // nothing for her (no Backup, Blitz, Raid or Riot). Residual: G1's multicolour over-count can send an unpayable
+    // Neera on to canPayCost's test payment, which draws (rare; as for G1's other callers). A name compare first:
+    // inert for every other card. Its writes are G1's (castFrom set and restored, and G2's setActivatingPlayer on our
+    // mana abilities).
     public static class NeeraOwnTurn {
         static final String KITTEN = "Displacer Kitten";        // O1: row 64's reset seam
         static final String HULLBREAKER = "Hullbreaker Horror"; // O1: row 64's S5 (no reset with our Horror out)
@@ -40444,6 +40462,22 @@ public class SpecialCardAi {
             }
             final String announce = s.getParam("Announce");
             return announce != null && announce.contains("NumTimes");
+        }
+
+        // 68C: true = our commander Neera passes the Main-1 phase gate (PermanentCreatureAi); a name compare first
+        public static boolean commanderInMainOne(final Player ai, final SpellAbility sa) {
+            final Card h = sa.getHostCard();
+            if (h == null || !NeeraWildMage.NAME.equals(h.getName()) || !sa.isSpell() || sa.isCopied()
+                    || sa.isCastFromPlayEffect() || !h.isCommander() || !ai.equals(h.getOwner())
+                    || !h.isInZone(ZoneType.Command)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            if (!game.getPhaseHandler().is(PhaseType.MAIN1, ai) || !game.getStack().isEmpty()
+                    || ai.isCardInPlay(NeeraWildMage.NAME)) {
+                return false;
+            }
+            return CommanderCastCeiling.affordable(ai, sa); // G1, unchanged: an unpayable window is refused first
         }
     }
 

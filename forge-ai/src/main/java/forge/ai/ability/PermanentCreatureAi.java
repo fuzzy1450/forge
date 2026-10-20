@@ -108,6 +108,13 @@ public class PermanentCreatureAi extends PermanentAi {
             }
         }
 
+        // Dead-card batch 4, row 68, part 68C (Neera, Wild Mage): our own commander's cast from the command zone is not
+        // held for Main 2 (PermanentAi's wait) in our Main 1 when real mana pays her taxed cost (G1); she then competes
+        // by the stock cost sort only. A name compare first: inert for every other card. See SpecialCardAi.NeeraOwnTurn.
+        if (SpecialCardAi.NeeraOwnTurn.commanderInMainOne(ai, sa)) {
+            return true;
+        }
+
         return super.checkPhaseRestrictions(ai, sa, ph);
     }
 
