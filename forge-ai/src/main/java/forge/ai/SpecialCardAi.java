@@ -29708,6 +29708,12 @@ public class SpecialCardAi {
     // remembered. The only writes are activator stamps: G2's on our mana abilities, as the estimate does, and
     // affordable's on an unstamped SA, as getOriginalAndAltCostAbilities does right after the filter. No
     // handler changes: a direct canPlaySa caller (rule B3-2) skips the filter and keeps A's stock path.
+    // The cast (30A): readmitted only as the owner's own hand cast, in our own Main 2 on an empty stack with
+    // no mana held (RemoveDeckFilter.noManaHeld) and no free-cast counter out (a cast now would imprint into
+    // a blank), when imprintPick finds a worthy instant among the hand's Instant.cmcLE2 (the trigger's own
+    // ChangeType), and last (skeptic F3: the G2 walk only for a cast that would imprint) the engine's
+    // test-mode {2} within HonestMana. The stock path then runs: PermanentAi's Main 2, WillPlay, canPayCost.
+    // A Play-effect cast (a thief's, or the owner's own) never reaches the filter and keeps A's decision.
     public static class IsochronScepter {
         public static final String NAME = "Isochron Scepter";
 
@@ -29733,10 +29739,28 @@ public class SpecialCardAi {
             if (!isScepter(host) || sa.isCopied() || (stamped != null && !ai.equals(stamped))) {
                 return false;
             }
+            if (sa.isSpell()) {
+                return readmitCast(ai, sa, host); // 30A
+            }
             if (sa.isActivatedAbility() && sa.getApi() == ApiType.Play) {
                 return readmitCopy(ai, sa, host);
             }
             return false;
+        }
+
+        // 30A: the owner's own hand cast in our Main 2 (F3 order: the O(1) window, noManaHeld and the F1 veto, the
+        // pick over the hand, then the price)
+        private static boolean readmitCast(final Player ai, final SpellAbility sa, final Card host) {
+            final Game game = ai.getGame();
+            if (sa.isCastFromPlayEffect() || !host.isInZone(ZoneType.Hand) || !ai.equals(host.getOwner())
+                    || !ai.canCastSorcery() || !game.getPhaseHandler().is(PhaseType.MAIN2, ai)
+                    || !game.getStack().isEmpty() || !RemoveDeckFilter.noManaHeld(ai, true)
+                    || freeCastCounterOut(game)) {
+                return false;
+            }
+            final CardCollectionView instants = CardLists.getValidCards(ai.getCardsIn(ZoneType.Hand),
+                    "Instant.cmcLE2", ai, host, sa); // the imprint trigger's own ChangeType
+            return imprintPick(ai, host, instants) != null && affordable(ai, sa);
         }
 
         // the {2}, {T} copy, any controller's (B4-12): the Scepter ours, on the battlefield and untapped, on an
