@@ -29689,6 +29689,17 @@ public class SpecialCardAi {
     // A free-cast counter on any battlefield (isFreeCastCounter, Vexing Bauble's shape; the carrier runs one)
     // counters every copy, which is cast without paying: it vetoes every copy window and the cast (skeptic
     // F1). The pick skips the veto, so a free cast still exiles its best instant (the counter may leave).
+    // REVERSAL (30C-loop): a root UntapAll of our nonland permanents with no sub (Dramatic Reversal, the
+    // carrier's combo with the Scepter: each copy untaps the Scepter and our rocks). It is picked, and its
+    // copy readmitted, only while reversalLive (skeptic F2: an imprint is for good): loopMana, the {T}-only
+    // mana our nonland permanents other than the Scepter make, tapped or not, is LOOP_COST or more, so every
+    // pass pays its own {2} back; a cast payoff of ours fires on the copy (firedBy: Vivi Ornitier, Storm-Kiln
+    // Artist, Birgi; Prowess counts too, mana-neutral and harmless here); and no opponent's cast trigger
+    // does (Rhystic Study, Mystic Remora, Esper Sentinel). Not live, the pick falls to DRAW, then BURN, then
+    // null. The copy window is our own main phase; the stock run-away roll (ComputerUtil
+    // .preventRunAwayActivations) ends the loop, as it ends any repeatable ability's. firedBy reads a
+    // trigger only when its requirements hold and it is not suppressed (F4) and never a free-cast counter's
+    // (F1); loopMana stamps each mana ability's activator as ours and puts it back (B4-4).
     // RNG (B4-9): readmit and everything behind it is a gate on a path A refused at a draw-free point (the G3
     // filter), so a false is the old filter exactly; imprintPick is a deterministic chooser at the same
     // consult, after the stock shuffle, so the draws are A's. Every read is a zone, phase, stack,
@@ -29740,6 +29751,8 @@ public class SpecialCardAi {
             final Kind kind = kind(imprinted);
             switch (kind) {
                 // REVERSAL: our own main phase, while the loop pays for itself (30C-loop)
+                case REVERSAL:
+                    return loopCopy(ai, sa, host, imprinted);
                 // DRAW and BURN: the end step before our turn (30C-eot)
                 case DRAW:
                 case BURN:
@@ -29756,7 +29769,8 @@ public class SpecialCardAi {
             Kind best = Kind.NONE;
             for (final Card c : fetchList) {
                 final Kind k = kind(c);
-                if (k != Kind.NONE && (best == Kind.NONE || k.ordinal() < best.ordinal())) {
+                if (k != Kind.NONE && (best == Kind.NONE || k.ordinal() < best.ordinal())
+                        && (k != Kind.REVERSAL || reversalLive(ai, host, c))) { // 30C-loop: F2
                     pick = c;
                     best = k;
                 }
@@ -29778,6 +29792,11 @@ public class SpecialCardAi {
             final AbilitySub sub = sp.getSubAbility();
             switch (sp.getApi()) {
                 // REVERSAL (30C-loop)
+                case UntapAll: {
+                    final String valid = sp.getParamOrDefault("ValidCards", "");
+                    return sub == null && valid.contains("nonLand") && valid.contains("YouCtrl")
+                            ? Kind.REVERSAL : Kind.NONE;
+                }
                 // DRAW and BURN (30C-eot)
                 case Draw:
                     return sub == null && selfDraw(sp) ? Kind.DRAW : Kind.NONE;
@@ -29826,6 +29845,90 @@ public class SpecialCardAi {
                 }
             }
             return null;
+        }
+
+        // 30C-loop: a REVERSAL copy in our own main phase, on readmitCopy's empty stack, then the shared floor
+        // (copyPaid), then reversalLive; the stock run-away roll ends the loop
+        static final int LOOP_COST = 2; // the copy ability's printed {2}
+
+        static boolean loopCopy(final Player ai, final SpellAbility sa, final Card host, final Card imprinted) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            return ph.isPlayerTurn(ai) && ph.getPhase().isMain() && copyPaid(ai, sa)
+                    && reversalLive(ai, host, imprinted);
+        }
+
+        // the loop works now, for the pick and the copy alike (skeptic F2): our other nonland permanents hand
+        // back LOOP_COST or more per untap, a cast payoff of ours fires on the copy, and no opponent's cast
+        // trigger does
+        static boolean reversalLive(final Player ai, final Card host, final Card reversal) {
+            return loopMana(ai, host) >= LOOP_COST && firedBy(ai, ai.getCardsIn(ZoneType.Battlefield), reversal)
+                    && !opponentsFire(ai, reversal);
+        }
+
+        // {T}-only mana of our nonland permanents other than the host, tapped or not: what each copy of an
+        // untap-all-our-nonland instant hands back. Lands, summoning-sick creatures, reflected abilities
+        // (Chrome Mox, Mox Amber) and sacrifice or mana costs count nothing (an under-count, the safe side).
+        // Each ability's restrictions (Mox Opal's metalcraft) and CantBeActivated statics (checkRestrictions)
+        // are read with its activator stamped as ai and put back (B4-4).
+        static int loopMana(final Player ai, final Card host) {
+            int total = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (src.isLand() || src.equals(host) || (src.isCreature() && src.isSick())) {
+                    continue;
+                }
+                int best = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final Cost cost = ma.getPayCosts();
+                    if (ma.getManaPart() == null || ma.getApi() == ApiType.ManaReflected || cost == null
+                            || !cost.hasTapCost() || cost.hasManaCost() || !cost.isReusuableResource()) {
+                        continue;
+                    }
+                    final Player stamped = ma.getActivatingPlayer();
+                    ma.setActivatingPlayer(ai);
+                    try {
+                        if (ma.getRestrictions().canPlay(src, ma) && ma.checkRestrictions(src, ai) && ma.metConditions()) {
+                            best = Math.max(best, AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma));
+                        }
+                    } finally {
+                        ma.setActivatingPlayer(stamped);
+                    }
+                }
+                total += best;
+            }
+            return total;
+        }
+
+        // a non-static Battlefield cast trigger, its requirements met and not suppressed (F4), among cards that
+        // the caster's cast of spell fires; a free-cast counter's never counts (F1). matchesValidParam reads
+        // each trigger from its own host's side, so Rhystic Study's "Opponent" matches us. A payoff of ours
+        // need only be a cast trigger (Prowess too); an opponent's is declined on, a harmless one included.
+        static boolean firedBy(final Player caster, final Iterable<Card> cards, final Card spell) {
+            final Game game = caster.getGame();
+            for (final Card c : cards) {
+                if (isFreeCastCounter(c)) {
+                    continue;
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if ((t.getMode() == TriggerType.SpellCast || t.getMode() == TriggerType.SpellCastOrCopy)
+                            && !t.isStatic() && !t.isSuppressed() && "Battlefield".equals(t.getParam("TriggerZones"))
+                            && t.requirementsCheck(game)
+                            && t.matchesValidParam("ValidActivatingPlayer", caster)
+                            && t.matchesValidParam("ValidCard", spell)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // an opponent's cast trigger that our cast of spell fires (Rhystic Study, Mystic Remora, Esper Sentinel)
+        static boolean opponentsFire(final Player ai, final Card spell) {
+            for (final Player opp : ai.getOpponents()) {
+                if (firedBy(ai, opp.getCardsIn(ZoneType.Battlefield), spell)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         // the floor both copy windows share, asked inside the window: no free-cast counter out (skeptic F1),
