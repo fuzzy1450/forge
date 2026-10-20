@@ -33131,6 +33131,15 @@ public class SpecialCardAi {
     //   AFTER the stock body (its draws kept, the useRemovalNow roll included), aims the readmit's own pick
     //   and answers WillPlay inside those approvals, else returns the stock decision untouched, so ManaAi's
     //   ritual look-ahead and the other direct canPlaySa scanners keep A's answer outside them.
+    // - Part 66B, the free cast: free(), from DestroyAi.doTriggerNoCost AFTER the stock body (which draws
+    //   nothing), for a Play-effect cast of the root spell by any controller (Neera's reveal, an exile cast
+    //   through a Play effect, a thief's Play effect), never a copy: the best positive-net candidate, no floor,
+    //   becomes the target at both consults of the cast. With none, a mandatory consult keeps the stock pick,
+    //   and so does an optional one unless that pick's own net is DECLINE_BELOW or less (a noncreature token
+    //   against a library of real artifacts, a small token creature against real ones): then the cast is
+    //   declined, and Neera's reveal bottoms the card. A decline forfeits a spells deck's cast triggers, so
+    //   only a stock pick that costs a card is refused (skeptic F3); a land swap nets about 0 and is cast.
+    //   free() draws nothing either; its writes are sa's targets, set on a pick and reset on a decline.
     // RNG: draws nothing and allocates no SpellAbility id; a readmit refusal is A's filter verbatim. Holds and
     // remembers nothing, no static mutable state (the serve JVM shares statics); its only writes are
     // HonestMana's setActivatingPlayer on our own mana abilities and sa's targets on an approval.
@@ -33139,6 +33148,7 @@ public class SpecialCardAi {
         static final int CREATURE_FLOOR = 180;   // MaelstromPulse.CREATURE_FLOOR: a nontoken 3/3
         static final int PERMANENT_FLOOR = 140;  // MaelstromPulse.PERMANENT_FLOOR: 50 + 30 x mana value 3
         static final int COMMANDER_TAX = 100;    // Firespout's recast tax
+        static final int DECLINE_BELOW = -100;   // 66B: a stock free-cast pick this far below even costs a card
 
         // the root spell of this card, never a copy and never a sub; keyed on the host's paper name, the key
         // the readmit switch (RemoveDeckFilter.paperName) and isCardRemAIDeck read (B3-2, B3-3)
@@ -33175,6 +33185,37 @@ public class SpecialCardAi {
             sa.resetTargets();
             sa.getTargets().add(pick);
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // 66B's key: a Play-effect cast of the root spell by any controller (Neera's reveal, an exile cast
+        // through a Play effect, a thief's Play effect), never a copy
+        public static boolean isEffectCast(final SpellAbility sa) {
+            return isRoot(sa) && sa.isCastFromPlayEffect();
+        }
+
+        // DestroyAi.doTriggerNoCost, behind isEffectCast and AFTER the stock body: the best positive-net
+        // candidate; else the stock answer, but an optional consult whose stock pick nets DECLINE_BELOW or
+        // less is declined (DECLINE_BELOW 0 is the diagnosis' rule). Both consults of one cast (the optional
+        // one, then chooseTargetsFor's mandatory one) read one board and agree. A stock pick whose gear cannot
+        // be read is kept.
+        public static AiAbilityDecision free(final Player ai, final SpellAbility sa, final boolean mandatory,
+                final AiAbilityDecision stock) {
+            final Card pick = best(ai, sa, false);
+            if (pick != null) {
+                sa.resetTargets();
+                sa.getTargets().add(pick);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            if (mandatory || !stock.decision().willingToPlay()) {
+                return stock;
+            }
+            final Card s = sa.getTargets().getFirstTargetedCard();
+            final int gear = s == null ? -1 : gear(s);
+            if (gear >= 0 && net(s, gear, new HashMap<>())[0] <= DECLINE_BELOW) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return stock;
         }
 
         // the window, then the mana, then the floor; null = no approval

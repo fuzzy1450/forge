@@ -364,6 +364,19 @@ public class DestroyAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
+        final AiAbilityDecision stock = doTriggerNoCostStock(ai, sa, mandatory);
+        // Wild Magic Surge (dead-card batch 4, row 66, part 66B): a Play-effect cast of the root spell by any
+        // controller (Neera's reveal, an exile cast, a thief's Play effect), never a copy, targets the best
+        // positive net exchange (SpecialCardAi.WildMagicSurge.free); with none, the stock pick stands, except
+        // that an optional cast whose stock pick nets -100 or less is declined. After the stock body, which
+        // draws nothing. The root spell's paper name only: inert for every other Destroy spell ability.
+        if (SpecialCardAi.WildMagicSurge.isEffectCast(sa)) {
+            return SpecialCardAi.WildMagicSurge.free(ai, sa, mandatory, stock);
+        }
+        return stock;
+    }
+
+    private AiAbilityDecision doTriggerNoCostStock(Player ai, SpellAbility sa, boolean mandatory) {
         final boolean noRegen = sa.hasParam("NoRegen");
         if (sa.usesTargeting()) {
             sa.resetTargets();
