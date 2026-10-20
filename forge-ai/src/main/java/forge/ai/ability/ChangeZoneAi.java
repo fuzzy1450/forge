@@ -303,6 +303,20 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.MizzixsMastery.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.MnemonicDeluge.handles(sa) && !(sa instanceof AbilitySub)) {
+            // Dead-card batch 4, row 63, part 63A: Mnemonic Deluge ("exile target instant or sorcery card from a
+            // graveyard; copy it three times; you may cast the copies"). The generic known-origin path below keeps
+            // only opponents' cards for Destination$ Exile (isPreferredTarget, no AITgtOwnCards) and takes the most
+            // expensive, blind to whether its copies are cast. That path is RNG-free and the card carries no AI hint
+            // or AILogic, so it was A's whole consult: run it first, exactly as A did (every branch between the
+            // clear above and it is name-gated on another card), and its answer and target stand wherever the
+            // chooser (SpecialCardAi.MnemonicDeluge.consider) is outside the stock window, the mana is short or no
+            // pick exists, so canPayCost's draws follow A's approval. Play-effect casts and copy retargets go through
+            // doTriggerNoCost. Every other ChangeZone card takes exactly the path it took before this branch.
+            final AiAbilityDecision stock = knownOriginCanPlayAI(aiPlayer, sa);
+            return SpecialCardAi.MnemonicDeluge.consider(aiPlayer, sa, stock);
+        }
+
         if ("Unfinished Business".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {
             // Picks the creature and up to two Aura/Equipment cards together:
             // the sub's AttachedTo$ ParentTarget is read as a card type by

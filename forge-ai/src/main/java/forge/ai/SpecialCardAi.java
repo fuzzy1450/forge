@@ -37141,6 +37141,438 @@ public class SpecialCardAi {
         }
     }
 
+    // Mnemonic Deluge (dead-card batch 4, row 63)
+    // "Exile target instant or sorcery card from a graveyard. Copy that card three times. You may cast the copies
+    // without paying their mana costs. Exile Mnemonic Deluge." ({6}{U}{U}{U} sorcery; no AI hint, no AILogic.)
+    // ChangeZoneAi's graveyard-exile targeting keeps only opponents' cards (isPreferredTarget's Exile branch, no
+    // AITgtOwnCards) and takes the most expensive (getBestAI -> getMostExpensivePermanentAI), blind to whether a copy
+    // is ever cast: the AI copied an opponent's Ray of Command, Three Visits or Hour of Reckoning (no copy cast) while
+    // our own Rise of the Eldrazi or Aminatou's Augury sat in our graveyard, and a Swarm Intelligence or Melek copy of
+    // the Deluge re-picked its original's card, so the original fizzled. A pick is a card the resolution's own chooser
+    // casts a copy of (PlayAi.chooseSingleCard on the DBPlay sub: the copy's doTriggerNoCost, a valid target count, a
+    // payable remaining cost, no X), from any graveyard, highest mana value first, ours before theirs at equal value;
+    // the first card it accepts wins (Finale of Promise's loop, one card at a time). The pool, cheapest tests first:
+    // - an instant or sorcery, not a Mnemonic Deluge, of mana value MIN_PICK_CMC or more (three free copies repay the
+    //   nine mana), a legal target of this spell;
+    // - 63C: not a card another spell or ability on the stack already targets (the original of a copy, a Mastery);
+    // - no AI:RemoveDeck:All hint, and MizzixsMastery.safeToOffer (no ...All api, none of the apis that refuse or
+    //   turn respond-only while a spell is on the stack, no Mana api, no CannotPlayAi handler; every part, charm
+    //   choice and face), called, never edited;
+    // - not Death by Dragons' shape: a targeted Token part steered by AITgts$ Opponent, which TokenAi.doTriggerNoCost
+    //   ignores, so a free copy hands the token to every other player;
+    // - 63G: not a symmetric spell, whose three copies hit us as hard as anyone: an untargeted discard of our whole
+    //   hand (Finale of Promise's discardsOwnHand rule, privately copied), a Defined$ Player sacrifice, draw or mill, a
+    //   vote, a tempting offer or any other each-opponent-may offer;
+    // - the library floor (B4-5): MIN_LIBRARY_LEFT cards stay after every copy of this pick, and of each card the
+    //   stack already targets, has drawn, dug, milled, revealed and searched its share: COPIES times the cast copies
+    //   our own copy engines add (resolutions(), a private copy of CommuneWithLava.resolutions' reading), times the
+    //   card's own library cost (libraryCost: an amount that is not a number, a hand-size count aside, keeps the card
+    //   out; so does a reveal-until whose revealed cards leave the library).
+    // No pick: the stock answer and target stand.
+    // RNG: the stock known-origin evaluation runs first, unchanged and RNG-free, as A ran it. The paid cast (63A,
+    // consider) keeps the stock timing (isPreferredTarget's Main 2, end-step and no-creature gates for a graveyard
+    // exile, read with the same calls) and G2 affordability (HonestMana against the engine's test-mode cost, in total
+    // and in blue) ahead of the prediction, so a held Deluge in a window A refused or could not pay draws exactly
+    // what A drew, and where A approved and B retargets, canPayCost draws as A did (the target never changes the
+    // cost). The prediction runs other cards' handlers (their draws, copyWithNoManaCost's SpellAbility ids): only in
+    // an affordable stock window with a non-empty pool; where it then finds no pick, the stream has moved with no
+    // visible cast (the named residual). Guarded against re-entry; a throw anywhere in the pool build or the
+    // prediction is no pick (never an exit-4 halt), and a throw from one candidate's handler declines that candidate.
+    public static class MnemonicDeluge {
+        public static final String NAME = "Mnemonic Deluge";
+        public static final int MIN_PICK_CMC = 3;
+        public static final int COPIES = 3;
+        public static final int MIN_LIBRARY_LEFT = 10;
+        private static final int UNBOUNDED = -1;
+
+        private static final ThreadLocal<Boolean> PREDICTING = ThreadLocal.withInitial(() -> false);
+
+        // The root spell: a targeted ChangeZone with the Play sub, by its source's paper name (a flashback, a copy or a
+        // Play-effect cast of it included).
+        public static boolean handles(final SpellAbility sa) {
+            return sa != null && sa.isSpell() && sa.getApi() == ApiType.ChangeZone && sa.usesTargeting()
+                    && sa.getSubAbility() != null && sa.getSubAbility().getApi() == ApiType.Play
+                    && NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa));
+        }
+
+        // 63A: a paid cast (from hand, a Lier, Disciple of the Drowned flashback, a thief's static "you may cast"),
+        // after the stock knownOriginCanPlayAI. Outside the stock window or with the mana short: A's answer and target.
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final AiAbilityDecision stock) {
+            if (!stockWindow(ai, sa) || !affordable(ai, sa)) {
+                return stock;
+            }
+            final Card pick = choose(ai, sa);
+            return pick == null ? stock : target(sa, pick);
+        }
+
+        // isPreferredTarget's own timing gates for a Graveyard -> Exile target, read with the same calls (RNG-free).
+        private static boolean stockWindow(final Player ai, final SpellAbility sa) {
+            if (ComputerUtil.playImmediately(ai, sa)) {
+                return true;
+            }
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (ph.getPhase().isBefore(PhaseType.MAIN2) && !sa.hasParam("ActivationPhases")
+                    && !ComputerUtil.castSpellInMain1(ai, sa)) {
+                return false; // "Don't use these abilities before main 2 if possible"
+            }
+            if ((!ph.getNextTurn().equals(ai) || ph.getPhase().isBefore(PhaseType.END_OF_TURN))
+                    && !sa.hasParam("PlayerTurn") && !SpellAbilityAi.isSorcerySpeed(sa, ai)
+                    && !ComputerUtil.activateForCost(sa, ai)) {
+                return false;
+            }
+            // "don't rush bouncing stuff when not going to attack"
+            return !(ph.getPhase().isBefore(PhaseType.MAIN2) && ph.isPlayerTurn(ai) && ai.getCreaturesInPlay().isEmpty());
+        }
+
+        // G2: the engine's test-mode cost (taxes, reductions) against HonestMana, held sources skipped, in total and in
+        // blue (MobVerdict's idiom); never canPayCost, whose test payment draws.
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            if (sa.getPayCosts() == null) {
+                return true;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.BLUE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+        }
+
+        // The pick, or null (the stock answer stands): re-entered from a candidate's own handler, or a throw anywhere.
+        static Card choose(final Player ai, final SpellAbility sa) {
+            if (PREDICTING.get()) {
+                return null;
+            }
+            PREDICTING.set(true);
+            try {
+                return pick(ai, sa);
+            } catch (RuntimeException e) {
+                return null;
+            } finally {
+                PREDICTING.remove();
+            }
+        }
+
+        private static Card pick(final Player ai, final SpellAbility sa) {
+            final AbilitySub play = sa.getSubAbility();
+            final Set<Card> claimed = targetedOnStack(ai.getGame());
+            final int perCard = COPIES * resolutions(ai);
+            // what the copies of the cards already targeted on the stack take from our library (F2: a Mastery's card
+            // counted as three copies too, deliberately over-conservative)
+            int pending = 0;
+            for (final Card c : claimed) {
+                if (c.isInZone(ZoneType.Graveyard) && (c.isInstant() || c.isSorcery())) {
+                    final int cost = libraryCost(ai, c);
+                    if (cost == UNBOUNDED) {
+                        return null;
+                    }
+                    pending += perCard * cost;
+                }
+            }
+            final int room = ai.getCardsIn(ZoneType.Library).size() - pending - MIN_LIBRARY_LEFT;
+            if (room < 0) {
+                return null;
+            }
+            final CardCollection pool = new CardCollection();
+            final List<Player> owners = new ArrayList<>();
+            owners.add(ai); // ours first: the stable sort keeps them ahead at equal mana value
+            owners.addAll(ai.getOpponents());
+            for (final Player p : owners) {
+                for (final Card c : p.getCardsIn(ZoneType.Graveyard)) {
+                    if (!(c.isInstant() || c.isSorcery()) || NAME.equals(c.getName()) || c.getCMC() < MIN_PICK_CMC
+                            || !sa.canTarget(c) || claimed.contains(c) || ComputerUtilCard.isCardRemAIDeck(c)
+                            || !MizzixsMastery.safeToOffer(c) || aimsTokenAtOpponentByHint(c) || symmetric(c)) {
+                        continue;
+                    }
+                    final int cost = libraryCost(ai, c);
+                    if (cost == UNBOUNDED || perCard * cost > room) {
+                        continue;
+                    }
+                    pool.add(c);
+                }
+            }
+            if (pool.isEmpty()) {
+                return null;
+            }
+            CardLists.sortByCmcDesc(pool);
+            final SpellAbilityAi playAi = SpellApiToAi.Converter.get(play);
+            for (final Card c : pool) {
+                try {
+                    if (playAi.chooseSingleCard(ai, play, new CardCollection(c), true, null, null) != null) {
+                        return c;
+                    }
+                } catch (RuntimeException e) {
+                    // a throw from the candidate's own handler declines that candidate
+                }
+            }
+            return null;
+        }
+
+        // 63C: the cards a spell or ability on the stack already targets, in every part.
+        private static Set<Card> targetedOnStack(final Game game) {
+            final Set<Card> out = new HashSet<>();
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                for (SpellAbility part = si.getSpellAbility(); part != null; part = part.getSubAbility()) {
+                    part.getTargets().getTargetCards().forEach(out::add);
+                }
+            }
+            return out;
+        }
+
+        // Every spell the chooser can offer from this card: the current face, plus the back of a modal card
+        // (MizzixsMastery.safeToOffer's reading, as AbilityUtils.getSpellsFromPlayEffect collects them).
+        private static List<SpellAbility> offered(final Card c) {
+            final List<SpellAbility> spells = new ArrayList<>(basicSpells(c));
+            if (c.isModal() && c.hasState(forge.card.CardStateName.Backside)) {
+                spells.addAll(basicSpells(c.getState(forge.card.CardStateName.Backside)));
+            }
+            return spells;
+        }
+
+        // Death by Dragons' shape: a targeted Token part steered by AITgts$ Opponent, in any part, charm choice or face.
+        static boolean aimsTokenAtOpponentByHint(final Card c) {
+            for (final SpellAbility s : offered(c)) {
+                if (tokenByHint(s)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean tokenByHint(final SpellAbility root) {
+            for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+                if (part.getApi() == ApiType.Token && part.usesTargeting() && "Opponent".equals(part.getParam("AITgts"))) {
+                    return true;
+                }
+                for (final AbilitySub choice : part.getAdditionalAbilityList("Choices")) {
+                    if (tokenByHint(choice)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // 63G: a spell whose three copies hit us as hard as anyone, in any part, charm choice or face, or a card whose
+        // text makes an each-opponent-may offer.
+        private static boolean symmetric(final Card c) {
+            for (final SpellAbility s : offered(c)) {
+                if (symmetricParts(s)) {
+                    return true;
+                }
+            }
+            if (offersOpponents(c.getOracleText())) {
+                return true;
+            }
+            return c.isModal() && c.hasState(forge.card.CardStateName.Backside)
+                    && offersOpponents(c.getState(forge.card.CardStateName.Backside).getOracleText());
+        }
+
+        private static boolean symmetricParts(final SpellAbility root) {
+            for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+                final ApiType api = part.getApi();
+                if (api == ApiType.Vote) {
+                    return true; // will of the council, council's dilemma, secret council
+                }
+                if (api == ApiType.Discard && !part.usesTargeting() && "Hand".equals(part.getParam("Mode"))) {
+                    final String defined = part.getParamOrDefault("Defined", "You");
+                    if ("You".equals(defined) || "Player".equals(defined)) {
+                        return true; // a wheel: our whole hand, three times
+                    }
+                }
+                if ((api == ApiType.Sacrifice || api == ApiType.Draw || api == ApiType.Mill)
+                        && "Player".equals(part.getParam("Defined"))) {
+                    return true; // each player sacrifices, draws or mills (Taste of Death, Necrotic Hex)
+                }
+                if (api == ApiType.RepeatEach && part.hasParam("RepeatOptionalForEachPlayer")) {
+                    return true; // a tempting offer (Tempt with Vengeance)
+                }
+                if (part.hasParam("Optional") && (part.getParamOrDefault("DefinedPlayer", "").contains("Opponent")
+                        || part.getParamOrDefault("Defined", "").contains("Opponent"))) {
+                    return true; // each opponent may (Tempt with Discovery)
+                }
+                for (final AbilitySub choice : part.getAdditionalAbilityList("Choices")) {
+                    if (symmetricParts(choice)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean offersOpponents(final String oracle) {
+            if (oracle == null) {
+                return false;
+            }
+            final String text = oracle.toLowerCase(Locale.ROOT);
+            return text.contains("tempting offer") || text.contains("each opponent may");
+        }
+
+        // The library cards one copy of this card can take from us, over its costliest offered spell: every part and
+        // charm choice (summed: an over-count only drops a candidate) that draws, digs, mills, reveals until or
+        // searches a library that may be ours. UNBOUNDED keeps the card out of the pool.
+        private static int libraryCost(final Player ai, final Card c) {
+            int most = 0;
+            for (final SpellAbility s : offered(c)) {
+                final int cost = chainCost(ai, s, s);
+                if (cost == UNBOUNDED) {
+                    return UNBOUNDED;
+                }
+                most = Math.max(most, cost);
+            }
+            return most;
+        }
+
+        private static int chainCost(final Player ai, final SpellAbility root, final SpellAbility first) {
+            int sum = 0;
+            for (SpellAbility part = first; part != null; part = part.getSubAbility()) {
+                final int cost = partCost(ai, root, part);
+                if (cost == UNBOUNDED) {
+                    return UNBOUNDED;
+                }
+                sum += cost;
+                for (final AbilitySub choice : part.getAdditionalAbilityList("Choices")) {
+                    final int more = chainCost(ai, root, choice);
+                    if (more == UNBOUNDED) {
+                        return UNBOUNDED;
+                    }
+                    sum += more;
+                }
+            }
+            return sum;
+        }
+
+        private static int partCost(final Player ai, final SpellAbility root, final SpellAbility part) {
+            final ApiType api = part.getApi();
+            if (api == ApiType.Draw || api == ApiType.Mill) {
+                return mayBeOurs(part.getParam("Defined")) ? amount(ai, root, part, "NumCards") : 0;
+            }
+            if (api == ApiType.Dig) {
+                return mayBeOurs(part.getParam("Defined")) ? amount(ai, root, part, "DigNum") : 0;
+            }
+            if (api == ApiType.DigUntil) {
+                if (!mayBeOurs(part.getParam("Defined"))) {
+                    return 0;
+                }
+                // the revealed cards leave the library too, however many there are
+                return "Library".equals(part.getParam("RevealedDestination")) ? amount(ai, root, part, "Amount") : UNBOUNDED;
+            }
+            if (api == ApiType.ChangeZone && part.hasParam("Origin")
+                    && ZoneType.listValueOf(part.getParam("Origin")).contains(ZoneType.Library)) {
+                return mayBeOurs(part.getParam("DefinedPlayer")) ? amount(ai, root, part, "ChangeNum") : 0;
+            }
+            return 0;
+        }
+
+        // No player named (the effect's default, You, or a target: DrawAi and DigAi aim their own player targets at
+        // us), You, every player, a target or a remembered player: ours, or may be. Only a set named for opponents is
+        // not.
+        private static boolean mayBeOurs(final String defined) {
+            return defined == null || !defined.contains("Opponent");
+        }
+
+        // An integer, a Number$ SVar, or a hand-size count (Valakut Awakening's Count$RememberedSize/Plus.1 after its
+        // hand-to-library part; Count$InYourHand, Count$CardsInYourHand, Count$ValidHand), bounded by the largest hand
+        // in the game plus its /Plus.N; anything else is UNBOUNDED.
+        private static int amount(final Player ai, final SpellAbility root, final SpellAbility part, final String key) {
+            final String value = part.getParamOrDefault(key, "1").trim();
+            final Integer n = number(value);
+            if (n != null) {
+                return n;
+            }
+            final String text = part.getSVar(value).trim();
+            if (text.startsWith("Number$")) {
+                final Integer k = number(text.substring("Number$".length()).trim());
+                return k == null ? UNBOUNDED : k;
+            }
+            final int slash = text.indexOf('/');
+            final String base = slash < 0 ? text : text.substring(0, slash);
+            final String op = slash < 0 ? "" : text.substring(slash + 1);
+            int plus = 0;
+            if (op.startsWith("Plus.")) {
+                final Integer k = number(op.substring("Plus.".length()));
+                if (k == null) {
+                    return UNBOUNDED;
+                }
+                plus = k;
+            } else if (!op.isEmpty()) {
+                return UNBOUNDED;
+            }
+            if (base.startsWith("Count$InYourHand") || base.startsWith("Count$CardsInYourHand")
+                    || base.startsWith("Count$ValidHand")
+                    || (base.startsWith("Count$RememberedSize") && movesFromHand(root))) {
+                int hand = 0;
+                for (final Player p : ai.getGame().getPlayers()) {
+                    hand = Math.max(hand, p.getCardsIn(ZoneType.Hand).size());
+                }
+                return hand + plus;
+            }
+            return UNBOUNDED;
+        }
+
+        private static Integer number(final String s) {
+            return s.matches("\\d{1,6}") ? Integer.valueOf(s) : null;
+        }
+
+        private static boolean movesFromHand(final SpellAbility root) {
+            for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+                if (part.getApi() == ApiType.ChangeZone && part.hasParam("Origin")
+                        && ZoneType.listValueOf(part.getParam("Origin")).contains(ZoneType.Hand)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Resolutions one cast copy can make, from our battlefield, RNG-free and conservative (an over-count only drops
+        // a candidate): the copy, plus one copy event per cast trigger whose ability copies a spell (Swarm
+        // Intelligence, Melek, Izzet Paragon, Kalamax; their conditions ignored), each event making one more copy per
+        // CopySpell replacement (Twinning Staff). A private copy of CommuneWithLava.resolutions and copiesSpell (batch
+        // 3), read without building the trigger's ability (no SpellAbility id).
+        private static int resolutions(final Player ai) {
+            int events = 0;
+            int extra = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if ((t.getMode() == TriggerType.SpellCast || t.getMode() == TriggerType.SpellCastOrCopy)
+                            && copiesSpell(t)) {
+                        events++;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.CopySpell) {
+                        extra++;
+                    }
+                }
+            }
+            return 1 + events * (1 + extra);
+        }
+
+        private static boolean copiesSpell(final Trigger t) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                return built.getApi() == ApiType.CopySpellAbility;
+            }
+            if (!t.hasParam("Execute")) {
+                return false;
+            }
+            final String text = t.getSVar(t.getParam("Execute"));
+            if (text.isEmpty()) {
+                return false;
+            }
+            final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+            String api = params.get("DB");
+            if (api == null) {
+                api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+            }
+            return ApiType.CopySpellAbility.name().equals(api);
+        }
+
+        private static AiAbilityDecision target(final SpellAbility sa, final Card pick) {
+            sa.resetTargets();
+            sa.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+    }
+
     // Momentous Fall
     // "As an additional cost to cast this spell, sacrifice a creature. You draw cards equal to the
     // sacrificed creature's power, then you gain life equal to its toughness." Once AI:RemoveDeck is
