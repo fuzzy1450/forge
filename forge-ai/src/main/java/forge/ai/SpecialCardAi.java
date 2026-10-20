@@ -44046,7 +44046,7 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31 and 30, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard,
+    // 25, 31, 30 and 42, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard,
     // a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -44199,6 +44199,8 @@ public class SpecialCardAi {
                     return Scapeshift.readmit(ai, sa);
                 case IsochronScepter.NAME:               // batch 4, row 30 (W6)
                     return IsochronScepter.readmit(ai, sa);
+                case CleansingBeam.NAME:                 // batch 4, row 42 (W6)
+                    return CleansingBeam.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -52185,6 +52187,226 @@ public class SpecialCardAi {
                 }
             }
             return safeColor != null ? safeColor : bestColor;
+        }
+    }
+
+    // Cleansing Beam (dead-card batch 4, row 42; precon:Heavenly Inferno (CMA), Kaalia of the Vast, an anchor)
+    // "Radiance - Cleansing Beam deals 2 damage to target creature and each other creature that shares a color
+    // with it." ({4}{R} Instant; printed text = Oracle = the script: DamageDealEffect adds CardUtil.getRadiance's
+    // set, every creature in play of any controller sharing any colour of the target, so a multicoloured target
+    // spreads through the union of its colours and a colourless one to nothing; only the target is targeted.)
+    // Never cast by its owner on any engine: AI:RemoveDeck:All drops the hand spell in AiController.
+    // getSpellAbilityToPlay's removeIf before any handler runs (every credited cast is a theft: Nathan Drake's
+    // attack-trigger Play, Grand Larceny). Behind the hint the stock DamageDealAi.canPlay is Radiance-blind
+    // (dealDamageChooseTgtC never counts the spread, so a white, black or red target kills our own Kaalia) and
+    // draws MyRandom at every consult, so the hint is KEPT (the copy, steal and exchange pickers, ChangeZoneAi's
+    // GainControl search and the -10 sort still refuse the card) and two name-gated points carry it:
+    // - readmit, G3's case: the owner's own face-up hand cast of the root DealDamage spell, paying its mana cost
+    //   (ownHandCast), with no live mana reservation (RemoveDeckFilter.noManaHeld);
+    // - consider, from DamageDealAi.canPlay after Artillerize, behind the same key (rule B3-2).
+    // Windows, always with an empty stack: our own main phases; an opponent's declare-attackers or declare-blockers
+    // step with attackers on us; an opponent's end step right before our turn.
+    // Mana: G2 (HonestMana, held sources skipped) against the test-mode calculateManaCost (rule B3-5), in total and
+    // in red.
+    // Value line: for each targetable opposing creature with a colour and no ward, the hit set is CardUtil.
+    // getRadiance's: the target plus every creature sharing a colour with it (the union of the target's colours),
+    // each dealt 2 by a red source. It is read on Sudden Demise's board (SuddenDemise.scan, batch 2 row 116, called
+    // not edited: getEnoughDamageToKill with prevention, protection from red, shields and indestructible; its
+    // death-watcher, payback and damage-received vetoes) and scored by net, an adapted private copy of
+    // SuddenDemise.admissible's per-pair loop at X = 2 over that mask:
+    // - an opposing real kill (no regeneration, undying, persist, SacMe, harmless own death trigger);
+    // - no commander we control or own dies;
+    // - nothing of ours dies in our own turn before Main 2 or in an opponent's combat (one-sided windows);
+    // - worth a card: a nontoken of mana value 2+ or power 3+, or two cards' worth of tokens (4 halves);
+    // - never a card down: killed half-cards >= max(2, our nontoken losses x 2 + 2);
+    // - net (opposing value killed minus ours lost, evaluateCreature) >= MIN_NET (160, a vanilla nontoken 2/2:
+    //   Artillerize's, Fiery Gambit's and Titan's Presence's single-kill floor), and above Sudden Demise's own
+    //   MARGIN (200) whenever a creature of ours dies: a trade of our own cards pays the sweeper's margin, as the
+    //   row this copies does for the same hit set (skeptic finding 3);
+    // - none of Sudden Demise's vetoes fires on the hit set.
+    // The best net wins; a tie keeps the first target in battlefield order. In the defensive windows only, that
+    // pick is then re-priced without the credited kills ComputerUtil.filterCreaturesThatWillDieThisTurn says die this
+    // turn anyway (an attacker our blockers kill) and declined unless it still clears every floor (Artillerize's
+    // skeptic A3; skeptic finding 2). Worst accepted cast: {4}{R} and the card for an opponent's vanilla nontoken 2/2
+    // with nothing of ours lost, or four of its 1/1 tokens.
+    // RNG: A never evaluated the owner's card (a draw-free refusal), so every decline draws nothing: the window, the
+    // test-mode price, HonestMana, getTargetableCards and the scan (getEnoughDamageToKill, predictDamageTo,
+    // evaluateCreature, the trigger scans, whose abilities TriggerHandler.parseTrigger materialised at parse time,
+    // so no SpellAbility id is allocated; never canRegenerate). One residual: in a defensive window the doomed
+    // filter's combat predictor reaches ComputerUtil.canRegenerate, which for an attacker covered by a Regenerate
+    // ability runs canPayCost and draws isManaSourceReserved rolls, only for a pick that passed every other floor
+    // (Artillerize's and Tower Defense's documented residual; AVOID_TARGETING_CREATS_THAT_WILL_DIE is true in
+    // AiProps and no profile overrides it). Targets are reset first and set only on WillPlay; nothing is held,
+    // remembered or reserved; canPayCost then runs on approvals only.
+    // Coupling (rule B3-4): SuddenDemise.scan and SuddenDemise.Board are that accepted row's private members, read
+    // here as nestmates and never edited; a revert or an edit of Sudden Demise's Board must inline them here.
+    public static class CleansingBeam {
+        public static final String NAME = "Cleansing Beam";
+        static final int DAMAGE = 2;          // NumDmg$ 2
+        static final int MIN_NET = 160;       // a vanilla nontoken 2/2 (Artillerize.MIN_KILL_EVAL)
+
+        // the readmit's key, carried by the DamageDealAi route (rule B3-2); the host's paper name (rule B3-3)
+        private static boolean ownHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Player activator = sa.getActivatingPlayer();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && sa.isSpell() && sa.getParent() == null && sa.getApi() == ApiType.DealDamage
+                    && !sa.isCopied() && !sa.isCastFromPlayEffect() && !sa.hasParam("WithoutManaCost")
+                    && !host.isFaceDown() && ai.equals(host.getOwner()) && host.isInZone(ZoneType.Hand)
+                    && (activator == null || ai.equals(activator));
+        }
+
+        // RemoveDeckFilter.readmit's case: RNG-free, reads the SA, zone, owner and AiCardMemory only
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return ownHandCast(ai, sa) && RemoveDeckFilter.noManaHeld(ai, false);
+        }
+
+        // DamageDealAi.canPlay's route
+        public static boolean routes(final Player ai, final SpellAbility sa) {
+            return ownHandCast(ai, sa);
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty()) {
+                return no(AiPlayDecision.StackNotEmpty);           // never in response
+            }
+            // 1. the window, O(1)
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean ownTurn = ph.isPlayerTurn(ai);
+            final boolean ownMain = ownTurn && ph.getPhase().isMain();
+            final boolean oppEnd = !ownTurn && ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn());
+            final boolean defensive = !ownTurn && combat != null
+                    && (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS))
+                    && !combat.getAttackersOf(ai).isEmpty();
+            if (!ownMain && !oppEnd && !defensive) {
+                return no(AiPlayDecision.AnotherTime);
+            }
+            final boolean oneSided = defensive || (ownTurn && ph.getPhase().isBefore(PhaseType.MAIN2));
+            // 2. a coloured, unwarded, targetable opposing creature (a colourless target spreads to nothing)
+            final CardCollection targets = targets(ai, sa);
+            if (targets.isEmpty()) {
+                return no(AiPlayDecision.TargetingFailed);
+            }
+            // 3. real mana with red (G2), never the bare estimate
+            if (!affordable(ai, sa)) {
+                return no(AiPlayDecision.CantAfford);
+            }
+            // 4. the board once (Sudden Demise's scan), then one int loop per target
+            final Card host = sa.getHostCard();
+            final SuddenDemise.Board b = SuddenDemise.scan(ai, host);
+            final Card best = best(b, host, targets, oneSided);
+            if (best == null || !sa.canTarget(best)) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            if (defensive && !standsWithoutDoomed(ai, b, host, best.getColor().getColor())) {
+                return no(AiPlayDecision.CantPlayAi);              // the kills that count were dying anyway
+            }
+            sa.getTargets().add(best);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // consider's check 2: the targetable opposing creatures with a colour and no ward, in battlefield order
+        private static CardCollection targets(final Player ai, final SpellAbility sa) {
+            return CardLists.filter(CardLists.getTargetableCards(ai.getOpponents().getCreaturesInPlay(), sa),
+                    c -> c.getColor().getColor() != 0 && !c.hasKeyword(Keyword.WARD));
+        }
+
+        // consider's check 3: G2's honest count (held sources skipped) covers the engine's test-mode price, taxes
+        // and reductions included (rule B3-5), in total and in red
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // consider's pick: the target whose hit set has the best admissible net, MIN_NET or more, with no doomed
+        // set; a tie keeps the first target in battlefield order. null = no admissible target.
+        private static Card best(final SuddenDemise.Board b, final Card host, final CardCollection targets,
+                final boolean oneSided) {
+            Card best = null;
+            int bestNet = Integer.MIN_VALUE;
+            for (final Card t : targets) {
+                final int net = net(b, host, t.getColor().getColor(), oneSided, Collections.<Card>emptySet());
+                if (net >= MIN_NET && net > bestNet) {
+                    best = t;
+                    bestNet = net;
+                }
+            }
+            return best;
+        }
+
+        // SuddenDemise.admissible's per-pair loop, an adapted private copy (rule B3-4: copied, never widened): one
+        // union mask at X = DAMAGE; a doomed creature (the defensive recheck's; empty otherwise) earns no kill
+        // credit. Integer.MIN_VALUE = not admissible.
+        private static int net(final SuddenDemise.Board b, final Card source, final byte mask, final boolean oneSided,
+                final Set<Card> doomed) {
+            boolean anyKill = false, anyLoss = false, worthACard = false;
+            int killHalfCards = 0, ourCards = 0, net = 0;
+            for (int i = 0; i < b.need.length; i++) {
+                if ((b.colors[i] & mask) == 0) {
+                    continue;                                  // not hit (the target's own bits are in mask)
+                }
+                final Card c = b.creatures.get(i);
+                if (b.punished[i] && ComputerUtilCombat.predictDamageTo(c, DAMAGE, source, false) > 0) {
+                    return Integer.MIN_VALUE;                  // a damage-received punisher sees it
+                }
+                if (b.need[i] > DAMAGE) {
+                    continue;                                  // survives
+                }
+                if (b.vetoOnDeath[i]) {
+                    return Integer.MIN_VALUE;                  // a death watcher or payback sees it
+                }
+                if (b.loss[i]) {
+                    if (c.isCommander()) {
+                        return Integer.MIN_VALUE;              // never our commander (Kaalia)
+                    }
+                    anyLoss = true;
+                    net -= b.value[i];
+                    if (!c.isToken()) {
+                        ourCards += 2;
+                    }
+                } else if (b.kill[i] && !doomed.contains(c)) {
+                    anyKill = true;
+                    net += b.value[i];
+                    killHalfCards += c.isToken() ? 1 : 2;
+                    worthACard |= b.worth[i];
+                }
+            }
+            if (!anyKill || (oneSided && anyLoss)
+                    || (!worthACard && killHalfCards < 4)
+                    || killHalfCards < Math.max(2, ourCards + 2)
+                    || (anyLoss && net <= SuddenDemise.MARGIN)) {      // a trade of our own cards: the sweeper margin
+                return Integer.MIN_VALUE;
+            }
+            return net;
+        }
+
+        // Artillerize A3's rule, for the defensive windows only: a credited kill that ComputerUtil's predictor says
+        // dies this turn anyway (an attacker our blockers kill, a spell on the stack) buys nothing. Lazy: only a pick
+        // that passed every other floor reaches it. oneSided is true by definition in a defensive window.
+        private static boolean standsWithoutDoomed(final Player ai, final SuddenDemise.Board b, final Card source,
+                final byte mask) {
+            final CardCollection credited = new CardCollection();
+            for (int i = 0; i < b.need.length; i++) {
+                if ((b.colors[i] & mask) != 0 && b.need[i] <= DAMAGE && b.kill[i]) {
+                    credited.add(b.creatures.get(i));
+                }
+            }
+            final CardCollection kept = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, new CardCollection(credited));
+            if (kept.size() == credited.size()) {
+                return true;
+            }
+            final Set<Card> doomed = new HashSet<>(credited);
+            doomed.removeAll(kept);
+            return net(b, source, mask, true, doomed) >= MIN_NET;
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision why) {
+            return new AiAbilityDecision(0, why);
         }
     }
 

@@ -337,6 +337,16 @@ public class DamageDealAi extends DamageAiBase {
             return SpecialCardAi.Artillerize.consider(ai, sa);
         }
 
+        if (SpecialCardAi.CleansingBeam.routes(ai, sa)) {
+            // Cleansing Beam (dead-card batch 4, row 42): reached by the owner's own hand cast that pays its
+            // mana cost, the key G3's readmit lets through (the hint keeps every other caster off the list).
+            // The stock path below is Radiance-blind (dealDamageChooseTgtC never counts CardUtil.getRadiance's
+            // spread, so a white, black or red target kills our own Kaalia) and draws MyRandom at every consult.
+            // Thefts and Play-effect casts (Nathan Drake), copies and WithoutManaCost probes fail the key and
+            // take exactly the path they took before, as does every other DamageDeal card.
+            return SpecialCardAi.CleansingBeam.consider(ai, sa);
+        }
+
         final String damage = sa.getParam("NumDmg");
         int dmg = calculateDamageAmount(sa, source, damage);
 
