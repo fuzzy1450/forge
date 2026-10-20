@@ -13857,6 +13857,8 @@ public class SpecialCardAi {
                     return Misdirection.consider(ai, sa);
                 case RicochetTrap.NAME:      // batch 4's row 43
                     return RicochetTrap.consider(ai, sa);
+                case BoltBend.NAME:          // batch 4's row 49
+                    return BoltBend.consider(ai, sa);
                 default:
                     return null;
             }
@@ -13875,6 +13877,8 @@ public class SpecialCardAi {
                 case Misdirection.NAME:      // batch 4's row 40
                     return true;
                 case RicochetTrap.NAME:      // batch 4's row 43
+                    return true;
+                case BoltBend.NAME:          // batch 4's row 49
                     return true;
                 default:
                     return false;
@@ -14015,6 +14019,96 @@ public class SpecialCardAi {
         private static boolean freeSwatHeld(final Player ai) {
             return ai.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.nameEquals("Deflecting Swat"))
                     && ai.getCardsIn(ZoneType.Battlefield).anyMatch(Card::isCommander);
+        }
+    }
+
+    // Bolt Bend (dead-card batch 4, row 49; a case of G3's RemoveDeckFilter and of G7's SwatFamily)
+    // "This spell costs {3} less to cast if you control a creature with power 4 or greater. Change the
+    // target of target spell or ability with a single target." {3}{R} Instant, AI:RemoveDeck:All, one
+    // carrier (Ping King 47e3b761, deck 514, a site upload, not an anchor). Three gates kept every cast
+    // out (0 owner casts in 187 distinct held libraries on 2.0.15+499e03087c5): G3's filter dropped the
+    // hinted spell (no readmit case), ChangeTargetsAi.checkApiLogic answered CantPlayAi, and
+    // PlayerControllerAi.chooseNewTargetsFor was a stub outside Deflecting Swat, so a cast moved nothing.
+    // The key (B3-2, B3-3), isOwnHandCast: our own cast of the paper card's root spell from our own hand
+    // at its printed cost -- not a sub, a copy, a Play-effect cast or a WithoutManaCost probe copy
+    // (ManaAi's ritual look-ahead, targetPlayableSpellCard) -- owned, controlled and activated by us.
+    // - readmit, G3's case: the key, while an opponent's spell or ability is the top of the stack
+    //   (inWindow, O(1)); every other pass keeps the hint's filter.
+    // - consider, G7's SwatFamily.consider case: null for anything the key refuses, so G7 keeps the
+    //   stock path below its route (a copy, a theft, an exile or graveyard cast, a no-cost probe copy);
+    //   else the window and floor are Deflecting Swat's (batch 1, row 27), called unchanged: an
+    //   opponent's spell or ability on top whose single-target, non-divided part harms its target
+    //   (DealDamage, Destroy, GainControl, ChangeZone to Graveyard/Library/Hand/non-returning Exile, curse
+    //   or negative Pump, curse or steal Attach), aims at our commander, a planeswalker, a creature worth
+    //   a vanilla 2/2, a nonland CMC 3+ permanent or our life against lethal, is predicted to remove it
+    //   (predictThreatenedObjects), and has a legal new target an opponent controls or is; TargetType$
+    //   SpellAbility.singleTarget is Swat's own canTargetSpellAbility check. Then, RNG-free (B3-5), the
+    //   test-mode adjusted cost -- {R} with a power-4 creature of ours, else {3}{R} -- must fit
+    //   HonestMana with held sources skipped (G1 CommanderCastCeiling.affordable), so no unpayable window
+    //   reaches canPayCost's isManaSourceReserved draws; a decline resets the targets (CantAfford).
+    // - isHost: the paper-name test the key reads. G7's SwatFamily.retargets names the card, so a
+    //   resolving Bolt Bend this player activated moves the part through DeflectingSwat.chooseNewTargets,
+    //   unchanged: only such a part, onto the opponent's best effective object or face, never onto ours.
+    //   With the plan gone by resolution the chooser keeps the target (null, the stub's behaviour), though
+    //   "change the target" is mandatory (CR 115.7a): ChangeTargetsEffect asks no confirm, and forcing a
+    //   change could only move the removal onto another object of ours.
+    // RNG: readmit, consider and the key draw nothing and allocate no SpellAbility id; Bolt Bend has no
+    // alternative or additional cost to expand (its {3} is a ReduceCost static), and an instant has no ETB
+    // copy. A decline returns before canPayCost, whose draws follow a WillPlay only. Holds nothing,
+    // remembers nothing; inert for every other card (a name compare). Couplings (B3-4): a revert of
+    // DeflectingSwat (batch 1, row 27) or of G1 CommanderCastCeiling reverts this row; its G3 case and its
+    // G7 case and name go with it.
+    public static class BoltBend {
+        public static final String NAME = "Bolt Bend";
+
+        // the key: our own cast of the root spell from our own hand, at its printed cost
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()
+                    || sa.hasParam("WithoutManaCost") || sa.getApi() != ApiType.ChangeTargets || !isHost(sa)) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            final Player activator = sa.getActivatingPlayer();
+            return host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner()) && ai.equals(host.getController())
+                    && (activator == null || ai.equals(activator));
+        }
+
+        // an opponent's spell or ability is the top of the stack; O(1)
+        static boolean inWindow(final Player ai) {
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty()) {
+                return false;
+            }
+            final SpellAbility top = game.getStack().peekAbility();
+            final Player by = top == null ? null : top.getActivatingPlayer();
+            return by != null && by.isOpponentOf(ai) && !ai.getYourTeam().contains(by);
+        }
+
+        // G3's case (RemoveDeckFilter.readmit)
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isOwnHandCast(ai, sa) && inWindow(ai);
+        }
+
+        // the SA's host is a Bolt Bend (the paper name, B3-3)
+        public static boolean isHost(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // G7's case (SwatFamily.consider): null keeps the stock path for every SA the key refuses
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa)) {
+                return null; // not this row's cast: G7 keeps the stock path
+            }
+            final AiAbilityDecision swat = DeflectingSwat.consider(ai, sa);
+            if (!swat.willingToPlay()) {
+                return swat;
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return swat;
         }
     }
 
@@ -44046,8 +44140,8 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30 and 42, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard,
-    // a readmit).
+    // 25, 31, 30, 42 and 49, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird
+    // Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -44201,6 +44295,8 @@ public class SpecialCardAi {
                     return IsochronScepter.readmit(ai, sa);
                 case CleansingBeam.NAME:                 // batch 4, row 42 (W6)
                     return CleansingBeam.readmit(ai, sa);
+                case BoltBend.NAME:                      // batch 4, row 49 (W6)
+                    return BoltBend.readmit(ai, sa);
                 default:
                     return false;
             }
