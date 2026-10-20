@@ -383,6 +383,16 @@ public class ComputerUtilAbility {
                 if (sa.isSpell() && SpecialCardAi.BreathOfFury.NAME.equals(source.getName())) {
                     p += SpecialCardAi.BreathOfFury.sortBonus(ai, sa);
                 }
+                // Cleansing Beam keeps its hint (-10 above) for every other reader. In our own main phase, the owner's
+                // hand cast whose pick kills three or more opposing creatures for a net above Sudden Demise's margin
+                // gets +40: +10 undoes the hint and +30 sorts the sweep ahead of every other spell (1786320 t21: Vow of
+                // Malice took the mana a one-sided Beam on a green Elf swarm needed). The verdict is
+                // RemoveDeckFilter.readmit's, memoised for this hand SA on the game thread just before this sort, so the
+                // bonus is O(1) and fixed for the whole sort: the comparator stays transitive. predictSpellToCastInMain2's
+                // sorts (eval thread) read no memo, and return only SpellPermanents, which an instant is not.
+                if (sa.isSpell() && SpecialCardAi.CleansingBeam.NAME.equals(source.getName())) {
+                    p += SpecialCardAi.CleansingBeam.sortBonus(ai, sa);
+                }
                 // try to use it before it's gone
                 if (source.isInPlay() && source.hasSVar("EndOfTurnLeavePlay")) {
                     p += 1;

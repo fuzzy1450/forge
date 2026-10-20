@@ -52238,12 +52238,32 @@ public class SpecialCardAi {
     // (Artillerize's and Tower Defense's documented residual; AVOID_TARGETING_CREATS_THAT_WILL_DIE is true in
     // AiProps and no profile overrides it). Targets are reset first and set only on WillPlay; nothing is held,
     // remembered or reserved; canPayCost then runs on approvals only.
+    // The sweep sorts first (part 42B, Breath of Fury's memoised sort bonus): the hint's -10 leaves a readmitted
+    // Beam only the mana left after every positive-key spell (5 - 10 = -5), and the Kaalia seat taps out (1786320
+    // t21: Vow of Malice took the mana a one-sided Beam on a green Elf swarm needed, and the swarm won at t24). So
+    // readmit, on the game thread inside removeIf just before chooseSpellAbilityToPlayFromList's sort, memoises
+    // this hand SA (SWEEP) when, in our own main phase with an empty stack, a target and G2 mana exist (consider's
+    // checks 2 and 3) and consider's own pick (best, no doomed set: no combat in our main phase) kills SWEEP_KILLS
+    // or more opposing creatures the floor credits, for a net above SuddenDemise.MARGIN. The memo is cleared first
+    // on every call. sortBonus then gives the memo's SA +SORT_SWEEP (+10 undoes the hint, +30 sorts it ahead of
+    // every other spell) in our own main phase, O(1) and fixed for the whole sort, so the comparator stays
+    // transitive; predictSpellToCastInMain2's sorts (the eval thread) read no memo and return only SpellPermanents,
+    // and sortCreatureSpells moves creatures only. RNG class: a post-sort move whose residual can shift a pass with
+    // no visible cast (B4-9, 1B's class): the memo is computed draw-free, a memo-true pass approves the Beam first,
+    // and only when canPayCost's test payment then fails (G2 makes it rare) do its draws come before the SAs sorted
+    // behind it.
     // Coupling (rule B3-4): SuddenDemise.scan and SuddenDemise.Board are that accepted row's private members, read
     // here as nestmates and never edited; a revert or an edit of Sudden Demise's Board must inline them here.
     public static class CleansingBeam {
         public static final String NAME = "Cleansing Beam";
         static final int DAMAGE = 2;          // NumDmg$ 2
         static final int MIN_NET = 160;       // a vanilla nontoken 2/2 (Artillerize.MIN_KILL_EVAL)
+        static final int SWEEP_KILLS = 3;     // 42B: a sweep worth sorting first kills three or more
+        static final int SORT_SWEEP = 40;     // 42B: +10 undoes the hint's -10, +30 sorts it first (Breath of Fury's)
+        // 42B: readmit's sweep verdict for the sort, keyed by the hand SA it was found for (Breath of Fury's LETHAL
+        // memo). Weak, so a serve slot's thread never keeps a finished game alive; the "Game AI Eval" thread always
+        // reads null.
+        private static final ThreadLocal<java.lang.ref.WeakReference<SpellAbility>> SWEEP = new ThreadLocal<>();
 
         // the readmit's key, carried by the DamageDealAi route (rule B3-2); the host's paper name (rule B3-3)
         private static boolean ownHandCast(final Player ai, final SpellAbility sa) {
@@ -52256,9 +52276,68 @@ public class SpecialCardAi {
                     && (activator == null || ai.equals(activator));
         }
 
-        // RemoveDeckFilter.readmit's case: RNG-free, reads the SA, zone, owner and AiCardMemory only
+        // RemoveDeckFilter.readmit's case: RNG-free, reads the SA, zone, owner and AiCardMemory only; 42B adds the
+        // sort's sweep verdict for this hand SA (the memo, cleared first on every call)
         public static boolean readmit(final Player ai, final SpellAbility sa) {
-            return ownHandCast(ai, sa) && RemoveDeckFilter.noManaHeld(ai, false);
+            SWEEP.remove();
+            if (!ownHandCast(ai, sa) || !RemoveDeckFilter.noManaHeld(ai, false)) {
+                return false;
+            }
+            if (sweeps(ai, sa)) {
+                SWEEP.set(new java.lang.ref.WeakReference<>(sa));
+            }
+            return true;
+        }
+
+        // 42B: ComputerUtilAbility.getSpellAbilityPriority's bonus: +SORT_SWEEP for the memo's hand SA in our own main
+        // phase, else 0
+        public static int sortBonus(final Player ai, final SpellAbility sa) {
+            if (!ownHandCast(ai, sa)) {
+                return 0;
+            }
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || !ph.getPhase().isMain()) {
+                return 0;
+            }
+            final java.lang.ref.WeakReference<SpellAbility> r = SWEEP.get();
+            return r != null && r.get() == sa ? SORT_SWEEP : 0;
+        }
+
+        // 42B: the sweep verdict, draw-free (consider's reads): our own main phase, an empty stack, a target and G2
+        // mana (consider's checks 2 and 3), and consider's own pick, whose net clears SuddenDemise.MARGIN and whose
+        // hit set kills SWEEP_KILLS or more opposing creatures the floor credits (net admitted it, so three 1/1
+        // tokens, which are not worth a card, never set it)
+        private static boolean sweeps(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!game.getStack().isEmpty() || !ph.isPlayerTurn(ai) || !ph.getPhase().isMain()) {
+                return false;
+            }
+            final CardCollection targets = targets(ai, sa);
+            if (targets.isEmpty() || !affordable(ai, sa)) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            final SuddenDemise.Board b = SuddenDemise.scan(ai, host);
+            final boolean oneSided = ph.getPhase().isBefore(PhaseType.MAIN2);   // consider's, in our own turn
+            final Card best = best(b, host, targets, oneSided);
+            if (best == null || !sa.canTarget(best)) {
+                return false;
+            }
+            final byte mask = best.getColor().getColor();
+            return net(b, host, mask, oneSided, Collections.<Card>emptySet()) > SuddenDemise.MARGIN
+                    && kills(b, mask) >= SWEEP_KILLS;
+        }
+
+        // 42B: the opposing creatures the hit set kills that net credits (its own kill test, no doomed set)
+        private static int kills(final SuddenDemise.Board b, final byte mask) {
+            int n = 0;
+            for (int i = 0; i < b.need.length; i++) {
+                if ((b.colors[i] & mask) != 0 && b.need[i] <= DAMAGE && b.kill[i]) {
+                    n++;
+                }
+            }
+            return n;
         }
 
         // DamageDealAi.canPlay's route
