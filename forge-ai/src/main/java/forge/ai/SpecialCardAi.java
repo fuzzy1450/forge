@@ -40104,7 +40104,21 @@ public class SpecialCardAi {
     //   last (-10), and W1's 1B (sequenceFeeder) finds it movable and puts it just ahead of the first payable
     //   non-feeder when G2 pays both; a feeder already sorted first takes the trigger, and Looting waits for the next
     //   window (it is declined once Neera is spent).
-    // - Outside Neera's window, and for the flashback in it, the hint stands (false).
+    // - 67B, the loot: our own hand cast or graveyard flashback cast in the same phases, outside Neera's window
+    //   (inside it a hand cast is 67A's and a flashback is held: Neera would bottom it into flashback's exile
+    //   replacement, CR 702.34a, so there is no reveal), a hand cast only while no Neera of ours is on our
+    //   battlefield (spent this turn: tomorrow's window is worth more), in our command zone (not yet cast) or in our
+    //   hand (bounced), since the feeder is worth more than a loot; and only with at least JUNK_FLOOR (2) cards in
+    //   hand, the host aside, that the AI's own discard judge ComputerUtil.isWorseThanDraw calls worse than a draw,
+    //   its "small stuff" clause left out (a nonland of MV 1 or less with six lands out: Swords to Plowshares, Sol
+    //   Ring): DiscardMe cards, lands it says we do not need, nonlands of MV above lands in play + in hand + 2. Then
+    //   (B3-7) both draws arrive and nobody profits: canDraw, the CantDraw statics' cap (Narset, Spirit of the
+    //   Labyrinth, Leovold) allows DRAW (2), and no opposing draw replacement or Drawn/Discarded punisher (Notion
+    //   Thief, Alms Collector, Orcish Bowmasters, Sheoldred, Waste Not) sees them (KnollspineDragon's scan, the host
+    //   standing in for the drawn cards). junk runs before that scan. The loot turns two dead cards into two fresh
+    //   draws for {R} and the card (+1 effective card; +2 for the flashback, which costs no card); with one junk
+    //   card it is neutral at best, so 2 is the floor. The junk count is taken before the draw and the chooser
+    //   (getCardsToDiscard) picks after it, so a discard can still be a live card (the verify plan's H-B2).
     // RNG-free and write-free: phase, zone and trigger reads, castSpellInMain1, one library scan (cheap), noManaHeld,
     // the test-mode price and G2 (whose only writes are setActivatingPlayer on our own mana abilities); the
     // activator is already stamped by getAllPossibleAbilities. Draws nothing, holds nothing, remembers nothing,
@@ -40112,8 +40126,13 @@ public class SpecialCardAi {
     // reservation roll in a window G2 called payable. A thief fails the owner check, a MayPlay cast from exile or
     // the library fails the zone test, and a stolen Neera feeds its controller's own Looting. W1's NeeraWildMage
     // (NAME, unspent, takenPreCast), G2 HonestMana and RemoveDeckFilter.noManaHeld are called unchanged (B3-4).
+    // 67B adds one hand scan (junk, through isWorseThanDraw) and, after two junk cards, the draw reads
+    // (StaticAbilityCantDraw.canDrawAmount, batch 1's KnollspineDragon.drawOrDiscardIsPunished), all called
+    // unchanged and RNG-free.
     public static class FaithlessLooting {
         public static final String NAME = "Faithless Looting";
+        static final int JUNK_FLOOR = 2; // the two cards the loot discards
+        static final int DRAW = 2;       // the two cards it draws
 
         // RemoveDeckFilter.readmit's case, cheapest checks first
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -40142,8 +40161,9 @@ public class SpecialCardAi {
                 if (!fromHand || !NeeraWildMage.takenPreCast(ai, sa)) {
                     return false;
                 }
-            } else {
-                return false; // outside Neera's window the hint stands
+            } else if ((fromHand && neeraReserve(ai)) || junk(ai, host) < JUNK_FLOOR || !draws(ai, host)) {
+                return false; // 67B: the feeder is kept for Neera; fewer than two cards worth looting away; or the
+                              // draws would be capped, stolen or punished (B3-7)
             }
             if (!RemoveDeckFilter.noManaHeld(ai, true)) {
                 return false; // a refusal only waits
@@ -40152,6 +40172,44 @@ public class SpecialCardAi {
             final HonestMana mana = HonestMana.of(ai, sa, true);
             return mana.total() >= cost.getConvertedManaCost()
                     && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // 67B: a Neera of ours still to come (command zone; hand, after a bounce) or spent this turn (battlefield)
+        private static boolean neeraReserve(final Player ai) {
+            if (ai.isCardInPlay(NeeraWildMage.NAME)) {
+                return true;
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Command)) {
+                if (NeeraWildMage.NAME.equals(c.getName()) && ai.equals(c.getOwner())) {
+                    return true;
+                }
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (NeeraWildMage.NAME.equals(c.getName()) && ai.equals(c.getOwner())) {
+                    return true; // skeptic M3: a Neera bounced to hand is one cast from returning
+                }
+            }
+            return false;
+        }
+
+        // 67B: hand cards (the host aside) isWorseThanDraw calls worse than a draw, minus its "small stuff"
+        // clause (a nonland of MV <= 1 with six lands out): DiscardMe, an unneeded land, a far-off nonland
+        static int junk(final Player ai, final Card host) {
+            int n = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (!c.equals(host) && (c.isLand() || c.getCMC() > 1 || c.hasSVar("DiscardMe"))
+                        && ComputerUtil.isWorseThanDraw(ai, c)) {
+                    n++;
+                }
+            }
+            return n;
+        }
+
+        // 67B, B3-7: both draws arrive and no opposing draw replacement, Drawn/Discarded punisher or draw cap sees
+        // them (batch 1's scan and the engine's own cap, called unchanged, B3-4)
+        private static boolean draws(final Player ai, final Card host) {
+            return ai.canDraw() && StaticAbilityCantDraw.canDrawAmount(ai, DRAW) >= DRAW
+                    && !KnollspineDragon.drawOrDiscardIsPunished(ai, host);
         }
     }
 
