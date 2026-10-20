@@ -37205,6 +37205,15 @@ public class SpecialCardAi {
             return pick == null ? stock : target(sa, pick);
         }
 
+        // 63B: an optional free consult, after the stock knownOriginTriggerAI: a Play-effect cast (Neera's reveal, a
+        // Mizzix's Mastery or Arcane Bombardment copy, a thief's free cast) or a Swarm Intelligence or Melek copy's new
+        // targets (PlayerControllerAi.chooseNewTargetsForCopy asks doTrigger(copy, false) of our own spell). No hold and
+        // no cost: the chooser alone; no pick, the stock answer and target.
+        public static AiAbilityDecision considerFree(final Player ai, final SpellAbility sa, final AiAbilityDecision stock) {
+            final Card pick = choose(ai, sa);
+            return pick == null ? stock : target(sa, pick);
+        }
+
         // isPreferredTarget's own timing gates for a Graveyard -> Exile target, read with the same calls (RNG-free).
         private static boolean stockWindow(final Player ai, final SpellAbility sa) {
             if (ComputerUtil.playImmediately(ai, sa)) {

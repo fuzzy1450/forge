@@ -788,6 +788,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
+        if (!mandatory && SpecialCardAi.MnemonicDeluge.handles(sa)) {
+            // Dead-card batch 4, row 63, part 63B: Mnemonic Deluge's optional free consults: a Play-effect cast
+            // (Neera's reveal, a Mizzix's Mastery or Arcane Bombardment copy, a thief's free cast) and a copy's new
+            // targets (Swarm Intelligence, Melek: PlayerControllerAi.chooseNewTargetsForCopy asks doTrigger(copy,
+            // false) of our own spell). The stock knownOriginTriggerAI below keeps only opponents' graveyard cards and
+            // takes the most expensive, so a copy re-picked its original's card and the original fizzled. Run it
+            // first, unchanged and RNG-free (the card has no AILogic, so it was A's whole consult), then the chooser
+            // (SpecialCardAi.MnemonicDeluge.considerFree): its pick, or the stock answer and target. Mandatory calls (a
+            // forced cast, an opponent's copy of our spell, stack-time targeting) keep the stock path below.
+            final AiAbilityDecision stock = knownOriginTriggerAI(aiPlayer, sa, false);
+            return SpecialCardAi.MnemonicDeluge.considerFree(aiPlayer, sa, stock);
+        }
+
         if (!mandatory && SpecialCardAi.TitansPresence.handles(sa)) {
             // An optional Play-effect cast (Zhulodok's cascade, Optional through its reveal cost) is
             // judged here: the stock known-origin pick ignores the reveal and casts into a whiff when
