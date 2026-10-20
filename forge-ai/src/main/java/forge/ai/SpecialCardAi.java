@@ -40082,6 +40082,79 @@ public class SpecialCardAi {
         }
     }
 
+    // Faithless Looting (dead-card batch 4, wave 6, row 67, a B4-14 follow-up; deck review 2026-10-17, Neera - Wild
+    // Magic 510f65b5, deck 507, and sixteen anchor precons)
+    // "Draw two cards, then discard two cards. Flashback {2}{R}" ({R} sorcery; the script matches the printed text
+    // clause by clause). AI:RemoveDeck:All drops the hand spell and the graveyard flashback spell (the same host) in
+    // getSpellAbilityToPlay's removeIf before any handler runs, so its owner never casts it through its own priority
+    // loop: its owner casts on 2.0.15+499e03087c5 are Play-effect casts (Neera's reveal, Baral's Expertise,
+    // Electrodominance, Velomachus Lorehold, Mizzix's Mastery), which never read the hint. The script keeps the hint:
+    // the -10 sort and every other isCardRemAIDeck reader stay as they are (the steal, copy, tutor and Mizzix's
+    // Mastery pickers; CopySpellAbilityAi refuses to copy it, so a Looting is never copied). The G3 dispatcher
+    // decides admission only; DrawAi's own approval and guards (the hand-size guard, the library of 5 or fewer,
+    // canLoot) and the discard chooser stay stock.
+    // - 67A, the Neera feeder: our own hand cast (not the flashback, not a copy, not a Play-effect cast) in our main
+    //   phase on an empty stack (canCastSorcery), in Main 2 or in Main 1 where castSpellInMain1 says so (DrawAi
+    //   .checkPhaseRestrictions' Main-2 hold, answered first by the function it asks itself, so Main 1 stays A's),
+    //   while a Neera we control is unspent and 1A's take rule judged before the cast (takenPreCast) will bottom it,
+    //   with no live mana reservation and G2 paying the engine's adjusted {R}: {R} for one reveal, a free nonland
+    //   card (cast 93% of the time, 3.47 average MV in deck 507). takenPreCast (hand, MV 1) and shouldBottom (stack,
+    //   MV 1) read the same cheap(ai, 1) against the same library, Looting in neither, and Looting has no target, so
+    //   the readmit and the trigger agree: it is bottomed, never resolves, and Neera reveals. Readmitted, it sorts
+    //   last (-10), and W1's 1B (sequenceFeeder) finds it movable and puts it just ahead of the first payable
+    //   non-feeder when G2 pays both; a feeder already sorted first takes the trigger, and Looting waits for the next
+    //   window (it is declined once Neera is spent).
+    // - Outside Neera's window, and for the flashback in it, the hint stands (false).
+    // RNG-free and write-free: phase, zone and trigger reads, castSpellInMain1, one library scan (cheap), noManaHeld,
+    // the test-mode price and G2 (whose only writes are setActivatingPlayer on our own mana abilities); the
+    // activator is already stamped by getAllPossibleAbilities. Draws nothing, holds nothing, remembers nothing,
+    // allocates no SpellAbility id, so a refusal is the old filter and the first new draw is canPayCost's
+    // reservation roll in a window G2 called payable. A thief fails the owner check, a MayPlay cast from exile or
+    // the library fails the zone test, and a stolen Neera feeds its controller's own Looting. W1's NeeraWildMage
+    // (NAME, unspent, takenPreCast), G2 HonestMana and RemoveDeckFilter.noManaHeld are called unchanged (B3-4).
+    public static class FaithlessLooting {
+        public static final String NAME = "Faithless Looting";
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()
+                    || !ai.equals(host.getOwner())) {
+                return false; // a theft, a copy, a Play-effect cast: the hint as it was
+            }
+            final boolean fromHand = !sa.isFlashback() && host.isInZone(ZoneType.Hand);
+            final boolean flashback = sa.isFlashback() && host.isInZone(ZoneType.Graveyard);
+            if (!fromHand && !flashback) {
+                return false; // a MayPlay cast from exile or the library: the hint as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (!ai.canCastSorcery()) {
+                return false; // O(1) on every other pass: opponents' turns, combat, a non-empty stack
+            }
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2) && !ComputerUtil.castSpellInMain1(ai, sa)) {
+                return false; // DrawAi.checkPhaseRestrictions' Main-2 hold, answered first
+            }
+            if (ai.isCardInPlay(NeeraWildMage.NAME) && NeeraWildMage.unspent(ai)) {
+                // 67A: the trigger takes it (1A's own rule, before the cast); never the flashback
+                if (!fromHand || !NeeraWildMage.takenPreCast(ai, sa)) {
+                    return false;
+                }
+            } else {
+                return false; // outside Neera's window the hint stands
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+    }
+
     // Nemata, Grove Guardian (dead-card batch 3, row 101; extension 2026-10-15; Mono-Green Food and
     // Tokens 8428b3ce)
     // "{2}{G}: Create a 1/1 green Saproling creature token. Sacrifice a Saproling: Saproling
@@ -45139,8 +45212,8 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49, 52 and 66, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68
-    // is Sunbird Standard, a readmit).
+    // 25, 31, 30, 42, 49, 52, 66 and 67, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row
+    // 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -45300,6 +45373,8 @@ public class SpecialCardAi {
                     return MindbreakTrap.readmit(ai, sa);
                 case WildMagicSurge.NAME:                // batch 4, row 66 (W6)
                     return WildMagicSurge.readmit(ai, sa);
+                case FaithlessLooting.NAME:              // batch 4, row 67 (W6)
+                    return FaithlessLooting.readmit(ai, sa);
                 default:
                     return false;
             }
