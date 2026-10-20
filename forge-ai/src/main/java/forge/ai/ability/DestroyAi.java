@@ -115,6 +115,22 @@ public class DestroyAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision checkApiLogic(final Player ai, final SpellAbility sa) {
+        final AiAbilityDecision stock = checkApiLogicStock(ai, sa);
+        // Wild Magic Surge (dead-card batch 4, row 66, part 66A): G3's RemoveDeckFilter.readmit puts its owner's
+        // own hand cast back only in our Main 2 or the opponent's end step before our turn, on an empty stack,
+        // with {R}{R} spare and a target whose net exchange clears the floor (SpecialCardAi.WildMagicSurge).
+        // The stock body runs first, its draws kept (the useRemovalNow roll included); consider then answers
+        // WillPlay on the readmit's own pick inside those approvals, else the stock decision unchanged
+        // (ManaAi's ritual look-ahead, hasReasonToPlayCardThisTurn and targetPlayableSpellCard keep A's answer
+        // outside them). The root spell's paper name only: inert for every other Destroy spell ability, and
+        // chkDrawback's subs never pass the key.
+        if (SpecialCardAi.WildMagicSurge.isOwnHandCast(ai, sa)) {
+            return SpecialCardAi.WildMagicSurge.consider(ai, sa, stock);
+        }
+        return stock;
+    }
+
+    private AiAbilityDecision checkApiLogicStock(final Player ai, final SpellAbility sa) {
         final Card source = sa.getHostCard();
         final boolean noRegen = sa.hasParam("NoRegen");
         final String logic = sa.getParam("AILogic");

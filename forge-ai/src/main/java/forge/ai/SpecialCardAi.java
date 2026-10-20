@@ -33099,6 +33099,295 @@ public class SpecialCardAi {
         }
     }
 
+    // Wild Magic Surge (dead-card batch 4, wave 6, row 66; a follow-up of the 2026-10-17 deck review of
+    // Neera - Wild Magic 510f65b5, deck 507)
+    // "Destroy target permanent an opponent controls. Its controller reveals cards from the top of their
+    // library until they reveal a permanent card that shares a card type with that permanent. They put that
+    // card onto the battlefield and the rest on the bottom of their library in a random order." {R}{R}
+    // Instant. AI:RemoveDeck:All is KEPT (B3-1): it stripped every hand cast at the removeIf of
+    // AiController.getSpellAbilityToPlay before any handler ran (no G3 case named the card), so no owner ever
+    // cast it from hand (0 in 2,589 + 705 + 420 held games of its three carriers); it lived on Play-effect
+    // casts only (Neera's reveal, exile casts, thieves). Behind the hint the stock DestroyAi body has no floor
+    // for this card: it takes getBestRemovalTargetAI's pick (+30 for every token, lands in), and its
+    // useRemovalNow roll is the only bar. The card is a swap, not a kill: the reveal runs whether or not the
+    // destroy happens (AlwaysRemember$ True) and hands the victim a uniformly random permanent card of a
+    // shared type from its library. So every judgement here is
+    //   net(t) = value(t) + COMMANDER_TAX (a commander) - gear(t) - the mean value of the permanent cards in
+    //   t's controller's library that share a card type with t (Permanent.sharesCardTypeWith, the script's
+    //   own test; the library's composition, never its order, as ArchonOfValorsReach and
+    //   TalionTheKindlyLord read an opponent's library; 0 when no card matches),
+    // with value Maelstrom Pulse's (evaluateCreature for a creature, else 50 + 30 x mana value, +10 a loyalty
+    // counter) and gear(t) the P/T its Equipment grants a creature (15 a power, 10 a toughness: the Equipment
+    // stays behind and re-equips the replacement; skeptic F2). Candidates: targetable opposing nonland
+    // permanents we do not own, through a private copy of MaelstromPulse.isCandidate (B3-4), never one pumped
+    // by an effect until end of turn, umbra-armored (the Aura dies instead and the reveal still runs; skeptic
+    // F1) or carrying a Destroy replacement of its own, and minus creatures already dying.
+    // - Part 66A, the own-hand cast: readmit(), G3's case, puts our face-up hand spell back on the list only
+    //   on an empty stack in our Main 2 or in the opponent's end step right before our turn, with no mana
+    //   held (G3's noManaHeld), {R}{R} at the engine's test-mode cost within G2's HonestMana (total and red,
+    //   held sources skipped), and a candidate whose net clears its floor: CREATURE_FLOOR for a creature,
+    //   PERMANENT_FLOOR for any other permanent, any positive net for a planeswalker no library card can
+    //   replace; the best net wins, battlefield order breaking ties. consider(), from DestroyAi.checkApiLogic
+    //   AFTER the stock body (its draws kept, the useRemovalNow roll included), aims the readmit's own pick
+    //   and answers WillPlay inside those approvals, else returns the stock decision untouched, so ManaAi's
+    //   ritual look-ahead and the other direct canPlaySa scanners keep A's answer outside them.
+    // RNG: draws nothing and allocates no SpellAbility id; a readmit refusal is A's filter verbatim. Holds and
+    // remembers nothing, no static mutable state (the serve JVM shares statics); its only writes are
+    // HonestMana's setActivatingPlayer on our own mana abilities and sa's targets on an approval.
+    public static class WildMagicSurge {
+        public static final String NAME = "Wild Magic Surge";
+        static final int CREATURE_FLOOR = 180;   // MaelstromPulse.CREATURE_FLOOR: a nontoken 3/3
+        static final int PERMANENT_FLOOR = 140;  // MaelstromPulse.PERMANENT_FLOOR: 50 + 30 x mana value 3
+        static final int COMMANDER_TAX = 100;    // Firespout's recast tax
+
+        // the root spell of this card, never a copy and never a sub; keyed on the host's paper name, the key
+        // the readmit switch (RemoveDeckFilter.paperName) and isCardRemAIDeck read (B3-2, B3-3)
+        private static boolean isRoot(final SpellAbility sa) {
+            final Card host = sa == null ? null : sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && sa.isSpell() && sa.getParent() == null && sa.getApi() == ApiType.Destroy && !sa.isCopied();
+        }
+
+        // 66A's key: our own face-up spell from our own hand, not a Play-effect cast. ManaAi's no-cost copy
+        // (copyWithNoManaCost) keeps the hand host and is not isCopied, so it passes too (harmless: the
+        // ritual look-ahead skips instants after its verdict).
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            if (!isRoot(sa) || sa.isCastFromPlayEffect()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            return !host.isFaceDown() && ai.equals(host.getOwner()) && host.isInZone(ZoneType.Hand);
+        }
+
+        // G3's case (RemoveDeckFilter.readmit), cheapest checks first; a false is A's filter verbatim
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isOwnHandCast(ai, sa) && handPick(ai, sa) != null;
+        }
+
+        // DestroyAi.checkApiLogic, behind isOwnHandCast and AFTER the stock body: the readmit's own pick on the
+        // same board, computed before any target is touched; outside its approvals the stock decision and its
+        // targets come back untouched (a reset first would hand a caller a WillPlay with no target)
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final AiAbilityDecision stock) {
+            final Card pick = handPick(ai, sa);
+            if (pick == null) {
+                return stock;
+            }
+            sa.resetTargets();
+            sa.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the window, then the mana, then the floor; null = no approval
+        private static Card handPick(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean main2 = ph.isPlayerTurn(ai) && ph.is(PhaseType.MAIN2);
+            final boolean oppEot = !ph.isPlayerTurn(ai) && ph.is(PhaseType.END_OF_TURN) && ph.getNextTurn() == ai;
+            if ((!main2 && !oppEot) || !game.getStack().isEmpty()) {
+                return null;
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, false) || !affordable(ai, sa)) {
+                return null;
+            }
+            return best(ai, sa, true);
+        }
+
+        // {R}{R} at the engine's test-mode cost (calculateManaCost: taxes and reductions; RNG-free for this
+        // spell) within G2's count with held sources skipped, in total and in red (B3-5)
+        private static boolean affordable(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana m = HonestMana.of(ai, sa, true);
+            return m.total() >= cost.getConvertedManaCost()
+                    && m.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // The shared chooser: the best net among the candidates, always above 0, battlefield order breaking ties
+        // (the first wins); floored = the hand path's floors (clears). A candidate whose gear cannot be read is
+        // dropped. The replacement means are memoised per (controller, core types) within the call.
+        private static Card best(final Player ai, final SpellAbility sa, final boolean floored) {
+            CardCollection list = CardLists.getTargetableCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa);
+            list = CardLists.filter(list, t -> isCandidate(ai, t));
+            list = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, list);
+            final Map<String, int[]> memo = new HashMap<>();
+            Card best = null;
+            int bestNet = 0;
+            for (final Card t : list) {
+                final int gear = gear(t);
+                if (gear < 0) {
+                    continue;
+                }
+                final int[] n = net(t, gear, memo);
+                if (n[0] > bestNet && (!floored || clears(t, n[0], n[1]))) {
+                    best = t;
+                    bestNet = n[0];
+                }
+            }
+            return best;
+        }
+
+        // {net, matches}: value, + COMMANDER_TAX for a commander, - gear, - the mean replacement value; and how
+        // many library cards could replace t
+        private static int[] net(final Card t, final int gear, final Map<String, int[]> memo) {
+            final int[] r = replacement(t, memo);
+            return new int[] {value(t) + (t.isCommander() ? COMMANDER_TAX : 0) - gear - r[0], r[1]};
+        }
+
+        private static boolean clears(final Card t, final int net, final int matches) {
+            if (t.isPlaneswalker() && matches == 0) {
+                return net > 0;                     // a clean kill: nothing can replace it
+            }
+            return net >= (t.isCreature() ? CREATURE_FLOOR : PERMANENT_FLOOR);
+        }
+
+        // {mean value, count} of the permanent cards in t's controller's library that share a card type with t
+        // (DigUntil's Valid$ Permanent.sharesCardTypeWith RememberedLKI); {0, 0} when none does.
+        // CardType.sharesCardTypeWith reads core types only, hence the memo key.
+        private static int[] replacement(final Card t, final Map<String, int[]> memo) {
+            final Player ctrl = t.getController();
+            final StringBuilder key = new StringBuilder().append(ctrl.getId());
+            for (final CardType.CoreType ct : CardType.CoreType.values()) {
+                if (t.getType().hasType(ct)) {
+                    key.append(',').append(ct.name());
+                }
+            }
+            return memo.computeIfAbsent(key.toString(), k -> {
+                int sum = 0;
+                int n = 0;
+                for (final Card m : ctrl.getCardsIn(ZoneType.Library)) {
+                    if (m.isPermanent() && m.sharesCardTypeWith(t)) {
+                        sum += value(m);
+                        n++;
+                    }
+                }
+                return new int[] {n == 0 ? 0 : sum / n, n};
+            });
+        }
+
+        // Maelstrom Pulse's value (LegionsToAshes.removalValue's shape), a private copy; a planeswalker off the
+        // battlefield (a library card) counts its printed loyalty
+        private static int value(final Card c) {
+            if (c.isCreature()) {
+                return ComputerUtilCard.evaluateCreature(c);
+            }
+            int v = 50 + 30 * c.getCMC();
+            if (c.isPlaneswalker()) {
+                v += 10 * loyalty(c);
+            }
+            return v;
+        }
+
+        private static int loyalty(final Card c) {
+            if (c.isInPlay()) {
+                return c.getCounters(CounterEnumType.LOYALTY);
+            }
+            try {
+                return Integer.parseInt(c.getCurrentState().getBaseLoyalty().trim());
+            } catch (final RuntimeException e) {
+                return 0;
+            }
+        }
+
+        // skeptic F2: the P/T a creature's Equipment grants it, 15 a power and 10 a toughness (the Equipment
+        // stays on the battlefield and re-equips the replacement), over every Continuous static of every
+        // Equipment on it; 0 for a noncreature; -1 (the candidate is dropped) when an amount cannot be read.
+        // A first-order correction: keyword grants and anthems are not taken off (skeptic R8).
+        private static int gear(final Card t) {
+            if (!t.isCreature()) {
+                return 0;
+            }
+            try {
+                int dp = 0;
+                int dt = 0;
+                for (final Card q : t.getEquippedBy()) {
+                    for (final StaticAbility st : q.getStaticAbilities()) {
+                        if (!st.checkMode(StaticAbilityMode.Continuous)) {
+                            continue;
+                        }
+                        dp += AbilityUtils.calculateAmount(q, st.getParam("AddPower"), st);
+                        dt += AbilityUtils.calculateAmount(q, st.getParam("AddToughness"), st);
+                    }
+                }
+                return 15 * Math.max(0, dp) + 10 * Math.max(0, dt);
+            } catch (final RuntimeException e) {
+                return -1;
+            }
+        }
+
+        // MaelstromPulse.isCandidate, a private copy (B3-4), plus: never a land; never a creature an effect
+        // pumps until end of turn (a non-zero boostPT pair in column 0: PumpEffect, PumpAllEffect, perpetual;
+        // the replacement inherits none of it); never umbra-armored (HarshMercy.umbraArmored, a private copy: it
+        // sees Umbra Mystic's granted keyword too); never a card with a Destroy replacement of its own
+        // (Mossbridge Troll, Clergy and Knight of the Holy Nimbus regenerate instead, and the reveal still runs)
+        private static boolean isCandidate(final Player ai, final Card t) {
+            if (t.isLand()) {
+                return false;
+            }
+            if (ai.equals(t.getOwner()) || t.hasKeyword(Keyword.WARD) || !t.canBeDestroyed()
+                    || t.getShieldCount() > 0 || t.getCounters(CounterEnumType.SHIELD) > 0
+                    || t.hasSVar("SacMe") || "Dies".equals(t.getSVar("Targeting"))) {
+                return false;
+            }
+            if (!t.isCreature() && (t.isToken() || t.isTokenCard())) {
+                return false;                       // cracked in response: the spell fizzles
+            }
+            if ((t.hasKeyword(Keyword.UNDYING) && t.getCounters(CounterEnumType.P1P1) == 0)
+                    || (t.hasKeyword(Keyword.PERSIST) && t.getCounters(CounterEnumType.M1M1) == 0)) {
+                return false;
+            }
+            for (final Card aura : t.getEnchantedBy()) {
+                if (ai.equals(aura.getController())) {
+                    return false;                   // our Aura already answers it, and would die with it
+                }
+            }
+            // Structural stand-ins for DestroyAi's canRegenerate and sacrifice-in-response filters, which call
+            // canPayCost (MyRandom through the payment test); these read the script only.
+            for (final SpellAbility ab : t.getAllSpellAbilities()) {
+                if (!ab.isActivatedAbility()) {
+                    continue;
+                }
+                if (ab.getApi() == ApiType.Regenerate) {
+                    return false;
+                }
+                final Cost cost = ab.getPayCosts();
+                if (cost == null) {
+                    continue;
+                }
+                for (final CostPart part : cost.getCostParts()) {
+                    if (part instanceof CostSacrifice && ((CostSacrifice) part).payCostFromSource()) {
+                        return false;
+                    }
+                }
+            }
+            if ((t.isCreature() && effectBoosted(t)) || umbraArmored(t)) {
+                return false;
+            }
+            for (final ReplacementEffect re : t.getReplacementEffects()) {
+                if (re.getMode() == ReplacementType.Destroy) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean effectBoosted(final Card c) {
+            for (final Pair<Integer, Integer> b : c.getPTBoostTable().column(0L).values()) {
+                if (b.getLeft() != 0 || b.getRight() != 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean umbraArmored(final Card c) {
+            for (final Card aura : c.getEnchantedBy()) {
+                if (aura.hasKeyword(Keyword.UMBRA_ARMOR)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Maestros Confluence (dead-card batch 2, row 67)
     // "Choose three. You may choose the same mode more than once. Return target monocolored
     // instant or sorcery card from your graveyard to your hand; target creature gets -3/-3 until
@@ -44809,8 +45098,8 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49 and 52, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is
-    // Sunbird Standard, a readmit).
+    // 25, 31, 30, 42, 49, 52 and 66, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68
+    // is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -44968,6 +45257,8 @@ public class SpecialCardAi {
                     return BoltBend.readmit(ai, sa);
                 case MindbreakTrap.NAME:                 // batch 4, row 52 (W6)
                     return MindbreakTrap.readmit(ai, sa);
+                case WildMagicSurge.NAME:                // batch 4, row 66 (W6)
+                    return WildMagicSurge.readmit(ai, sa);
                 default:
                     return false;
             }
