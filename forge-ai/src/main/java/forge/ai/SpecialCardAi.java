@@ -29652,6 +29652,184 @@ public class SpecialCardAi {
         }
     }
 
+    // Isochron Scepter (dead-card batch 4, wave 6, row 30; carrier The Sting of Ping 30da5b05, deck 512, Vivi
+    // Ornitier, a site upload and not an anchor, the only registered deck that lists the card)
+    // "Imprint - When Isochron Scepter enters, you may exile an instant card with mana value 2 or less from
+    // your hand. {2}, {T}: You may copy the exiled card. If you do, you may cast the copy without paying its
+    // mana cost." ({2} artifact.) The script is the printed card (OptionalDecider$ You on the enters trigger;
+    // Optional$ True, CopyCard$ True and WithoutManaCost$ True on the Play ability) and keeps
+    // AI:RemoveDeck:All, so the -10 sort and every other isCardRemAIDeck reader (steal, exchange, copy, clone
+    // and tutor pickers) still refuse it. AiController's filter dropped both its spell abilities before any
+    // handler ran: 0 hand casts in 385 distinct held libraries on 2.0.15+499e03087c5. Behind the hint there
+    // is no floor: PermanentAi's WillPlay in any own Main 2; the imprint's getWorstAI, the cheapest instant
+    // in hand (Pact of Negation in 2024775, after an opponent's Tibalt's Trickery cast the Scepter for us);
+    // and PlayAi's WillPlay at any empty-stack priority, whatever the imprint can do there.
+    // Four parts, each its own commit; every part needs 30B's class, and 30A needs at least one copy window:
+    // - 30B, the imprint pick (imprintPick, from ChangeZoneAi.chooseCardToHiddenOriginChangeZone after the
+    //   stock shuffle): the first instant of the best kind kind() names whose copy can work, else null, which
+    //   exiles nothing (the trigger's search is not Mandatory: ChangeZoneAi.confirmAction answers true and
+    //   the search ends). G3's case and the copy readmit's frame land with it and answer false while kind()
+    //   names no kind, so 30B alone only keeps a free cast's imprint from spending an instant no copy uses;
+    // - 30C-eot and 30C-loop, the copy readmit (G3) in each kind's own window; each gives kind() its own
+    //   kinds, so a dropped part takes them out of the pick and the cast readmit, and no imprint is stranded;
+    // - 30A, the cast readmit (G3): the owner's hand cast, in our Main 2, when imprintPick finds a worthy
+    //   instant in hand.
+    // Kinds are script shapes, never names, ranked in Kind's declaration order. Every instant no part names
+    // is NONE: counterspells (no target on the empty stack PlayAi activates on), charms (Pyroblast, Red
+    // Elemental Blast), Effects with no AILogic (Borne Upon a Wind, refused as a Play-effect cast), X and
+    // non-mana costs, and so Pact of Negation (a Counter root) and Final Fortune (an AddTurn root), whose
+    // copies lose the game: the pick never exiles either.
+    // A free-cast counter on any battlefield (isFreeCastCounter, Vexing Bauble's shape; the carrier runs one)
+    // counters every copy, which is cast without paying: it vetoes every copy window and the cast (skeptic
+    // F1). The pick skips the veto, so a free cast still exiles its best instant (the counter may leave).
+    // RNG (B4-9): readmit and everything behind it is a gate on a path A refused at a draw-free point (the G3
+    // filter), so a false is the old filter exactly; imprintPick is a deterministic chooser at the same
+    // consult, after the stock shuffle, so the draws are A's. Every read is a zone, phase, stack,
+    // AiCardMemory (noManaHeld), parameter, trigger or SVar-text read, the test-mode calculateManaCost or
+    // HonestMana (G2); no ability is built, so no SpellAbility id is allocated, and nothing is held or
+    // remembered. The only writes are activator stamps: G2's on our mana abilities, as the estimate does, and
+    // affordable's on an unstamped SA, as getOriginalAndAltCostAbilities does right after the filter. No
+    // handler changes: a direct canPlaySa caller (rule B3-2) skips the filter and keeps A's stock path.
+    public static class IsochronScepter {
+        public static final String NAME = "Isochron Scepter";
+
+        // the imprinted instant's kind, by its script shape (kind()); the declaration order is the pick's rank
+        enum Kind { NONE, REVERSAL, DRAW, BURN }
+
+        // the filter's own key: the host's paper rules (rule B3-3; a Clone's copy answers to the Clone's)
+        static boolean isScepter(final Card host) {
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // ChangeZoneAi's hook key: a Scepter's enters-trigger exile (Imprint, from hand), whoever controls it
+        public static boolean isImprint(final SpellAbility sa) {
+            return sa != null && sa.getApi() == ApiType.ChangeZone && sa.hasParam("Imprint")
+                    && "Hand".equals(sa.getParam("Origin")) && isScepter(sa.getHostCard());
+        }
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first; a false is the old filter. An ability another
+        // player's pass stamped is not ours to answer.
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Player stamped = sa.getActivatingPlayer();
+            if (!isScepter(host) || sa.isCopied() || (stamped != null && !ai.equals(stamped))) {
+                return false;
+            }
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.Play) {
+                return readmitCopy(ai, sa, host);
+            }
+            return false;
+        }
+
+        // the {2}, {T} copy, any controller's (B4-12): the Scepter ours, on the battlefield and untapped, on an
+        // empty stack; then the imprinted card's kind picks the window, each copy-window part's case under its
+        // line (none: the old filter)
+        private static boolean readmitCopy(final Player ai, final SpellAbility sa, final Card host) {
+            if (!host.isInPlay() || host.isTapped() || !ai.equals(host.getController())
+                    || !ai.getGame().getStack().isEmpty()) {
+                return false;
+            }
+            final Card imprinted = imprinted(host);
+            final Kind kind = kind(imprinted);
+            switch (kind) {
+                // REVERSAL: our own main phase, while the loop pays for itself (30C-loop)
+                // DRAW and BURN: the end step before our turn (30C-eot)
+                default:
+                    return false;
+            }
+        }
+
+        // the pick: the first instant of the best kind whose copy can work, in fetchList's order (the stock
+        // shuffle's, at the imprint), else null; RNG-free, builds nothing
+        public static Card imprintPick(final Player ai, final Card host, final Iterable<Card> fetchList) {
+            Card pick = null;
+            Kind best = Kind.NONE;
+            for (final Card c : fetchList) {
+                final Kind k = kind(c);
+                if (k != Kind.NONE && (best == Kind.NONE || k.ordinal() < best.ordinal())) {
+                    pick = c;
+                    best = k;
+                }
+            }
+            return pick;
+        }
+
+        // the instant's kind: a plain instant spell with only a mana cost and no X, then its root API, each
+        // copy-window part's cases under its line (none: NONE)
+        static Kind kind(final Card c) {
+            if (c == null || !c.isInstant()) {
+                return Kind.NONE;
+            }
+            final SpellAbility sp = c.getFirstSpellAbility();
+            if (sp == null || !sp.isSpell() || sp.getApi() == null || sp.getPayCosts() == null
+                    || !sp.getPayCosts().isOnlyManaCost() || sp.getPayCosts().getTotalMana().countX() > 0) {
+                return Kind.NONE;
+            }
+            final AbilitySub sub = sp.getSubAbility();
+            switch (sp.getApi()) {
+                // REVERSAL (30C-loop)
+                // DRAW and BURN (30C-eot)
+                default:
+                    return Kind.NONE;
+            }
+        }
+
+        // the card the Scepter imprinted, while it is still in exile
+        static Card imprinted(final Card host) {
+            for (final Card c : host.getImprintedCards()) {
+                if (c.isInZone(ZoneType.Exile)) {
+                    return c;
+                }
+            }
+            return null;
+        }
+
+        // the floor both copy windows share, asked inside the window: no free-cast counter out (skeptic F1),
+        // no mana held (G3's noManaHeld, at instant speed), the engine's test-mode cost within G2
+        static boolean copyPaid(final Player ai, final SpellAbility sa) {
+            return !freeCastCounterOut(ai.getGame()) && RemoveDeckFilter.noManaHeld(ai, false) && affordable(ai, sa);
+        }
+
+        // the cost, tax included (the test-mode calculateManaCost, rule B3-5), within the honest count with held
+        // sources dropped (G2), so an unpayable window declines before canPayCost's test payment draws
+        static boolean affordable(final Player ai, final SpellAbility sa) {
+            if (sa.getActivatingPlayer() == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            return HonestMana.of(ai, sa, true).total() >= cost.getConvertedManaCost();
+        }
+
+        // a free-cast counter on any battlefield, whoever controls it
+        static boolean freeCastCounterOut(final Game game) {
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (isFreeCastCounter(c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Vexing Bauble's shape ("Whenever a player casts a spell, if no mana was spent to cast it, counter that
+        // spell"): a non-static Battlefield SpellCast trigger whose ValidSA reads ManaSpent (a "no colored mana"
+        // variant too) and whose Execute is a DB$ Counter; read from the SVar text, never built
+        static boolean isFreeCastCounter(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() != TriggerType.SpellCast || t.isStatic()
+                        || !"Battlefield".equals(t.getParam("TriggerZones"))
+                        || !t.getParamOrDefault("ValidSA", "").contains("ManaSpent") || !t.hasParam("Execute")) {
+                    continue;
+                }
+                final String text = t.getSVar(t.getParam("Execute"));
+                if (!text.isEmpty() && "Counter".equals(
+                        FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR).get("DB"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Jolted Awake (dead-card batch 3, row 14)
     // "Choose up to one target artifact or creature card in your graveyard. You get {E}{E}. Then
     // you may pay an amount of {E} equal to that card's mana value. If you do, return it from
@@ -43697,7 +43875,7 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25 and 31, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard,
+    // 25, 31 and 30, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird Standard,
     // a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -43848,6 +44026,8 @@ public class SpecialCardAi {
                     return StealEnchantment.readmit(ai, sa);
                 case Scapeshift.NAME:                    // batch 4, row 31 (W5)
                     return Scapeshift.readmit(ai, sa);
+                case IsochronScepter.NAME:               // batch 4, row 30 (W6)
+                    return IsochronScepter.readmit(ai, sa);
                 default:
                     return false;
             }

@@ -2195,6 +2195,16 @@ public class ChangeZoneAi extends SpellAbilityAi {
             final Card pick = SpecialCardAi.PraetorsGrasp.choosePick(decider, sa, fetchList);
             return pick != null ? pick : first;
         }
+        if (ZoneType.Exile.equals(destination) && SpecialCardAi.IsochronScepter.isImprint(sa)) {
+            // Isochron Scepter's imprint (dead-card batch 4, wave 6, row 30): the Exile branch below takes the
+            // cheapest instant (getWorstAI -> getCheapestPermanentAI): Pact of Negation in 2024775, a copy no
+            // empty-stack activation can cast and one that loses the game if it ever is. Take the Scepter's
+            // ranked pick instead (SpecialCardAi.IsochronScepter.imprintPick); null exiles nothing (the
+            // search is not Mandatory, so ChangeZoneAi.confirmAction answers true and it ends). After the
+            // stock shuffle, so the draws are the stock path's; RNG-free. Any controller's resolution, a
+            // thief's included (B4-12); every other card's search takes the stock pick below unchanged.
+            return SpecialCardAi.IsochronScepter.imprintPick(decider, sa.getHostCard(), fetchList);
+        }
 
         if (ZoneType.Battlefield.equals(destination)) {
             fetchList = CardLists.filter(fetchList, c1 -> !c1.getType().isLegendary() || !decider.isCardInPlay(c1.getName()));
