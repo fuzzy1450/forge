@@ -979,6 +979,15 @@ public class AiController {
             return AiPlayDecision.AnotherTime;
         }
 
+        // Dead-card batch 4, row 63, part 63F: Mnemonic Deluge. ChangeZoneAi's chooser (63A) found no pick and kept
+        // the stock target, a Death by Dragons-shaped card (a targeted Token part with AITgts$ Opponent): its three free
+        // copies would be aimed at us by TokenAi.doTriggerNoCost, so every other player would get the tokens. canPlaySa
+        // and canPayCost above ran A's path, draws included, so this veto changes only the cast A was about to make
+        // (B4-3). A name compare inside declines: inert for every other SA. Draws nothing. See the class comment.
+        if (SpecialCardAi.MnemonicDeluge.declines(player, sa)) {
+            return AiPlayDecision.CantPlayAi;
+        }
+
         return AiPlayDecision.WillPlay;
     }
 

@@ -37211,7 +37211,37 @@ public class SpecialCardAi {
         // no cost: the chooser alone; no pick, the stock answer and target.
         public static AiAbilityDecision considerFree(final Player ai, final SpellAbility sa, final AiAbilityDecision stock) {
             final Card pick = choose(ai, sa);
+            if (pick == null && stock.willingToPlay() && givesTokens(sa)) {
+                // 63F: no pick, and the stock answer that would stand aims at Death by Dragons' shape (declines below)
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
             return pick == null ? stock : target(sa, pick);
+        }
+
+        // 63F: the stock answer standing on a Death by Dragons-shaped target (a targeted Token part with AITgts$
+        // Opponent; the pool never holds one, so only a no-pick consult gets here): TokenAi.doTriggerNoCost aims each
+        // of the three free copies at us, so every other player gets the tokens (1650999 T30 on the W1 base: three
+        // Dragons for the opponent, and Swarm Intelligence copies of the copies made three more). The paid cast is
+        // refused here, from AiController.canPlayAndPayForFace after canPayCost ran A's test payment, draws included
+        // (B4-3: only the cast A was about to make changes); a Play-effect cast or a copy never comes there and is
+        // declined in considerFree, after the prediction found no pick (the decline itself draws nothing). A throw is
+        // no decline.
+        public static boolean declines(final Player ai, final SpellAbility sa) {
+            return handles(sa) && !(sa instanceof AbilitySub) && !sa.isCastFromPlayEffect() && givesTokens(sa);
+        }
+
+        private static boolean givesTokens(final SpellAbility sa) {
+            try {
+                for (final Card c : sa.getTargets().getTargetCards()) {
+                    if (aimsTokenAtOpponentByHint(c)) {
+                        return true;
+                    }
+                }
+                return false;
+            } catch (RuntimeException e) {
+                return false;
+            }
         }
 
         // isPreferredTarget's own timing gates for a Graveyard -> Exile target, read with the same calls (RNG-free).
