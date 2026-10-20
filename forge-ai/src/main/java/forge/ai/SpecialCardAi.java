@@ -40213,6 +40213,160 @@ public class SpecialCardAi {
         }
     }
 
+    // Neera, Wild Mage on our own turn (dead-card batch 4, wave 6, row 68, a B4-14 follow-up of W1's row 1; deck
+    // review 2026-10-17; Neera - Wild Magic 510f65b5, deck 507, the only Neera carrier, a site upload and not an
+    // anchor, Neera its commander)
+    // Neera's once-each-turn count is spent when her cast trigger is stacked, before any AI decision, and the "may" is
+    // asked at resolution (CR 603.5; NeeraWildMage's comment), so the turn's first spell owns the turn's trigger and,
+    // under W1's 1A (shouldBottom), a non-feeder first spell forfeits that turn's reveal. The AI casts its instant
+    // removal at its first priority pass, which is our upkeep (ChangeZoneAi's one phase gate on battlefield removal
+    // refuses only while we control no creature; Pongify's DestroyAi logic has none), and W1's 1B cannot help there:
+    // the sorcery-speed feeders fail canCastTiming in the upkeep. 28 own upkeep and draw-step casts forfeited the
+    // turn's reveal before any main phase in 48 base logs (244 own-turn triggers).
+    // - 68A, holdForFeeder (AiController.canPlayAndPayForFace, the veto after OwnCommanderBounce, 76A and 63F, before
+    //   return WillPlay; AnotherTime): our own instant or sorcery cast from hand or from the graveyard (Lier's
+    //   flashback), never a permanent, a copy or a Play-effect cast, in our upkeep or draw step on an empty stack
+    //   while a Neera we control is unspent, is held for our Main 1 when the trigger would not take it (takenPreCast),
+    //   it aims no DealDamage or LoseLife part at an opponent (near-lethal burn: the AI aims there only below 5 life
+    //   after the damage, DamageAiBase.shouldTgtP), its pricing asks no controller, and a feeder in hand is paid by
+    //   real mana (G2) together with it. A feeder is NeeraWildMage.movable (takenPreCast minus the random-gated roots
+    //   and a reusable permanent), never an AI:RemoveDeck:All host (skeptic A1: the AI casts one only when a G3 case
+    //   readmits it, and Faithless Looting's 67A window is a main-phase one the upkeep never evaluates), and approved
+    //   by the stock AI in our Main 1 (mainOneFeeder): a RearrangeTopOfLibrary root (Ponder, Portent: no phase gate),
+    //   a permanent castPermanentInMain1 passes (PermanentAi:54; Jori En's, Storm-Kiln Artist's or Displacer Kitten's
+    //   BuffedBy) or a Draw or Dig root castSpellInMain1 passes (DrawAi's and DigAi's Main-2 holds). O1: no hold
+    //   while we control a Displacer Kitten and no Hullbreaker Horror, since row 64's 64B blink resets a spent Neera
+    //   and the first forfeit is recoverable there (with our Horror out 64B keeps the stock pick, its S5, so the hold
+    //   stands). Between the hold and our Main 1 lie only our draw and land drop: no combat is crossed and no
+    //   opponent gets a turn, so S keeps its timing value (1624032 T12: Pongify still answers Szarekh before the
+    //   attack). In Main 1, 1B moves the feeder ahead of the first payable own-hand spell (or it already sorts
+    //   first), the trigger takes it (bottom, reveal, free cast) and S is cast later in the same Main 1 on a spent
+    //   Neera. Residuals: a bigger payable spell sorted above S in Main 1 that G2 cannot pay with the feeder takes
+    //   the trigger and may leave S unpaid that turn (the AI's own Main-1 priority, one card better informed; the
+    //   skeptic's "no guard, measure it"); a graveyard S sorted above the feeder is cast first (1B moves a feeder
+    //   ahead of own-hand spells only); Opt, Consider and Preordain are taken by 1A but not movable, so a forfeit with
+    //   one of them in hand is not held for; one-spell-a-turn statics (Rule of Law) turn a hold into a lost S.
+    //   A decline after A's draws (B4-9, B4-3): canPlaySa and canPayCost above ran A's path, its test payment
+    //   included, so only the cast A was about to make changes. Its reads are RNG-free (the phase, stack, zone and
+    //   owner tests, unspent's trigger read, takenPreCast's and movable's library scan, castPermanentInMain1 and
+    //   castSpellInMain1 for deck 507's feeders, which carry no Backup, Blitz, Raid or Riot, isCardRemAIDeck, the
+    //   test-mode price and G2); its writes are setActivatingPlayer(ai) on our own hand spell SAs (the value the
+    //   AI's own pass writes; 1B writes the same) and G2's; it allocates no SpellAbility or Card id. O(1) outside our
+    //   upkeep and draw step; the hand scan only there, on an empty stack, while our Neera is unspent.
+    // W1's NeeraWildMage (NAME, unspent, takenPreCast, movable) and G2 HonestMana are called unchanged (B3-4, B4-7);
+    // pays and asksController are private copies of NeeraWildMage's (B3-4), as ScrollRack and FaithlessLooting keep
+    // theirs. No static state but the name constants (the serve JVM shares statics).
+    public static class NeeraOwnTurn {
+        static final String KITTEN = "Displacer Kitten";        // O1: row 64's reset seam
+        static final String HULLBREAKER = "Hullbreaker Horror"; // O1: row 64's S5 (no reset with our Horror out)
+
+        // 68A: true = hold S for our Main 1 (AnotherTime); cheapest checks first
+        public static boolean holdForFeeder(final Player ai, final SpellAbility s) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!s.isSpell() || !ph.isPlayerTurn(ai) || !(ph.is(PhaseType.UPKEEP) || ph.is(PhaseType.DRAW))
+                    || !game.getStack().isEmpty()) {
+                return false; // O(1) outside our upkeep and draw step
+            }
+            final Card h = s.getHostCard();
+            if (h == null || h.isPermanent() || s.isCopied() || s.isCastFromPlayEffect() || !ai.equals(h.getOwner())
+                    || !(h.isInZone(ZoneType.Hand) || h.isInZone(ZoneType.Graveyard)) || s.getPayCosts() == null) {
+                return false; // a hand or flashback cast of our own instant or sorcery; never a free cast or a copy
+            }
+            if (!ai.isCardInPlay(NeeraWildMage.NAME) || !NeeraWildMage.unspent(ai)) {
+                return false;
+            }
+            if (ai.isCardInPlay(KITTEN) && !ai.isCardInPlay(HULLBREAKER)) {
+                return false; // O1: 64B's Kitten blink resets a spent Neera, so the forfeit is recoverable
+            }
+            if (NeeraWildMage.takenPreCast(ai, s) || burnsAnOpponent(s) || asksController(s)) {
+                return false; // the trigger takes S itself; near-lethal burn; a price that asks a controller
+            }
+            final ManaCostBeingPaid sc = ComputerUtilMana.calculateManaCost(s.getPayCosts(), s, ai, true, 0, false);
+            final HonestMana m = HonestMana.of(ai, s, true);
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.equals(h) || ComputerUtilCard.isCardRemAIDeck(c)) {
+                    continue; // A1: a RemoveDeck host is never a feeder (the AI does not cast it there)
+                }
+                for (final SpellAbility f : c.getSpellAbilities()) {
+                    if (!f.isSpell() || f.getPayCosts() == null) {
+                        continue;
+                    }
+                    f.setActivatingPlayer(ai); // the value the AI's own pass writes (as 1B)
+                    if (!NeeraWildMage.movable(ai, f) || asksController(f) || !mainOneFeeder(ai, f)) {
+                        continue;
+                    }
+                    final ManaCostBeingPaid fc = ComputerUtilMana.calculateManaCost(f.getPayCosts(), f, ai, true, 0, false);
+                    if (pays(m, sc, fc)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // a feeder the stock AI approves in our Main 1; both helpers are RNG-free for deck 507's feeders
+        static boolean mainOneFeeder(final Player ai, final SpellAbility f) {
+            final ApiType api = f.getApi();
+            if (api == ApiType.RearrangeTopOfLibrary) {
+                return true; // Ponder, Portent: RearrangeTopOfLibraryAi has no phase gate
+            }
+            if (f.getHostCard().isPermanent() ? ComputerUtil.castPermanentInMain1(ai, f)
+                    : (api == ApiType.Draw || api == ApiType.Dig) && ComputerUtil.castSpellInMain1(ai, f)) {
+                return true; // PermanentAi:54, DrawAi:283, DigAi:77 approve it in Main 1 themselves
+            }
+            return false;
+        }
+
+        // near-lethal burn is never held: an opponent among the targets of a DealDamage or LoseLife part
+        private static boolean burnsAnOpponent(final SpellAbility root) {
+            for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
+                if (!s.usesTargeting() || (s.getApi() != ApiType.DealDamage && s.getApi() != ApiType.LoseLife)) {
+                    continue;
+                }
+                for (final GameObject o : s.getTargets()) {
+                    if (o instanceof Player p && p.isOpponentOf(root.getActivatingPlayer())) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // NeeraWildMage.pays, a private copy (B3-4): G2 total and each colour against one or two adjusted costs
+        private static boolean pays(final HonestMana m, final ManaCostBeingPaid a, final ManaCostBeingPaid b) {
+            if (m.total() < a.getConvertedManaCost() + (b == null ? 0 : b.getConvertedManaCost())) {
+                return false;
+            }
+            final byte[] col = {MagicColor.WHITE, MagicColor.BLUE, MagicColor.BLACK, MagicColor.RED, MagicColor.GREEN};
+            final forge.card.mana.ManaCostShard[] sh = {forge.card.mana.ManaCostShard.WHITE,
+                    forge.card.mana.ManaCostShard.BLUE, forge.card.mana.ManaCostShard.BLACK,
+                    forge.card.mana.ManaCostShard.RED, forge.card.mana.ManaCostShard.GREEN};
+            for (int k = 0; k < col.length; k++) {
+                if (m.colour(col[k]) < a.getUnpaidShards(sh[k]) + (b == null ? 0 : b.getUnpaidShards(sh[k]))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // NeeraWildMage.asksController (itself SylvanOffering's), a private copy (B3-4): a cost whose test-mode
+        // pricing asks a controller or test-pays (Convoke, Delve, Improvise, Assist, Emerge, Offering, Waterbend;
+        // the Announce$ NumTimes loop's canPayManaCost test payments can draw MyRandom). None in deck 507.
+        private static boolean asksController(final SpellAbility s) {
+            final Card h = s.getHostCard();
+            if (h != null && (h.hasKeyword(Keyword.CONVOKE) || h.hasKeyword(Keyword.DELVE) || h.hasKeyword(Keyword.IMPROVISE)
+                    || h.hasKeyword(Keyword.ASSIST) || h.hasKeyword(Keyword.EMERGE) || h.hasKeyword(Keyword.OFFERING))) {
+                return true;
+            }
+            if (s.getPayCosts() != null && s.getPayCosts().getMaxWaterbend() != null) {
+                return true;
+            }
+            final String announce = s.getParam("Announce");
+            return announce != null && announce.contains("NumTimes");
+        }
+    }
+
     // Nemata, Grove Guardian (dead-card batch 3, row 101; extension 2026-10-15; Mono-Green Food and
     // Tokens 8428b3ce)
     // "{2}{G}: Create a 1/1 green Saproling creature token. Sacrifice a Saproling: Saproling
