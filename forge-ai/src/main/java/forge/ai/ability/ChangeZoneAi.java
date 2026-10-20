@@ -254,6 +254,23 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return SpecialCardAi.PrismaticEnding.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.MindbreakTrap.isOwnHandCast(aiPlayer, sa)) {
+            // Exile any number of target spells, for {2}{U}{U} or, once an opponent has cast three spells
+            // this turn, {0}. Its AI:RemoveDeck:All hint is kept: G3's readmit
+            // (SpecialCardAi.MindbreakTrap.readmit) puts our own hand cast back on the list only in a
+            // response window where the floor already holds, so a refusal there is A's filter verbatim.
+            // This gate carries the readmit's own key, our own hand cast (rule B3-2), so the canPlaySa
+            // callers that skip the filter (ManaAi's ritual look-ahead, TapAi's
+            // hasReasonToPlayCardThisTurn) meet the same RNG-free evaluator. It replaces
+            // doExileSpellLogic's top-only damage, destroy or sacrifice rule and the generic branch's
+            // floorless exile for that cast only; Play-effect casts (doTriggerNoCost ->
+            // knownOriginTriggerAI), copies and thefts keep the stock path below. Ahead of
+            // cardsToChoose().clear(), as Long-Term Plans: in A the card never reached that clear either,
+            // so a decline leaves no state. Every other ChangeZone card takes exactly the path it took
+            // before this branch.
+            return SpecialCardAi.MindbreakTrap.consider(aiPlayer, sa);
+        }
+
         cardsToChoose().clear();
 
         if ("Spelltwine".equals(ComputerUtilAbility.getAbilitySourceName(sa)) && !(sa instanceof AbilitySub)) {

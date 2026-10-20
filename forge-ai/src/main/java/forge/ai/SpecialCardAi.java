@@ -35796,6 +35796,204 @@ public class SpecialCardAi {
         }
     }
 
+    // Mindbreak Trap (dead-card batch 4, wave 6, row 52; a near-dead card)
+    // "If an opponent cast three or more spells this turn, you may pay {0} rather than pay this spell's mana
+    // cost. Exile any number of target spells." {2}{U}{U} Instant - Trap. AI:RemoveDeck:All stripped every hand
+    // cast at AiController.getSpellAbilityToPlay's removeIf before any handler ran (no G3 case named it), so
+    // the owner never cast it from hand: 0 hand casts in about 794 distinct held libraries; the store's one
+    // owner cast is a Play-effect cast from exile (Plargg and Nassari, game 1627260, with no target). The
+    // hint is KEPT, and behind it the stock known-origin path has no floor (doExileSpellLogic takes the top
+    // spell and only damage, destroy or sacrifice; the generic branch exiles every opposing instant or
+    // sorcery on the stack, whatever its size), so dropping the hint would not be the fix:
+    // - readmit(), G3's case, puts our own hand spell back on the list only in a response window (a non-empty
+    //   stack whose top object is not ours) where the floor already holds and the mode's cost is met: the
+    //   card's own {0} mode is live (its AlternativeCost static's CheckSVar, the test
+    //   StaticAbilityAlternativeCost.alternativeCosts runs), or no mana reservation is live (G3's noManaHeld)
+    //   and G1 (CommanderCastCeiling.affordable, under G4's contract) prices the engine's {2}{U}{U}, blue
+    //   shards included, within HonestMana. A refusal leaves the spell ability at the removeIf where A's
+    //   filter dropped it, before getOriginalAndAltCostAbilities could copy the {0} mode: no SpellAbility id,
+    //   no LKI copy, no target, no random number.
+    // - consider(), from the head of ChangeZoneAi.checkApiLogic behind isOwnHandCast (the readmit's own key,
+    //   rule B3-2), replaces the stock path for that cast only: outside the window AnotherTime; a paid spell
+    //   ability that fails noManaHeld or G1, CantAfford; else every worthy spell as a target, top first,
+    //   while canAddMoreTarget (MaxTgts counts the stack's spells, and the Trap is still in hand), WillPlay;
+    //   with none, CantPlayAi. Every decline resets the targets.
+    // The floor (worthy): an opponent's spell on the stack the Trap can target, that no spell or ability of
+    // ours on the stack already targets (our counter, Misdirection or Hullbreaker Horror trigger answers it,
+    // and the Trap would only make that answer fizzle), and that is
+    // (a) aimed at us: some target in its chain is us, a card we control or a spell or ability we control
+    //     (removal, burn, discard, theft, a counter of our spell);
+    // (b) an untargeted spell on doExileSpellLogic's own list (DealDamage, DamageAll, Destroy, DestroyAll,
+    //     Sacrifice, SacrificeAll) that can reach something of ours: its ValidCards (absent: a creature or
+    //     planeswalker) matches a permanent we control, or it has ValidPlayers (R2); or
+    // (c) of mana value MIN_MV_ANY or more, or MIN_MV_THREAT or more for a creature, planeswalker or battle
+    //     spell, where a noncreature spell whose card has a mana ability never counts by size (R1: a Signet,
+    //     a Talisman, Commander's Sphere).
+    // The free mode is judged on the same bars (part 52B, one bar lower in the free window, is deferred). By
+    // size every target is one the Default profile's stock counterspell policy counters with certainty (CMC 3
+    // and up); its random CMC 1-2 bands are left out on purpose. RNG-free: reads the stack, zones, parameters,
+    // the static's condition, canTarget, the test-mode cost and HonestMana; no draw, no copy, nothing held or
+    // remembered, so readmit's false is the old filter exactly. Play-effect casts (ChangeZoneAi.doTriggerNoCost
+    // -> knownOriginTriggerAI: Plargg and Nassari, Chaos Wand, Wand of Wonder, Mind's Dilation, Etali), copies
+    // (Mnemonic Deluge, Twincast) and thieves (Thief of Sanity, Identity Thief, Gonti: the host is not in
+    // their hand) keep the stock path or the closed filter. Known, not fixed (skeptic FINAL 4): (b) reads the
+    // root API only (a Charm root or a sub-carried sweeper falls to the size bars, and an untargeted edict is
+    // read by ValidCards, not SacValid); free in consider is this spell ability's mana alone (another card's
+    // alternative cost, Omniscience or Dream Halls, would be judged free); an opposing sweeper of mana value 4
+    // or more that kills nothing of ours still counts by size.
+    public static class MindbreakTrap {
+        public static final String NAME = "Mindbreak Trap";
+        static final int MIN_MV_ANY = 4;          // worth {2}{U}{U} and a card on its size alone
+        static final int MIN_MV_THREAT = 3;       // a creature, planeswalker or battle spell
+        // the stock card AI's own list (ChangeZoneAi.doExileSpellLogic); Arrays.asList, never List.of: a
+        // permanent spell's getApi() is null, which List.of's contains refuses
+        private static final List<ApiType> DANGEROUS = Arrays.asList(ApiType.DealDamage, ApiType.DamageAll,
+                ApiType.Destroy, ApiType.DestroyAll, ApiType.Sacrifice, ApiType.SacrificeAll);
+
+        // our own spell of this card cast from our own hand: not a sub, not a copy, not a Play-effect cast;
+        // keyed on the host's paper name, the key the readmit switch (RemoveDeckFilter.paperName) and
+        // isCardRemAIDeck read (rules B3-2, B3-3; Vampiric Tutor's shape). The {0} copy keeps the host, so it
+        // passes too.
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())) {
+                return false;
+            }
+            final Player activator = sa.getActivatingPlayer();
+            return host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner()) && ai.equals(host.getController())
+                    && (activator == null || ai.equals(activator));
+        }
+
+        // a non-empty stack whose top object is not ours; O(1)
+        static boolean inWindow(final Player ai) {
+            final forge.game.zone.MagicStack stack = ai.getGame().getStack();
+            if (stack.isEmpty()) {
+                return false;
+            }
+            final Player top = stack.peekAbility().getActivatingPlayer();
+            return top != null && !ai.equals(top);
+        }
+
+        // the card's own {0} mode is live: its AlternativeCost static's CheckSVar, the test
+        // StaticAbilityAlternativeCost.alternativeCosts runs; reads only
+        static boolean freeNow(final Card host) {
+            for (final StaticAbility st : host.getStaticAbilities()) {
+                if (st.checkConditions(StaticAbilityMode.AlternativeCost)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the paid mode: no mana reservation live (G3), and G1 prices the engine's {2}{U}{U}
+        static boolean payable(final Player ai, final SpellAbility sa) {
+            return RemoveDeckFilter.noManaHeld(ai, false) && CommanderCastCeiling.affordable(ai, sa);
+        }
+
+        // G3's case (RemoveDeckFilter.readmit): the cheap tests first, then the floor, then the mode's cost,
+        // so a refusal is A's filter verbatim
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa) || !inWindow(ai)) {
+                return false;
+            }
+            final boolean free = freeNow(sa.getHostCard());
+            return !worthy(ai, sa).isEmpty() && (free || payable(ai, sa));
+        }
+
+        // ChangeZoneAi.checkApiLogic's gate, behind isOwnHandCast
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            if (!inWindow(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final ManaCost mana = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+            final boolean free = mana == null || mana.isZero();   // the {0} copy
+            if (!free && !payable(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            for (final SpellAbility s : worthy(ai, sa)) {
+                if (!sa.canAddMoreTarget()) {
+                    break;
+                }
+                sa.getTargets().add(s);
+            }
+            if (sa.getTargets().isEmpty() || !sa.isTargetNumberValid()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // every opposing spell on the stack worth the card, top first (MagicStack iterates from the top); the
+        // answered set is only queried, never iterated (SpellAbility's equals and hashCode are id-based)
+        static List<SpellAbility> worthy(final Player ai, final SpellAbility sa) {
+            final Set<SpellAbility> answered = new HashSet<>();
+            for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+                final SpellAbility x = si.getSpellAbility();
+                if (x != null && ai.equals(x.getActivatingPlayer())) {
+                    for (SpellAbility c = x; c != null; c = c.getSubAbility()) {
+                        for (final GameObject o : c.getTargets()) {
+                            if (o instanceof SpellAbility t) {
+                                answered.add(t);
+                            }
+                        }
+                    }
+                }
+            }
+            final List<SpellAbility> out = new ArrayList<>();
+            for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+                final SpellAbility s = si.getSpellAbility();
+                if (s == null || !s.isSpell() || s.getActivatingPlayer() == null
+                        || !s.getActivatingPlayer().isOpponentOf(ai) || answered.contains(s) || !sa.canTarget(s)) {
+                    continue;
+                }
+                if (aimedAt(ai, s) || massDanger(ai, s) || bySize(s.getHostCard())) {
+                    out.add(s);
+                }
+            }
+            return out;
+        }
+
+        // R2: an untargeted spell on doExileSpellLogic's list that can reach something of ours
+        static boolean massDanger(final Player ai, final SpellAbility s) {
+            if (!DANGEROUS.contains(s.getApi()) || s.usesTargeting()) {
+                return false;
+            }
+            if (s.hasParam("ValidPlayers")) {
+                return true;
+            }
+            final String valid = s.getParamOrDefault("ValidCards", "Creature,Planeswalker");
+            return !CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), valid.split(","),
+                    s.getActivatingPlayer(), s.getHostCard(), s).isEmpty();
+        }
+
+        // the size bars, one set for the paid and the free mode (52B deferred)
+        static boolean bySize(final Card c) {
+            if (c == null || (!c.isCreature() && !c.getManaAbilities().isEmpty())) {
+                return false;                     // R1: a mana rock never counts by size
+            }
+            final int mv = c.getCMC();
+            final boolean threat = c.isCreature() || c.isPlaneswalker() || c.isBattle();
+            return mv >= MIN_MV_ANY || (threat && mv >= MIN_MV_THREAT);
+        }
+
+        // some target in the spell's chain is us, a card we control, or a spell or ability we control
+        static boolean aimedAt(final Player ai, final SpellAbility s) {
+            for (SpellAbility c = s; c != null; c = c.getSubAbility()) {
+                for (final GameObject o : c.getTargets()) {
+                    if (ai.equals(o) || (o instanceof Card k && ai.equals(k.getController()))
+                            || (o instanceof SpellAbility t && ai.equals(t.getActivatingPlayer()))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Mimic Vat
     public static class MimicVat {
         public static boolean considerExile(final Player ai, final SpellAbility sa) {
@@ -44140,8 +44338,8 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42 and 49, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is Sunbird
-    // Standard, a readmit).
+    // 25, 31, 30, 42, 49 and 52, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row 68 is
+    // Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -44297,6 +44495,8 @@ public class SpecialCardAi {
                     return CleansingBeam.readmit(ai, sa);
                 case BoltBend.NAME:                      // batch 4, row 49 (W6)
                     return BoltBend.readmit(ai, sa);
+                case MindbreakTrap.NAME:                 // batch 4, row 52 (W6)
+                    return MindbreakTrap.readmit(ai, sa);
                 default:
                     return false;
             }
