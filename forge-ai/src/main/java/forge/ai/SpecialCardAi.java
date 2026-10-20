@@ -29679,6 +29679,13 @@ public class SpecialCardAi {
     // Elemental Blast), Effects with no AILogic (Borne Upon a Wind, refused as a Play-effect cast), X and
     // non-mana costs, and so Pact of Negation (a Counter root) and Final Fortune (an AddTurn root), whose
     // copies lose the game: the pick never exiles either.
+    // DRAW and BURN (30C-eot). DRAW is a root self Draw (untargeted, Defined You, no sub) or an untargeted
+    // Scry whose only sub is one (Opt); BURN is a DealDamage that can target a player, bare or as the only
+    // sub of an Effect with AILogic Burn (Wild Slash). Their copy is readmitted only at the end step before
+    // our turn on an empty stack (DrawAi's draw-instant timing), on mana that untaps before we need it; DRAW
+    // also under DrawAi's own self-draw guards (canDraw, LIBRARY_MIN cards in the library, a hand no larger
+    // than its maximum). A BURN copy's own DamageDealAi picks the target; one that finds none wastes only
+    // that free mana.
     // A free-cast counter on any battlefield (isFreeCastCounter, Vexing Bauble's shape; the carrier runs one)
     // counters every copy, which is cast without paying: it vetoes every copy window and the cast (skeptic
     // F1). The pick skips the veto, so a free cast still exiles its best instant (the counter may leave).
@@ -29734,6 +29741,9 @@ public class SpecialCardAi {
             switch (kind) {
                 // REVERSAL: our own main phase, while the loop pays for itself (30C-loop)
                 // DRAW and BURN: the end step before our turn (30C-eot)
+                case DRAW:
+                case BURN:
+                    return eotCopy(ai, sa, kind);
                 default:
                     return false;
             }
@@ -29769,9 +29779,43 @@ public class SpecialCardAi {
             switch (sp.getApi()) {
                 // REVERSAL (30C-loop)
                 // DRAW and BURN (30C-eot)
+                case Draw:
+                    return sub == null && selfDraw(sp) ? Kind.DRAW : Kind.NONE;
+                case Scry:
+                    return !sp.usesTargeting() && sub != null && sub.getSubAbility() == null
+                            && sub.getApi() == ApiType.Draw && selfDraw(sub) ? Kind.DRAW : Kind.NONE;
+                case DealDamage:
+                    return sub == null && hitsPlayers(sp) ? Kind.BURN : Kind.NONE;
+                case Effect:
+                    return "Burn".equals(sp.getParam("AILogic")) && sub != null && sub.getSubAbility() == null
+                            && sub.getApi() == ApiType.DealDamage && hitsPlayers(sub) ? Kind.BURN : Kind.NONE;
                 default:
                     return Kind.NONE;
             }
+        }
+
+        // 30C-eot: a DRAW or BURN copy at the end step before our turn, on an empty stack (readmitCopy's), on mana
+        // that untaps before we need it, then the shared floor (copyPaid); a DRAW also needs DrawAi's own
+        // self-draw guards, a BURN nothing more (the copy's DamageDealAi picks its target)
+        static final int LIBRARY_MIN = 5; // DrawAi.targetAI refuses a one-card self-draw at a library of 4 or fewer
+
+        static boolean eotCopy(final Player ai, final SpellAbility sa, final Kind kind) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.getNextTurn() != ai || !copyPaid(ai, sa)) {
+                return false;
+            }
+            return kind == Kind.BURN || (ai.canDraw() && ai.getCardsIn(ZoneType.Library).size() >= LIBRARY_MIN
+                    && ai.getCardsIn(ZoneType.Hand).size() <= ai.getMaxHandSize());
+        }
+
+        // a Draw of our own: untargeted, Defined You (or no Defined: the activator)
+        static boolean selfDraw(final SpellAbility d) {
+            return !d.usesTargeting() && "You".equals(d.getParamOrDefault("Defined", "You"));
+        }
+
+        // a DealDamage that can target a player
+        static boolean hitsPlayers(final SpellAbility d) {
+            return d.usesTargeting() && d.getTargetRestrictions().canTgtPlayer();
         }
 
         // the card the Scepter imprinted, while it is still in exile
