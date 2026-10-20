@@ -463,6 +463,14 @@ public class PlayerControllerAi extends PlayerController {
             sub.setTargets(subtc);
         }
 
+        // Dead-card batch 4, row 77, part 77A: an optional copy of our own instant or sorcery (Swarm Intelligence's
+        // AILogic$ Always; SpellAbilityAi.doTriggerNoCostWithSubs ignores a decline of an "Always" logic, so the floor
+        // sits here) is declined when it takes our library under OwnLibraryFloor's margin. After the stock consult and
+        // the target restore: a decline after A's consult. Inert unless the wrapped ability copies our instant or
+        // sorcery. Draws nothing. See the class comment.
+        if (ret && SpecialCardAi.OwnLibraryFloor.breachesCopy(player, wrapper)) {
+            ret = false;
+        }
         return ret;
     }
 

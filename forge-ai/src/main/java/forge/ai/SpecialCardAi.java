@@ -40481,6 +40481,503 @@ public class SpecialCardAi {
         }
     }
 
+    // Own library floor (dead-card batch 4, wave 6, row 77: Neera's library floor, a follow-up of W2's battery-neera
+    // M-Decking flag; Neera - Wild Magic 510f65b5, deck 507; the row pool's card is Aminatou's Augury)
+    // The deck runs its own library out. Aminatou's Augury (a Dig that exiles 8, ChangeNum$ All with no
+    // DestinationZone2, so DigAi's "don't deck yourself" never sees it), See the Truth (3 cards when cast from anywhere
+    // but the hand), Rise of the Eldrazi's and Prismari Command's draws, each multiplied by copy triggers (Swarm
+    // Intelligence's optional AILogic$ Always copy; Storm of Saruman's and Melek, Izzet Paragon's mandatory ones;
+    // Arcane Bombardment's and Mizzix's Mastery's cast copies), and every cast or copy feeding draw triggers (Archmage
+    // Emeritus' Magecraft, Niv-Mizzet, Parun, Jori En). DrawAi's guard (numCards >= library - 3) counts the printed
+    // cards only (B4-5), and three decisions on the chain have no library test at all. On 2.0.15+499e03087c5, 100 of
+    // 8,192 decided deck-507 games were Milled losses (Augury owner-cast in 94 of them); battery-neera: 2 stored, 5 on
+    // W1's build, 6 on W2's final, every one deck 507 losing on its own turn trying to draw from an empty library.
+    // Decline-only, at three hooks, each after the stock consult (a decline after A's consult, B4-3, B4-9):
+    // - 77A breachesCopy (PlayerControllerAi.confirmTrigger, after the stock doTrigger and the target restore): an
+    //   optional copy trigger's copy of our own instant or sorcery (Swarm Intelligence, Mirari, Owlin Spiralmancer).
+    //   SpellAbilityAi.doTriggerNoCostWithSubs ignores a decline of an "Always" logic, so the floor cannot sit in the
+    //   API AI. The copy is not made; the original resolves.
+    // - 77B breachesCast (PlayAi.chooseSingleCard's candidate filter, after canPlayFromEffectAI, the target count and
+    //   canPayCost): a Play-effect free cast of our own instant or sorcery (Neera's reveal, Arcane Bombardment's and
+    //   Mizzix's Mastery's copies, Mnemonic Deluge's, Plargg and Nassari, Chaos Wand). The candidate's next spell
+    //   ability is still judged; with no candidate left the Play effect ends.
+    // - 77C breachesCast (AiController.canPlayAndPayForFace, the last veto): our own cast of an instant or sorcery
+    //   from any zone (hand, flashback, Augury's exile, Melek's library top). The card stays where it is.
+    // The floor (the diagnosis' P2, with the skeptic's S1-S3): room = library - pending, pending being every card our
+    // stack still takes from our library. A cast or copy is declined when (soft) cost > 0, cost >= room - MARGIN and it
+    // answers no opponent's spell or ability, or (hard) the draw triggers it fires exceed the library (a draw from an
+    // empty library: a sure loss at the next state-based check, whatever the spell answers). For a cast, cost = su *
+    // (1 + mc) + draws, with su the cards one resolution takes from our library (its Draw, Mill, Dig and DigUntil parts
+    // aimed at us), mc the mandatory copy triggers that fire on it with their condition held now (Storm of Saruman's
+    // second spell, Melek's cast from the library), and draws the cast draw triggers held now plus the Magecraft draws
+    // of each mandatory copy. For an optional copy, cost = su * n + draws, with n = 1 + our CopySpell replacements
+    // (Twinning Staff) and draws the Magecraft draws times n. Exempt from both clauses: Laboratory Maniac or Jace,
+    // Wielder of Mysteries in play while we can win, cantLose, our own Thassa's Oracle trigger on the stack
+    // (DemonicConsultation's window, read by its own name test). Exempt from the soft clause only, never on a hard
+    // breach (the draw trigger resolves above the burn, D1: game 1677119): a DealDamage part aimed at an opponent whose
+    // NumDmg times the resolutions reaches that opponent's life, and our Niv-Mizzet, Parun whose pings for the cast's
+    // draws (its triggers plus its own Draw parts) reach the weakest opponent's life within room.
+    // S2: a cast trigger counts only when it can fire on this cast, in all four counts: every key understood (KNOWN;
+    // any other key leaves it uncounted), the permanent's zone, ValidActivatingPlayer matched against us, and ValidCard
+    // absent or one alternative with head Card, or Instant / Sorcery by the spell's type, and a rest in PLAIN or
+    // starting wasCastFromYourLibrary (Melek: conditionHolds tests the host's zone). Never the engine's ValidCard test
+    // on a pre-cast host: a thief's free cast of an opponent's card fails YouCtrl there (game 1738137). S3: the
+    // pre-cast Count$wasCastFrom X is read by the host's zone (castFrom is null until the cast): a hand See the Truth
+    // takes 1, from exile, the library or a Play effect 3. S6: one battlefield pass (Engines) and one stack walk
+    // (pending) per consult. S4: both entry points catch a RuntimeException, decline nothing and print one "R77 ERR
+    // <part> <exception>" line; nothing else is caught.
+    // Reads zone sizes, the stack, battlefield trigger text (the Execute SVar parsed, never built: CommuneWithLava.
+    // copiesSpell's rule, so no SpellAbility id is allocated) and existing SAs' params and targets; an amount whose SVar
+    // names Random is never evaluated. RNG-free, no static state but the constants (the serve JVM shares statics),
+    // writes nothing. Private copies of CommuneWithLava.resolutions' reading and of DemonicConsultation's window (B3-4).
+    // Residuals, named and not taken: Charm modes unseen at their own consult (R6; the stock DrawAi guard still judges
+    // a loot mode) and Repeat / Charm sub-branches (R10); delayed draws such as Portent's (R12); Jori En's draw on a
+    // creature second spell (R9); Primal Wellspring's mana-made copy (R2: counted once it is on the stack) and draw
+    // triggers not yet on the stack (R1); Plargg and Nassari's upkeep exile and the draw step (R11); opposing mill (R8);
+    // Arjun, the Shifting Flame with Thought Reflection (R5, precon Seize Control: a row of its own).
+    public static class OwnLibraryFloor {
+        public static final int MARGIN = 3; // DrawAi's own guard (numCards >= library - 3), decksUsNow's
+        static final String NIV = "Niv-Mizzet, Parun";
+        static final String LAB = "Laboratory Maniac";
+        static final String JACE = "Jace, Wielder of Mysteries";
+        static final String ORACLE = "Thassa's Oracle";
+        // S2: the cast-trigger keys the floor understands; any other (TargetsValid, ActivationLimit, IsPresent,
+        // Condition..., ResolvedLimit, PlayerTurn...) leaves the trigger uncounted
+        private static final Set<String> KNOWN = Set.of("Execute", "Mode", "TriggerDescription", "ValidCard",
+                "TriggerZones", "ValidActivatingPlayer", "OptionalDecider", "ActivatorThisTurnCast");
+        // S2: the ValidCard properties after the head that read as "any such spell of ours"
+        private static final Set<String> PLAIN = Set.of("", "YouCtrl", "YouOwn", "nonCreature", "nonLand");
+
+        // 77B, 77C: true = decline root, our own cast of an instant or sorcery about to be cast
+        public static boolean breachesCast(final Player ai, final SpellAbility root) {
+            try {
+                final Card h = root.getHostCard();
+                if (h == null || !root.isSpell() || root.isCopied() || !(h.isInstant() || h.isSorcery())) {
+                    return false;
+                }
+                final Engines e = engines(ai, h);
+                if (e.copyEvents == 0 && e.castDraws == 0 && !stockGuardSkips(ai, root)) {
+                    return false; // not engaged: no copy or draw trigger of ours on a cast, no Dig the stock guard skips
+                }
+                final int su = selfUse(ai, root);
+                final int mc = e.mandatoryCopies;
+                final int draws = e.castDrawsHeld + e.copyDraws * mc;
+                final int cost = su * (1 + mc) + draws;
+                final int lib = ai.getCardsIn(ZoneType.Library).size();
+                final int room = lib - pending(ai, e.castDraws);
+                final boolean hard = draws > lib;
+                final boolean soft = cost > 0 && cost >= room - MARGIN && !answersOpponent(ai, root);
+                if (!hard && !soft) {
+                    return false;
+                }
+                return exemption(ai, root, hard, 1 + mc, draws + drawPart(ai, root) * (1 + mc), room) == null;
+            } catch (RuntimeException ex) {
+                System.err.println("R77 ERR " + (root != null && root.isCastFromPlayEffect() ? "77B" : "77C") + " " + ex);
+                return false;
+            }
+        }
+
+        // 77A: true = decline w, an optional copy trigger confirmTrigger's stock consult said yes to, copying our own
+        // instant or sorcery (Defined$ TriggeredSpellAbility); the original is on the stack below it, in pending
+        public static boolean breachesCopy(final Player ai, final WrappedAbility w) {
+            try {
+                final SpellAbility t = w.getWrappedAbility();
+                if (t == null || t.getApi() != ApiType.CopySpellAbility || w.isMandatory()) {
+                    return false;
+                }
+                final SpellAbility orig = copied(t);
+                final Card h = orig == null ? null : orig.getHostCard();
+                if (h == null || !ai.equals(orig.getActivatingPlayer()) || !(h.isInstant() || h.isSorcery())) {
+                    return false;
+                }
+                final Engines e = engines(ai, null); // a copy is not cast: only Magecraft fires for it
+                final int n = 1 + e.replacements;
+                final int su = selfUse(ai, orig);
+                final int draws = e.copyDraws * n;
+                final int cost = su * n + draws;
+                final int lib = ai.getCardsIn(ZoneType.Library).size();
+                final int room = lib - pending(ai, e.castDraws);
+                final boolean hard = draws > lib;
+                final boolean soft = cost > 0 && cost >= room - MARGIN && !answersOpponent(ai, orig);
+                if (!hard && !soft) {
+                    return false;
+                }
+                return exemption(ai, orig, hard, n, draws + drawPart(ai, orig) * n, room) == null;
+            } catch (RuntimeException ex) {
+                System.err.println("R77 ERR 77A " + ex);
+                return false;
+            }
+        }
+
+        // S1: the exemption that keeps a breaching cast or copy, by clause; null = decline. times = the resolutions
+        // (the spell and its copies); totalDraws = its draw triggers plus its own Draw parts times the resolutions
+        private static String exemption(final Player ai, final SpellAbility sa, final boolean hard, final int times,
+                final int totalDraws, final int room) {
+            if (ai.isCardInPlay(LAB) && !ai.cantWin()) {
+                return "lab";
+            }
+            if (ai.isCardInPlay(JACE) && !ai.cantWin()) {
+                return "jace";
+            }
+            if (ai.cantLose()) {
+                return "cantLose";
+            }
+            if (oracleOnStack(ai)) {
+                return "oracle";
+            }
+            if (hard) {
+                return null; // D1: a draw trigger meets an empty library before any burn or ping resolves
+            }
+            if (burnLethal(ai, sa, times)) {
+                return "burn";
+            }
+            if (ai.isCardInPlay(NIV) && totalDraws > 0 && totalDraws <= room
+                    && totalDraws >= ai.getOpponentsSmallestLifeTotal()) {
+                return "niv"; // Niv-Mizzet pings each drawn card; "any target", read as the face (soft only)
+            }
+            return null;
+        }
+
+        // DemonicConsultation's window, a private copy of its name test: our own Thassa's Oracle trigger on the stack
+        private static boolean oracleOnStack(final Player ai) {
+            for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+                final SpellAbility t = si.getSpellAbility();
+                if (t != null && t.isTrigger() && ai.equals(t.getActivatingPlayer()) && t.getHostCard() != null
+                        && ORACLE.equals(t.getHostCard().getName())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the counts of one battlefield pass (S6), per consult; nothing is kept between consults
+        private static final class Engines {
+            int copyEvents;      // cast triggers of ours that copy a spell and can fire on a cast (resolutions > 1)
+            int mandatoryCopies; // of those, firing on this spell, no OptionalDecider, their condition held now (mc)
+            int castDraws;       // cast triggers of ours that draw and can fire on a cast (cd)
+            int castDrawsHeld;   // of those, firing on this spell with their condition held now (cdp)
+            int copyDraws;       // of those, SpellCastOrCopy ones (Magecraft): a copy fires them too (kd)
+            int replacements;    // CopySpell replacements on our battlefield (Twinning Staff)
+        }
+
+        // S6: every count in one pass over our battlefield. spellHost = the instant or sorcery about to be cast, or
+        // null (an optional copy: no cast trigger fires for it). A trigger's Execute API is read once, after the mode
+        private static Engines engines(final Player ai, final Card spellHost) {
+            final Engines e = new Engines();
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    final TriggerType mode = t.getMode();
+                    if (mode != TriggerType.SpellCast && mode != TriggerType.SpellCastOrCopy) {
+                        continue;
+                    }
+                    final String api = executesApi(t);
+                    final boolean copies = ApiType.CopySpellAbility.name().equals(api);
+                    if (!copies && !ApiType.Draw.name().equals(api)) {
+                        continue;
+                    }
+                    if (!fires(ai, c, t) || !fitsSpell(t, null)) {
+                        continue;
+                    }
+                    final boolean onThis = spellHost != null && fitsSpell(t, spellHost)
+                            && conditionHolds(ai, t, spellHost);
+                    if (copies) {
+                        e.copyEvents++;
+                        if (onThis && !t.hasParam("OptionalDecider")) {
+                            e.mandatoryCopies++;
+                        }
+                    } else {
+                        e.castDraws++;
+                        if (mode == TriggerType.SpellCastOrCopy) {
+                            e.copyDraws++;
+                        }
+                        if (onThis) {
+                            e.castDrawsHeld++;
+                        }
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.CopySpell) {
+                        e.replacements++;
+                    }
+                }
+            }
+            return e;
+        }
+
+        // S2 (a)-(c): every gating key understood, the permanent's zone, ValidActivatingPlayer against us
+        private static boolean fires(final Player ai, final Card perm, final Trigger t) {
+            if (!KNOWN.containsAll(t.getMapParams().keySet())) {
+                return false;
+            }
+            if (perm.getZone() == null || !t.zonesCheck(perm.getZone())) {
+                return false;
+            }
+            return !t.hasParam("ValidActivatingPlayer") || t.matchesValidParam("ValidActivatingPlayer", ai);
+        }
+
+        // S2 (d): ValidCard absent, or one alternative head[.rest] with head Card, or Instant / Sorcery by the spell's
+        // type (spellHost null accepts the head), and rest in PLAIN or starting wasCastFromYourLibrary. A head-token
+        // whitelist, never the engine's isValid on the pre-cast host
+        private static boolean fitsSpell(final Trigger t, final Card spellHost) {
+            final String vc = t.getParam("ValidCard");
+            if (vc == null) {
+                return true;
+            }
+            for (final String alt : vc.split(",")) {
+                final int dot = alt.indexOf('.');
+                final String head = dot < 0 ? alt : alt.substring(0, dot);
+                final String rest = dot < 0 ? "" : alt.substring(dot + 1);
+                if (!PLAIN.contains(rest) && !rest.startsWith("wasCastFromYourLibrary")) {
+                    continue; // a property the floor does not model: not counted
+                }
+                if ("Card".equals(head)
+                        || ("Instant".equals(head) && (spellHost == null || spellHost.isInstant()))
+                        || ("Sorcery".equals(head) && (spellHost == null || spellHost.isSorcery()))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Jori En's and Storm of Saruman's "second spell each turn" (ActivatorThisTurnCast$ EQn) and Melek's "cast from
+        // your library" (ValidCard ...wasCastFromYourLibrary), read before the cast
+        private static boolean conditionHolds(final Player ai, final Trigger t, final Card host) {
+            final String n = t.getParam("ActivatorThisTurnCast");
+            if (n != null && n.startsWith("EQ")) {
+                try {
+                    if (ai.getSpellsCastThisTurn() + 1 != Integer.parseInt(n.substring(2))) {
+                        return false;
+                    }
+                } catch (NumberFormatException ex) {
+                    // an unparsed count: held (the conservative reading)
+                }
+            }
+            final String v = t.getParam("ValidCard");
+            return v == null || !v.contains("wasCastFromYourLibrary") || (host != null && host.isInZone(ZoneType.Library));
+        }
+
+        // the trigger's ability API by name, read without building it (CommuneWithLava.copiesSpell's reading, any API)
+        private static String executesApi(final Trigger t) {
+            final SpellAbility built = t.getOverridingAbility();
+            if (built != null) {
+                return built.getApi() == null ? null : built.getApi().name();
+            }
+            if (!t.hasParam("Execute")) {
+                return null;
+            }
+            final String text = t.getSVar(t.getParam("Execute"));
+            if (text.isEmpty()) {
+                return null;
+            }
+            final Map<String, String> params = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+            String api = params.get("DB");
+            if (api == null) {
+                api = params.containsKey("AB") ? params.get("AB") : params.get("SP");
+            }
+            return api;
+        }
+
+        // the cards one resolution takes from OUR library: Draw and Mill (NumCards), a Dig not into the library (DigNum
+        // with ChangeNum$ All or a DestinationZone2 off the library, else min(DigNum, ChangeNum)), DigUntil (1)
+        private static int selfUse(final Player ai, final SpellAbility root) {
+            int n = 0;
+            for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
+                final ApiType api = s.getApi();
+                if (api == null) {
+                    continue;
+                }
+                switch (api) {
+                    case Draw:
+                    case Mill:
+                        if (hits(ai, s)) {
+                            n += amount(s, "NumCards", 1);
+                        }
+                        break;
+                    case Dig:
+                        if (hits(ai, s) && !"Library".equals(s.getParam("DestinationZone"))) {
+                            final int dig = amount(s, "DigNum", 1);
+                            final String d2 = s.getParam("DestinationZone2");
+                            if ("All".equals(s.getParam("ChangeNum")) || (d2 != null && !"Library".equals(d2))) {
+                                n += dig;
+                            } else {
+                                n += Math.min(dig, amount(s, "ChangeNum", 1));
+                            }
+                        }
+                        break;
+                    case DigUntil:
+                        if (hits(ai, s)) {
+                            n += 1;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+            return n;
+        }
+
+        // the cards its own Draw parts take (Niv-Mizzet pings each drawn card)
+        private static int drawPart(final Player ai, final SpellAbility root) {
+            int n = 0;
+            for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
+                if (s.getApi() == ApiType.Draw && hits(ai, s)) {
+                    n += amount(s, "NumCards", 1);
+                }
+            }
+            return n;
+        }
+
+        // a Dig of ours that leaves the library with no DestinationZone2: DigAi's "don't deck yourself" skips it
+        private static boolean stockGuardSkips(final Player ai, final SpellAbility root) {
+            for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
+                if (s.getApi() == ApiType.Dig && s.getParam("DestinationZone2") == null
+                        && !"Library".equals(s.getParam("DestinationZone")) && hits(ai, s)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the part takes from ai's library: its targeted players, else Defined (default You)
+        private static boolean hits(final Player ai, final SpellAbility s) {
+            if (s.usesTargeting()) {
+                for (final Player p : s.getTargets().getTargetPlayers()) {
+                    if (ai.equals(p)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            if (s.getActivatingPlayer() == null) {
+                return false;
+            }
+            return AbilityUtils.getDefinedPlayers(s.getHostCard(), s.getParamOrDefault("Defined", "You"), s).contains(ai);
+        }
+
+        // an amount: an integer, else calculateAmount, never for an SVar naming Random (its default instead); S3: a
+        // Count$wasCastFrom<Zone>.t.f SVar before the cast (castFrom null) takes t iff the host is in that zone (a Your
+        // prefix also needs the zone to be the activator's; ByYou takes f)
+        private static int amount(final SpellAbility s, final String param, final int dflt) {
+            final String v = s.getParam(param);
+            if (v == null) {
+                return dflt;
+            }
+            try {
+                return Integer.parseInt(v);
+            } catch (NumberFormatException ex) {
+                // an SVar or a Count$ expression, read below
+            }
+            final String sv = s.hasSVar(v) ? s.getSVar(v) : "";
+            if (sv.contains("Random")) {
+                return dflt;
+            }
+            if (sv.startsWith("Count$wasCastFrom")) {
+                final Card h = s.getHostCard();
+                if (h != null && h.getCastFrom() == null && h.getZone() != null) {
+                    final String[] sq = sv.substring(6).split("\\.");
+                    if (sq.length >= 3) {
+                        String zn = sq[0].substring(11);
+                        final boolean your = sq[0].contains("Your");
+                        if (your) {
+                            zn = zn.substring(4);
+                        }
+                        final boolean match = !sq[0].contains("ByYou")
+                                && h.getZone().getZoneType() == ZoneType.smartValueOf(zn)
+                                && (!your || (h.getZone().getPlayer() != null
+                                        && h.getZone().getPlayer().equals(s.getActivatingPlayer())));
+                        return Math.max(0, AbilityUtils.calculateAmount(h, sq[match ? 1 : 2], s));
+                    }
+                }
+            }
+            return Math.max(0, AbilityUtils.calculateAmount(s.getHostCard(), v, s));
+        }
+
+        // the cards our stack still takes from our library, the resolving item skipped (it stays on the stack until it
+        // finishes resolving: MagicStack.resolveStack). A spell or copy of ours adds its selfUse, a Draw trigger its
+        // own, a mandatory copy trigger the copied spell's (an optional one nothing: 77A judges it when it resolves).
+        // While the stack resolves, each instant or sorcery spell of ours above the resolving item was cast during it
+        // (a Bombardment or Mizzix's Play casting several copies) and its cast draw triggers wait in MagicStack's
+        // simultaneous list: cd more for each (conditions ignored)
+        private static int pending(final Player ai, final int cd) {
+            final forge.game.zone.MagicStack st = ai.getGame().getStack();
+            boolean above = st.isResolving();
+            int n = 0;
+            for (final SpellAbilityStackInstance si : st) {
+                final SpellAbility sa = si.getSpellAbility();
+                if (sa == null) {
+                    continue;
+                }
+                final Card h = sa.getHostCard();
+                if (above && h != null && st.isResolving(h)) {
+                    above = false;
+                    continue; // the resolving item itself
+                }
+                if (!ai.equals(sa.getActivatingPlayer())) {
+                    continue;
+                }
+                if (sa.isWrapper()) {
+                    final WrappedAbility w = (WrappedAbility) sa;
+                    final SpellAbility t = w.getWrappedAbility();
+                    if (t == null) {
+                        continue;
+                    }
+                    if (t.getApi() == ApiType.Draw) {
+                        n += selfUse(ai, t);
+                    } else if (t.getApi() == ApiType.CopySpellAbility && w.isMandatory()) {
+                        final SpellAbility o = copied(t);
+                        if (o != null) {
+                            n += selfUse(ai, o);
+                        }
+                    }
+                    continue;
+                }
+                n += selfUse(ai, sa);
+                if (above && sa.isSpell() && !sa.isCopied() && h != null && (h.isInstant() || h.isSorcery())) {
+                    n += cd;
+                }
+            }
+            return n;
+        }
+
+        // the spell a CopySpellAbility trigger copies (Defined$ TriggeredSpellAbility by default)
+        private static SpellAbility copied(final SpellAbility t) {
+            final List<SpellAbility> d = AbilityUtils.getDefinedSpellAbilities(t.getHostCard(),
+                    t.getParamOrDefault("Defined", "TriggeredSpellAbility"), t);
+            return d.isEmpty() ? null : d.get(0);
+        }
+
+        // a DealDamage part aimed at an opponent whose damage, times the resolutions, reaches that opponent's life
+        private static boolean burnLethal(final Player ai, final SpellAbility root, final int times) {
+            for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
+                if (s.getApi() != ApiType.DealDamage || !s.usesTargeting()) {
+                    continue;
+                }
+                final int dmg = amount(s, "NumDmg", 0) * times;
+                for (final Player p : s.getTargets().getTargetPlayers()) {
+                    if (p.isOpponentOf(ai) && dmg >= p.getLife()) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // the spell targets a spell or ability an opponent controls (a counter or a redirect: an answer)
+        private static boolean answersOpponent(final Player ai, final SpellAbility root) {
+            for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
+                if (!s.usesTargeting()) {
+                    continue;
+                }
+                for (final SpellAbility t : s.getTargets().getTargetSpells()) {
+                    if (t.getActivatingPlayer() != null && t.getActivatingPlayer().isOpponentOf(ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Nemata, Grove Guardian (dead-card batch 3, row 101; extension 2026-10-15; Mono-Green Food and
     // Tokens 8428b3ce)
     // "{2}{G}: Create a 1/1 green Saproling creature token. Sacrifice a Saproling: Saproling
