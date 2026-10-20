@@ -40253,6 +40253,30 @@ public class SpecialCardAi {
     //   test-mode price and G2); its writes are setActivatingPlayer(ai) on our own hand spell SAs (the value the
     //   AI's own pass writes; 1B writes the same) and G2's; it allocates no SpellAbility or Card id. O(1) outside our
     //   upkeep and draw step; the hand scan only there, on an empty stack, while our Neera is unspent.
+    // - 68B, liftsMainTwoHold (one disjunct at PermanentAi.checkPhaseRestrictions' Main-2 wait, one conjunct at
+    //   DrawAi.checkPhaseRestrictions' and DigAi.checkApiLogic's pre-Main-2 holds, each asked only where the stock
+    //   hold refused): B4-14's phase clause, done the other way round. In our Main 1 on an empty stack, while a Neera
+    //   we control is unspent, a sorcery-speed movable feeder cast from our hand (a rock, Goblin Electromancer, Serum
+    //   Visions, See the Truth; never Brainstorm, whose DrawAi plan is their end step) is approved now instead of in
+    //   Main 2 when it takes no mana a castable non-feeder needs (liftCore): G2 pays it, some own-hand non-feeder G2
+    //   pays waits, and every own-hand non-feeder G2 pays alone it still pays with it (a RemoveDeck host never
+    //   waits, skeptic A1, but stays in that conflict check: a readmitted one may be cast). W1's 1B then puts it
+    //   first and the trigger takes it instead of the Main-1 spell: the Main-1 spell keeps its own timing and nothing
+    //   crosses combat (holding a Main-1 bomb for Main 2 would leave a blocker in place through our attack). With no
+    //   non-feeder waiting the timing never mattered and A is kept. It amends 1B's contract ("DrawAi's holds are
+    //   never overridden") for the movable feeders, inside Neera's window only. liftCore is also 68A's third
+    //   mainOneFeeder clause (skeptic A2: one predicate, two callers, so a hold implies a lift in Main 1 modulo the
+    //   draw and the land drop; a graveyard S is held only when some other non-feeder waits). A3 order: the phase
+    //   and stack, Neera in play and unspent, our own hand cast, a cost, movable, asksController, withFlash last (a
+    //   static scan), so every other deck's refused Main-1 consult costs one isCardInPlay. Activated abilities are
+    //   never lifted (Mind Stone's sacrifice draw keeps DrawAi's hold), a sub fails the hand-cast test before any
+    //   cost read, and the free-cast entries never reach it (DrawAi's and DigAi's doTriggerNoCost; PlayAi's
+    //   WithoutManaCost copy passes PermanentAi's wait first). A gate on a path A refused at a draw-free point
+    //   (B4-9): false is A draw for draw; true goes on to the stock checks and canPayCost of the cast it was designed
+    //   to make. Its writes are 68A's (setActivatingPlayer(ai) on our own hand spell SAs, and G2's). Residuals: a
+    //   free creature the reveal casts in Main 1 lands before combat, summoning-sick; G2's multicolour over-count
+    //   in the conflict test (one dual counted toward both pips). ownHandCast is a private copy of NeeraWildMage's
+    //   (B3-4).
     // W1's NeeraWildMage (NAME, unspent, takenPreCast, movable) and G2 HonestMana are called unchanged (B3-4, B4-7);
     // pays and asksController are private copies of NeeraWildMage's (B3-4), as ScrollRack and FaithlessLooting keep
     // theirs. No static state but the name constants (the serve JVM shares statics).
@@ -40315,7 +40339,7 @@ public class SpecialCardAi {
                     : (api == ApiType.Draw || api == ApiType.Dig) && ComputerUtil.castSpellInMain1(ai, f)) {
                 return true; // PermanentAi:54, DrawAi:283, DigAi:77 approve it in Main 1 themselves
             }
-            return false;
+            return liftCore(ai, f); // 68B (A2): a feeder 68B lifts in Main 1, on 68B's own test
         }
 
         // near-lethal burn is never held: an opponent among the targets of a DealDamage or LoseLife part
@@ -40331,6 +40355,62 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+
+        // 68B: our Main 1, an empty stack and liftCore (PermanentAi's Main-2 wait, DrawAi's and DigAi's pre-Main-2
+        // holds; each caller asks only where its stock hold refused)
+        public static boolean liftsMainTwoHold(final Player ai, final SpellAbility f) {
+            final Game game = ai.getGame();
+            return game.getPhaseHandler().is(PhaseType.MAIN1, ai) && game.getStack().isEmpty() && liftCore(ai, f);
+        }
+
+        // 68B's predicate after its phase and stack gate, and 68A's third mainOneFeeder clause (A2); A3 order
+        private static boolean liftCore(final Player ai, final SpellAbility f) {
+            if (!ai.isCardInPlay(NeeraWildMage.NAME) || !NeeraWildMage.unspent(ai)) {
+                return false; // one battlefield scan on every other deck's refused consult
+            }
+            if (!ownHandCast(ai, f) || f.getPayCosts() == null || !NeeraWildMage.movable(ai, f) || asksController(f)
+                    || f.withFlash(f.getHostCard(), ai)) {
+                return false; // a hand cast of a sorcery-speed feeder only (Brainstorm's flash: their end step)
+            }
+            final ManaCostBeingPaid fc = ComputerUtilMana.calculateManaCost(f.getPayCosts(), f, ai, true, 0, false);
+            final HonestMana m = HonestMana.of(ai, f, true);
+            if (!pays(m, fc, null)) {
+                return false;
+            }
+            boolean waiting = false;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.equals(f.getHostCard()) || c.isLand()) {
+                    continue;
+                }
+                for (final SpellAbility x : c.getSpellAbilities()) {
+                    if (!x.isSpell() || x.getPayCosts() == null) {
+                        continue;
+                    }
+                    x.setActivatingPlayer(ai); // the value the AI's own pass writes (as 1B)
+                    if (asksController(x) || NeeraWildMage.takenPreCast(ai, x)) {
+                        continue; // another feeder, or a cost whose test pricing asks a controller
+                    }
+                    final ManaCostBeingPaid xc = ComputerUtilMana.calculateManaCost(x.getPayCosts(), x, ai, true, 0, false);
+                    if (!pays(m, xc, null)) {
+                        continue; // not castable now anyway
+                    }
+                    if (!pays(m, xc, fc)) {
+                        return false; // the feeder would take mana this non-feeder needs: A's Main 2
+                    }
+                    if (!ComputerUtilCard.isCardRemAIDeck(c)) {
+                        waiting = true; // A1: a RemoveDeck host never waits (it stays in the conflict check)
+                    }
+                }
+            }
+            return waiting;
+        }
+
+        // NeeraWildMage.ownHandCast, a private copy (B3-4)
+        private static boolean ownHandCast(final Player ai, final SpellAbility s) {
+            final Card h = s.getHostCard();
+            return h != null && s.isSpell() && !s.isCopied() && !s.isCastFromPlayEffect()
+                    && h.isInZone(ZoneType.Hand) && ai.equals(h.getOwner());
         }
 
         // NeeraWildMage.pays, a private copy (B3-4): G2 total and each colour against one or two adjusted costs

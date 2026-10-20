@@ -279,9 +279,12 @@ public class DrawAi extends SpellAbilityAi {
             return super.checkPhaseRestrictions(ai, sa, ph);
         }
 
-        // Don't use draw abilities before main 2 if possible
+        // Don't use draw abilities before main 2 if possible (dead-card batch 4, row 68, part 68B: not for a movable
+        // Neera feeder cast from our hand in our Main 1 while our Neera is unspent, when it takes no mana a castable
+        // non-feeder needs; asked last, only where the hold refused; see SpecialCardAi.NeeraOwnTurn)
         if (ph.getPhase().isBefore(PhaseType.MAIN2) && !sa.hasParam("ActivationPhases")
-                && !ComputerUtil.castSpellInMain1(ai, sa) && !isSacCost) {
+                && !ComputerUtil.castSpellInMain1(ai, sa) && !isSacCost
+                && !SpecialCardAi.NeeraOwnTurn.liftsMainTwoHold(ai, sa)) {
             return false;
         }
 

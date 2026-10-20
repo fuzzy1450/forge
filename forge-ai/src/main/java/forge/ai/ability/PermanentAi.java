@@ -51,7 +51,12 @@ public class PermanentAi extends SpellAbilityAi {
         }
 
         // Wait for Main2 if possible
-        return !ph.is(PhaseType.MAIN1) || !ph.isPlayerTurn(ai) || sa.hasParam("WithoutManaCost") || ComputerUtil.castPermanentInMain1(ai, sa);
+        return !ph.is(PhaseType.MAIN1) || !ph.isPlayerTurn(ai) || sa.hasParam("WithoutManaCost") || ComputerUtil.castPermanentInMain1(ai, sa)
+                // Dead-card batch 4, row 68, part 68B (Neera, Wild Mage): a movable Neera feeder cast from our hand in
+                // our Main 1 while our Neera is unspent, when it takes no mana a castable non-feeder needs. Asked only
+                // where the wait above refused (a draw-free point); one isCardInPlay for every other deck. See
+                // SpecialCardAi.NeeraOwnTurn.
+                || SpecialCardAi.NeeraOwnTurn.liftsMainTwoHold(ai, sa);
     }
 
     /**

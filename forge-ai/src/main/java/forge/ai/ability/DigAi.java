@@ -73,9 +73,12 @@ public class DigAi extends SpellAbilityAi {
             }
         }
 
-        // Don't use draw abilities before main 2 if possible
+        // Don't use draw abilities before main 2 if possible (dead-card batch 4, row 68, part 68B: not for a movable
+        // Neera feeder cast from our hand in our Main 1 while our Neera is unspent, when it takes no mana a castable
+        // non-feeder needs; asked last, only where the hold refused; see SpecialCardAi.NeeraOwnTurn)
         if (game.getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2) && !sa.hasParam("ActivationPhases")
-                && !sa.hasParam("DestinationZone") && !ComputerUtil.castSpellInMain1(ai, sa)) {
+                && !sa.hasParam("DestinationZone") && !ComputerUtil.castSpellInMain1(ai, sa)
+                && !SpecialCardAi.NeeraOwnTurn.liftsMainTwoHold(ai, sa)) {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
