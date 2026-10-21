@@ -183,6 +183,91 @@ public class SpecialCardAi {
         return count;
     }
 
+    // Abigale, Eloquent First-Year (dead-card batch 4, row 59; carrier Crackhead Math fca770e4, deck 517, Tayam)
+    // {W/B}{W/B} legendary 1/1 flying, first strike, lifelink. "When Abigale enters, up to one other target
+    // creature loses all abilities. Put a flying counter, a first strike counter, and a lifelink counter on
+    // that creature." TrigAnimate has no Types$, no Power$/Toughness$, no AILogic and no AITgts, so
+    // AnimateAi.animateTgtAI had no branch for it (CantPlayAi; on an empty board at its no-candidate check):
+    // - the cast-time dry run (AiController.checkETBEffectsPreparedCard, doTrigger(exSA, false)) vetoed every
+    //   hand cast at saSideEffects' BadEtbEffects; the BadETB rescue there needs !isFullyTargetable, which
+    //   never holds at TargetMin 0. Every stored owner cast (6 in 808 held games, all deck 517's) came while
+    //   an opposing ETB-disabling static (Hushwing Gryff, Torpor Orb, Hushbringer, Doorkeeper Thrull) let
+    //   checkETBEffectsPreparedCard return before the dry run.
+    // - the mandatory stack-time ask fell to AnimateAi's fallback: our own getWorstAI creature, the cheapest
+    //   artifact first (getWorstPermanentAI) -- Marvin, Murderous Mimic in 3 of 3 logged entries.
+    // chooseEtbTarget (AILogic AbigaleEloquentFirstYear, AnimateAi.doTriggerNoCost's first statement) answers
+    // both asks and is always willing: no target is legal at TargetMin 0, so the body is judged by the stock
+    // creature path (PermanentCreatureAi, the legend rule, PlayMain1). The target, RNG-free:
+    // 1. an opposing commander: a creature an opponent controls and we do not own, isCommander(), no Ward (its
+    //    trigger would counter the whole enters trigger), power at most MAX_GIFT_POWER whether or not it
+    //    flies (the counters give it flying, first strike and lifelink), and a trigger, a static or an
+    //    activated ability (mana included) that no keyword installed (a keyword alone does not count: Forge
+    //    installs a static for Flying, Vigilance or Defender and a trigger for Prowess); highest
+    //    CreatureEvaluator value, first max;
+    // 2. else no target -- never our commander, never a creature of ours.
+    // Draws nothing, holds nothing, remembers nothing, allocates no SpellAbility; it writes targets only on the
+    // SpellAbility it was handed (the dry run's copy, or the trigger on the stack), as the stock fallback did.
+    public static class AbigaleEloquentFirstYear {
+        public static final String NAME = "Abigale, Eloquent First-Year";
+        public static final String LOGIC = "AbigaleEloquentFirstYear";
+        static final int MAX_GIFT_POWER = 3;
+
+        public static AiAbilityDecision chooseEtbTarget(final Player ai, final SpellAbility sa) {
+            if (!sa.usesTargeting()) {
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // a copy whose text lost the target
+            }
+            sa.resetTargets();
+            final Card pick = pickTarget(ai, sa);
+            if (pick != null && sa.canTarget(pick)) {
+                sa.getTargets().add(pick);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        public static Card pickTarget(final Player ai, final SpellAbility sa) {
+            Card best = null;
+            int bestValue = Integer.MIN_VALUE;
+            for (final Card c : CardLists.getTargetableCards(ai.getGame().getCardsIn(ZoneType.Battlefield), sa)) {
+                if (opposingCommander(ai, c)) {
+                    final int v = ComputerUtilCard.evaluateCreature(c);
+                    if (v > bestValue) {
+                        bestValue = v;
+                        best = c;
+                    }
+                }
+            }
+            return best;
+        }
+
+        static boolean opposingCommander(final Player ai, final Card c) {
+            return c.isCreature() && c.getController().isOpponentOf(ai) && !ai.equals(c.getOwner())
+                    && c.isCommander() && !c.hasKeyword(Keyword.WARD) && c.getNetPower() <= MAX_GIFT_POWER
+                    && hasRealAbility(c);
+        }
+
+        // what "loses all abilities" takes that outweighs the gift: a trigger, a static or an activated
+        // ability (mana included) that no keyword installed. The getters apply changed traits, so a granted
+        // ability counts too.
+        static boolean hasRealAbility(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getKeyword() == null) {
+                    return true;
+                }
+            }
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (st.getKeyword() == null) {
+                    return true;
+                }
+            }
+            for (final SpellAbility a : c.getSpellAbilities()) {
+                if (a.isActivatedAbility() && a.getKeyword() == null) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Acorn Catapult (dead-card batch 2, row 100; precon:Counterpunch (CMD))
     // "{1}, {T}: Acorn Catapult deals 1 damage to any target. That permanent's controller or that
     // player creates a 1/1 green Squirrel creature token." AI:RemoveDeck:All kept it out of every

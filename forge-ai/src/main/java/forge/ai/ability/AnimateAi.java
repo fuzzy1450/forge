@@ -366,6 +366,18 @@ public class AnimateAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player aiPlayer, SpellAbility sa, boolean mandatory) {
+        // Dead-card batch 4, row 59 (Abigale, Eloquent First-Year; abigale_eloquent_first_year.txt is the
+        // only script with this logic): its "up to one other target creature loses all abilities" has no
+        // Types$, Power$/Toughness$, AILogic or AITgts, so animateTgtAI below refused it (CantPlayAi, or on
+        // an empty board at its no-candidate check), and the cast-time dry run
+        // (AiController.checkETBEffectsPreparedCard, mandatory false) vetoed every hand cast at
+        // saSideEffects' BadEtbEffects; the trigger going on the stack (mandatory) fell to the fallback
+        // below, which strips our own getWorstAI creature, the cheapest artifact first. The chooser answers
+        // both asks, RNG-free, always willing (no target is legal at TargetMin 0). Draws nothing. See the
+        // class comment.
+        if (SpecialCardAi.AbigaleEloquentFirstYear.LOGIC.equals(sa.getParam("AILogic"))) {
+            return SpecialCardAi.AbigaleEloquentFirstYear.chooseEtbTarget(aiPlayer, sa);
+        }
         AiAbilityDecision decision;
         if (!mandatory && !sa.usesTargeting() && !worthAnimating(aiPlayer, sa)) {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
