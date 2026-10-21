@@ -56319,6 +56319,10 @@ public class SpecialCardAi {
     //   (skeptic F1, F2). A thief's Earthcraft keeps the filter on its activation (owner AND controller). RNG: a
     //   state A never reached (0 owner casts); every decline before the payer tests draws nothing, and the first
     //   draws are those tests (canPayManaCost, canPayCost, canPlaySa on an in-band spell), as the Vizier's are.
+    //   Retry 1 (W8's verdict, b4/earthcraft/verdict-w8-n24.md): "cannot pay now" is read in each colour as well as
+    //   in total (coloursFit), so a spell one untap short only in a colour (2004932 T18: Llanowar Elves {G} with no
+    //   green source left) joins the band, priced at one untap; the payer tests still refuse a basic of the wrong
+    //   colour.
     // A thief keeps the filter (readmit asks for the owner) and every stock path; a Play-effect cast never meets the
     // filter (canPlayFromEffectAI -> PermanentAi.doTriggerNoCost). A Copy Enchantment copy answers to Copy
     // Enchantment's own case and a token copy or a Mairsil grant to none (rule B3-3: the paper name).
@@ -56523,11 +56527,15 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
             }
             // 4. the mana we have now (G2 less sacrificeBound, 41A's count) and the hand and command spells the
-            // untaps bring into reach: more than now (castable already: the RNG-free proxy for canPayCost) and no
-            // more than now + reach. A basic's {T} makes one mana. Vizier's loop, verbatim but for the name.
+            // untaps bring into reach: not castable already (the RNG-free proxy for canPayCost) and no more than
+            // now + reach. Retry 1: castable already is cmc <= now AND every colour's unpaid shards within G2's count
+            // of that colour (coloursFit), so a spell short only in a colour joins the band (2004932 T18: Llanowar
+            // Elves {G} against now 3 with no green, which the total-only test skipped as castable). A basic's {T}
+            // makes one mana. Vizier's loop, verbatim but for the name and that test.
             // one untap of one basic; 41C: one per body that can pay (an upper bound; payerBodies cuts it below)
             final int reach = chain ? tappable.size() : 1;
-            final int now = HonestMana.of(ai, sa, true).total() - sacrificeBound(ai, sa)[0];
+            final HonestMana hm = HonestMana.of(ai, sa, true);
+            final int now = hm.total() - sacrificeBound(ai, sa)[0];
             final List<SpellAbility> band = new ArrayList<>();
             final List<ManaCostBeingPaid> rests = new ArrayList<>();
             // Command too: a commander recast is priced with its tax
@@ -56545,8 +56553,8 @@ public class SpecialCardAi {
                 testSa.setActivatingPlayer(ai);
                 final ManaCostBeingPaid rest = ComputerUtilMana.calculateManaCost(testSa.getPayCosts(), testSa, ai, true, 0, false);
                 final int cmc = rest.getConvertedManaCost(); // the adjusted cost: tax, Medallions
-                if (cmc <= now || cmc > now + reach) {
-                    continue;
+                if (cmc > now + reach || (cmc <= now && coloursFit(rest, hm))) {
+                    continue; // beyond reach, or castable already
                 }
                 band.add(testSa);
                 rests.add(rest);
@@ -56567,15 +56575,19 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
             }
             // 7. the payer tests (Vizier's step 4, the first draws): per spell, per distinct basic production, that
-            // production applied once per mana the spell is short to a copy of its cost, the rest payable by what is
-            // untapped now; then at most one canPayCost and one canPlaySa per spell
+            // production applied once per mana the spell is short in total, and at least once (retry 1: a spell short
+            // only in a colour), to a copy of its cost, the rest payable by what is untapped now; then at most one
+            // canPayCost and one canPlaySa per spell
             final List<Pair<Card, SpellAbility>> sources = new ArrayList<>(tapped.values());
             sources.addAll(poolable.values()); // 41C: after every tapped basic, which needs no pool
             final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
             for (int i = 0; i < band.size(); i++) {
                 final SpellAbility testSa = band.get(i);
                 final ManaCostBeingPaid rest = rests.get(i);
-                final int untaps = rest.getConvertedManaCost() - now; // 1 .. reach
+                // 1 .. reach. Retry 1: a spell short only in a colour (cmc <= now) is priced at one untap, of the basic
+                // whose production fixes that colour; payWithRock and canPayManaCost refuse a basic of the wrong
+                // colour (1630850 T15: a Plains for Sylvan Safekeeper's {G})
+                final int untaps = Math.max(1, rest.getConvertedManaCost() - now);
                 if (untaps > bodies.size()) {
                     continue; // one free body per untap
                 }
@@ -56603,6 +56615,18 @@ public class SpecialCardAi {
                 }
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // Part 41B, retry 1: step 4's colour half of "castable already" (the caller tests the total): in each of W,
+        // U, B, R and G, the spell's unpaid shards of exactly that colour within G2's count of that colour. A hybrid,
+        // two-brid, Phyrexian or {C} shard is its own shard key and is not read here, so such a shard is judged by
+        // the total alone, as before the retry. Pure reads, RNG-free.
+        private static boolean coloursFit(final ManaCostBeingPaid rest, final HonestMana hm) {
+            return rest.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE) <= hm.colour(MagicColor.WHITE)
+                    && rest.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE) <= hm.colour(MagicColor.BLUE)
+                    && rest.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK) <= hm.colour(MagicColor.BLACK)
+                    && rest.getUnpaidShards(forge.card.mana.ManaCostShard.RED) <= hm.colour(MagicColor.RED)
+                    && rest.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN) <= hm.colour(MagicColor.GREEN);
         }
 
         // our basic lands this activation can target (ValidTgts$ Land.Basic, read by canTarget) whose mana ability
