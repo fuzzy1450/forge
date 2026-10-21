@@ -165,7 +165,8 @@ public class OptionalTriggerLoopTest extends AITest {
      * on (here the one for a counter the AI's Grizzly Bears survived). Every round's Flourishing trigger still goes on
      * the stack after something resolved, so each is a repeat and the AI stops the loop as it does with nothing
      * waiting. Counting only a trigger with no instance already on the stack never stopped it: each round saw the
-     * waiting one, and the stack, three deep, never reaches the 999-item limit that would draw the game.
+     * waiting one, and the stack, three deep, never reaches the item limit that would draw the game
+     * (MagicStack.MAX_STACK_SIZE).
      */
     @Test(timeOut = 300_000)
     public void aFlourishingTriggerWaitingBelowTheLoopDoesNotHideItsRepeats() {

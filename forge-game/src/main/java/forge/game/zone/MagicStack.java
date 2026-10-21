@@ -59,6 +59,15 @@ import java.util.stream.Collectors;
  */
 public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbilityStackInstance> {
     public static final int MAX_TRIGGER_REPEATS = 50;
+    /**
+     * A stack holding more than this many items draws the game: the last stop for a loop nothing else catches, such
+     * as a Scalelord Reckoner mirror whose targeted triggers go on the stack for ever without one resolving (upstream
+     * #8254 put it at 999 against the heap running out). A legal finite crowd can pass 999: 51 Ondu Spiritdancers,
+     * fresh on a new turn, all trigger on one enchantment entering under Secret Arcade, and every copy that resolves
+     * triggers the ones that have not copied yet, about 1,300 triggers in all. 9999 leaves such crowds to resolve and
+     * still stops a runaway well short of the heap, while the game's own time limit bounds how long either takes.
+     */
+    public static final int MAX_STACK_SIZE = 9999;
 
     private final List<SpellAbility> simultaneousStackEntryList = Lists.newArrayList();
     private final List<SpellAbility> activePlayerSAs = Lists.newArrayList();
@@ -224,7 +233,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
 
         // Stop infinite loop. E.g. Scalelord Reckoner mirrormatch with only triggering targets is a draw.
         // CR 104.4b the same goes for a mandatory trigger that keeps coming back before the stack clears
-        if (game.getStack().size() > 999 || (si == null && isRepeatingTrigger(sp))) {
+        if (game.getStack().size() > MAX_STACK_SIZE || (si == null && isRepeatingTrigger(sp))) {
             for (Player p : game.getPlayers()) {
                 p.intentionalDraw();
             }
