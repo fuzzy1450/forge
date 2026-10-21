@@ -64972,6 +64972,90 @@ public class SpecialCardAi {
         }
     }
 
+    // Wedding Ring (dead-card batch 4, row 14, a former cut: batch 1's row 166, which Evan cut on 2026-09-14;
+    // carriers Mono-White Politics and Soldiers 3fda1116, an upload, and precon:Timey-Wimey (WHO) d4b63a5c, an
+    // anchor). {2}{W}{W} Artifact: "When Wedding Ring enters, if it was cast, target opponent creates a token
+    // that's a copy of it. Whenever an opponent who controls an artifact named Wedding Ring draws a card during
+    // their turn, you draw a card. Whenever an opponent who controls an artifact named Wedding Ring gains life
+    // during their turn, you gain that much life." The ETB copy (DB$ CopyPermanent | ValidTgts$ Opponent |
+    // Defined$ Self | Controller$ TargetedPlayer) reached CopyPermanentAi.doTriggerNoCost, whose loop lists
+    // cards only: TargetingFailed for a player, mandatory or not. So AiController.checkETBEffectsPreparedCard's
+    // dry run vetoed every judged cast (BadEtbEffects, through the saSideEffects of canPlaySa and of an optional
+    // canPlayFromEffectAI), and a forced cast's real ETB (The Tenth Doctor's suspend, stored game 2017259) was
+    // never put on the stack (PlayerControllerAi.prepareSingleSa false), though a legal opponent existed.
+    // Routed here by name from doTriggerNoCost, after the Face Yourself gate, for the targeted copy only.
+    //   mandatory (the real trigger, 14A): the floored pick, else the targetable opponent with the largest hand;
+    //     none -> TargetingFailed (no legal target: the trigger is removed, as the rules say). The floored pick
+    //     (FLOOR H) is a targetable opponent who can draw, whose library ours outlasts (ours >= LIB_SAFE or
+    //     >= theirs), holding max(our hand after the cast + HAND_GAP, MIN_OPP_HAND) cards or more; the largest
+    //     hand wins, the first in turn order on a tie. The extra card each turn cycle is worth more to the
+    //     shorter hand: a full grip is mana-bound and discards at cleanup (IntellectualOffering's refill guard).
+    //   the dry run (mandatory false): TargetingFailed, A's answer, so every judged cast is still vetoed.
+    // RNG: the mandatory branch reads zone sizes, sa.canTarget and canDraw (no MyRandom, no card, no
+    // SpellAbility, nothing remembered) and adds the target the trigger resolves with: a removed decline,
+    // divergent by design from a forced cast's first ETB on. The dry run answers where and as A answered.
+    public static class WeddingRing {
+        public static final String NAME = "Wedding Ring";
+        static final int LIB_SAFE = 40;    // FLOOR H: our library outlasts any at this size
+        static final int HAND_GAP = 1;     // FLOOR H: their hand minus ours after the cast
+        static final int MIN_OPP_HAND = 3; // FLOOR H: never refill an opponent in topdeck mode
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean mandatory) {
+            sa.resetTargets();
+            if (!sa.getTargetRestrictions().canTgtPlayer()) {
+                return no(AiPlayDecision.TargetingFailed);
+            }
+            if (mandatory) {
+                Player pick = pick(ai, sa, true);
+                if (pick == null) {
+                    pick = pick(ai, sa, false);
+                }
+                if (pick == null) {
+                    return no(AiPlayDecision.TargetingFailed);
+                }
+                sa.getTargets().add(pick);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return no(AiPlayDecision.TargetingFailed); // the dry run: A's answer
+        }
+
+        // FLOOR H when floored, else any targetable opponent; the largest hand wins, first in turn order on a tie
+        private static Player pick(final Player ai, final SpellAbility sa, final boolean floored) {
+            final int ourLib = ai.getCardsIn(ZoneType.Library).size();
+            final int hand = ourHandAfter(ai, sa);
+            Player best = null;
+            int bestHand = -1;
+            for (final Player p : ai.getOpponents()) {
+                if (!sa.canTarget(p)) {
+                    continue;
+                }
+                final int oppHand = p.getCardsIn(ZoneType.Hand).size();
+                if (floored && (!p.canDraw()
+                        || (ourLib < LIB_SAFE && ourLib < p.getCardsIn(ZoneType.Library).size())
+                        || oppHand < Math.max(hand + HAND_GAP, MIN_OPP_HAND))) {
+                    continue;
+                }
+                if (oppHand > bestHand) {
+                    best = p;
+                    bestHand = oppHand;
+                }
+            }
+            return best;
+        }
+
+        // the dry run runs with the Ring still in hand (canPlaySa judges an LKI copy); the real ETB after it left
+        private static int ourHandAfter(final Player ai, final SpellAbility sa) {
+            final int hand = ai.getCardsIn(ZoneType.Hand).size();
+            final SpellAbility cast = sa.getHostCard() == null ? null : sa.getHostCard().getCastSA();
+            final Card real = cast == null ? null : cast.getHostCard();
+            return real != null && real.isInZone(ZoneType.Hand) ? hand - 1 : hand;
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision why) {
+            return new AiAbilityDecision(0, why);
+        }
+    }
+
     // Wild Endeavor (dead-card batch 3, row 34; precon:Draconic Rage (AFC))
     // "Roll two d4 and choose one result. Create a number of 3/3 green Beast creature tokens equal
     // to that result. Then search your library for a number of basic land cards equal to the other

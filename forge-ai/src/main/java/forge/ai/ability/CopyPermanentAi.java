@@ -147,6 +147,14 @@ public class CopyPermanentAi extends SpellAbilityAi {
             return SpecialCardAi.FaceYourself.consider(aiPlayer, sa, mandatory);
         }
 
+        if (SpecialCardAi.WeddingRing.NAME.equals(sourceName) && sa.usesTargeting()) {
+            // ValidTgts$ Opponent, Controller$ TargetedPlayer: the card-target loop below cannot target a
+            // player, so checkETBEffects' dry run vetoed every cast (BadEtbEffects) and a forced cast's
+            // mandatory ETB never reached the stack (prepareSingleSa false). Every other CopyPermanent
+            // card is unchanged.
+            return SpecialCardAi.WeddingRing.consider(aiPlayer, sa, mandatory);
+        }
+
         if (sa.usesTargeting()) {
             sa.resetTargets();
 
