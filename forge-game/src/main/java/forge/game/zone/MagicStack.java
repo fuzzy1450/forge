@@ -60,17 +60,18 @@ import java.util.stream.Collectors;
 public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbilityStackInstance> {
     public static final int MAX_TRIGGER_REPEATS = 50;
     /**
-     * A stack holding more than this many items draws the game: the last stop for a loop nothing else catches
-     * (upstream #8254 put it at 999 against the heap running out). One such loop: Venser, Fervent Forger copying an
-     * opponent's legendary Venser, whose mandatory targeted trigger puts two more on the stack each time one resolves;
-     * the repeating-trigger draw below skips targeted triggers. But a legal finite crowd can pass 999 too: 51 Ondu
-     * Spiritdancers, fresh on a new turn, all trigger on one enchantment entering under Secret Arcade, and every copy
-     * that resolves triggers the ones that have not copied yet, 1,276 triggers on the stack at most. 4000 leaves that
-     * crowd to resolve, with room to spare, while a runaway still draws after four times the items 999 allowed rather
-     * than after the ten times a bigger limit would take: every item costs memory (about 10 KB for a trigger, 50 KB
-     * for an activated ability) and the time to put it on the stack.
+     * A stack holding more than this many items draws the game: the last stop for a loop nothing else catches (upstream
+     * #8254 put it at 999 against the heap running out). A legal finite crowd can pass 999: 51 Ondu Spiritdancers,
+     * fresh on a new turn, all trigger on one enchantment entering under Secret Arcade, and every copy that resolves
+     * triggers the ones that have not copied yet, 1,276 triggers on the stack at most, and about 50 more for each other
+     * card in play that triggers on an enchantment entering. 1500 leaves such crowds to resolve. It stays that low
+     * because what an item costs depends on the loop: such a crowd shares one triggering card, about 10 KB an item,
+     * while Venser, Fervent Forger copying an opponent's legendary Venser, whose mandatory targeted trigger puts two
+     * more on the stack each time one resolves (the repeating-trigger draw below skips targeted triggers), makes new
+     * token copies every time, about 620 KB an item: 1.1 GB of live heap at this limit, where 4000 ran a 2.3 GB heap
+     * out.
      */
-    public static final int MAX_STACK_SIZE = 4000;
+    public static final int MAX_STACK_SIZE = 1500;
 
     private final List<SpellAbility> simultaneousStackEntryList = Lists.newArrayList();
     private final List<SpellAbility> activePlayerSAs = Lists.newArrayList();

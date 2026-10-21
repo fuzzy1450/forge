@@ -23,11 +23,12 @@ import forge.game.zone.ZoneType;
  * finite crowd: 51 Ondu Spiritdancers under Secret Arcade, fresh on their controller's turn, all trigger on one
  * enchantment entering, and every copy that resolves triggers the ones that have not copied yet, 1,326 triggers in
  * all with 1,276 on the stack at once (MTG_DeckMaker stored games 1594009, 1682203, 1889860, 2058086 and 2590011, which
- * the self-copy-loop stop otherwise finishes). At 4000 that crowd resolves, and the limit is exact either side of it.
+ * the self-copy-loop stop otherwise finishes). At 1500 that crowd resolves, and the limit is exact either side of it.
  *
  * The crowd's size is arithmetic. With the optional-loop stop at MAX_TRIGGER_REPEATS (50) rounds, n fresh Ondus put n,
- * n - 1, ..., n - 50 triggers on the stack, one round after each copy resolves, so the stack peaks at 51 n - 1,325 items:
- * 1,276 for 51 Ondus, 3,979 for 104, 4,030 for 105.
+ * n - 1, ..., n - 50 triggers on the stack, one round after each copy resolves, so the stack peaks at 51 n - 1,325
+ * items: 1,276 for 51 Ondus, 1,480 for 55, 1,531 for 56. In a real game each other card that triggers on an enchantment
+ * entering adds about 50 more: with Fear of Sleep Paralysis, stored game 1682203's stack held 1,326 items at once.
  */
 public class StackSizeLimitTest extends AITest {
 
@@ -76,27 +77,27 @@ public class StackSizeLimitTest extends AITest {
         assertEquals(MagicStack.MAX_TRIGGER_REPEATS + 1, countCardsWithName(game, "Sol Ring"));
     }
 
-    @Test(timeOut = 600_000)
+    @Test(timeOut = 300_000)
     public void aCrowdThatStaysUnderTheLimitResolves() {
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
-        int most = crowd(game, ai, 104);
+        int most = crowd(game, ai, 55);
 
-        assertFalse("a crowd of 3,979 items drew the game", game.isGameOver());
-        assertEquals(3979, most);
+        assertFalse("a crowd of 1,480 items drew the game", game.isGameOver());
+        assertEquals(1480, most);
         assertTrue(game.getStack().isEmpty());
     }
 
-    @Test(timeOut = 600_000)
+    @Test(timeOut = 300_000)
     public void aCrowdThatWouldPassTheLimitDrawsTheGame() {
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
-        // 105 Ondus would peak at 4,030 items: the item after the 4,001st draws the game
-        int most = crowd(game, ai, 105);
+        // 56 Ondus would peak at 1,531 items: the item after the 1,501st draws the game
+        int most = crowd(game, ai, 56);
 
         assertTrue("the crowd should have drawn the game", game.isGameOver());
         assertEquals(GameEndReason.Draw, game.getOutcome().getWinCondition());
-        assertEquals(4001, most);
+        assertEquals(1501, most);
         assertEquals(MagicStack.MAX_STACK_SIZE + 1, game.getStack().size());
     }
 }
