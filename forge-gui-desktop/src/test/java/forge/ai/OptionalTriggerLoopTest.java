@@ -11,8 +11,10 @@ import java.util.Set;
 
 import org.testng.annotations.Test;
 
+import forge.card.CardStateName;
 import forge.game.Game;
 import forge.game.GameEntityCounterTable;
+import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
 import forge.game.phase.PhaseType;
@@ -22,6 +24,7 @@ import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.WrappedAbility;
 import forge.game.zone.MagicStack;
+import forge.game.zone.ZoneType;
 
 /**
  * precon:Blight Curse's Blowfly Infestation and Flourishing Defenses loop for ever once the opponents have no
@@ -361,5 +364,79 @@ public class OptionalTriggerLoopTest extends AITest {
 
         game.getPhaseHandler().mainLoopStep();
         assertEquals(0, stack.getTriggerRepeats(flourishing));
+    }
+
+    /**
+     * Secret Arcade makes its controller's nonland permanents enchantments, Ondu Spiritdancer included, so Ondu's
+     * "whenever an enchantment you control enters, you may create a token that's a copy of it. Do this only once each
+     * turn." triggers on Ondu itself. Each copy is a new Ondu whose own once each turn is unused, so it triggers on
+     * itself in turn and copies itself again. Every round's trigger comes from a new copy, with a trigger id of its
+     * own, so the count by id never passed 1 and the AI never stopped: precon:Miracle Worker's turn never ended
+     * (stored games 1929599 and 1934332, 20-minute Timeouts on turns 16 and 17). The copies share the first Ondu's
+     * loop key, so the AI declines the 51st copy, as it declines Flourishing's 51st Elf.
+     */
+    @Test(timeOut = 300_000)
+    public void onduSpiritdancerCopyingItselfUnderSecretArcadeStopsOnceItHasRepeatedFiftyTimes() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        Card arcade = addCard("Secret Arcade // Dusty Parlor", ai);
+        arcade.unlockRoom(ai, CardStateName.LeftSplit);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+        game.getAction().checkStateEffects(true);
+        Card ondu = game.getAction().moveToPlay(addCardToZone("Ondu Spiritdancer", ai, ZoneType.Hand), null,
+                AbilityKey.newMap());
+        assertTrue("Secret Arcade makes Ondu an enchantment", ondu.isEnchantment());
+        int loopKey = ondu.getTriggers().iterator().next().getLoopKey();
+
+        Set<Integer> ondus = new HashSet<>();
+        Set<Integer> triggerIds = new HashSet<>();
+        int steps = 0;
+        do {
+            // the first step puts the waiting trigger on the stack (moveToPlay only ran it)
+            game.getPhaseHandler().mainLoopStep();
+            steps++;
+            for (Card c : ai.getCreaturesInPlay()) {
+                if (c.getName().equals("Ondu Spiritdancer") && ondus.add(c.getId())) {
+                    for (Trigger t : c.getTriggers()) {
+                        triggerIds.add(t.getId());
+                        assertEquals("every copy keeps the first Ondu's loop key", loopKey, t.getLoopKey());
+                    }
+                }
+            }
+        } while (chainGoesOn(game) && steps < MAX_STEPS);
+
+        assertFalse("the loop never ended: " + ondus.size() + " Ondus in " + steps + " steps", chainGoesOn(game));
+        assertFalse("an optional loop is no draw", game.isGameOver());
+        // The Ondu we started with, then one copy for each of the first 50 triggers: the 51st is declined.
+        assertEquals(MagicStack.MAX_TRIGGER_REPEATS + 1, ondus.size());
+        assertEquals("each copy's trigger has an id of its own", ondus.size(), triggerIds.size());
+    }
+
+    /**
+     * A copy of a trigger gets an id of its own and keeps its original's loop key, through a chain of copies; an LKI
+     * copy keeps both; another card's trigger, even of the same name, is a loop of its own.
+     */
+    @Test(timeOut = 300_000)
+    public void aCopiedTriggerKeepsItsOriginalsLoopKey() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        Card ondu = addCard("Ondu Spiritdancer", ai);
+        Card another = addCard("Ondu Spiritdancer", ai);
+        Trigger original = ondu.getTriggers().iterator().next();
+        assertEquals("a trigger never copied is keyed by its own id", original.getId(), original.getLoopKey());
+
+        Trigger copy = original.copy(another, false);
+        Trigger copyOfCopy = copy.copy(ondu, false);
+        assertTrue("a copy has an id of its own", copy.getId() != original.getId());
+        assertTrue("so has a copy of a copy", copyOfCopy.getId() != copy.getId() && copyOfCopy.getId() != original.getId());
+        assertEquals(original.getLoopKey(), copy.getLoopKey());
+        assertEquals(original.getLoopKey(), copyOfCopy.getLoopKey());
+
+        Trigger lki = original.copy(ondu, true);
+        assertEquals(original.getId(), lki.getId());
+        assertEquals(original.getLoopKey(), lki.getLoopKey());
+
+        assertTrue("another card's trigger is another loop",
+                another.getTriggers().iterator().next().getLoopKey() != original.getLoopKey());
     }
 }

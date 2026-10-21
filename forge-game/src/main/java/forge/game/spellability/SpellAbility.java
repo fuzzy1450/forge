@@ -1372,6 +1372,11 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
         return isTrigger() ? getTrigger().getId() : -1;
     }
 
+    /** The source trigger's {@link Trigger#getLoopKey() loop key}: its id, unless it is a copy of another trigger. */
+    public int getSourceTriggerLoopKey() {
+        return isTrigger() ? getTrigger().getLoopKey() : -1;
+    }
+
     public boolean isReplacementAbility() {
         return getParent() != null ? getParent().isReplacementAbility() : replacementEffect != null;
     }
