@@ -215,6 +215,15 @@ public class PlayAi extends SpellAbilityAi {
                         // if we won't be able to pay the cost, don't choose the card
                         return false;
                     }
+                    // Dead-card batch 4, row 77, part 77B: a Play-effect free cast of our own instant or sorcery
+                    // (Neera's reveal, Arcane Bombardment's and Mizzix's Mastery's copies, Mnemonic Deluge's, Plargg
+                    // and Nassari, Chaos Wand) is not chosen when it takes our library under OwnLibraryFloor's
+                    // margin. After the stock canPlayFromEffectAI, target and cost checks: a decline after A's
+                    // consult. continue, not return false: the card's next spell ability is still judged. Inert
+                    // unless OwnLibraryFloor is engaged. Draws nothing. See the class comment.
+                    if (SpecialCardAi.OwnLibraryFloor.breachesCast(ai, spell)) {
+                        continue;
+                    }
                     return true;
                 }
             }
