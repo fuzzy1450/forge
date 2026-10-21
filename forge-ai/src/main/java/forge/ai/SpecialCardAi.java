@@ -15172,6 +15172,248 @@ public class SpecialCardAi {
         }
     }
 
+    // Sickening Shoal (dead-card batch 4, row 35; Yuriko Midrange 8718e1d2, deck 513)
+    // "You may exile a black card with mana value X from your hand rather than pay this spell's mana
+    // cost. Target creature gets -X/-X until end of turn." ({X}{B}{B} Instant - Arcane.) Never cast on
+    // any engine: AI:RemoveDeck:All drops the hand spell in AiController.getSpellAbilityToPlay's
+    // removeIf before any handler runs. Behind the hint PumpAi.checkApiLogic announces X with
+    // setMaxXValue: the printed {X}{B}{B} gets every spare mana (determineLeftoverMana's test payments
+    // draw) and useRemovalNow's roll; the pitch copy's cost has no X part (ExileFromHand<1/...cmcEQX>
+    // reads X, it does not pay it), so hasXInAnyCostPart is false, X is 0 and the defense == 0 refusal
+    // answers CantPlayAi. The hint is KEPT (tutor, copy and steal pickers, the -10 sort), and:
+    // - readmit (G3): our own hand cast, only in a window below with a creature to aim at;
+    // - handles (PumpAi.checkApiLogic's route after Flunk) carries the readmit's whole key, the window
+    //   included (rule B3-2), and the script's two printed cost shapes: outside a window every caller,
+    //   canPlaySa's direct ones included, takes the path A took, and any other shape, a copy and a
+    //   Play-effect cast keep the stock path;
+    // - consider: Flunk's windows and floor, X exactly the smallest kill (Flunk.kills, called
+    //   unchanged); the pitch (two cards for one) at PITCH_MIN_VALUE or a commander, X the smallest
+    //   mana value whose payment pick (ComputerUtil.chooseExileFrom, the payment's own chooser) is
+    //   pitchable: black, never our commander, a planeswalker, our next land drop, a creature worth
+    //   more than the kill, or a card whose own spell can target a creature (answersCreature);
+    // - the printed {X}{B}{B} is claimed and refused (CantAffordX), drawing nothing: the stock path
+    //   would announce every spare mana as X behind useRemovalNow's roll.
+    // RNG: every decline draws nothing and returns before canPayCost; X is cleared on entry and on
+    // every decline, set only on WillPlay. Residual (B3x-3): a readmitted pass builds the pitch copy
+    // in getOriginalAndAltCostAbilities, one SpellAbility id A did not allocate.
+    public static class SickeningShoal {
+        public static final String NAME = "Sickening Shoal";
+        static final int PITCH_MIN_VALUE = 200; // two cards for one: a non-token 3/3 with an ability
+        static final String X_PAID = "Count$xPaid";
+
+        // RemoveDeckFilter.readmit's case: RNG-free, O(board)
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return sa.isSpell() && ownHandCast(ai, sa) && !inWindow(ai, false).isEmpty();
+        }
+
+        // the targeted root curse spell of this paper name (rule B3-3), only while the script has the
+        // shape this evaluator reads (rule B3-13: s/sickening_shoal.txt is the only script it meets),
+        // and only on the readmit's whole key, the window included (rule B3-2)
+        public static boolean handles(final Player ai, final SpellAbility sa) {
+            if (sa == null || sa instanceof AbilitySub || !sa.isSpell() || !sa.usesTargeting() || !sa.isCurse()
+                    || !"-X".equals(sa.getParam("NumAtt")) || !"-X".equals(sa.getParam("NumDef"))
+                    || !X_PAID.equals(sa.getSVar("X"))) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())) {
+                return false;
+            }
+            return ownHandCast(ai, sa) && (hardCast(sa) || pitchCost(sa) != null) && !inWindow(ai, false).isEmpty();
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.setXManaCostPaid(null);
+            sa.resetTargets();
+            final CardCollection window = inWindow(ai, true);
+            if (window.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final Card host = sa.getHostCard();
+            final CostExile pitch = pitchCost(sa);
+            final int cap;
+            if (pitch == null) {
+                // the printed {X}{B}{B}: refused here, drawing nothing
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            } else {
+                // the pitch: the largest mana value among the cards it may exile
+                int best = 0;
+                for (final Card f : ai.getCardsIn(ZoneType.Hand)) {
+                    if (pitchable(ai, f, host)) {
+                        best = Math.max(best, f.getCMC());
+                    }
+                }
+                cap = best;
+            }
+            if (cap < 1) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+            }
+            final int floor = PITCH_MIN_VALUE;
+            final Game game = ai.getGame();
+            CardCollection list = CardLists.getTargetableCards(window, sa);
+            list = ComputerUtil.filterAITgts(sa, ai, list, true);
+            list = CardLists.filter(list, c -> c.isCreature()
+                    && c.getController().isOpponentOf(ai)
+                    && need(c, cap) > 0
+                    && !c.hasKeyword(Keyword.WARD)
+                    && !c.hasSVar("SacMe")
+                    && !ComputerUtilCard.hasActiveUndyingOrPersist(c)
+                    && !ComputerUtilCard.isUselessCreature(c.getController(), c)
+                    && c.getEnchantedBy().stream().noneMatch(a -> ai.equals(a.getController()))
+                    && !targetedByOurStack(ai, game, c)
+                    && !leavesThisTurn(c)
+                    && (c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= floor));
+            if (list.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            list = ComputerUtilCard.prioritizeCreaturesWorthRemovingNow(ai, list, false);
+            final List<Card> order = new ArrayList<>(list);
+            order.sort((a, b) -> Integer.compare(score(b), score(a))); // stable: ties keep order
+            for (final Card t : order) {
+                final int need = need(t, cap);
+                final int tEval = ComputerUtilCard.evaluateCreature(t);
+                for (int x = need; x <= cap; x++) {
+                    sa.setXManaCostPaid(x);
+                    // exactly what AiCostDecision.visit(CostExile) exiles for this X
+                    final CardCollection paid = ComputerUtil.chooseExileFrom(ai, pitch, host, 1, sa, false);
+                    if (paid == null || paid.isEmpty()) {
+                        continue;
+                    }
+                    final Card f = paid.get(0);
+                    if (pitchable(ai, f, host) && !(f.isCreature() && ComputerUtilCard.evaluateCreature(f) > tEval)
+                            && sa.canTarget(t)) {
+                        sa.getTargets().add(t);
+                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                    }
+                }
+                sa.setXManaCostPaid(null);
+            }
+            sa.setXManaCostPaid(null);
+            return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
+        }
+
+        // the smallest X in 1..cap that surely kills c (Flunk.kills, called unchanged), else 0
+        static int need(final Card c, final int cap) {
+            for (int x = 1; x <= cap; x++) {
+                if (Flunk.kills(c, x)) {
+                    return x;
+                }
+            }
+            return 0;
+        }
+
+        // the stock removal formula without its board term (Dispatch's, Flunk's)
+        private static int score(final Card c) {
+            return ComputerUtilCard.evaluateCreature(c) + (c.isToken() ? 30 : 0);
+        }
+
+        // a card the pitch may exile: black, not this card, mana value 1 or more, never our commander or a
+        // planeswalker, never a card whose own spell can target a creature; a modal double-faced card
+        // whose back is a land only while a land card is in hand
+        static boolean pitchable(final Player ai, final Card f, final Card host) {
+            if (f == host || !f.isBlack() || f.getCMC() < 1 || f.isCommander() || f.isPlaneswalker()
+                    || answersCreature(f)) {
+                return false;
+            }
+            if (f.isModal() && f.hasState(forge.card.CardStateName.Backside)
+                    && f.getState(forge.card.CardStateName.Backside).getType().isLand()) {
+                return CardLists.count(ai.getCardsIn(ZoneType.Hand), CardPredicates.LANDS) > 0;
+            }
+            return true;
+        }
+
+        // a card whose own spell can target a creature is itself the answer the pitch would spend: game 1990357
+        // t15 pitched Snuff Out to kill the creature Snuff Out killed one turn later in the control, and 1714748
+        // t12 pitched Dismember. RNG-free: the card's existing spell abilities, no copy, no id.
+        static boolean answersCreature(final Card f) {
+            for (final SpellAbility s : f.getSpellAbilities()) {
+                if (!s.isSpell()) {
+                    continue;
+                }
+                for (SpellAbility a = s; a != null; a = a.getSubAbility()) {
+                    if (a.usesTargeting() && a.getTargetRestrictions().canTgtCreature()) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Dispatch's and Flunk's windows: an opponent's declare-attackers or declare-blockers step, the
+        // attackers aimed at us (predict: not those our blocks already kill), or an opponent's end step,
+        // every opposing creature. predict = false is readmit's cheap form (no combat predictor).
+        static CardCollection inWindow(final Player ai, final boolean predict) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Player active = ph.getPlayerTurn();
+            if (active == null || !active.isOpponentOf(ai)) {
+                return new CardCollection();
+            }
+            final Combat combat = game.getCombat();
+            if (combat != null && (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS))) {
+                final boolean afterBlocks = ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS);
+                return CardLists.filter(combat.getAttackers(), c -> ai.equals(combat.getDefenderPlayerByAttacker(c))
+                        && !(predict && afterBlocks && combat.isBlocked(c)
+                                && ComputerUtilCombat.attackerWouldBeDestroyed(ai, c, combat)));
+            }
+            if (ph.is(PhaseType.END_OF_TURN)) {
+                return CardLists.filter(ai.getOpponents().getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES);
+            }
+            return new CardCollection();
+        }
+
+        // the printed {X}{B}{B}
+        static boolean hardCast(final SpellAbility sa) {
+            final Cost c = sa.getPayCosts();
+            return c != null && c.isOnlyManaCost() && c.getTotalMana().countX() == 1;
+        }
+
+        // the static's pitch copy: ExileFromHand<1/Card.Black+Other+cmcEQX> and no mana to pay
+        // (copyWithManaCostReplaced keeps copyWithNoMana's zero CostPartMana, new Cost(0))
+        static CostExile pitchCost(final SpellAbility sa) {
+            final Cost c = sa.getPayCosts();
+            if (c == null || !c.getTotalMana().isZero()) {
+                return null;
+            }
+            CostExile e = null;
+            for (final CostPart p : c.getCostParts()) {
+                if (p instanceof CostExile && e == null) {
+                    e = (CostExile) p;
+                } else if (!(p instanceof CostPartMana)) {
+                    return null;
+                }
+            }
+            return e != null && e.getFrom().size() == 1 && e.getFrom().get(0) == ZoneType.Hand
+                    && e.getType().contains("cmcEQX") ? e : null;
+        }
+
+        // private verbatim copy of Artillerize.ownHandCast (batch 3, row 63)
+        private static boolean ownHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final Player activator = sa.getActivatingPlayer();
+            return host != null && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner())
+                    && (activator == null || ai.equals(activator)) && !sa.hasParam("WithoutManaCost");
+        }
+
+        // private verbatim copies of Flunk's leavesThisTurn and targetedByOurStack (Dispatch's)
+        private static boolean leavesThisTurn(final Card c) {
+            final String v = c.getSVar("EndOfTurnLeavePlay");
+            return !v.isEmpty() && !"Dash".equals(v) && !"Warp".equals(v);
+        }
+
+        private static boolean targetedByOurStack(final Player ai, final Game game, final Card c) {
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                for (SpellAbility s = si.getSpellAbility(); s != null; s = s.getSubAbility()) {
+                    if (ai.equals(s.getActivatingPlayer()) && s.getTargets() != null
+                            && s.getTargets().getTargetCards().contains(c)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Divine Reckoning (dead-card batch 3, row 18)
     // {2}{W}{W} Sorcery, "Each player chooses a creature they control. Destroy the rest."
     // Flashback {5}{W}{W}. AI:RemoveDeck:All hid both spell abilities (the hand cast and the
@@ -46566,8 +46808,8 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49, 52, 66, 67, 20 and 21, keepOff for batch 2's row 68 (Trench Gorger; batch
-    // 3's row 68 is Sunbird Standard, a readmit).
+    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21 and 35, keepOff for batch 2's row 68 (Trench Gorger;
+    // batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -46733,6 +46975,8 @@ public class SpecialCardAi {
                     return MishrasBauble.readmit(ai, sa);
                 case CruelEntertainment.NAME:            // batch 4, row 21 (W7)
                     return CruelEntertainment.readmit(ai, sa);
+                case SickeningShoal.NAME:                // batch 4, row 35 (W7)
+                    return SickeningShoal.readmit(ai, sa);
                 default:
                     return false;
             }

@@ -228,6 +228,17 @@ public class PumpAi extends PumpAiBase {
             // takes exactly the path it took before this branch.
             return SpecialCardAi.Flunk.consider(ai, sa);
         }
+        if (SpecialCardAi.SickeningShoal.handles(ai, sa)) {
+            // Dead-card batch 4, row 35. AI:RemoveDeck:All kept A from ever evaluating the owner's
+            // cast; behind it setMaxXValue read X = 0 for the pitch copy (its exile cost reads X, it
+            // has no X part) and every spare mana for {X}{B}{B}. handles carries the readmit's whole
+            // key, the window included (rule B3-2), so outside a window every caller takes the path
+            // it took before. The evaluator announces X, owns window, floor and target, and draws
+            // nothing on any decline. Copies and Play-effect casts take doTriggerNoCost; every other
+            // Pump card, and every other shape of this one (a canPlaySa probe's free copy), takes
+            // the path it took before this branch.
+            return SpecialCardAi.SickeningShoal.consider(ai, sa);
+        }
         final Game game = ai.getGame();
         final Card source = sa.getHostCard();
         final SpellAbility root = sa.getRootAbility();
