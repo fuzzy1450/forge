@@ -343,6 +343,15 @@ public class DrawAi extends SpellAbilityAi {
             }
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
+        if (SpecialCardAi.FinaleOfRevelation.keepsX(ai, sa)) {
+            // Dead-card batch 4, row 75 (part 75B). X, and every draw floor, were decided by
+            // SpecialCardAi.FinaleOfRevelation.consider on the root. targetAI's ConsiderPrimary branch
+            // would re-announce X as the leftover mana clamped to the hand-size room plus one
+            // (setMaxXValue's test payments, then root.setXManaCostPaid) and refuse a hand above
+            // getMaxHandSize() even under no maximum hand size. A declined consult leaves X null, so the
+            // stock path below runs. Draws nothing. Same shape as the Biomantic Mastery gate above.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         if (targetAI(ai, sa, sa.isTrigger() && sa.getHostCard().isInPlay())) {
             // Tataru Taru's tempo floor on the symmetric-draw approval: judged only after targetAI
             // approved and only off resolution, so every stock path and every random draw is unchanged

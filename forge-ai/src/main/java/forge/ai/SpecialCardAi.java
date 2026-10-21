@@ -21908,6 +21908,35 @@ public class SpecialCardAi {
         }
     }
 
+    // Finale of Revelation (dead-card batch 4, row 75, parts 75B and 75A; deck review 2026-10-17, Arcanis F8)
+    // Part 75B lands first; 75A and 75B are kept or reverted together (separate commits for bisection only).
+    // keepsX, which DrawAi.chkDrawback asks before targetAI, keeps an X announced on the root of the owner's own
+    // hand cast (handles) instead of letting targetAI's ConsiderPrimary branch re-size it to the leftover mana
+    // clamped to the hand-size room plus one and refuse a hand above getMaxHandSize(). Part 75A adds the judgment
+    // that announces X (consider, routed from ChangeZoneAllAi.canPlay), which clears X at every consult it judges.
+    // Reads game state only: no random draw, no SpellAbility id, no held or remembered state.
+    public static class FinaleOfRevelation {
+        public static final String NAME = "Finale of Revelation";
+
+        public static boolean handles(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && sa.isSpell() && !(sa instanceof AbilitySub) && sa.getApi() == ApiType.ChangeZoneAll
+                    && !sa.isCastFromPlayEffect() && !sa.isCopied() && !sa.hasParam("WithoutManaCost")
+                    && sa.costHasManaX() && !host.isFaceDown() && host.isInZone(ZoneType.Hand)
+                    && ai.equals(host.getOwner()) && ai.equals(host.getController());
+        }
+
+        // DrawAi.chkDrawback (part 75B): the draw sub of a cast consider approved keeps its X
+        public static boolean keepsX(final Player ai, final SpellAbility sub) {
+            if (!(sub instanceof AbilitySub) || sub.getApi() != ApiType.Draw) {
+                return false;
+            }
+            final SpellAbility root = sub.getRootAbility();
+            return root != sub && root.getXManaCostPaid() != null && handles(ai, root);
+        }
+    }
+
     // Fire Covenant
     // "As an additional cost to cast this spell, pay X life. Fire Covenant deals X damage divided
     // as you choose among any number of target creatures." The stock DamageDealAi path maximizes
