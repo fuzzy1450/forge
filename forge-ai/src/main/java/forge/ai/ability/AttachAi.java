@@ -1638,6 +1638,22 @@ public class AttachAi extends SpellAbilityAi {
 
         Card c = attachGeneralAI(aiPlayer, sa, prefList, mandatory, attachSource, sa.getParam("AILogic"));
 
+        // Swiftfoot Boots (dead-card batch 4, row 71, part 71A; a W1 follow-up, deck review F4,
+        // Arcanis - i LOVE drawing cards 87715b77). The Pump preference above gives the first equip
+        // to the best creature the keywords help, and from_useless_only below then pins the
+        // equipment there while that creature is useful, so a commander cast later never gets its
+        // haste or protection (one move onto a commander, off a useless holder, in 137 logged
+        // seat-games). Once A's chooser found a useful target (c != null),
+        // SpecialCardAi.GreavesAndBoots answers our own commander instead, or null for every stock
+        // line below. RNG-free; it runs after A's chooser, so A's draws are the same.
+        if (c != null && SpecialCardAi.GreavesAndBoots.handles(aiPlayer, sa, attachSource, mandatory)) {
+            final Card cmdr = SpecialCardAi.GreavesAndBoots.commanderTarget(aiPlayer, sa, attachSource, prefList, c);
+            if (cmdr != null) {
+                AiCardMemory.rememberCard(aiPlayer, attachSource, AiCardMemory.MemorySet.ATTACHED_THIS_TURN);
+                return cmdr;
+            }
+        }
+
         AiController aic = ((PlayerControllerAi)aiPlayer.getController()).getAi();
         if (c != null && attachSource.isEquipment()
                 && attachSource.isEquipping()

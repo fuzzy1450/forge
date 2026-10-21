@@ -28858,6 +28858,75 @@ public class SpecialCardAi {
         }
     }
 
+    // Swiftfoot Boots (dead-card batch 4, row 71, part 71A; a W1 follow-up, B4-14: deck review F4,
+    // Arcanis - i LOVE drawing cards 87715b77). Printed "Equipped creature has hexproof and haste.
+    // Equip {1}"; the script matches. commanderTarget answers our own commander for A's approved
+    // equip (a first equip re-aimed, or a move A's from_useless_only refused), or null for A's path:
+    // - only under from_useless_only (every stored seat), so "never" and "always" keep their own rules
+    //   and no profile can trade the equipment back and forth with this one;
+    // - a move never leaves a commander of ours, nor a holder that entered this turn (its haste); a first
+    //   equip keeps A's target when that is our commander already, or when it entered this turn and the
+    //   commander did not (A's haste pick);
+    // - the commander: owned and controlled by us, a creature in A's legal list, getSafeTargets-safe, not
+    //   isUselessCreature (so a stock move off a useless commander is never answered back), without
+    //   shroud or hexproof (isUsefulAttachKeyword's clause), not crewed this turn; the best
+    //   evaluateCreature among partners;
+    // - hexproof does not stop our own spells and abilities from targeting that commander, so the Boots
+    //   need no further floor;
+    // - a move whose Equip has a printed mana value above 0 is payable on HonestMana (G2, held sources
+    //   skipped) or it is A's TargetingFailed, so canPayCost's test payment never runs where A's did not.
+    // ATTACHED_THIS_TURN is not read: A writes it on a consult that found no target, which would refuse
+    // the commander's own cast turn, and this move is one-way, so it cannot go back and forth.
+    // Draws nothing and builds no ability; its only writes are HonestMana's activator stamps, and the
+    // caller's ATTACHED_THIS_TURN on an approval.
+    public static class GreavesAndBoots {
+        public static final String BOOTS = "Swiftfoot Boots";
+
+        public static boolean handles(final Player ai, final SpellAbility sa, final Card eq, final boolean mandatory) {
+            return !mandatory && eq != null && sa.isEquip() && eq.equals(sa.getHostCard())
+                    && BOOTS.equals(eq.getName())
+                    && ai.equals(eq.getController())
+                    && "from_useless_only".equals(AiProfileUtil.getProperty(ai, AiProps.MOVE_EQUIPMENT_TO_BETTER_CREATURES));
+        }
+
+        public static Card commanderTarget(final Player ai, final SpellAbility sa, final Card eq,
+                final CardCollection prefList, final Card stockPick) {
+            final Card holder = eq.getEquipping();
+            final boolean moving = holder != null && ai.equals(holder.getController());
+            if (moving ? (ours(ai, holder) || holder.isFirstTurnControlled()) : ours(ai, stockPick)) {
+                return null;
+            }
+            Card best = null;
+            int bestEval = 0;
+            for (final Card c : ComputerUtil.getSafeTargets(ai, sa, prefList)) {
+                if (!ours(ai, c) || c.equals(holder) || ComputerUtilCard.isUselessCreature(ai, c)
+                        || c.hasKeyword(Keyword.SHROUD) || c.hasKeyword(Keyword.HEXPROOF)
+                        || c.getTimesCrewedThisTurn() > 0) {
+                    continue;
+                }
+                final int e = ComputerUtilCard.evaluateCreature(c);
+                if (best == null || e > bestEval) {
+                    best = c;
+                    bestEval = e;
+                }
+            }
+            if (best == null || (!moving && stockPick.isFirstTurnControlled() && !best.isFirstTurnControlled())) {
+                return null;
+            }
+            if (moving) {
+                final int cost = sa.getPayCosts().getTotalMana().getCMC();
+                if (cost > 0 && HonestMana.of(ai, sa, true).total() < cost) {
+                    return null;
+                }
+            }
+            return best;
+        }
+
+        private static boolean ours(final Player ai, final Card c) {
+            return c != null && c.isCreature() && c.isCommander() && ai.equals(c.getOwner()) && ai.equals(c.getController());
+        }
+    }
+
     // Illusionist's Gambit
     // "Cast this spell only during the declare blockers step on an opponent's turn. Remove all
     // attacking creatures from combat and untap them. After this phase, there is an additional combat
