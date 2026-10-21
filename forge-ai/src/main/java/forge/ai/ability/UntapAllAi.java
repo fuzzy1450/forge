@@ -27,6 +27,15 @@ public class UntapAllAi extends SpellAbilityAi {
             return SpecialCardAi.ReinsOfPower.consider(aiPlayer, sa);
         }
 
+        if (SpecialCardAi.DramaticReversal.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            // Dead-card batch 4, row 33. The no-SubAbility fallthrough below refused every cast at a
+            // draw-free point; DramaticReversal.consider answers instead and draws nothing on any
+            // decline. Free and copied casts (Isochron Scepter, Mnemonic Deluge, cascade) never reach
+            // canPlay and stay on doTriggerNoCost. Every other UntapAll card takes exactly the path it
+            // took before this branch.
+            return SpecialCardAi.DramaticReversal.consider(aiPlayer, sa);
+        }
+
         final AbilitySub abSub = sa.getSubAbility();
         if (abSub != null) {
         	if (ApiType.AddPhase == abSub.getApi() 

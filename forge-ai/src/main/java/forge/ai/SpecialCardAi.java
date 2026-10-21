@@ -17401,6 +17401,336 @@ public class SpecialCardAi {
         }
     }
 
+    // Dramatic Reversal (dead-card batch 4, row 33; The Sting of Ping)
+    // "Untap all nonland permanents you control." ({1}{U} Instant.) The script
+    // (d/dramatic_reversal.txt: SP$ UntapAll | ValidCards$ Permanent.nonLand+YouCtrl) matches the
+    // printed card, with no AI hint and no SubAbility. UntapAllAi overrides canPlay and approves only
+    // an UntapAll root with a SubAbility (the AddPhase "untap and attack again" family), so every
+    // consult of this card fell through to its closing CantPlayAi, drawing nothing: it was never cast
+    // from hand (0 owner casts in 627 held games on 2.0.15+499e03087c5, 160 distinct held libraries).
+    // UntapAllAi's name gate, after Reins of Power's, asks consider instead. The free and copied casts
+    // (Isochron Scepter's copy, Mnemonic Deluge, cascade, a thief's free Play) never reach canPlay:
+    // they keep doTriggerNoCost's stock WillPlay. consider, in order:
+    //  1. the base canPlay's restriction check, which the override skips (ReinsOfPower's mirror);
+    //  2. the window: our own turn, a main phase, an empty stack;
+    //  3. the Scepter hold (row 30's cross-row rule): never while an Isochron Scepter is in our hand,
+    //     so the hand cast does not spend the deck's combo piece (the Scepter's imprint ranks a live
+    //     Reversal first) for one mana. It ships with row 30 and goes with it if row 30 is reverted:
+    //     a Scepter that is never cast would otherwise hold this card for the rest of the game;
+    //  4. the cast-tax veto: never while an opponent's battlefield permanent has a SpellCast trigger
+    //     on its opponents' casts (ValidActivatingPlayer$ Opponent: Rhystic Study's {1}, Mystic
+    //     Remora's {4}, Esper Sentinel), which taxes the one spell whose whole value is a thin net (an
+    //     over-veto is the safe side);
+    //  5. G1 (CommanderCastCeiling.affordable, called unchanged): real mana pays the adjusted {1}{U};
+    //  6. (B) a tapped The One Ring of ours whose next activation passes the Ring's own floor
+    //     (TheOneRing.consider, called unchanged) and Manifold Key's library guard, drain floor and
+    //     draw-punisher scan (private verbatim copies: ManifoldKey keeps them private), its activator
+    //     stamped, checked and restored (B4-4); the stock CountersPutAi activates it again after the
+    //     untap;
+    //  7. (A1) net mana into a play the AI already wants: back, the mana our tapped nonland
+    //     permanents make once untapped (untapMana), exceeds the adjusted cost, and a play this
+    //     priority's canPlaySa approved and canPayCost then refused (AiController's record, an entry
+    //     stamped with this turn and phase whose host is still in its zone) is paid by the untap: its
+    //     adjusted cost within now - cost + back, and every coloured shard within now's colour - our
+    //     shard + back's colour. Never toward an X or Announce cost, a cost feature whose adjustment
+    //     asks a controller (Convoke, Improvise, Delve, Emerge, Offering, Assist, Waterbend: G1's
+    //     caveat), a refusal mana cannot answer (canPayAdditionalCosts: a sacrifice, discard or life),
+    //     or a second Reversal. saEvaluator sorts the highest mana value first, so every play dearer
+    //     than this one has been judged when it is consulted; a cheaper one is not seen (safe).
+    // untapMana is HonestMana's per-source worth (G2) for a TAPPED source: canPlay(), which fails on
+    // the tap cost while it is tapped, is replaced by the restriction, CantBeActivated and condition
+    // checks it makes besides the cost. Only {T}-only, reusable, mana-free costs with no spending
+    // restriction count (never a Treasure, Lotus Petal or Lion's Eye Diamond), no summoning-sick
+    // creature, and never a ManaReflected or Special production: Mox Amber with our legend in the
+    // command zone and Chrome Mox with no or a colourless imprint make nothing, and back is the gain
+    // the floor trusts. Under-counts, the safe side: Treasures, mana multipliers, Vivi's extra mana,
+    // restricted mana. Over-counts: a multicolour source counts toward each colour it can make (G2's
+    // residual), and the colour test does not charge our generic {1} to a colour (the skeptic's F4,
+    // left to the floor-miss count).
+    // RNG: a gate on a path A refused at a draw-free point (UntapAllAi's fallthrough). Every check
+    // reads state: the restrictions, the stack, the hand and battlefield scans, trigger params, G1,
+    // G2, test-mode calculateManaCost (Cost copies, no SpellAbility id), canPayAdditionalCosts, the
+    // record, the Ring floor. Its only writes are setActivatingPlayer on mana abilities (as G2's) and
+    // the Ring's stamp, restored. The first draw is canPayCost's test payment after a WillPlay.
+    public static class DramaticReversal {
+        public static final String NAME = "Dramatic Reversal";
+        static final String SCEPTER = "Isochron Scepter"; // row 30's card, by paper name
+        static final int LIBRARY_MARGIN = 4;     // ManifoldKey's: DrawAi's sub declines at numCards >= library - 3
+        static final int RING_DRAIN_UPKEEPS = 3; // ManifoldKey's: the raised drain, three upkeeps ahead
+        private static final forge.card.mana.ManaCostShard[] SHARDS = {
+                forge.card.mana.ManaCostShard.WHITE, forge.card.mana.ManaCostShard.BLUE,
+                forge.card.mana.ManaCostShard.BLACK, forge.card.mana.ManaCostShard.RED,
+                forge.card.mana.ManaCostShard.GREEN };
+        // cost features whose adjustment asks a controller (G1's caveat): never a candidate
+        private static final Keyword[] ASKS = { Keyword.CONVOKE, Keyword.IMPROVISE, Keyword.DELVE,
+                Keyword.EMERGE, Keyword.OFFERING, Keyword.ASSIST };
+
+        // One entry of AiController's record: a play canPlaySa approved and canPayCost then refused,
+        // with its host's zone and the turn and phase it was refused in. The stamp bounds an entry by
+        // turn and phase, not by pass: a direct canPlaySa scanner in the same phase (TapAi's shockland
+        // decision, ManaAi's ritual look-ahead) can read the previous pass's entries; the floor
+        // re-prices every entry against the current mana, so a stale one only costs a look.
+        public record Refused(SpellAbility sa, ZoneType zone, int turn, PhaseType phase) {
+            public static Refused of(final SpellAbility sa, final Game game) {
+                final Card h = sa.getHostCard();
+                final forge.game.zone.Zone z = h == null ? null : game.getZoneOf(h);
+                final PhaseHandler ph = game.getPhaseHandler();
+                return new Refused(sa, z == null ? null : z.getZoneType(), ph.getTurn(), ph.getPhase());
+            }
+
+            // refused in this turn and phase, its host still in the zone it was refused in
+            boolean current(final Game game) {
+                final Card h = sa.getHostCard();
+                final PhaseHandler ph = game.getPhaseHandler();
+                if (h == null || zone == null || turn != ph.getTurn() || phase != ph.getPhase()) {
+                    return false;
+                }
+                final forge.game.zone.Zone z = game.getZoneOf(h);
+                return z != null && z.getZoneType() == zone && z.contains(h);
+            }
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            // Routing through UntapAllAi.canPlay's name gate bypasses the base class's restriction
+            // check, so mirror it here (ReinsOfPower's).
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(host, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.isPlayerTurn(ai) || ph.getPhase() == null || !ph.getPhase().isMain() || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // O(1)
+            }
+            if (ai.getCardsIn(ZoneType.Hand).anyMatch(c -> SCEPTER.equals(c.getName()))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // the Scepter hold (row 30)
+            }
+            if (castTaxed(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // the cast-tax veto
+            }
+            if (!CommanderCastCeiling.affordable(ai, sa)) { // G1, called unchanged
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // what the untap gives back: our tapped permanents the spell names (ValidCards, read with
+            // us as "You")
+            final CardCollection tapped = CardLists.getValidCards(
+                    CardLists.filter(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.TAPPED),
+                    sa.getParamOrDefault("ValidCards", ""), ai, host, sa);
+            int back = 0;
+            final int[] backColours = new int[MagicColor.WUBRG.length];
+            for (final Card c : tapped) {
+                final SpellAbility ring = ringAbility(c);
+                if (ring != null && ringUsable(ai, c, ring) && ringWorthAgain(ai, ring)) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay); // (B) The One Ring again
+                }
+                back += untapMana(ai, c, backColours);
+            }
+            final ManaCostBeingPaid own = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final int cost = own.getConvertedManaCost();
+            if (back <= cost) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // nets nothing
+            }
+            if (!(ai.getController() instanceof PlayerControllerAi pc)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // no record to read
+            }
+            // (A1) something this priority's canPlaySa approved and canPayCost refused, which the untap
+            // pays for
+            outer:
+            for (final Refused r : new ArrayList<>(pc.getAi().getApprovedUnaffordable())) {
+                final SpellAbility x = r.sa();
+                final Card xh = x.getHostCard();
+                if (x == sa || xh == null || xh.equals(host) || !r.current(game) || x.isManaAbility()
+                        || x.getPayCosts() == null || x.getPayCosts().getTotalMana().countX() > 0
+                        || x.hasParam("Announce") || x.getPayCosts().getMaxWaterbend() != null
+                        || NAME.equals(ComputerUtilAbility.getAbilitySourceName(x))) {
+                    continue; // X sizing is setMaxXValue's job; Announce and Waterbend ask (G1's caveat)
+                }
+                for (final Keyword kw : ASKS) {
+                    if (xh.hasKeyword(kw)) {
+                        continue outer; // a cost feature whose adjustment asks a controller (G1's caveat)
+                    }
+                }
+                if (!forge.game.cost.CostPayment.canPayAdditionalCosts(x.getPayCosts(), x, false)) {
+                    continue; // refused for a sacrifice, discard or life it cannot pay: mana will not help
+                }
+                final ManaCostBeingPaid need = ComputerUtilMana.calculateManaCost(x.getPayCosts(), x, ai, true, 0, false);
+                final int needCmc = need.getConvertedManaCost();
+                final HonestMana now = HonestMana.of(ai, x, true);
+                if (needCmc <= 0 || now.total() - cost + back < needCmc) {
+                    continue;
+                }
+                for (int i = 0; i < SHARDS.length; i++) {
+                    final int left = now.colour(MagicColor.WUBRG[i]) - own.getUnpaidShards(SHARDS[i]) + backColours[i];
+                    if (left < need.getUnpaidShards(SHARDS[i])) {
+                        continue outer;
+                    }
+                }
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // An opponent's battlefield trigger on its opponents' casts (Mode$ SpellCast with
+        // ValidActivatingPlayer$ Opponent or Player.Opponent): Rhystic Study, Mystic Remora, Esper
+        // Sentinel. Trigger params, read only.
+        static boolean castTaxed(final Player ai) {
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (c.getController() == null || !c.getController().isOpponentOf(ai)) {
+                    continue;
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.SpellCast
+                            && t.getParamOrDefault("ValidActivatingPlayer", "").contains("Opp")) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // The best mana one {T} activation of a TAPPED source makes once it is untapped: HonestMana's
+        // per-source worth and colours (G2, a private copy), with canPlay() (which fails on the tap
+        // cost while tapped) replaced by the restriction, static and condition checks it makes
+        // besides the cost. Tap-only, reusable costs only (no sacrifice, life or counters: never a
+        // Treasure, Lotus Petal or Lion's Eye Diamond, which are gone anyway), no mana in the cost, no
+        // spending restriction, no summoning-sick creature, and no ManaReflected or Special production
+        // (it may make nothing: this is the gain the floor trusts).
+        static int untapMana(final Player ai, final Card src, final int[] colours) {
+            if (src.isCreature() && src.isSick()) {
+                return 0;
+            }
+            int best = 0;
+            final int[] bestColours = new int[colours.length];
+            for (final SpellAbility ma : src.getManaAbilities()) {
+                final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                final Cost pay = ma.getPayCosts();
+                if (mp == null || pay == null || !pay.hasTapCost() || pay.hasManaCost() || !pay.isReusuableResource()
+                        || !mp.getManaRestrictions().isEmpty()
+                        || ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana()) {
+                    continue;
+                }
+                ma.setActivatingPlayer(ai);
+                if (!ma.getRestrictions().canPlay(src, ma) || !ma.checkRestrictions(src, ai) || !ma.metConditions()) {
+                    continue;
+                }
+                final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                if (amount <= 0) {
+                    continue;
+                }
+                final String produced = mp.getOrigProduced().trim();
+                final boolean choice = produced.isEmpty() || mp.isComboMana() || mp.isAnyMana()
+                        || produced.contains("Chosen");
+                best = Math.max(best, choice ? amount : amount * produced.split(" ").length);
+                final String letters;
+                if (mp.isComboMana()) {
+                    letters = mp.getComboColors(ma);
+                } else if (mp.isAnyMana()) {
+                    letters = "W U B R G";
+                } else if (produced.contains("Chosen")) {
+                    letters = produced.replace("Chosen", mp.getChosenColor(ma));
+                } else {
+                    letters = produced;
+                }
+                final int[] symbols = new int[colours.length];
+                for (final String t : letters.split(" ")) {
+                    final int i = t.length() == 1 ? index(MagicColor.fromName(t.charAt(0))) : -1;
+                    if (i >= 0) {
+                        symbols[i]++;
+                    }
+                }
+                final int each = produced.contains("AnyDifferent") ? Math.min(1, amount) : amount;
+                for (int i = 0; i < colours.length; i++) {
+                    final int made = choice ? (symbols[i] > 0 ? each : 0) : symbols[i] * amount;
+                    bestColours[i] = Math.max(bestColours[i], made);
+                }
+            }
+            for (int i = 0; i < colours.length; i++) {
+                colours[i] += bestColours[i];
+            }
+            return best;
+        }
+
+        // ManifoldKey.ringAbility, private there: the tap ability The One Ring's own AI judges
+        // (AILogic$ TheOneRing, CountersPutAi)
+        static SpellAbility ringAbility(final Card c) {
+            for (final SpellAbility ab : c.getSpellAbilities()) {
+                if (ab.isActivatedAbility() && ab.getApi() == ApiType.PutCounter
+                        && "TheOneRing".equals(ab.getParam("AILogic"))) {
+                    return ab;
+                }
+            }
+            return null;
+        }
+
+        // B4-4: the activator stamped, every check canPlay() makes but the tap cost plus
+        // CantBeActivated (checkRestrictions), the stamp restored
+        static boolean ringUsable(final Player ai, final Card c, final SpellAbility ring) {
+            final Player before = ring.getActivatingPlayer();
+            ring.setActivatingPlayer(ai);
+            try {
+                return ring.getRestrictions().canPlay(c, ring) && ring.checkRestrictions(c, ai);
+            } finally {
+                ring.setActivatingPlayer(before);
+            }
+        }
+
+        // ManifoldKey.ringWorthAgain, private there, verbatim
+        static boolean ringWorthAgain(final Player ai, final SpellAbility ring) {
+            final int draws = ring.getHostCard().getCounters(CounterType.getType("BURDEN")) + 1;
+            if (!ai.canDraw() || ai.getCardsIn(ZoneType.Library).size() < draws + LIBRARY_MARGIN) {
+                return false; // never into a deck-out; DrawAi's sub would refuse anyway
+            }
+            if (!TheOneRing.consider(ai, ring).willingToPlay()) {
+                return false; // the Ring's own life and hand-size floor
+            }
+            if (ai.canLoseLife() && !ai.cantLoseForZeroOrLessLife()) {
+                // the extra burden counter stays: three upkeeps at n+1, n+2, n+3 while the stock Ring
+                // keeps adding one, and the unblocked attack ignores our blockers, so it only ever
+                // holds the untap back
+                final int drain = RING_DRAIN_UPKEEPS * draws + RING_DRAIN_UPKEEPS * (RING_DRAIN_UPKEEPS - 1) / 2;
+                int unblocked = 0;
+                for (final Player opp : ai.getOpponents()) {
+                    unblocked += ComputerUtilCombat.sumDamageIfUnblocked(CardLists.filter(opp.getCreaturesInPlay(),
+                            c -> ComputerUtilCombat.canAttackNextTurn(c, ai)), ai);
+                }
+                if (ai.getLife() - drain - unblocked <= AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD)) {
+                    return false;
+                }
+            }
+            return !drawPunished(ai);
+        }
+
+        // ManifoldKey.drawPunished, private there, verbatim: an opponent's permanent that triggers on
+        // our draws (Orcish Bowmasters) or replaces them (Notion Thief)
+        static boolean drawPunished(final Player ai) {
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (ai.equals(c.getController())) {
+                    continue;
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Drawn) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if (re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static int index(final byte colour) {
+            for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                if (MagicColor.WUBRG[i] == colour) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+    }
+
     // Druid of Purification (dead-card batch 3, row 51)
     // "When Druid of Purification enters, starting with you, each player may choose an artifact or
     // enchantment you don't control. Destroy each permanent chosen this way." ({3}{G} 2/3.) The ETB

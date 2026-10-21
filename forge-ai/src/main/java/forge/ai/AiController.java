@@ -98,6 +98,14 @@ public class AiController {
     private int lastAttackAggression;
     private boolean useLivingEnd;
     private List<SpellAbility> skipped;
+    // Dead-card batch 4, row 33 (Dramatic Reversal): what canPlaySa approved and canPayCost then
+    // refused, each entry with its host's zone and the turn and phase it was refused in. Cleared at
+    // the start of every chooseSpellAbilityToPlayFromList and added to only after canPayCost drew, so
+    // no draw of A moves. The stamp bounds an entry by turn and phase, not by pass: a direct canPlaySa
+    // scanner in the same phase can read the previous pass's entries. An instance field: a static
+    // would be shared by every concurrent game of a serve JVM. Read only by
+    // SpecialCardAi.DramaticReversal.
+    private final List<SpecialCardAi.DramaticReversal.Refused> approvedUnaffordable = new ArrayList<>();
 
     public AiController(final Player computerPlayer, final Game game0) {
         player = computerPlayer;
@@ -134,6 +142,11 @@ public class AiController {
 
     public AiCardMemory getCardMemory() {
         return memory;
+    }
+
+    // Dead-card batch 4, row 33: the record above, read only by SpecialCardAi.DramaticReversal
+    public List<SpecialCardAi.DramaticReversal.Refused> getApprovedUnaffordable() {
+        return approvedUnaffordable;
     }
 
     public Combat getPredictedCombat() {
@@ -967,6 +980,9 @@ public class AiController {
         }
 
         if (!ComputerUtilCost.canPayCost(sa, player, sa.isTrigger())) {
+            // Dead-card batch 4, row 33's record: the handler wanted it and the mana refused it, written
+            // after canPayCost drew. Passive: nothing but SpecialCardAi.DramaticReversal reads it.
+            approvedUnaffordable.add(SpecialCardAi.DramaticReversal.Refused.of(sa, game));
             // for dependent costs with X, e.g. Repeal, which require a valid target to be specified before a decision can be made
             // on whether the cost can be paid, this can only be checked late after canPlaySa has been run (or the AI will misplay)
             return AiPlayDecision.CantAfford;
@@ -1905,6 +1921,7 @@ public class AiController {
         if (all == null || all.isEmpty())
             return null;
 
+        approvedUnaffordable.clear(); // Dead-card batch 4, row 33: a fresh pass of the record
         try {
             all.sort(ComputerUtilAbility.saEvaluator); // put best spells first
             ComputerUtilAbility.sortCreatureSpells(all);
