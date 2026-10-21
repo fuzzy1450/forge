@@ -56173,24 +56173,47 @@ public class SpecialCardAi {
             return true;
         }
 
-        // The bodies successive payments of this activation tap, in the order they tap them, at most limit, cut at
-        // the first that is not free (isFreeBody): the stock chooser's own order (ComputerUtil.chooseTapType, called
-        // unchanged: our untapped creatures the cost may tap, the lowest power first, ties in battlefield order), so
-        // the body priced is the body the payment taps. Empty when the stock pick is not free (a live mana dork, or
-        // Wall of Roots under threat): the activation declines. RNG-free.
+        // The bodies successive payments of this activation tap, in the order they tap them, at most limit. Part 41D:
+        // the payment's own choice (fodder, AiCostDecision.visit(CostTapType)'s early return for this activation),
+        // every free body the cost may tap in ranked's order, so the body priced is the body tapped and a free body
+        // beside a live mana dork is found. RNG-free.
         static List<Card> payerBodies(final Player ai, final SpellAbility sa, final CostTapType tapCost,
                 final boolean threatened, final int limit) {
-            final List<Card> out = new ArrayList<>();
-            final int n = Math.min(limit, tappable(ai, sa, tapCost).size());
-            final CardCollection order = n <= 0 ? null : ComputerUtil.chooseTapType(ai, tapCost.getType(),
-                    sa.getHostCard(), !tapCost.canTapSource, n, new CardCollection(), sa);
-            if (order != null) {
-                for (final Card c : order) {
-                    if (!isFreeBody(ai, c, threatened)) {
-                        break;
-                    }
-                    out.add(c);
+            final List<Card> out = ranked(ai, sa, tapCost, new CardCollection(), threatened);
+            return out.size() > limit ? new ArrayList<>(out.subList(0, limit)) : out;
+        }
+
+        // Part 41D: the body AiCostDecision.visit(CostTapType) taps for our own activation (isOwnActivation), the
+        // one considerUntap priced: the first of ranked, the threat read off the board here by the planner's own
+        // scan, so the decision and the payment compute the same card (Life's Legacy's sacrifice choice, batch 1,
+        // is the precedent); null when no body is free, and the payment falls through to the stock chooser. Pure
+        // and RNG-free.
+        public static Card fodder(final Player ai, final SpellAbility sa, final CardCollectionView exclude) {
+            final CostTapType tapCost = sa.getPayCosts() == null ? null
+                    : sa.getPayCosts().getCostPartByType(CostTapType.class);
+            if (tapCost == null) {
+                return null;
+            }
+            final List<Card> out = ranked(ai, sa, tapCost, exclude, incoming(ai)[1] > 0);
+            return out.isEmpty() ? null : out.get(0);
+        }
+
+        // Part 41D's order: the free bodies (isFreeBody) the cost may tap (tappable), exclude out; summoning-sick
+        // ones first (their tap costs neither mana nor an attack), then the lowest ComputerUtilCard.evaluateCreature,
+        // then battlefield order (a stable sort). Pure and RNG-free.
+        static List<Card> ranked(final Player ai, final SpellAbility sa, final CostTapType tapCost,
+                final CardCollectionView exclude, final boolean threatened) {
+            final List<Pair<Card, Integer>> scored = new ArrayList<>();
+            for (final Card c : tappable(ai, sa, tapCost)) {
+                if (!exclude.contains(c) && isFreeBody(ai, c, threatened)) {
+                    scored.add(Pair.of(c, ComputerUtilCard.evaluateCreature(c)));
                 }
+            }
+            scored.sort((a, b) -> a.getLeft().isSick() != b.getLeft().isSick() ? (a.getLeft().isSick() ? -1 : 1)
+                    : Integer.compare(a.getRight(), b.getRight()));
+            final List<Card> out = new ArrayList<>();
+            for (final Pair<Card, Integer> p : scored) {
+                out.add(p.getLeft());
             }
             return out;
         }

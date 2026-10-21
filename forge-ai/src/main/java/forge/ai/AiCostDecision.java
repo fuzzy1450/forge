@@ -470,6 +470,20 @@ public class AiCostDecision extends CostDecisionMakerBase {
         CardCollection exclude = new CardCollection();
         exclude.addAll(tapped);
 
+        // Dead-card batch 4, row 41, part 41D: our own Earthcraft activation (SpecialCardAi.Earthcraft
+        // .isOwnActivation: the paper name, owner and controller) taps the body its planner priced,
+        // Earthcraft.fodder: a free body (no live {T} mana, no Main-1 attack lost, no Defender while an
+        // opposing creature can attack next turn), summoning-sick first, then the lowest evaluateCreature.
+        // A pure function of the board, so the decision and the payment agree; null falls through to the
+        // stock chooser below. Inert for every other tap-type cost. Draws nothing.
+        if (SpecialCardAi.Earthcraft.isOwnActivation(player, ability)) {
+            final Card body = SpecialCardAi.Earthcraft.fodder(player, ability, exclude);
+            if (body != null) {
+                tapped.add(body);
+                return PaymentDecision.card(body);
+            }
+        }
+
         if (type.contains("sharesCreatureTypeWith")) {
             return null;
         }
