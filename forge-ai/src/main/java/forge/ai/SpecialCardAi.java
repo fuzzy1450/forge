@@ -56029,7 +56029,14 @@ public class SpecialCardAi {
             }
             // 2. our targetable tapped basics whose {T} makes mana, one per distinct production: one battlefield pass
             final Map<String, Pair<Card, SpellAbility>> tapped = basics(ai, sa, true);
-            if (tapped.isEmpty()) {
+            // Part 41C (separable), the pre-tap chain, in our Main 2 only (skeptic F8: a pool empties with the phase,
+            // and stock PoolExtraMana pools in Main 2 only): our untapped targetable basics too, to be tapped for
+            // mana into the pool and then untapped (the last step below), up to one untap per free body. Each step
+            // re-plans from scratch at the next consult (now rises by one, the bodies fall by one); the chain ends at
+            // the spell's cast or at a refusal.
+            final boolean chain = ph.is(PhaseType.MAIN2, ai);
+            final Map<String, Pair<Card, SpellAbility>> poolable = chain ? basics(ai, sa, false) : new LinkedHashMap<>();
+            if (tapped.isEmpty() && poolable.isEmpty()) {
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
             }
             // 3. any body the cost can tap at all, unranked
@@ -56040,7 +56047,8 @@ public class SpecialCardAi {
             // 4. the mana we have now (G2 less sacrificeBound, 41A's count) and the hand and command spells the
             // untaps bring into reach: more than now (castable already: the RNG-free proxy for canPayCost) and no
             // more than now + reach. A basic's {T} makes one mana. Vizier's loop, verbatim but for the name.
-            final int reach = 1; // one untap of one basic
+            // one untap of one basic; 41C: one per body that can pay (an upper bound; payerBodies cuts it below)
+            final int reach = chain ? tappable.size() : 1;
             final int now = HonestMana.of(ai, sa, true).total() - sacrificeBound(ai, sa)[0];
             final List<SpellAbility> band = new ArrayList<>();
             final List<ManaCostBeingPaid> rests = new ArrayList<>();
@@ -56084,6 +56092,7 @@ public class SpecialCardAi {
             // production applied once per mana the spell is short to a copy of its cost, the rest payable by what is
             // untapped now; then at most one canPayCost and one canPlaySa per spell
             final List<Pair<Card, SpellAbility>> sources = new ArrayList<>(tapped.values());
+            sources.addAll(poolable.values()); // 41C: after every tapped basic, which needs no pool
             final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
             for (int i = 0; i < band.size(); i++) {
                 final SpellAbility testSa = band.get(i);
@@ -56102,6 +56111,13 @@ public class SpecialCardAi {
                     }
                     if (!ComputerUtilCost.canPayCost(testSa, ai, false)
                             && aic.canPlaySa(testSa) == AiPlayDecision.WillPlay) {
+                        // 41C: an untapped basic is tapped for its mana into the pool first, as stock PoolExtraMana
+                        // does (UntapAi.doPoolExtraManaLogic: ComputerUtil.playNoStack). The LAST step, after every
+                        // test passed, and mana-neutral (the land's mana moves into the pool, which HonestMana counts
+                        // at the next consult); a later failure leaves the pool to the next spell of this phase.
+                        if (!p.getLeft().isTapped() && !ComputerUtil.playNoStack(ai, p.getRight(), game, false)) {
+                            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // it could not tap: no pool
+                        }
                         sa.getTargets().add(p.getLeft()); // we want this spell and can only afford it with the untap
                         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
                     }
