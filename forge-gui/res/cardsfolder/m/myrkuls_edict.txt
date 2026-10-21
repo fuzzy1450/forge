@@ -1,7 +1,7 @@
 Name:Myrkul's Edict
 ManaCost:1 B
 Types:Sorcery
-A:SP$ RollDice | Sides$ 20 | ResultSubAbilities$ 1-9:OneOppSac,10-19:EachOppSac,20:SacTopPower | SpellDescription$ Roll a d20.
+A:SP$ RollDice | Sides$ 20 | ResultSubAbilities$ 1-9:OneOppSac,10-19:EachOppSac,20:SacTopPower | AILogic$ MyrkulsEdict | SpellDescription$ Roll a d20.
 SVar:OneOppSac:DB$ ChoosePlayer | Defined$ You | Choices$ Player.Opponent | SubAbility$ DBSac | StackDescription$ SpellDescription | SpellDescription$ 1—9 VERT Choose an opponent. That player sacrifices a creature.
 SVar:DBSac:DB$ Sacrifice | Defined$ ChosenPlayer | SacValid$ Creature | SubAbility$ DBCleanupChosen
 SVar:EachOppSac:DB$ Sacrifice | Defined$ Player.Opponent | SacValid$ Creature | StackDescription$ SpellDescription | SpellDescription$ 10—19 VERT Each opponent sacrifices a creature.

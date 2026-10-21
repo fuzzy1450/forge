@@ -39664,6 +39664,172 @@ public class SpecialCardAi {
         }
     }
 
+    // Myrkul's Edict (dead-card batch 4, row 54; braids-arisen-nightmare, braids-null-spike, Mardu Dice)
+    // "Roll a d20. 1-9 | Choose an opponent. That player sacrifices a creature. 10-19 | Each opponent
+    // sacrifices a creature. 20 | Each opponent sacrifices a creature with the greatest power among
+    // creatures that player controls." ({1}{B} sorcery.) Never cast by its owner from hand (0 owner casts
+    // in 1,518 held rows, 69 distinct held libraries, under 2.0.15+499e03087c5; its 3 owner casts were
+    // Hidden Necropolis discovers): no hint, but RollDiceAi's mana-cost default accepts only at the
+    // opponent's end step, which sorcery timing excludes (rows 80, 96 and 34's gate). Routed from
+    // RollDiceAi.checkApiLogic on AILogic MyrkulsEdict, myrkuls_edict.txt alone, only where that default
+    // refuses.
+    //
+    // Value floor: in 19 rolls of 20 each victim is the creature its controller's AI sacrifices
+    // (EdictForAll.picks, ComputerUtil.chooseCardToSacrifice's order: SacMe 6..1, then the worst
+    // evaluateCreature); the 20 takes the greatest power and is not priced. Cast only when that victim is
+    // an opposing-owned card worth a card by its printed shape (EdictForAll.worthACard: a nontoken of mana
+    // value 2 or more, or power 3 or more; never SacMe or an active undying/persist returner), for the
+    // opponent the stock 1-9 chooser takes (ChoosePlayerAi's default, the first of Choices) and for at
+    // least one opponent of the 10-19 branch -- one and the same player in a 1v1 -- and nothing opposing
+    // is paid for that sacrifice or death (EdictForAll's step-7 rule, over these victims).
+    //
+    // RNG: the stock default refused without a draw; every decline here is draw-free (the window, the
+    // shape, calculateManaCost in test mode, HonestMana, getDefinedPlayers, CardLists filters,
+    // evaluateCreature, trigger reads). Only a WillPlay goes on to willPayCosts, saSideEffects and
+    // canPayCost's test payment. Holds nothing, writes no SVar, remembers nothing, sets no target. The
+    // value map is looked up, never iterated.
+    public static class MyrkulsEdict {
+        public static final String NAME = "Myrkul's Edict";
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            // 1. window, the cheapest test first: our own main phase, an empty stack
+            if (!game.getStack().isEmpty() || !ph.isPlayerTurn(ai) || ph.getPhase() == null || !ph.getPhase().isMain()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            // 2. shape: the three results RollDiceEffect.resolveSub reads, else script drift
+            final SpellAbility one = sa.getAdditionalAbility("1-9");
+            final SpellAbility each = sa.getAdditionalAbility("10-19");
+            final SpellAbility top = sa.getAdditionalAbility("20");
+            final SpellAbility oneSac = one == null ? null : one.getSubAbility();
+            if (sa.getApi() != ApiType.RollDice || !"20".equals(sa.getParam("Sides")) || sa.hasParam("Amount")
+                    || sa.hasParam("Modifier") || one == null || each == null || top == null
+                    || one.getApi() != ApiType.ChoosePlayer || !"Player.Opponent".equals(one.getParam("Choices"))
+                    || oneSac == null || oneSac.getApi() != ApiType.Sacrifice
+                    || !"ChosenPlayer".equals(oneSac.getParam("Defined")) || !"Creature".equals(oneSac.getParam("SacValid"))
+                    || each.getApi() != ApiType.Sacrifice || !"Player.Opponent".equals(each.getParam("Defined"))
+                    || !"Creature".equals(each.getParam("SacValid")) || each.hasParam("Amount")
+                    || each.hasParam("Optional") || top.getApi() != ApiType.RepeatEach) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 3. mana, RNG-free (B3-5): G2 against the engine's adjusted cost, in total and in black
+            final ManaCostBeingPaid need = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < need.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLACK) < need.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            // 4. cheap bound before any evaluateCreature: an opposing creature worth a card by its shape
+            boolean anyShape = false;
+            for (final Card c : ai.getOpponents().getCreaturesInPlay()) {
+                if (EdictForAll.worthACard(c)) {
+                    anyShape = true;
+                    break;
+                }
+            }
+            if (!anyShape) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 5. the victims: the 1-9 chooser's opponent (ChoosePlayerAi.chooseSinglePlayer's default) and
+            //    each opponent's own pick
+            Player chosen = null;
+            for (final Player p : AbilityUtils.getDefinedPlayers(sa.getHostCard(), one.getParam("Choices"), one)) {
+                if (!p.equals(ai)) {
+                    chosen = p;
+                    break;
+                }
+            }
+            final Map<Card, Integer> value = new HashMap<>();
+            final CardCollection victims = new CardCollection();
+            Card chosenVictim = null;
+            for (final Player opp : ai.getOpponents()) {
+                final List<Card> pick = EdictForAll.picks(opp, each, 1, value);
+                if (!pick.isEmpty()) {
+                    victims.add(pick.get(0));
+                }
+                if (opp.equals(chosen)) {
+                    final List<Card> mine = EdictForAll.picks(opp, oneSac, 1, value);
+                    chosenVictim = mine.isEmpty() ? null : mine.get(0);
+                }
+            }
+            if (chosenVictim != null && !victims.contains(chosenVictim)) {
+                victims.add(chosenVictim);
+            }
+            // 6. the floor on the shape alone, before any opposing trigger is read (EdictForAll's order:
+            //    the veto only ever takes credit away, so a board that fails here fails with it too, and
+            //    Trigger.ensureAbility's lazy id allocation is reached only where B would act)
+            final CardCollection noValue = new CardCollection();
+            if (!credited(ai, chosenVictim, noValue)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            boolean anyCredited = false;
+            for (final Card v : victims) {
+                if (credited(ai, v, noValue)) {
+                    anyCredited = true;
+                    break;
+                }
+            }
+            if (!anyCredited) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 7. (part 1B) the opposing payoff veto over every victim
+            if (paysThem(ai, victims, noValue)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            // 8. the floor again, less the victims whose own harmless death trigger leaves value behind
+            if (!credited(ai, chosenVictim, noValue)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            for (final Card v : victims) {
+                if (credited(ai, v, noValue)) {
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                }
+            }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+        }
+
+        // an opposing card, worth a card by its printed shape, and no harmless returner of its own
+        private static boolean credited(final Player ai, final Card v, final CardCollection noValue) {
+            return v != null && !ai.equals(v.getOwner()) && !noValue.contains(v) && EdictForAll.worthACard(v);
+        }
+
+        // EdictForAll.consider's step 7, a private copy over these victims (it is inline there): an opposing
+        // Sacrificed / SacrificedOnce trigger for the victim's controller vetoes; an opposing death trigger
+        // (WaveOfReckoning.isDeathTrigger) on a victim vetoes when another permanent holds it or it harms us,
+        // and otherwise only takes that victim's credit away (its own harmless "when this dies")
+        private static boolean paysThem(final Player ai, final CardCollection dying, final CardCollection noValue) {
+            for (final Card h : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : h.getTriggers()) {
+                    final boolean sacTrig = t.getMode() == TriggerType.Sacrificed || t.getMode() == TriggerType.SacrificedOnce;
+                    final boolean deathTrig = WaveOfReckoning.isDeathTrigger(t);
+                    if (!sacTrig && !deathTrig) {
+                        continue;
+                    }
+                    for (final Card d : dying) {
+                        if (!t.matchesValidParam("ValidCard", d)) {
+                            continue;
+                        }
+                        if (sacTrig) {
+                            if (t.matchesValidParam("ValidPlayer", d.getController())) {
+                                return true;
+                            }
+                            continue;
+                        }
+                        if (!t.matchesValidParam("ValidCards", d)) {
+                            continue;
+                        }
+                        if (!h.equals(d) || WaveOfReckoning.deathTriggerHarmsUs(t)) {
+                            return true;
+                        }
+                        noValue.add(d);
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Mystic Confluence (dead-card batch 2, row 18)
     // "Choose three. You may choose the same mode more than once. - Counter target spell unless its
     // controller pays {3}. - Return target creature to its owner's hand. - Draw a card." ({3}{U}{U}

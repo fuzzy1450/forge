@@ -62,6 +62,16 @@ public class RollDiceAi extends SpellAbilityAi {
 
         if (cost != null && (sa.getPayCosts().hasManaCost() || sa.getPayCosts().hasTapCost())) {
             boolean result = ph.getNextTurn() == aiPlayer && ph.is(PhaseType.END_OF_TURN);
+            // Dead-card batch 4, row 54: myrkuls_edict.txt is the only script with this logic. This default
+            // refuses the sorcery at every own-turn consult (it accepts only at the opponent's end step).
+            // Unlike rows 80, 96 and 34 the router sits inside the default and runs only on its refusal, so
+            // every consult the stock approves keeps the stock answer verbatim: a no-cost copy (ManaAi's
+            // ritual look-ahead, with the carriers' Dark Ritual), a free alternative cost (the WillPlay
+            // below), the end step before our turn under a flash grant (result). RollDiceAi draws nothing and
+            // consider() draws nothing on a decline; Play-effect casts (doTriggerNoCost) never get here.
+            if (!result && "MyrkulsEdict".equals(logic)) {
+                return SpecialCardAi.MyrkulsEdict.consider(aiPlayer, sa);
+            }
             return result ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
