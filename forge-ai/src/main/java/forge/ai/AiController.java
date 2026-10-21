@@ -988,16 +988,6 @@ public class AiController {
             return AiPlayDecision.CantPlayAi;
         }
 
-        // Dead-card batch 4, row 68, part 68A (Neera, Wild Mage): our own instant or sorcery cast in our upkeep or
-        // draw step while our Neera's once-each-turn trigger is unspent would spend that trigger on a spell 1A declines
-        // to bottom (the turn's reveal is forfeited before any main phase). Held for our Main 1 when a movable,
-        // non-RemoveDeck feeder the stock AI approves there is in hand and real mana pays both now; W1's 1B then puts
-        // the feeder first. canPlaySa and canPayCost above ran A's path, draws included, so this changes only the cast
-        // A was about to make (B4-3). O(1) outside our upkeep and draw step. Draws nothing. See the class comment.
-        if (SpecialCardAi.NeeraOwnTurn.holdForFeeder(player, sa)) {
-            return AiPlayDecision.AnotherTime;
-        }
-
         // Dead-card batch 4, row 77, part 77C: our own cast of an instant or sorcery (hand, flashback, Aminatou's
         // Augury's exile, Melek's library top) is refused when it takes our library under OwnLibraryFloor's margin.
         // canPlaySa and canPayCost above ran A's path, draws included, so this veto changes only the cast A was about
