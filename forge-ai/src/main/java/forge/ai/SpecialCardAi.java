@@ -37594,12 +37594,28 @@ public class SpecialCardAi {
     // an affordable stock window with a non-empty pool; where it then finds no pick, the stream has moved with no
     // visible cast (the named residual). Guarded against re-entry; a throw anywhere in the pool build or the
     // prediction is no pick (never an exit-4 halt), and a throw from one candidate's handler declines that candidate.
+    // Retry 1 (63A; tools/deadcards/b4/mnemonic-deluge/verdict-w6-n24.md, the V1 slip): safeToOffer, 63G and
+    // libraryCost walked only the sub chain and the charm choices, so a part in an SVar-named branch went unseen:
+    // Promise of Loyalty's PutCounter and SacrificeAll sit in its RepeatEach's RepeatSubAbility, and it was picked
+    // twice (one game's three copies sacrificed our own Goblin tokens). deepSafe applies safeToOffer's rule to every
+    // part, those reached through BRANCHES included; symmetricParts and chainCost enter BRANCHES too; a RepeatEach
+    // over RepeatPlayers$ Player is symmetric; and a part that takes from a library that may be ours, reached through
+    // a Repeat's or RepeatEach's RepeatSubAbility, is UNBOUNDED (the count is not read, so a fixed RepeatCount goes
+    // too). Filters inside the pool: they draw nothing.
     public static class MnemonicDeluge {
         public static final String NAME = "Mnemonic Deluge";
         public static final int MIN_PICK_CMC = 3;
         public static final int COPIES = 3;
         public static final int MIN_LIBRARY_LEFT = 10;
         private static final int UNBOUNDED = -1;
+        // Retry 1 (63A): the SVar-named branches a part's sub chain never reaches, which deepSafe, symmetricParts and
+        // chainCost also enter: a Repeat's or RepeatEach's RepeatSubAbility, a Branch's TrueSubAbility and
+        // FalseSubAbility, a Clash's or FlipCoin's WinSubAbility and LoseSubAbility (EspersToMagicite.BRANCHES' keys
+        // but SubAbility, the chain itself, and Execute, a delayed trigger's, which is not entered). A built ability
+        // tree ends; MAX_DEPTH still bounds the walk, and past it a card is unsafe, symmetric and UNBOUNDED.
+        private static final String[] BRANCHES = {"RepeatSubAbility", "TrueSubAbility", "FalseSubAbility",
+                "WinSubAbility", "LoseSubAbility"};
+        private static final int MAX_DEPTH = 12;
 
         private static final ThreadLocal<Boolean> PREDICTING = ThreadLocal.withInitial(() -> false);
 
@@ -37734,7 +37750,8 @@ public class SpecialCardAi {
                 for (final Card c : p.getCardsIn(ZoneType.Graveyard)) {
                     if (!(c.isInstant() || c.isSorcery()) || NAME.equals(c.getName()) || c.getCMC() < MIN_PICK_CMC
                             || !sa.canTarget(c) || claimed.contains(c) || ComputerUtilCard.isCardRemAIDeck(c)
-                            || !MizzixsMastery.safeToOffer(c) || aimsTokenAtOpponentByHint(c) || symmetric(c)) {
+                            || !MizzixsMastery.safeToOffer(c) || !deepSafe(c) || aimsTokenAtOpponentByHint(c)
+                            || symmetric(c)) {
                         continue;
                     }
                     final int cost = libraryCost(ai, c);
@@ -37782,6 +37799,44 @@ public class SpecialCardAi {
             return spells;
         }
 
+        // Retry 1 (63A): MizzixsMastery.safeToOffer's rule (its partsSafe: api null, an ...All api, an api in its
+        // UNSAFE_TO_OFFER, a CannotPlayAi handler; read, never edited) over every part of every offered spell, the parts
+        // reached through BRANCHES included, which its sub-chain walk never enters (Promise of Loyalty's PutCounter and
+        // SacrificeAll sit in its RepeatEach's RepeatSubAbility). Any such part keeps the card out of the pool.
+        private static boolean deepSafe(final Card c) {
+            for (final SpellAbility s : offered(c)) {
+                if (!deepPartsSafe(s, 0)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean deepPartsSafe(final SpellAbility root, final int depth) {
+            if (depth > MAX_DEPTH) {
+                return false;
+            }
+            for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+                final ApiType api = part.getApi();
+                if (api == null || api.name().endsWith("All") || MizzixsMastery.UNSAFE_TO_OFFER.contains(api)
+                        || SpellApiToAi.Converter.get(api) instanceof forge.ai.ability.CannotPlayAi) {
+                    return false;
+                }
+                for (final AbilitySub choice : part.getAdditionalAbilityList("Choices")) {
+                    if (!deepPartsSafe(choice, depth + 1)) {
+                        return false;
+                    }
+                }
+                for (final String key : BRANCHES) {
+                    final SpellAbility branch = part.getAdditionalAbility(key);
+                    if (branch != null && !deepPartsSafe(branch, depth + 1)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
         // Death by Dragons' shape: a targeted Token part steered by AITgts$ Opponent, in any part, charm choice or face.
         static boolean aimsTokenAtOpponentByHint(final Card c) {
             for (final SpellAbility s : offered(c)) {
@@ -37806,11 +37861,11 @@ public class SpecialCardAi {
             return false;
         }
 
-        // 63G: a spell whose three copies hit us as hard as anyone, in any part, charm choice or face, or a card whose
-        // text makes an each-opponent-may offer.
+        // 63G: a spell whose three copies hit us as hard as anyone, in any part, charm choice, BRANCHES branch or face,
+        // or a card whose text makes an each-opponent-may offer.
         private static boolean symmetric(final Card c) {
             for (final SpellAbility s : offered(c)) {
-                if (symmetricParts(s)) {
+                if (symmetricParts(s, 0)) {
                     return true;
                 }
             }
@@ -37821,7 +37876,10 @@ public class SpecialCardAi {
                     && offersOpponents(c.getState(forge.card.CardStateName.Backside).getOracleText());
         }
 
-        private static boolean symmetricParts(final SpellAbility root) {
+        private static boolean symmetricParts(final SpellAbility root, final int depth) {
+            if (depth > MAX_DEPTH) {
+                return true;
+            }
             for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
                 final ApiType api = part.getApi();
                 if (api == ApiType.Vote) {
@@ -37840,12 +37898,21 @@ public class SpecialCardAi {
                 if (api == ApiType.RepeatEach && part.hasParam("RepeatOptionalForEachPlayer")) {
                     return true; // a tempting offer (Tempt with Vengeance)
                 }
+                if (api == ApiType.RepeatEach && "Player".equals(part.getParam("RepeatPlayers"))) {
+                    return true; // each player in turn (Promise of Loyalty: every player keeps one creature)
+                }
                 if (part.hasParam("Optional") && (part.getParamOrDefault("DefinedPlayer", "").contains("Opponent")
                         || part.getParamOrDefault("Defined", "").contains("Opponent"))) {
                     return true; // each opponent may (Tempt with Discovery)
                 }
                 for (final AbilitySub choice : part.getAdditionalAbilityList("Choices")) {
-                    if (symmetricParts(choice)) {
+                    if (symmetricParts(choice, depth + 1)) {
+                        return true;
+                    }
+                }
+                for (final String key : BRANCHES) {
+                    final SpellAbility branch = part.getAdditionalAbility(key);
+                    if (branch != null && symmetricParts(branch, depth + 1)) {
                         return true;
                     }
                 }
@@ -37861,13 +37928,14 @@ public class SpecialCardAi {
             return text.contains("tempting offer") || text.contains("each opponent may");
         }
 
-        // The library cards one copy of this card can take from us, over its costliest offered spell: every part and
-        // charm choice (summed: an over-count only drops a candidate) that draws, digs, mills, reveals until or
-        // searches a library that may be ours. UNBOUNDED keeps the card out of the pool.
+        // The library cards one copy of this card can take from us, over its costliest offered spell: every part, charm
+        // choice and BRANCHES branch (summed: an over-count only drops a candidate) that draws, digs, mills, reveals
+        // until or searches a library that may be ours; such a part under a Repeat's or RepeatEach's RepeatSubAbility
+        // runs an unread number of times, so it is UNBOUNDED (retry 1). UNBOUNDED keeps the card out of the pool.
         private static int libraryCost(final Player ai, final Card c) {
             int most = 0;
             for (final SpellAbility s : offered(c)) {
-                final int cost = chainCost(ai, s, s);
+                final int cost = chainCost(ai, s, s, false, 0);
                 if (cost == UNBOUNDED) {
                     return UNBOUNDED;
                 }
@@ -37876,16 +37944,32 @@ public class SpecialCardAi {
             return most;
         }
 
-        private static int chainCost(final Player ai, final SpellAbility root, final SpellAbility first) {
+        private static int chainCost(final Player ai, final SpellAbility root, final SpellAbility first,
+                final boolean repeated, final int depth) {
+            if (depth > MAX_DEPTH) {
+                return UNBOUNDED;
+            }
             int sum = 0;
             for (SpellAbility part = first; part != null; part = part.getSubAbility()) {
                 final int cost = partCost(ai, root, part);
-                if (cost == UNBOUNDED) {
+                if (cost == UNBOUNDED || (repeated && cost != 0)) {
                     return UNBOUNDED;
                 }
                 sum += cost;
                 for (final AbilitySub choice : part.getAdditionalAbilityList("Choices")) {
-                    final int more = chainCost(ai, root, choice);
+                    final int more = chainCost(ai, root, choice, repeated, depth + 1);
+                    if (more == UNBOUNDED) {
+                        return UNBOUNDED;
+                    }
+                    sum += more;
+                }
+                for (final String key : BRANCHES) {
+                    final SpellAbility branch = part.getAdditionalAbility(key);
+                    if (branch == null) {
+                        continue;
+                    }
+                    // RepeatSubAbility is read by RepeatEffect and RepeatEachEffect alone: the loop's body
+                    final int more = chainCost(ai, root, branch, repeated || "RepeatSubAbility".equals(key), depth + 1);
                     if (more == UNBOUNDED) {
                         return UNBOUNDED;
                     }
