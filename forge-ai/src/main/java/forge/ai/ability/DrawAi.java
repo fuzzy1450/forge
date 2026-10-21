@@ -231,7 +231,11 @@ public class DrawAi extends SpellAbilityAi {
                     if (null == decision)
                         return false;
                     for (Card discard : decision.cards) {
-                        if (!ComputerUtil.isWorseThanDraw(payer, discard)) {
+                        if (!ComputerUtil.isWorseThanDraw(payer, discard)
+                                && !SpecialCardAi.DontBlinkCycling.cycles(payer, sa, discard)) {
+                            // Dead-card batch 4, row 48, part 48A: Don't Blink's own cycling, from mana that
+                            // would go unused, in the end step right before our turn. Reached only where the
+                            // stock floor refused at a draw-free point; the decline is that same refusal.
                             return false;
                         }
                     }

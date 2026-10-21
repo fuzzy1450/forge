@@ -16619,6 +16619,69 @@ public class SpecialCardAi {
         }
     }
 
+    // Don't Blink, Cycling {2} (dead-card batch 4, row 48, part 48A). DrawAi.willPayCosts refused the self-discard
+    // at every consult (ComputerUtil.isWorseThanDraw approves a 2-mana nonland card only at <= 1 land), so the
+    // card sat in hand in 386 of 390 held games: its cast (DontBlink above, batch 2 row 119, neither called nor
+    // edited here) answers only an opponent's creature spell cast from exile, a rare window the AI is
+    // nearly always tapped out for. Cycle it where it is a blank and the mana is free: the end step of the
+    // opponent's turn right before ours (that turn's windows are over, and the mana untaps in our untap step;
+    // in a pod only the opponent right before us), on an empty stack, with no opposing creature card waiting in
+    // exile to be cast (a coming window: hold), the draw safe (canDraw, draw limits included;
+    // KnollspineDragon's draw-thief / draw-punisher / discard-punisher scan, called unchanged; targetAI's
+    // library and hand guards already ran), and the engine-priced cost within G2 (G1,
+    // CommanderCastCeiling.affordable, called unchanged). Key: the root cycling ability of the paper card (host
+    // rules name, B3-3) discarding itself from its owner's hand; a thief casts the spell and never cycles, and a
+    // copy, a grant or an exiled card fails the key. RNG-free; its only write is HonestMana's
+    // setActivatingPlayer (G1's contract). A decline is the stock refusal; an approval goes on to canPayCost's
+    // reservation rolls, the designed divergence. Residual (named, not fixed): a creature an opponent casts
+    // from exile at resolution (Nathan Drake's attack trigger, a cascade) leaves nothing pending at an earlier
+    // end step, so the card is cycled before that window.
+    public static class DontBlinkCycling {
+        public static final String NAME = "Don't Blink";
+
+        public static boolean cycles(final Player ai, final SpellAbility sa, final Card discard) {
+            if (sa instanceof AbilitySub || !sa.isCycling()) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            if (host == null || discard != host || host.getRules() == null
+                    || !NAME.equals(host.getRules().getName())
+                    || !host.isInZone(ZoneType.Hand) || !ai.equals(host.getOwner())) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            if (!ph.is(PhaseType.END_OF_TURN) || ph.isPlayerTurn(ai) || !ai.equals(ph.getNextTurn())
+                    || !game.getStack().isEmpty()) {
+                return false; // O(1): every other consult
+            }
+            if (exileCastPending(ai, game) || !ai.canDraw()
+                    || KnollspineDragon.drawOrDiscardIsPunished(ai, host)) {
+                return false;
+            }
+            return CommanderCastCeiling.affordable(ai, sa);
+        }
+
+        // an opposing creature card in exile that an opponent may still cast: a MayPlay grant to an
+        // opponent (Hostage Taker, impulse effects, a creature of ours included), or an opponent's
+        // foretold, plotted, suspended or adventuring creature card. Paper type, so a face-down
+        // foretold card counts.
+        private static boolean exileCastPending(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(ZoneType.Exile)) {
+                if (c.getRules() == null || !c.getRules().getType().isCreature()) {
+                    continue;
+                }
+                for (final Player opp : ai.getOpponents()) {
+                    if (!c.mayPlay(opp).isEmpty() || (opp.equals(c.getOwner())
+                            && (c.isForetold() || c.isPlotted() || c.hasSuspend() || c.isOnAdventure()))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Doomsday Confluence
     // "{X}{X}{B} sorcery: Choose X. You may choose the same mode more than once. - Each player
     // sacrifices a nonartifact creature. - Create a 3/3 black Dalek artifact creature token with
