@@ -20361,7 +20361,7 @@ public class SpecialCardAi {
     // host Sliver's, not the grantor's, so the route is keyed on the AILogic value; only
     // frenetic_sliver.txt carries it). Stock PhaseOut, written for Frenetic Efreet, is not enough
     // for a flip that every Sliver on both sides shares: two threatened Slivers of different players
-    // answer each other's flips until MagicStack.add passes 999 entries and draws the game, and a
+    // answer each other's flips until the stack passes MAX_STACK_SIZE and draws the game, and a
     // thief's won flip hands the permanent back to its owner. So: only the owner flips, at most one
     // flip per host is on the stack, and only when a lethal damage effect on the stack already dooms
     // the host (PhaseOut's floor: predictThreatenedObjects registers only lethal DealDamage and

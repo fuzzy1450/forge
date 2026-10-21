@@ -60,14 +60,17 @@ import java.util.stream.Collectors;
 public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbilityStackInstance> {
     public static final int MAX_TRIGGER_REPEATS = 50;
     /**
-     * A stack holding more than this many items draws the game: the last stop for a loop nothing else catches, such
-     * as a Scalelord Reckoner mirror whose targeted triggers go on the stack for ever without one resolving (upstream
-     * #8254 put it at 999 against the heap running out). A legal finite crowd can pass 999: 51 Ondu Spiritdancers,
-     * fresh on a new turn, all trigger on one enchantment entering under Secret Arcade, and every copy that resolves
-     * triggers the ones that have not copied yet, about 1,300 triggers in all. 9999 leaves such crowds to resolve and
-     * still stops a runaway well short of the heap, while the game's own time limit bounds how long either takes.
+     * A stack holding more than this many items draws the game: the last stop for a loop nothing else catches
+     * (upstream #8254 put it at 999 against the heap running out). One such loop: Venser, Fervent Forger copying an
+     * opponent's legendary Venser, whose mandatory targeted trigger puts two more on the stack each time one resolves;
+     * the repeating-trigger draw below skips targeted triggers. But a legal finite crowd can pass 999 too: 51 Ondu
+     * Spiritdancers, fresh on a new turn, all trigger on one enchantment entering under Secret Arcade, and every copy
+     * that resolves triggers the ones that have not copied yet, 1,276 triggers on the stack at most. 4000 leaves that
+     * crowd to resolve, with room to spare, while a runaway still draws after four times the items 999 allowed rather
+     * than after the ten times a bigger limit would take: every item costs memory (about 10 KB for a trigger, 50 KB
+     * for an activated ability) and the time to put it on the stack.
      */
-    public static final int MAX_STACK_SIZE = 9999;
+    public static final int MAX_STACK_SIZE = 4000;
 
     private final List<SpellAbility> simultaneousStackEntryList = Lists.newArrayList();
     private final List<SpellAbility> activePlayerSAs = Lists.newArrayList();
