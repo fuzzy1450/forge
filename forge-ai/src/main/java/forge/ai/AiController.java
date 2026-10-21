@@ -998,6 +998,15 @@ public class AiController {
             return AiPlayDecision.AnotherTime;
         }
 
+        // Dead-card batch 4, row 77, part 77C: our own cast of an instant or sorcery (hand, flashback, Aminatou's
+        // Augury's exile, Melek's library top) is refused when it takes our library under OwnLibraryFloor's margin.
+        // canPlaySa and canPayCost above ran A's path, draws included, so this veto changes only the cast A was about
+        // to make (B4-3). Placed last, after W4's 76A and W6's 63F and 68A. Inert unless OwnLibraryFloor is engaged.
+        // Draws nothing. See the class comment.
+        if (SpecialCardAi.OwnLibraryFloor.breachesCast(player, sa)) {
+            return AiPlayDecision.CantPlayAi;
+        }
+
         return AiPlayDecision.WillPlay;
     }
 
