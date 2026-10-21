@@ -37477,6 +37477,133 @@ public class SpecialCardAi {
         }
     }
 
+    // Mishra's Bauble (dead-card batch 4, row 20; carrier The Sting of Ping 30da5b05, deck 512, Vivi
+    // Ornitier, not an anchor)
+    // "{T}, Sacrifice Mishra's Bauble: Look at the top card of target player's library. Draw a card at
+    // the beginning of the next turn's upkeep." ({0} artifact; printed text = Oracle = script.)
+    // AI:RemoveDeck:All dropped both of its spell abilities in AiController.getSpellAbilityToPlay's
+    // filter, so its owner never cast it (0 owner casts in 1,024 holds, 143 distinct libraries, on
+    // 2.0.15+499e03087c5; the one cast was a Silent-Blade Oni free cast from our hand, a Play effect
+    // that never reads the hint). The hint is KEPT: every other isCardRemAIDeck reader (tutor, steal,
+    // exchange and copy pickers) stays as it was. The -10 in the sort (ComputerUtilAbility.saEvaluator)
+    // only orders it behind other FREE abilities: "use 0 cmc abilities first" sorts a printed {0} ahead
+    // of every costed ability, which is why the cast is readmitted only at a cost of {0} (below). The
+    // G3 dispatcher readmits, for the player who OWNS the card, exactly one ability, its cast (the
+    // crack stays filtered), and the stock chain judges it behind the filter
+    // (PermanentNoncreatureAi/PermanentAi WillPlay for a {0} permanent):
+    // - 20A the cast from our own hand (not a Play-effect cast, not a copy), in our own main phase on
+    //   an empty stack, only while the engine's test-mode cost is {0} and nothing counters it or harms
+    //   its caster: no cast trigger working where it is counters it (our own Vexing Bauble, Chalice of
+    //   the Void at 0, Lavinia, Counterbalance, Nether Void, Chancellor of the Annex) or harms its caster
+    //   (Ruric Thar, Roiling Vortex, Eidolon of the Great Revel, Kambal, Painful Quandary, Spelltithe
+    //   Enforcer); no AI_SpellsNeedExtraMana tax is live. A taxed Bauble (Thorn of Amethyst, Trinisphere,
+    //   Thalia) stays in hand as before: its printed {0} would sort it ahead of the AI's costed plays,
+    //   including its commander, and spend real mana on a cantrip. At {0} the test payment ends at the
+    //   pool short-circuit, so no isManaSourceReserved roll is possible. "Opponent draws" taxes (Rhystic
+    //   Study, Mystic Remora, Esper Sentinel) stay stock, as in TravelThroughCaradhras.castPunished.
+    // Draws nothing, holds nothing, remembers nothing, and allocates no SpellAbility id: trigger chains are
+    // read as SVar text, never ensureAbility (Hour of Eternity's idiom). Its only write is
+    // setActivatingPlayer on a hand SA with no activator yet (as getOriginalAndAltCostAbilities does
+    // right after the filter; Bosh). A false is the old filter exactly. Calls no earlier row's helper.
+    public static class MishrasBauble {
+        public static final String NAME = "Mishra's Bauble";
+        static final int MAX_CHAIN = 8;      // SubAbility$ links followed through a trigger's text
+
+        // RemoveDeckFilter.readmit's case, cheapest checks first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner()) || sa.isCopied() || sa instanceof AbilitySub) {
+                return false; // every opponent and every thief keeps the filter
+            }
+            if (sa.isSpell()) {
+                return readmitCast(ai, sa, host);
+            }
+            return false; // the crack stays filtered
+        }
+
+        // 20A
+        static boolean readmitCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (sa.getApi() != ApiType.PermanentNoncreature || sa.isCastFromPlayEffect()
+                    || !host.isInZone(ZoneType.Hand) || !ai.canCastSorcery()) {
+                return false; // an escape or impulse cast, a Play effect, outside our own main on an empty stack
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (spellsNeedExtraMana(ai.getGame())) {
+                return false; // canPayCost's extra mana (Nether Void, Chancellor, Spelltithe): never free
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            // free only: a printed {0} sorts ahead of every costed ability, so a taxed cast would pay real
+            // mana before the AI's own plays; the test-mode cost includes RaiseCost, SetCost and ReduceCost
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (cost.getConvertedManaCost() > 0) {
+                return false;
+            }
+            return !answeredOnCast(ai, host);
+        }
+
+        // a SpellCast trigger working where it is that matches this free cast by us and whose chain counters
+        // it, or damages, drains, edicts or discards its caster (any controller's when the chain names
+        // TriggeredActivator, an opponent's always); conservative: conditions and optional deciders are
+        // read as firing, and every ManaSpent EQ0 trigger fires on a {0} cast
+        static boolean answeredOnCast(final Player ai, final Card host) {
+            final Game game = ai.getGame();
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                for (final Trigger t : c.getTriggers()) {
+                    if ((t.getMode() != TriggerType.SpellCast && t.getMode() != TriggerType.SpellCastOrCopy)
+                            || !t.hasParam("Execute") || !t.zonesCheck(game.getZoneOf(c))
+                            || !t.matchesValidParam("ValidCard", host)
+                            || !t.matchesValidParam("ValidActivatingPlayer", ai)) {
+                        continue;
+                    }
+                    final boolean theirs = c.getController() != null && c.getController().isOpponentOf(ai);
+                    if (chainAnswers(t, t.getParam("Execute"), theirs)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean chainAnswers(final Trigger t, String svar, final boolean theirs) {
+            for (int i = 0; svar != null && i < MAX_CHAIN; i++) {
+                final String text = t.getSVar(svar);
+                if (text == null || text.isEmpty()) {
+                    return false;
+                }
+                final Map<String, String> p = FileSection.parseToMap(text, FileSection.DOLLAR_SIGN_KV_SEPARATOR);
+                final String api = p.get("DB");
+                if ("Counter".equals(api)) {
+                    return true; // Vexing Bauble, Chalice, Lavinia, Nether Void, Chancellor; Counterbalance's sub
+                }
+                if (("DealDamage".equals(api) || "LoseLife".equals(api) || "Sacrifice".equals(api)
+                        || "Discard".equals(api)) && (theirs || text.contains("TriggeredActivator"))) {
+                    return true; // Ruric Thar, Roiling Vortex, Eidolon, Kambal, Painful Quandary, Spelltithe
+                }
+                svar = p.get("SubAbility");
+            }
+            return false;
+        }
+
+        private static boolean spellsNeedExtraMana(final Game game) {
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (!org.apache.commons.lang3.StringUtils.isBlank(c.getSVar("AI_SpellsNeedExtraMana"))) {
+                    return true;
+                }
+            }
+            for (final Card c : game.getCardsIn(ZoneType.Command)) {
+                if (!org.apache.commons.lang3.StringUtils.isBlank(c.getSVar("SpellsNeedExtraManaEffect"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Misleading Signpost (dead-card batch 2, row 86)
     // "Flash / When this artifact enters during the declare attackers step, you may reselect
     // which player or permanent target attacking creature is attacking. / {T}: Add {U}."
@@ -46306,8 +46433,8 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49, 52, 66 and 67, keepOff for batch 2's row 68 (Trench Gorger; batch 3's row
-    // 68 is Sunbird Standard, a readmit).
+    // 25, 31, 30, 42, 49, 52, 66, 67 and 20, keepOff for batch 2's row 68 (Trench Gorger; batch 3's
+    // row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -46469,6 +46596,8 @@ public class SpecialCardAi {
                     return WildMagicSurge.readmit(ai, sa);
                 case FaithlessLooting.NAME:              // batch 4, row 67 (W6)
                     return FaithlessLooting.readmit(ai, sa);
+                case MishrasBauble.NAME:                 // batch 4, row 20 (W7)
+                    return MishrasBauble.readmit(ai, sa);
                 default:
                     return false;
             }
