@@ -56846,22 +56846,47 @@ public class SpecialCardAi {
     //   Revoker naming it), then {4} as the engine prices it (test-mode calculateManaCost) within HonestMana (G2), all
     //   before canPayCost's test payment draws.
     // - the untap (isOwnUntap: the root activated Untap of a paper Clock on the battlefield, ours to own AND control;
-    //   a thief's Clock keeps the filter, the Squallmonger shape), judged by UntapAi.checkApiLogic's route under the
-    //   same key. Stock untapPrefTargeting there churns it (the skeptic's hint-drop probe: tap two artifacts to untap
-    //   the most expensive one, eight times in one game, Treasures and a copied Arcane Signet for nothing).
+    //   a thief's Clock keeps the filter, the Squallmonger shape), judged by considerUntap (45B1) from
+    //   UntapAi.checkApiLogic's route under the same key. Stock untapPrefTargeting there churns it (the skeptic's
+    //   hint-drop probe: tap two artifacts to untap the most expensive one, eight times in one game, Treasures and a
+    //   copied Arcane Signet for nothing). considerUntap: our own main phase on an empty stack (else AnotherTime),
+    //   fewer than CAP activations this turn, fewer than TREASURE_CEILING Treasure tokens of ours, then the loop step,
+    //   else the setup step, else CantPlayAi; the target is set only on WillPlay. The 0-mana sort puts this ability
+    //   ahead of every mana-costed spell at each main-phase consult once the Clock is ours on the battlefield
+    //   (ComputerUtilAbility.saComparator; skeptic M1), so its declines are O(1) until the engine scan.
     // The value is the Treasure-on-tap engine: a mandatory Taps trigger of ours whose Execute is a Treasure Token
     // (census: Magda, Brazen Outlaw only) watching an artifact D we control (the deck's changeling artifact
     // creatures, Firdoch Core, a Dwarf-naming Adaptive Automaton, Metallic Mimic or Roaming Throne, anything under
     // Mycosynth Lattice). Tapping D for the cost makes a Treasure before the untap resolves.
+    // - Loop step (an untapped D): tap D and one partner X, untap D. +1 Treasure or more a step (one per matching
+    //   watcher), and untapped mana is never lower: X is the Clock or an idle artifact (+1 now), or an untapped
+    //   Treasure that the new one replaces. D ends untapped, X stays tapped, and the new Treasure is the next step's X.
+    // - Setup step (no untapped D, a tapped one, the Clock untapped, three partners with the Clock): tap the Clock and
+    //   the next partner, untap D: at most one Treasure's mana now for at least two loop steps, so it needs
+    //   activations CAP - 2 and CAP - 1 left after it.
+    // - The cap: CAP activations a turn (sa.getActivationsThisTurn()); ComputerUtil.preventRunAwayActivations draws
+    //   from the 10th (SpellAbilityAi.canPlayWithoutRestrict, before checkApiLogic), so at 9 this RNG-free decline
+    //   answers first and the runaway draw is never reached. The ceiling (skeptic M3): 30 Treasure tokens are six of
+    //   Magda's sac-5 tutors and any library's Grinding Station mill; beyond it the loop buys nothing.
+    // - Partners, in order: the Clock itself, idle artifacts (noncreature, non-Vehicle, no {T} or {Q} in any
+    //   ability's cost, no static, trigger or replacement that reads a tapped state: Torpor Orb, Grafdigger's Cage,
+    //   Thorn of Amethyst, Clues; never Tangle Wire, Static Orb, Mana Vault), then untapped noncreature Treasure
+    //   tokens; never D, never another creature, never a mana rock or {T} utility that is not a Treasure.
+    // - The punisher scan is asked of D and X (loop) and of D and both partners (setup): skeptic M2.
     // A Play-effect cast never meets the filter (canPlayFromEffectAI -> PermanentAi.doTriggerNoCost); a Sculpting
     // Steel copy, a token copy or a Mairsil grant answers to no case (rule B3-3: the paper name).
-    // RNG parity: A never evaluated either ability (the filter is draw-free). Every check here reads zones, triggers'
-    // and statics' params, SVar text and the test-mode cost, with no MyRandom, no LKI copy, no SpellAbility created
-    // (watchers are read from the Execute SVar's text, never ensureAbility; the lock scan reads the card's own untap)
-    // and no AiCardMemory; the only writes are G2's own activator stamps on the mana abilities it reads. The first new
-    // draw is the cast's canPayCost test payment after the floor passed.
+    // RNG parity: A never evaluated either ability (the filter is draw-free; A never had the owner's Clock on the
+    // battlefield). Every check here reads zones, triggers' and statics' params, SVar text, tapped states, targeting,
+    // canUntap / canTap's replacement scans, activation counts, evaluateCreature and the test-mode cost, with no
+    // MyRandom, no LKI copy, no SpellAbility created (watchers are read from the Execute SVar's text, never
+    // ensureAbility; the lock scan reads the card's own untap) and no AiCardMemory; the only writes are G2's own
+    // activator stamps on the mana abilities it reads, and the untap's own target on WillPlay. The first new draws are
+    // the cast's canPayCost test payment after the floor passed, and after an untap's approval the engine's own (the
+    // payment's triggers, the stack).
     public static class ClockOfOmens {
         public static final String NAME = "Clock of Omens";
+        static final int CAP = 9;                // activations a turn; preventRunAwayActivations draws from the 10th
+        static final int TREASURE_CEILING = 30;  // Treasure tokens of ours at which the loop stops (skeptic M3)
 
         // the host's paper name (rule B3-3), never getAbilitySourceName, which reads a granted copy's original host
         private static boolean isPaper(final Card host) {
@@ -56908,6 +56933,53 @@ public class SpecialCardAi {
             if (HonestMana.of(ai, sa, true).total() < cost.getConvertedManaCost()) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // 45B1, from UntapAi.checkApiLogic's route (isOwnUntap): the window, the cap, the ceiling, then the loop step,
+        // else the setup step. Each decline is its own RNG-free return; the target is set only on WillPlay, and
+        // AiCostDecision's chooser (45C) recomputes the same pair from it
+        public static AiAbilityDecision considerUntap(final Player ai, final SpellAbility sa) {
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            sa.resetTargets();
+            if (!ph.isPlayerTurn(ai) || ph.getPhase() == null || !ph.getPhase().isMain()
+                    || !game.getStack().isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            final int used = sa.getActivationsThisTurn();
+            if (used >= CAP) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            if (treasures(ai) >= TREASURE_CEILING) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final List<Trigger> watchers = watchers(ai);
+            if (watchers.isEmpty()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // no engine at all: nothing to untap for
+            }
+            final Card clock = sa.getHostCard();
+            final Card d = engine(ai, sa, watchers, true);
+            if (d != null) {                                                // loop step: tap D and X, untap D
+                final List<Card> xs = partners(ai, clock, d);
+                if (xs.isEmpty() || punished(ai, d, xs.get(0))) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                sa.getTargets().add(d);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+            if (used > CAP - 3 || !clock.isUntapped() || !clock.canTap()) { // setup needs two loop steps after it
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final Card dt = engine(ai, sa, watchers, false);
+            if (dt == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            final List<Card> xs = partners(ai, clock, dt);                 // the Clock first
+            if (xs.size() < 3 || punished(ai, dt, xs.get(0), xs.get(1))) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.getTargets().add(dt);                                        // setup step: tap the Clock and X, untap D
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
@@ -57013,6 +57085,108 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+
+        // D: an artifact of ours, not a token and not a Clock, that a watcher matches, that the untap can target and an
+        // effect can untap; untapped (and tappable) for the loop step, tapped for the setup step. The cheap flags first,
+        // then canTarget, canUntap and the watchers (skeptic M3). Noncreatures first, then the lowest-valued creature
+        // (if the untap fizzles, the lesser blocker stays tapped); ties in battlefield order
+        static Card engine(final Player ai, final SpellAbility sa, final List<Trigger> watchers, final boolean untapped) {
+            Card best = null;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isArtifact() || c.isToken() || isPaper(c) || (untapped ? !c.isUntapped() : !c.isTapped())) {
+                    continue;
+                }
+                if ((untapped && !c.canTap()) || !sa.canTarget(c) || !c.canUntap(null, true)
+                        || treasuresPerTap(watchers, c) <= 0) {
+                    continue;
+                }
+                if (best == null || better(c, best)) {
+                    best = c;
+                }
+            }
+            return best;
+        }
+
+        private static boolean better(final Card a, final Card b) {
+            if (a.isCreature() != b.isCreature()) {
+                return !a.isCreature();
+            }
+            return a.isCreature() && ComputerUtilCard.evaluateCreature(a) < ComputerUtilCard.evaluateCreature(b);
+        }
+
+        // tap partners, in order: the Clock itself, idle artifacts, untapped Treasures; never d, never another
+        // creature, never a mana rock or {T} utility that is not a Treasure. considerUntap and the chooser read the
+        // same list from the same board
+        static List<Card> partners(final Player ai, final Card clock, final Card d) {
+            final List<Card> res = new ArrayList<>();
+            if (clock != d && clock.isUntapped() && clock.canTap()) {
+                res.add(clock);
+            }
+            final List<Card> treasures = new ArrayList<>();
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (c == d || c == clock || !c.isArtifact() || !c.isUntapped() || !c.canTap()) {
+                    continue;
+                }
+                if (idle(c)) {
+                    res.add(c);
+                } else if (c.isToken() && c.getType().hasSubtype("Treasure") && !c.isCreature()) {
+                    treasures.add(c);
+                }
+            }
+            res.addAll(treasures);
+            return res;
+        }
+
+        // a noncreature, non-Vehicle artifact with no {T} or {Q} in any ability's cost (so no mana ability, no Food,
+        // no Grinding Station) and no static, trigger or replacement that reads a tapped state (Static Orb, Tangle
+        // Wire, Howling Mine, Mana Vault): tapping it costs nothing this turn
+        static boolean idle(final Card c) {
+            if (c.isCreature() || c.getType().hasSubtype("Vehicle")) {
+                return false;
+            }
+            for (final SpellAbility s : c.getAllSpellAbilities()) {
+                final Cost pc = s.getPayCosts();
+                if (pc != null && (pc.hasTapCost() || pc.hasSpecificCostType(forge.game.cost.CostUntap.class))) {
+                    return false;
+                }
+            }
+            for (final StaticAbility st : c.getStaticAbilities()) {
+                if (mentionsTapped(st.getMapParams())) {
+                    return false;
+                }
+            }
+            for (final Trigger t : c.getTriggers()) {
+                if (mentionsTapped(t.getMapParams())) {
+                    return false;
+                }
+            }
+            for (final ReplacementEffect re : c.getReplacementEffects()) {
+                if (mentionsTapped(re.getMapParams())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean mentionsTapped(final Map<String, String> params) {
+            for (final String v : params.values()) {
+                if (v != null && v.toLowerCase(Locale.ROOT).contains("tapped")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Treasure tokens of ours, tapped or not (the ceiling's count)
+        static int treasures(final Player ai) {
+            int n = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isToken() && c.getType().hasSubtype("Treasure")) {
+                    n++;
+                }
+            }
+            return n;
         }
     }
 

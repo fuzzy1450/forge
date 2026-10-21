@@ -129,6 +129,17 @@ public class UntapAi extends SpellAbilityAi {
             // tests draws nothing.
             return SpecialCardAi.Earthcraft.considerUntap(ai, sa);
         }
+        if (SpecialCardAi.ClockOfOmens.isOwnUntap(ai, sa)) {
+            // Dead-card batch 4, row 45, part 45B1. Clock of Omens' "Tap two untapped artifacts you control: Untap
+            // target artifact." keeps AI:RemoveDeck:All; G3's readmit puts it back only for the player who owns and
+            // controls it, and it is judged here under the readmit's own key (rule B3-2): a thief's Clock, a Sculpting
+            // Steel copy, a Mairsil grant and every other Untap card keep the stock path below. untapPrefTargeting
+            // below churns it (tap two artifacts, untap the most expensive one: the hint-drop probe's eight
+            // activations for nothing, Treasures and a copied Arcane Signet among them). It untaps only a Treasure
+            // engine of ours (Magda, Brazen Outlaw's Dwarves), in our own main phase on an empty stack, at most nine
+            // times a turn and below thirty Treasures. Every decline draws nothing.
+            return SpecialCardAi.ClockOfOmens.considerUntap(ai, sa);
+        }
         final Card source = sa.getHostCard();
 
         if (sa.usesTargeting()) {
