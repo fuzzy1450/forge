@@ -64999,6 +64999,12 @@ public class SpecialCardAi {
     //       hold a Ring, each draws about twice a turn cycle;
     //     - FLOOR P: a draw thief or draw punisher at the table (IntellectualOffering's predicate, copied): our
     //       extra draws on their turn, or theirs on ours, would feed it, CurseEffects;
+    //     - FLOOR S' (14C): a creature card in our hand, not flash, not RemoveDeck-hinted, castable now by colour
+    //       with the whole pool (G2's total and each WUBRG shard of its printed cost), whose mana value exceeds
+    //       what the Ring's price leaves (total - price), AnotherTime: the Ring would take the mana of a creature
+    //       the AI casts (saComparator tries the 4-drop before cheaper spells). Creatures only, so the held cards
+    //       of these decks (wraths, O-Rings, situational removal) and a card the colours cannot cast never block
+    //       it: FLOOR S on mana value alone kept 1667004's Ring dead for 25 turns (the skeptic's amendment);
     //     - FLOOR H: no floored pick, DoesntImpactGame;
     //     - else the floored pick is targeted (on checkETBEffects' copy of the trigger, then discarded), WillPlay.
     //   The Ring is symmetric: once both hold one, each side gets about one extra card a turn cycle and a mirror
@@ -65019,6 +65025,11 @@ public class SpecialCardAi {
         static final int LIB_SAFE = 40;    // FLOOR H: our library outlasts any at this size
         static final int HAND_GAP = 1;     // FLOOR H: their hand minus ours after the cast
         static final int MIN_OPP_HAND = 3; // FLOOR H: never refill an opponent in topdeck mode
+        // FLOOR S': the five coloured shards, in MagicColor.WUBRG order
+        private static final forge.card.mana.ManaCostShard[] SHARDS = {
+                forge.card.mana.ManaCostShard.WHITE, forge.card.mana.ManaCostShard.BLUE,
+                forge.card.mana.ManaCostShard.BLACK, forge.card.mana.ManaCostShard.RED,
+                forge.card.mana.ManaCostShard.GREEN };
 
         public static AiAbilityDecision consider(final Player ai, final SpellAbility sa, final boolean mandatory) {
             sa.resetTargets();
@@ -65050,6 +65061,9 @@ public class SpecialCardAi {
             }
             if (tableStealsOrPunishesDraws(ai, ai.getGame())) {
                 return no(AiPlayDecision.CurseEffects);
+            }
+            if (displacesACreature(ai, cast)) { // FLOOR S' (14C)
+                return no(AiPlayDecision.AnotherTime);
             }
             final Player pick = pick(ai, sa, true);
             if (pick == null) {
@@ -65089,6 +65103,40 @@ public class SpecialCardAi {
             final SpellAbility cast = sa.getHostCard() == null ? null : sa.getHostCard().getCastSA();
             final Card real = cast == null ? null : cast.getHostCard();
             return real != null && real.isInZone(ZoneType.Hand) ? hand - 1 : hand;
+        }
+
+        // FLOOR S' (14C): a creature spell the AI would cast with today's whole pool but not after the Ring
+        private static boolean displacesACreature(final Player ai, final SpellAbility cast) {
+            final int price = ComputerUtilMana.calculateManaCost(cast.getPayCosts(), cast, ai, true, 0, false)
+                    .getConvertedManaCost();
+            final HonestMana mana = HonestMana.of(ai, cast, true);
+            final int spare = mana.total() - price;
+            final Card self = cast.getHostCard();
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.equals(self) || !c.isCreature() || c.isLand() || c.hasKeyword(Keyword.FLASH)
+                        || ComputerUtilCard.isCardRemAIDeck(c) || c.getManaCost() == null) {
+                    continue;
+                }
+                if (c.getCMC() > spare && castableNow(c.getManaCost(), mana)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // CommanderCastCeiling.affordable's body on a card's printed cost, a private copy (G1 is frozen and prices
+        // a SpellAbility): the pool's total against the cost's mana value, each WUBRG shard against its colour
+        private static boolean castableNow(final ManaCost cost, final HonestMana mana) {
+            final ManaCostBeingPaid toPay = new ManaCostBeingPaid(cost);
+            if (mana.total() < toPay.getConvertedManaCost()) {
+                return false;
+            }
+            for (int i = 0; i < SHARDS.length; i++) {
+                if (mana.colour(MagicColor.WUBRG[i]) < toPay.getUnpaidShards(SHARDS[i])) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         // FLOOR P: IntellectualOffering.tableStealsOrPunishesDraws (itself TradeSecrets'), copied verbatim with
