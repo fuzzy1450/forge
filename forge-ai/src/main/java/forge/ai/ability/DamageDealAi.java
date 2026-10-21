@@ -263,6 +263,15 @@ public class DamageDealAi extends DamageAiBase {
         final Card source = sa.getHostCard();
         final String sourceName = ComputerUtilAbility.getAbilitySourceName(sa);
 
+        if (SpecialCardAi.Firestorm.routes(ai, sa)) {
+            // Firestorm (dead-card batch 4, row 34): X is the TARGET COUNT (TargetedObjects$Amount), 0
+            // before targeting, so the generic path below reads dmg 0 and refuses at its dmg <= 0 test.
+            // Only the owner's own regular hand cast comes here (the readmit's key, B3-2); a thief, a
+            // copy, a Play-effect cast and every WithoutManaCost probe keep exactly the old path, as does
+            // every other DamageDeal card.
+            return SpecialCardAi.Firestorm.consider(ai, sa);
+        }
+
         if ("Meteor Blast".equals(sourceName)) {
             // X is the TARGET COUNT here, not the damage; the generic paths
             // below never announce it. Every other DamageDeal card takes

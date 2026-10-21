@@ -1290,6 +1290,13 @@ public class AiController {
                 // nothing. Discard the spare lands instead; see SpecialCardAi.NantukoCultivator.
                 return SpecialCardAi.NantukoCultivator.chooseLands(player, validCards, max, sa);
             }
+            // Firestorm (dead-card batch 4, row 34): our own hand cast discards what its plan priced: the
+            // spare cards first, then (the lethal line only) the rest by lowest mana value in hand order.
+            // Draws nothing (the stock picker's replay-card Aggregates.random is never reached). A name
+            // compare with the owner's own cast from hand: inert for every other discard.
+            if (SpecialCardAi.Firestorm.paysOwnDiscard(player, sa)) {
+                return SpecialCardAi.Firestorm.chooseDiscards(player, validCards, min);
+            }
 
             if (sa.hasParam("AnyNumber")) {
                 if ("DiscardUncastableAndExcess".equals(sa.getParam("AILogic"))) {

@@ -37781,6 +37781,570 @@ public class SpecialCardAi {
         }
     }
 
+    // Firestorm (dead-card batch 4, wave 8, row 34; a dead card)
+    // "As an additional cost to cast this spell, discard X cards. Firestorm deals X damage to each of X targets."
+    // {R} Instant. The script (f/firestorm.txt, unchanged) matches it at cast: Cost$ R Discard<X/Card>, ValidTgts$
+    // Any, TargetMin$ 0, NumDmg$ X with X = TargetedObjects$Amount, so the target count is both the discard and the
+    // damage. AI:RemoveDeck:All is KEPT (B3-1). Two gates, two deep, both draw-free: the hint stripped the owner's
+    // hand SA at AiController.getSpellAbilityToPlay's removeIf (no G3 case named it), and behind it
+    // DamageDealAi.canPlay read dmg = TargetedObjects$Amount = 0 before any target (its X branch knows only
+    // Count$xPaid) and refused at its dmg <= 0 test. The owner never cast it.
+    // - readmit(), G3's case: the owner's own regular hand cast that pays the printed {R} (ownHandCast), on an
+    //   empty stack with no mana held (G3's noManaHeld) and another card in hand, where one of the two lines can
+    //   exist: the O(1) lethal test, or our own main phase with a spare card. No targeting (the filter runs before
+    //   the activator is set), no random number, so its false is the old filter exactly.
+    // - consider(), from the head of DamageDealAi.canPlay behind routes() (the readmit's own key, B3-2): Meteor
+    //   Blast's restriction mirror, the window, the price, the CantDiscard and discard-punisher vetoes, then the
+    //   lethal line, else the value line. It announces X by choosing exactly X targets and answers WillPlay, or
+    //   declines with the targets untouched.
+    // - chooseDiscards(), from AiController.getCardsToDiscard behind paysOwnDiscard(): the payment discards what
+    //   the plan priced, the spare cards first, then (the lethal line only) the rest by lowest mana value in hand
+    //   order. The stock picker (getCardPreference's random replay card) is never reached.
+    // Line L (lethal): the cast kills every opponent if it resolves, at any priority with an empty stack. Every
+    // opponent is targetable, can lose life and is not under a can't-lose effect; X is the smallest value whose
+    // damage (predictDamageTo: static prevention and replacement) reaches every opponent's life, and at least the
+    // number of opponents, one face each (S3: X is also the target count); X is at most the other cards in hand.
+    // The X targets: every opponent's face, then the opponents' creatures and planeswalkers (non-punishers first,
+    // never one with Ward: S4), then ours (lowest evaluateCreature first); never ourselves. In a pod it fires only
+    // when every opponent dies.
+    // Line V (value): a removal spell paid in spare cards, in our own Main 1 or Main 2 on an empty stack. Every
+    // discard is spare: a DiscardMe card (highest first), or, only with MIN_LAND_SPARE (6) or more mana lands in
+    // play (S2: below that the stock forced-discard rule keeps land drops the AI still needs), a land beyond
+    // NantukoCultivator.keepCount (the stock discard picker's land rule; the keepers by a private copy of
+    // Nantuko's keeper score); never a DoNotDiscardIfAble card. Every target is on the opponents' side, none is a
+    // damage punisher (a non-combat DamageDone/DamageDoneOnce trigger whose ValidTarget is .Self: Phyrexian
+    // Obliterator, Boros Reckoner, Spitemare, enrage) and none has Ward (S4). At least MIN_KILLS kill worth a card:
+    // an opposing creature of mana value 2+ or power 3+ (Meteor Blast's rule) that X damage kills, with
+    // dealDamageChooseTgtC's filters (no regeneration, SacMe, undying or persist), or an opposing planeswalker X
+    // damage kills. X maximises those kills, the smallest X on a tie, padded with opposing faces, then the other
+    // opposing bodies.
+    // Both lines: the engine's test-mode price (taxes, reductions; B3-5) within G2 HonestMana, held sources
+    // skipped, red included, and one red source whose mana ability discards no card (HonestMana counts Lion's Eye
+    // Diamond, which would bin the hand the plan counts); ai.canDiscardBy(sa, false) (a CantDiscard static); and no
+    // opponent's discard punisher sees a card the cost can discard (Megrim, Liliana's Caress, Waste Not, Tergrid:
+    // B3-7, it hits us at cast time, before Firestorm resolves).
+    // RNG: A refused at two draw-free points, so every decline draws nothing. The reads: zones, phases,
+    // noManaHeld, the test-mode cost, HonestMana, canTarget, getEnoughDamageToKill / predictDamageTo,
+    // evaluateCreature / evaluateLand, trigger and SVar params, and regenerates() (S1: ComputerUtil.canRegenerate's
+    // ValidTgts / Defined test without its canPayCost, whose isManaSourceReserved rolls on the opponent's sources
+    // would fork a consult A never made). The only writes are setActivatingPlayer on our own mana abilities (G2's
+    // stamp) and the approved SA's targets. canPayCost's test payment, the first draw, follows an approval only;
+    // the discard chooser runs at payment and draws nothing. Nothing is held or remembered; no SpellAbility id.
+    // Known, not fixed (skeptic S5): the lethal line spends X + 1 cards into any counterspell; X is re-read at
+    // resolution (DamageDealEffect reads TargetedObjects$Amount after illegal targets drop), so a target lost in
+    // response leaves an opponent at 1 (the script's X lock, NumDmg$ Discarded$Amount, is not taken); the hint's
+    // -10 sort leaves a readmitted Firestorm the mana left after every other spell; an approval canPayCost then
+    // refuses leaves its targets on the SA, and canPlayFromHost's discard count reads them until a consider resets
+    // them (rare, self-healing).
+    // Couplings (B3-4): G3's RemoveDeckFilter.noManaHeld, G2 HonestMana, NantukoCultivator.keepCount
+    // (package-private) and aiPlayableManaNoManaCost are called, never edited. Private copies, never shared:
+    // Nantuko's keeper score, bestKeeper, anyColours and producedColours, and KnollspineDragon's Discarded test.
+    public static class Firestorm {
+        public static final String NAME = "Firestorm";
+        static final int MIN_KILLS = 1;          // line V: a 1-for-1 removal spell paid in spare cards
+        static final int MIN_LAND_SPARE = 6;     // S2: lands are spare only with this many mana lands in play
+        static final int NEW_COLOUR_BONUS = 200; // NantukoCultivator's keeper bonus (private copy, B3-4)
+
+        // the owner's own regular hand cast that pays the printed {R}: never a copy, a Play-effect cast, a
+        // WithoutManaCost probe (ManaAi's ritual look-ahead, targetPlayableSpellCard), a theft or an escape or
+        // graveyard cast (Underworld Breach); the host's paper name (B3-3); the mana test last, so a copy or a
+        // Play-effect cast never reaches it
+        static boolean ownHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || host.getRules() == null || !NAME.equals(host.getRules().getName())) {
+                return false;
+            }
+            final Player activator = sa.getActivatingPlayer();
+            return sa.isSpell() && sa.getParent() == null && sa.getApi() == ApiType.DealDamage && !sa.isCopied()
+                    && !sa.isCastFromPlayEffect() && !sa.hasParam("WithoutManaCost") && !host.isFaceDown()
+                    && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner()) && ai.equals(host.getController())
+                    && (activator == null || ai.equals(activator))
+                    && !sa.getPayCosts().getTotalMana().isZero();
+        }
+
+        // RemoveDeckFilter.readmit's case: the O(1) tests first, no targeting (the filter runs before the
+        // activator is set), no random number
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!ownHandCast(ai, sa)) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty() || !RemoveDeckFilter.noManaHeld(ai, false)) {
+                return false;
+            }
+            final int others = ai.getCardsIn(ZoneType.Hand).size() - 1;
+            if (others <= 0) {
+                return false;
+            }
+            if (lethalPossible(ai, others)) {
+                return true;
+            }
+            return valueWindow(ai) && !spare(ai, sa.getHostCard()).isEmpty();
+        }
+
+        // DamageDealAi.canPlay's route: the readmit's own key
+        public static boolean routes(final Player ai, final SpellAbility sa) {
+            return ownHandCast(ai, sa);
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            // routing from DamageDealAi.canPlay bypasses the base class's restriction check (MeteorBlast's mirror)
+            if (sa.getRestrictions() != null && !sa.getRestrictions().canPlay(sa.getHostCard(), sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlaySa);
+            }
+            final Game game = ai.getGame();
+            if (!game.getStack().isEmpty() || !RemoveDeckFilter.noManaHeld(ai, false)) {
+                return new AiAbilityDecision(0, AiPlayDecision.AnotherTime);
+            }
+            if (!pays(ai, sa)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            final Card host = sa.getHostCard();
+            if (discardPunished(ai, host)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi); // B3-7: it hits us at cast time
+            }
+            final int others = ai.getCardsIn(ZoneType.Hand).size() - 1;
+            List<GameObject> tg = others > 0 && lethalPossible(ai, others) ? lethalTargets(ai, sa, others) : null;
+            if (tg == null && valueWindow(ai) && ai.canDiscardBy(sa, false)) {
+                tg = valueTargets(ai, sa, spare(ai, host).size());
+            }
+            if (tg == null) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
+            sa.resetTargets();
+            for (final GameObject o : tg) {
+                sa.getTargets().add(o);
+            }
+            if (!sa.isTargetNumberValid() || sa.getTargets().size() != tg.size()) {
+                sa.resetTargets();
+                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // own turn, Main 1 or Main 2, empty stack: the value line's window
+        static boolean valueWindow(final Player ai) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            return ai.getGame().getStack().isEmpty() && ph.isPlayerTurn(ai)
+                    && (ph.is(PhaseType.MAIN1) || ph.is(PhaseType.MAIN2));
+        }
+
+        // the engine's test-mode price (taxes, reductions; B3-5) within G2 (HonestMana, held sources skipped),
+        // its red shards included, and one red source that does not discard our hand (Lion's Eye Diamond would
+        // bin the cards the plan counts)
+        static boolean pays(final Player ai, final SpellAbility sa) {
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)
+                    && redWithoutDiscard(ai, sa);
+        }
+
+        // B3-7: an opponent's Discarded or DiscardedAll trigger that would see a card this cost can discard
+        // (Megrim, Liliana's Caress, Waste Not, Tergrid, Hostile Investigator), on the battlefield or in the
+        // Command zone and working where it sits (zonesCheck), tested as TriggerDiscarded and TriggerDiscardedAll
+        // test it (an absent param matches): ValidPlayer against us, ValidCard against each card of our hand but
+        // the host (never discarded). A private copy of KnollspineDragon.drawOrDiscardIsPunished's Discarded test
+        // (B3-4), widened to DiscardedAll. Over-declines (a symmetric beneficial trigger) are fine.
+        static boolean discardPunished(final Player ai, final Card host) {
+            final Game game = ai.getGame();
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                if (controller == null || !controller.isOpponentOf(ai)) {
+                    continue;
+                }
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() != TriggerType.Discarded && t.getMode() != TriggerType.DiscardedAll) {
+                        continue;
+                    }
+                    if (!t.zonesCheck(game.getZoneOf(c)) || !t.matchesValidParam("ValidPlayer", ai)) {
+                        continue;
+                    }
+                    for (final Card h : ai.getCardsIn(ZoneType.Hand)) {
+                        if (!h.equals(host) && t.matchesValidParam("ValidCard", h)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // ---- the lethal line ----------------------------------------------------------------------------------
+
+        // O(1) per opponent: every opponent's life fits in the cards we can discard, and so does one face each
+        // (S3); the CantDiscard test needs the activated SA and runs in consider
+        static boolean lethalPossible(final Player ai, final int others) {
+            final List<Player> opps = new ArrayList<>(ai.getOpponents());
+            if (opps.isEmpty() || opps.size() > others) {
+                return false;
+            }
+            for (final Player p : opps) {
+                if (!p.canLoseLife() || p.cantLoseForZeroOrLessLife() || p.getLife() > others) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // the smallest X that kills every opponent, at least one target per opponent (S3), as X targets: every
+        // opponent's face, then their creatures and planeswalkers (non-punishers first, never one with Ward: S4),
+        // then ours (least valuable first), never ourselves; X <= the other cards in hand. null when there is none.
+        static List<GameObject> lethalTargets(final Player ai, final SpellAbility sa, final int others) {
+            final Card host = sa.getHostCard();
+            if (!ai.canDiscardBy(sa, false)) {
+                return null;
+            }
+            int need = 0;
+            final List<Player> opps = new ArrayList<>(ai.getOpponents());
+            for (final Player p : opps) {
+                if (!sa.canTarget(p) || !p.canLoseLife() || p.cantLoseForZeroOrLessLife()) {
+                    return null;
+                }
+                int x = 1;
+                while (x <= others && ComputerUtilCombat.predictDamageTo(p, x, host, false) < p.getLife()) {
+                    x++;
+                }
+                if (x > others) {
+                    return null;
+                }
+                need = Math.max(need, x);
+            }
+            need = Math.max(need, opps.size()); // S3: X is the target count too, one face per opponent
+            if (need > others) {
+                return null;
+            }
+            final List<GameObject> out = new ArrayList<>(opps);
+            final List<Card> theirs = new ArrayList<>();
+            final List<Card> theirsPun = new ArrayList<>();
+            final List<Card> ours = new ArrayList<>();
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (!(c.isCreature() || c.isPlaneswalker()) || !sa.canTarget(c)) {
+                    continue;
+                }
+                if (c.getController().isOpponentOf(ai)) {
+                    if (c.hasKeyword(Keyword.WARD)) {
+                        continue; // S4: a non-mana Ward is judged before the discards empty the hand
+                    }
+                    (punishes(c) ? theirsPun : theirs).add(c);
+                } else if (ai.equals(c.getController())) {
+                    ours.add(c);
+                }
+            }
+            ours.sort((a, b) -> Integer.compare(value(a), value(b)));
+            for (final List<Card> l : List.of(theirs, theirsPun, ours)) {
+                for (final Card c : l) {
+                    if (out.size() >= need) {
+                        break;
+                    }
+                    out.add(c);
+                }
+            }
+            return out.size() >= need ? out.subList(0, need) : null;
+        }
+
+        // ---- the value line -----------------------------------------------------------------------------------
+
+        // X <= spare (every discard spare), every target on the opponents' side, no punisher and no Ward (S4);
+        // the X with the most worth-a-card kills, the smallest X on a tie; at least MIN_KILLS
+        static List<GameObject> valueTargets(final Player ai, final SpellAbility sa, final int spare) {
+            final Card host = sa.getHostCard();
+            final List<Player> faces = new ArrayList<>();
+            final List<Card> cards = new ArrayList<>();
+            for (final Player p : ai.getOpponents()) {
+                if (sa.canTarget(p) && p.canLoseLife()) {
+                    faces.add(p);
+                }
+                for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
+                    if ((c.isCreature() || c.isPlaneswalker()) && sa.canTarget(c) && !punishes(c)
+                            && !c.hasKeyword(Keyword.WARD)) {
+                        cards.add(c);
+                    }
+                }
+            }
+            final int maxX = Math.min(spare, faces.size() + cards.size());
+            int bestX = 0;
+            List<Card> bestKills = new ArrayList<>();
+            for (int x = 1; x <= maxX; x++) {
+                final List<Card> kills = new ArrayList<>();
+                for (final Card c : cards) {
+                    if (killWorth(c, x, host)) {
+                        kills.add(c);
+                    }
+                }
+                kills.sort((a, b) -> Integer.compare(value(b), value(a)));
+                final int k = Math.min(kills.size(), x);
+                if (k > bestKills.size()) {
+                    bestX = x;
+                    bestKills = new ArrayList<>(kills.subList(0, k));
+                }
+            }
+            if (bestKills.size() < MIN_KILLS) {
+                return null;
+            }
+            final List<GameObject> out = new ArrayList<>(bestKills);
+            for (final Player p : faces) {
+                if (out.size() >= bestX) {
+                    break;
+                }
+                out.add(p);
+            }
+            for (final Card c : cards) {
+                if (out.size() >= bestX) {
+                    break;
+                }
+                if (!out.contains(c)) {
+                    out.add(c);
+                }
+            }
+            return out.size() == bestX ? out : null;
+        }
+
+        // an opponent's creature X damage kills that is worth a card (MeteorBlast's rule), or an opponent's
+        // planeswalker X damage kills; the stock killable filters of dealDamageChooseTgtC, regeneration read by
+        // the draw-free regenerates() (S1)
+        static boolean killWorth(final Card c, final int x, final Card host) {
+            if (c.isCreature()) {
+                if (c.getCMC() < 2 && c.getNetPower() < 3) {
+                    return false;
+                }
+                return ComputerUtilCombat.getEnoughDamageToKill(c, x, host, false, false) <= x
+                        && !regenerates(c) && !c.hasSVar("SacMe")
+                        && !ComputerUtilCard.hasActiveUndyingOrPersist(c);
+            }
+            if (c.isPlaneswalker()) {
+                return ComputerUtilCombat.predictDamageTo(c, x, host, false) >= c.getCurrentLoyalty();
+            }
+            return false;
+        }
+
+        // S1: ComputerUtil.canRegenerate without its cost test. Its canPayCost runs a test payment on the
+        // creature's controller's sources (isManaSourceReserved draws MyRandom per source) in a consult A never
+        // made. True when c can be shielded and has a regeneration shield already, or when an activated Regenerate
+        // ability on its controller's battlefield applies to it (canRegenerate's own ValidTgts / Defined test, run
+        // before its cost test there), whether or not that player can or would pay for it: stricter than stock,
+        // and draws nothing, stamps nothing.
+        static boolean regenerates(final Card c) {
+            if (!c.canBeShielded()) {
+                return false;
+            }
+            if (c.getShieldCount() > 0) {
+                return true;
+            }
+            final Player controller = c.getController();
+            final Game game = controller.getGame();
+            for (final Card src : controller.getCardsIn(ZoneType.Battlefield)) {
+                for (final SpellAbility ab : src.getSpellAbilities()) {
+                    if (!ab.isActivatedAbility() || ab.getApi() != ApiType.Regenerate) {
+                        continue;
+                    }
+                    final forge.game.spellability.TargetRestrictions tgt = ab.getTargetRestrictions();
+                    if (tgt != null) {
+                        if (CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), tgt.getValidTgts(),
+                                controller, ab.getHostCard(), ab).contains(c)) {
+                            return true;
+                        }
+                    } else if (AbilityUtils.getDefinedCards(ab.getHostCard(), ab.getParam("Defined"), ab).contains(c)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        static int value(final Card c) {
+            return c.isCreature() ? ComputerUtilCard.evaluateCreature(c) : 150 + 10 * c.getCurrentLoyalty();
+        }
+
+        // a card that punishes the damage itself: a non-combat DamageDone/DamageDoneOnce trigger on it whose
+        // ValidTarget is the card (Phyrexian Obliterator, Boros Reckoner, Spitemare, enrage)
+        static boolean punishes(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() != TriggerType.DamageDone && t.getMode() != TriggerType.DamageDoneOnce) {
+                    continue;
+                }
+                final String v = t.getParam("ValidTarget");
+                if (v != null && v.contains(".Self") && !"True".equals(t.getParam("CombatDamage"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // ---- the discards -------------------------------------------------------------------------------------
+
+        // the cards the plan may discard for free, in the order the payment discards them: DiscardMe cards
+        // (highest priority first), then, only with MIN_LAND_SPARE or more mana lands in play (S2), the lands
+        // beyond NantukoCultivator.keepCount, worst first by a private copy of its keeper rule; never
+        // DoNotDiscardIfAble, never the host
+        static CardCollection spare(final Player ai, final Card host) {
+            final CardCollection hand = new CardCollection(ai.getCardsIn(ZoneType.Hand));
+            if (host != null) {
+                hand.remove(host);
+            }
+            hand.removeIf(c -> c.hasSVar("DoNotDiscardIfAble"));
+            final CardCollection out = new CardCollection();
+            for (int p = 6; p >= 0; p--) {
+                for (final Card c : hand) {
+                    if (c.hasSVar("DiscardMe") && parse(c.getSVar("DiscardMe")) == p && !out.contains(c)) {
+                        out.add(c);
+                    }
+                }
+            }
+            if (CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS_PRODUCING_MANA) < MIN_LAND_SPARE) {
+                return out; // S2: below six mana lands the stock rule keeps land drops the AI still needs
+            }
+            final CardCollection pool = CardLists.filter(hand, CardPredicates.LANDS);
+            pool.removeAll(out);
+            final int keep = NantukoCultivator.keepCount(ai);
+            if (pool.size() <= keep) {
+                return out;
+            }
+            final byte any = anyColours(ai);
+            byte have = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                have |= producedColours(ai, src, any);
+            }
+            for (int i = 0; i < keep; i++) {
+                pool.remove(bestKeeper(ai, pool, have, any));
+            }
+            while (!pool.isEmpty()) {
+                Card worst = null;
+                int worstScore = Integer.MAX_VALUE;
+                for (final Card c : pool) {
+                    final int s = keeperScore(ai, c, have, any);
+                    if (s < worstScore) {
+                        worst = c;
+                        worstScore = s;
+                    }
+                }
+                out.add(worst);
+                pool.remove(worst);
+            }
+            return out;
+        }
+
+        // AiController.getCardsToDiscard's gate: the discard part of our own Firestorm cast from our hand
+        public static boolean paysOwnDiscard(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && sa.isSpell() && !sa.isCopied() && !sa.isCastFromPlayEffect()
+                    && ai.equals(sa.getActivatingPlayer()) && ai.equals(host.getOwner())
+                    && host.getCastFrom() != null && host.getCastFrom().is(ZoneType.Hand);
+        }
+
+        // the spare cards first (what the value line priced); the lethal line's rest by lowest mana value in hand
+        // order (List.sort is stable: deterministic, draws nothing)
+        public static CardCollection chooseDiscards(final Player ai, final CardCollection validCards, final int min) {
+            final CardCollection out = new CardCollection();
+            for (final Card c : spare(ai, null)) {
+                if (out.size() >= min) {
+                    break;
+                }
+                if (validCards.contains(c)) {
+                    out.add(c);
+                }
+            }
+            if (out.size() < min) {
+                final List<Card> rest = new ArrayList<>(validCards);
+                rest.removeAll(out);
+                rest.sort((a, b) -> Integer.compare(a.getCMC(), b.getCMC()));
+                for (final Card c : rest) {
+                    if (out.size() >= min) {
+                        break;
+                    }
+                    out.add(c);
+                }
+            }
+            return out;
+        }
+
+        private static int parse(final String v) {
+            try {
+                return Integer.parseInt(v.trim());
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+
+        private static int keeperScore(final Player ai, final Card c, final byte have, final byte any) {
+            int score = forge.ai.simulation.GameStateEvaluator.evaluateLand(c);
+            if ((producedColours(ai, c, any) & ~have) != 0) {
+                score += NEW_COLOUR_BONUS;
+            }
+            return score;
+        }
+
+        // NantukoCultivator.bestKeeper, a private copy: the first land in hand order wins a tie (strict >)
+        private static Card bestKeeper(final Player ai, final CardCollection pool, final byte have, final byte any) {
+            Card best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (final Card c : pool) {
+                final int score = keeperScore(ai, c, have, any);
+                if (score > bestScore) {
+                    best = c;
+                    bestScore = score;
+                }
+            }
+            return best;
+        }
+
+        private static byte anyColours(final Player ai) {
+            final ColorSet identity = ai.getCommanderColorID();
+            return identity == null ? MagicColor.ALL_COLORS : identity.getColor();
+        }
+
+        private static byte producedColours(final Player ai, final Card c, final byte any) {
+            byte mask = 0;
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                if (mp == null) {
+                    continue;
+                }
+                ma.setActivatingPlayer(ai);
+                if (mp.isAnyMana()) {
+                    mask |= any;
+                    continue;
+                }
+                final String letters = mp.isComboMana() ? mp.getComboColors(ma)
+                        : mp.getOrigProduced().replace("Chosen", mp.getChosenColor(ma));
+                for (final String t : letters.split(" ")) {
+                    if (t.length() == 1) {
+                        mask |= MagicColor.fromName(t.charAt(0));
+                    }
+                }
+            }
+            return mask;
+        }
+
+        // floating red, or an untapped red source of ours (not held for a later spell or a block) whose free
+        // mana ability can be played now, may be spent on this spell and discards no card (Lion's Eye Diamond)
+        static boolean redWithoutDiscard(final Player ai, final SpellAbility sa) {
+            if (ai.getManaPool().getAmountOfColor(MagicColor.RED) > 0) {
+                return true;
+            }
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+                        || AiCardMemory.isRememberedCard(ai, src, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)) {
+                    continue;
+                }
+                for (final SpellAbility ma : aiPlayableManaNoManaCost(src)) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    ma.setActivatingPlayer(ai);
+                    if (mp == null || !ma.canPlay() || !ma.checkRestrictions(ai) || !mp.meetsManaRestrictions(sa)
+                            || ma.getPayCosts().hasSpecificCostType(CostDiscard.class)) {
+                        continue;
+                    }
+                    if ((producedColours(ai, src, MagicColor.ALL_COLORS) & MagicColor.RED) != 0) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Mindbreak Trap (dead-card batch 4, wave 6, row 52; a near-dead card)
     // "If an opponent cast three or more spells this turn, you may pay {0} rather than pay this spell's mana
     // cost. Exile any number of target spells." {2}{U}{U} Instant - Trap. AI:RemoveDeck:All stripped every hand
@@ -48158,7 +48722,7 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35, 50 and 12, keepOff for batch 2's row 68 (Trench
+    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35, 50, 12 and 34, keepOff for batch 2's row 68 (Trench
     // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -48331,6 +48895,8 @@ public class SpecialCardAi {
                     return CullingTheWeak.readmit(ai, sa);
                 case LimDulsVault.NAME:                  // batch 4, row 12 (W8)
                     return LimDulsVault.readmit(ai, sa);
+                case Firestorm.NAME:                     // batch 4, row 34 (W8)
+                    return Firestorm.readmit(ai, sa);
                 default:
                     return false;
             }
