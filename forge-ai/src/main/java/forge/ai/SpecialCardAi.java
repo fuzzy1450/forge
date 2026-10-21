@@ -15191,8 +15191,9 @@ public class SpecialCardAi {
     //   mana value whose payment pick (ComputerUtil.chooseExileFrom, the payment's own chooser) is
     //   pitchable: black, never our commander, a planeswalker, our next land drop, a creature worth
     //   more than the kill, or a card whose own spell can target a creature (answersCreature);
-    // - the printed {X}{B}{B} is claimed and refused (CantAffordX), drawing nothing: the stock path
-    //   would announce every spare mana as X behind useRemovalNow's roll.
+    // - the hard cast (part 35C), the printed {X}{B}{B} with X exactly the kill, at Oubliette's 160
+    //   or a commander, with no held mana (G3's noManaHeld), G2 black >= 2 and G1 on the X-set
+    //   cost; the stock path would announce every spare mana as X behind useRemovalNow's roll.
     // RNG: every decline draws nothing and returns before canPayCost; X is cleared on entry and on
     // every decline, set only on WillPlay. Residual (B3x-3): a readmitted pass builds the pitch copy
     // in getOriginalAndAltCostAbilities, one SpellAbility id A did not allocate.
@@ -15233,8 +15234,15 @@ public class SpecialCardAi {
             final CostExile pitch = pitchCost(sa);
             final int cap;
             if (pitch == null) {
-                // the printed {X}{B}{B}: refused here, drawing nothing
-                return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
+                // the printed {X}{B}{B} (part 35C): no held mana, two black (G2), the rest as X
+                if (!RemoveDeckFilter.noManaHeld(ai, false)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+                final HonestMana mana = HonestMana.of(ai, sa, true);
+                if (mana.colour(MagicColor.BLACK) < 2) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+                }
+                cap = mana.total() - 2;
             } else {
                 // the pitch: the largest mana value among the cards it may exile
                 int best = 0;
@@ -15248,7 +15256,7 @@ public class SpecialCardAi {
             if (cap < 1) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
             }
-            final int floor = PITCH_MIN_VALUE;
+            final int floor = pitch == null ? Oubliette.MIN_TARGET_VALUE : PITCH_MIN_VALUE;
             final Game game = ai.getGame();
             CardCollection list = CardLists.getTargetableCards(window, sa);
             list = ComputerUtil.filterAITgts(sa, ai, list, true);
@@ -15271,6 +15279,16 @@ public class SpecialCardAi {
             order.sort((a, b) -> Integer.compare(score(b), score(a))); // stable: ties keep order
             for (final Card t : order) {
                 final int need = need(t, cap);
+                if (pitch == null) {
+                    // part 35C: X exactly the kill, then G1 on the engine's test-mode cost with X set
+                    sa.setXManaCostPaid(need);
+                    if (CommanderCastCeiling.affordable(ai, sa) && sa.canTarget(t)) {
+                        sa.getTargets().add(t);
+                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                    }
+                    sa.setXManaCostPaid(null);
+                    continue;
+                }
                 final int tEval = ComputerUtilCard.evaluateCreature(t);
                 for (int x = need; x <= cap; x++) {
                     sa.setXManaCostPaid(x);
@@ -15289,7 +15307,7 @@ public class SpecialCardAi {
                 sa.setXManaCostPaid(null);
             }
             sa.setXManaCostPaid(null);
-            return new AiAbilityDecision(0, AiPlayDecision.CostNotAcceptable);
+            return new AiAbilityDecision(0, pitch == null ? AiPlayDecision.CantAffordX : AiPlayDecision.CostNotAcceptable);
         }
 
         // the smallest X in 1..cap that surely kills c (Flunk.kills, called unchanged), else 0
