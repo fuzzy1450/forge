@@ -64990,12 +64990,32 @@ public class SpecialCardAi {
     //     >= theirs), holding max(our hand after the cast + HAND_GAP, MIN_OPP_HAND) cards or more; the largest
     //     hand wins, the first in turn order on a tie. The extra card each turn cycle is worth more to the
     //     shorter hand: a full grip is mana-bound and discards at cleanup (IntellectualOffering's refill guard).
-    //   the dry run (mandatory false): TargetingFailed, A's answer, so every judged cast is still vetoed.
+    //   the dry run (mandatory false, 14B: the saSideEffects of canPlaySa and of an optional canPlayFromEffectAI,
+    //     with the cast SA checkETBEffects sets on the host), in order:
+    //     - no cast SpellAbility on the host, TargetingFailed (A's answer);
+    //     - G1: real mana does not cover the engine's price of the cast (CommanderCastCeiling.affordable, called
+    //       unchanged), CantAfford; a free Play-effect copy prices 0 and passes;
+    //     - FLOOR L: we cannot draw, or our library holds fewer than LIB_MIN cards, CantPlayAi: once both sides
+    //       hold a Ring, each draws about twice a turn cycle;
+    //     - FLOOR P: a draw thief or draw punisher at the table (IntellectualOffering's predicate, copied): our
+    //       extra draws on their turn, or theirs on ours, would feed it, CurseEffects;
+    //     - FLOOR H: no floored pick, DoesntImpactGame;
+    //     - else the floored pick is targeted (on checkETBEffects' copy of the trigger, then discarded), WillPlay.
+    //   The Ring is symmetric: once both hold one, each side gets about one extra card a turn cycle and a mirror
+    //   of the other's own-turn life gain, for the caster's otherwise blank card and Main-2 mana. The floors
+    //   measure the asymmetry: the hand gap, the decking race, a thief or punisher fed. Not modelled: the life
+    //   mirror, our own draws on our own turn (the monarch's end-step draw, Mentor of the Meek, Clues), which feed
+    //   the opponent's copy too, and politics (a pod's target is chosen by hand size).
     // RNG: the mandatory branch reads zone sizes, sa.canTarget and canDraw (no MyRandom, no card, no
     // SpellAbility, nothing remembered) and adds the target the trigger resolves with: a removed decline,
-    // divergent by design from a forced cast's first ETB on. The dry run answers where and as A answered.
+    // divergent by design from a forced cast's first ETB on. Every dry-run decline returns at A's own decline site
+    // (TargetingFailed, inside checkETBEffectsPreparedCard after its exSA copy), reading zone sizes, sa.canTarget,
+    // canDraw, trigger and replacement params, HonestMana (its only write is setActivatingPlayer on the mana
+    // abilities it reads) and calculateManaCost in test mode: no MyRandom, no card, no SpellAbility, nothing
+    // remembered. canPayCost's roll follows a WillPlay only.
     public static class WeddingRing {
         public static final String NAME = "Wedding Ring";
+        static final int LIB_MIN = 20;     // FLOOR L
         static final int LIB_SAFE = 40;    // FLOOR H: our library outlasts any at this size
         static final int HAND_GAP = 1;     // FLOOR H: their hand minus ours after the cast
         static final int MIN_OPP_HAND = 3; // FLOOR H: never refill an opponent in topdeck mode
@@ -65016,7 +65036,27 @@ public class SpecialCardAi {
                 sa.getTargets().add(pick);
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }
-            return no(AiPlayDecision.TargetingFailed); // the dry run: A's answer
+            // the dry run (14B), with the cast SA checkETBEffects set on the host
+            final Card host = sa.getHostCard();
+            final SpellAbility cast = host == null ? null : host.getCastSA();
+            if (cast == null || !cast.isSpell()) {
+                return no(AiPlayDecision.TargetingFailed); // A's answer
+            }
+            if (!CommanderCastCeiling.affordable(ai, cast)) {
+                return no(AiPlayDecision.CantAfford);
+            }
+            if (!ai.canDraw() || ai.getCardsIn(ZoneType.Library).size() < LIB_MIN) {
+                return no(AiPlayDecision.CantPlayAi);
+            }
+            if (tableStealsOrPunishesDraws(ai, ai.getGame())) {
+                return no(AiPlayDecision.CurseEffects);
+            }
+            final Player pick = pick(ai, sa, true);
+            if (pick == null) {
+                return no(AiPlayDecision.DoesntImpactGame);
+            }
+            sa.getTargets().add(pick);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
         // FLOOR H when floored, else any targetable opponent; the largest hand wins, first in turn order on a tie
@@ -65049,6 +65089,39 @@ public class SpecialCardAi {
             final SpellAbility cast = sa.getHostCard() == null ? null : sa.getHostCard().getCastSA();
             final Card real = cast == null ? null : cast.getHostCard();
             return real != null && real.isInZone(ZoneType.Hand) ? hand - 1 : hand;
+        }
+
+        // FLOOR P: IntellectualOffering.tableStealsOrPunishesDraws (itself TradeSecrets'), copied verbatim with
+        // namesASide (never share a predicate with an accepted card): draw thieves and draw punishers on the
+        // battlefield or in the Command zone, counted only where they work (zonesCheck). Any opponent's Drawn
+        // trigger or Draw replacement is a veto (an opponent's Wedding Ring among them, a token of an earlier cast:
+        // its Drawn trigger draws them a card for each of ours on our turn); one of ours is a veto when it is
+        // symmetric. Our own payoffs still pass, and so does our own Ring (its ValidCard$ Card.OppOwn names a side).
+        private static boolean tableStealsOrPunishesDraws(final Player ai, final Game game) {
+            for (final Card c : game.getCardsIn(Arrays.asList(ZoneType.Battlefield, ZoneType.Command))) {
+                final Player controller = c.getController();
+                final boolean theirs = controller != null && controller.isOpponentOf(ai);
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Drawn && t.zonesCheck(game.getZoneOf(c))
+                            && (theirs || (!namesASide(t.getParam("ValidCard")) && !namesASide(t.getParam("ValidPlayer"))))) {
+                        return true;
+                    }
+                }
+                for (final ReplacementEffect re : c.getReplacementEffects()) {
+                    if ((re.getMode() == ReplacementType.Draw || re.getMode() == ReplacementType.DrawCards)
+                            && re.zonesCheck(game.getZoneOf(c))) {
+                        final String validPlayer = re.getParam("ValidPlayer");
+                        if (theirs || validPlayer == null || !validPlayer.contains("Opp")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean namesASide(final String valid) {
+            return valid != null && (valid.contains("You") || valid.contains("Opp"));
         }
 
         private static AiAbilityDecision no(final AiPlayDecision why) {
