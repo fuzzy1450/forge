@@ -119,6 +119,16 @@ public class UntapAi extends SpellAbilityAi {
             // keep this stock path. Draws nothing.
             return SpecialCardAi.AphettoAlchemist.considerUntap(ai, sa);
         }
+        if (SpecialCardAi.Earthcraft.isOwnActivation(ai, sa)) {
+            // Dead-card batch 4, row 41, part 41B. Earthcraft's "Tap an untapped creature you control: Untap target
+            // basic land." keeps AI:RemoveDeck:All; G3's readmit puts it back only for the player who owns and
+            // controls it, in our own main phase on an empty stack, and it is judged here under the readmit's own key
+            // (rule B3-2): a thief's Earthcraft, a Mairsil grant, a copy and every other Untap card keep the stock
+            // path below. untapPrefTargeting below would untap any tapped basic at every priority, tapping the
+            // lowest-power body (a live mana dork: net 0) for mana nobody spends. Every decline before the payer
+            // tests draws nothing.
+            return SpecialCardAi.Earthcraft.considerUntap(ai, sa);
+        }
         final Card source = sa.getHostCard();
 
         if (sa.usesTargeting()) {
