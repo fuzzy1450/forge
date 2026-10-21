@@ -40607,6 +40607,9 @@ public class SpecialCardAi {
     // takes 1, from exile, the library or a Play effect 3. S6: one battlefield pass (Engines) and one stack walk
     // (pending) per consult. S4: both entry points catch a RuntimeException, decline nothing and print one "R77 ERR
     // <part> <exception>" line; nothing else is caught.
+    // Retry 1 (the W6 verdict's pending miscount, game 1710140 T21): pending also counts the mandatory copies that a
+    // spell of ours cast during the resolution fired, which wait with its draw triggers in MagicStack's simultaneous
+    // list, each read at that spell's own cast (see pending).
     // Reads zone sizes, the stack, battlefield trigger text (the Execute SVar parsed, never built: CommuneWithLava.
     // copiesSpell's rule, so no SpellAbility id is allocated) and existing SAs' params and targets; an amount whose SVar
     // names Random is never evaluated. RNG-free, no static state but the constants (the serve JVM shares statics),
@@ -40645,7 +40648,7 @@ public class SpecialCardAi {
                 final int draws = e.castDrawsHeld + e.copyDraws * mc;
                 final int cost = su * (1 + mc) + draws;
                 final int lib = ai.getCardsIn(ZoneType.Library).size();
-                final int room = lib - pending(ai, e.castDraws);
+                final int room = lib - pending(ai, e);
                 final boolean hard = draws > lib;
                 final boolean soft = cost > 0 && cost >= room - MARGIN && !answersOpponent(ai, root);
                 if (!hard && !soft) {
@@ -40677,7 +40680,7 @@ public class SpecialCardAi {
                 final int draws = e.copyDraws * n;
                 final int cost = su * n + draws;
                 final int lib = ai.getCardsIn(ZoneType.Library).size();
-                final int room = lib - pending(ai, e.castDraws);
+                final int room = lib - pending(ai, e);
                 final boolean hard = draws > lib;
                 final boolean soft = cost > 0 && cost >= room - MARGIN && !answersOpponent(ai, orig);
                 if (!hard && !soft) {
@@ -40739,6 +40742,9 @@ public class SpecialCardAi {
             int castDrawsHeld;   // of those, firing on this spell with their condition held now (cdp)
             int copyDraws;       // of those, SpellCastOrCopy ones (Magecraft): a copy fires them too (kd)
             int replacements;    // CopySpell replacements on our battlefield (Twinning Staff)
+            // retry 1: the copy triggers above with no OptionalDecider, whatever spell is cast; pending reads each
+            // against a spell cast during the resolution, at that spell's own cast (queuedCopies)
+            final List<Trigger> mandatoryCopyTriggers = new ArrayList<>();
         }
 
         // S6: every count in one pass over our battlefield. spellHost = the instant or sorcery about to be cast, or
@@ -40765,6 +40771,9 @@ public class SpecialCardAi {
                         e.copyEvents++;
                         if (onThis && !t.hasParam("OptionalDecider")) {
                             e.mandatoryCopies++;
+                        }
+                        if (!t.hasParam("OptionalDecider")) {
+                            e.mandatoryCopyTriggers.add(t);
                         }
                     } else {
                         e.castDraws++;
@@ -40978,8 +40987,13 @@ public class SpecialCardAi {
         // own, a mandatory copy trigger the copied spell's (an optional one nothing: 77A judges it when it resolves).
         // While the stack resolves, each instant or sorcery spell of ours above the resolving item was cast during it
         // (a Bombardment or Mizzix's Play casting several copies) and its cast draw triggers wait in MagicStack's
-        // simultaneous list: cd more for each (conditions ignored)
-        private static int pending(final Player ai, final int cd) {
+        // simultaneous list: cd more for each (conditions ignored). Retry 1 (the W6 verdict's pending miscount: game
+        // 1710140 T21, where Storm of Saruman's copy of Arcane Bombardment's round-1 Augury copy, 9 cards, went
+        // uncounted and the round-2 Ancestral Vision copy passed at a true room of 8): the mandatory copy triggers that
+        // spell fired wait in the same list, so m * (su + kd) more for each, with su its selfUse, kd the Magecraft
+        // draws each copy fires and m the mandatory copy triggers that fit its host with their condition held at its
+        // own cast (queuedCopies): the mc breachesCast reads for a cast about to be made
+        private static int pending(final Player ai, final Engines e) {
             final forge.game.zone.MagicStack st = ai.getGame().getStack();
             boolean above = st.isResolving();
             int n = 0;
@@ -41012,12 +41026,74 @@ public class SpecialCardAi {
                     }
                     continue;
                 }
-                n += selfUse(ai, sa);
+                final int su = selfUse(ai, sa);
+                n += su;
                 if (above && sa.isSpell() && !sa.isCopied() && h != null && (h.isInstant() || h.isSorcery())) {
-                    n += cd;
+                    n += e.castDraws;
+                    n += queuedCopies(ai, e, st, sa, h) * (su + e.copyDraws);
                 }
             }
             return n;
+        }
+
+        // retry 1: m for a spell of ours cast during the resolution, the spell already cast: our mandatory copy
+        // triggers (Engines.mandatoryCopyTriggers: S2's fires passed, no OptionalDecider) that pass fitsSpell for its
+        // host and whose condition held at its own cast (heldAtCast)
+        private static int queuedCopies(final Player ai, final Engines e, final forge.game.zone.MagicStack st,
+                final SpellAbility spell, final Card host) {
+            if (e.mandatoryCopyTriggers.isEmpty()) {
+                return 0;
+            }
+            final int pos = castPosition(ai, st, spell);
+            int m = 0;
+            for (final Trigger t : e.mandatoryCopyTriggers) {
+                if (fitsSpell(t, host) && heldAtCast(ai, t, host, pos)) {
+                    m++;
+                }
+            }
+            return m;
+        }
+
+        // retry 1: the spell's 1-based position among our casts this turn, in MagicStack.getSpellsCastThisTurn()'s
+        // order (every player's casts, each entry carrying its cast SA's id); its latest cast, 0 when it is not there.
+        // Ours only: the engine's ActivatorThisTurnCast counts the activator's casts, as conditionHolds'
+        // getSpellsCastThisTurn() + 1 does for a cast about to be made
+        private static int castPosition(final Player ai, final forge.game.zone.MagicStack st,
+                final SpellAbility spell) {
+            int ours = 0;
+            int at = 0;
+            for (final SpellAbility c : st.getSpellsCastThisTurn()) {
+                if (c == null || !ai.equals(c.getActivatingPlayer())) {
+                    continue;
+                }
+                ours++;
+                if (spell.equals(c)) {
+                    at = ours;
+                }
+            }
+            return at;
+        }
+
+        // retry 1: conditionHolds read at a spell's own cast, the spell already cast: ActivatorThisTurnCast$ EQn
+        // (Storm of Saruman's second spell) against its cast position, Melek's wasCastFromYourLibrary by its
+        // getCastFrom() (a library of ours)
+        private static boolean heldAtCast(final Player ai, final Trigger t, final Card host, final int pos) {
+            final String n = t.getParam("ActivatorThisTurnCast");
+            if (n != null && n.startsWith("EQ")) {
+                try {
+                    if (pos != Integer.parseInt(n.substring(2))) {
+                        return false;
+                    }
+                } catch (NumberFormatException ex) {
+                    // an unparsed count: held (conditionHolds' reading)
+                }
+            }
+            final String v = t.getParam("ValidCard");
+            if (v == null || !v.contains("wasCastFromYourLibrary")) {
+                return true;
+            }
+            final forge.game.zone.Zone from = host.getCastFrom();
+            return from != null && from.getZoneType() == ZoneType.Library && ai.equals(from.getPlayer());
         }
 
         // the spell a CopySpellAbility trigger copies (Defined$ TriggeredSpellAbility by default)
