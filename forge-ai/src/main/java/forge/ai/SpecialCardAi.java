@@ -20590,6 +20590,14 @@ public class SpecialCardAi {
     //   destroys every doom counter on the table (Armageddon Clock's, Imminent Doom's, Lavabrink Floodgates', an
     //   earlier Eye's), and the floor counts counters, not picks. The Eye stays and is judged again at every
     //   priority: it improves when our doomed permanent dies first, as in combat.
+    // - considerCast (55P3; PermanentNoncreatureAi.checkApiLogic after the stock approval, the owner's own hand cast
+    //   only, which G3's case also readmits; own Main 2 by the stock PermanentAi phase hold): G2 covers the engine's
+    //   price; then each player's pick is predicted with chooseDoomed's own first rung on the board as it stands (each
+    //   AI runs 55P1, so the prediction is the resolution's choice, absent responses; no pick = the Eye, which
+    //   destroys nothing), each doomed permanent counted once (two choosers in a pod routinely pick the same bomb),
+    //   plus every permanent already carrying a doom counter: gain >= CAST_GAIN_MIN and gain - loss >= CAST_NET_MIN,
+    //   else CantPlayAi. The cast floors are at least the activation's, so a cast that passes is not then declined by
+    //   the activation on an unchanged board.
     // value: CreatureEvaluator for a creature, else 50 + 30 * CMC (+10 per loyalty counter), Act of Authority's
     // ranking copied privately (never a predicate shared with an accepted card) and without
     // getBestRemovalTargetAI's board term, which can draw; + TAX for a commander. Memoised per call in a
@@ -20602,14 +20610,28 @@ public class SpecialCardAi {
     // G2 HonestMana (whose only write is setActivatingPlayer on our mana abilities) to those reads.
     public static class EyeOfDoom {
         public static final String NAME = "Eye of Doom";
+        static final int CAST_GAIN_MIN = 200;  // a real threat among the victims: EdictForAll.MIN_VICTIM_EVAL
+        static final int CAST_NET_MIN = 200;   // the symmetric-removal margin: WaveOfReckoning.MARGIN, DestroyAllAi's
+                                               // CREATURE_EVAL_THRESHOLD; the card, six mana and the opponent's window
         static final int ACT_GAIN_MIN = 100;   // the Eye is already spent: a card's worth
         static final int ACT_NET_MIN = 100;    // about a 1/1 token (106) once our own loss is paid: EdictForAll.NET_MARGIN
         static final int TAX = 100;            // a commander is recast for 2 more, both sides: EdictForAll.COMMANDER_TAX
 
-        // RemoveDeckFilter.readmit's case (the dispatcher already matched the paper name): the activation by the
-        // Eye's controller (55P2). Zone, controller and API only; RNG-free, holds nothing; a false is the old filter
+        // RemoveDeckFilter.readmit's case (the dispatcher already matched the paper name): the owner's own hand cast
+        // (55P3) and the activation by the Eye's controller (55P2). Zone, owner, controller and API only; RNG-free,
+        // holds nothing; a false is the old filter
         public static boolean readmit(final Player ai, final SpellAbility sa) {
-            return isActivation(ai, sa);
+            return isOwnHandCast(ai, sa)      // 55P3
+                    || isActivation(ai, sa);  // 55P2
+        }
+
+        // 55P3's key: G3's case and PermanentNoncreatureAi's gate. Our own regular cast of the paper card from our own
+        // hand; a Play-effect cast (Guff Rewrites History, Nathan Drake, Krang & Shredder) keeps A's stock answer, and
+        // a MayPlay thief's exile cast (Gonti, Hostage Taker, Xanathar, Stolen Strategy) stays filtered
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && sa.isSpell() && !sa.isCastFromPlayEffect() && NAME.equals(paperName(host))
+                    && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner());
         }
 
         // 55P2's key: G3's case and DestroyAllAi.checkApiLogic's gate. The {2}, {T}, sacrifice DestroyAll of an Eye
@@ -20660,6 +20682,47 @@ public class SpecialCardAi {
                 }
             }
             return least;
+        }
+
+        // 55P3, from PermanentNoncreatureAi.checkApiLogic after the stock approval: G2, then the predicted picks. Every
+        // decline is its own RNG-free return, before canPlaySa's canPayCost
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            final int price = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false)
+                    .getConvertedManaCost();
+            if (HonestMana.of(ai, sa, true).total() < price) {
+                return no(AiPlayDecision.CantAfford);
+            }
+            final Card eye = sa.getHostCard();                         // in hand: not among the options yet
+            final Map<Card, Integer> memo = new HashMap<>();           // lookups only: never iterated
+            final CardCollection board = new CardCollection();
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isLand() && c.canReceiveCounters(CounterEnumType.DOOM)) {
+                    board.add(c);
+                }
+            }
+            final Set<Card> doomed = new LinkedHashSet<>();            // a permanent two players pick dies once
+            for (final Player p : ai.getGame().getPlayers()) {         // RepeatPlayers$ Player: each player picks
+                final Card pick = bestDoomable(p, board, eye, memo);   // null = the Eye itself: destroys nothing
+                if (pick != null) {
+                    doomed.add(pick);
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (!c.equals(eye) && c.getCounters(CounterEnumType.DOOM) > 0 && destroyable(c)) {
+                    doomed.add(c);                                     // already doomed: it dies too
+                }
+            }
+            int gain = 0;
+            int loss = 0;
+            for (final Card c : doomed) {
+                if (c.getController().equals(ai)) {
+                    loss += value(c, memo);
+                } else if (c.getController().isOpponentOf(ai)) {
+                    gain += value(c, memo);
+                }
+            }
+            return gain < CAST_GAIN_MIN || gain - loss < CAST_NET_MIN ? no(AiPlayDecision.CantPlayAi)
+                    : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
         // 55P2, from DestroyAllAi.checkApiLogic (its first decision): G2, then the doomed values that would die. Every
@@ -20727,6 +20790,13 @@ public class SpecialCardAi {
             }
             memo.put(c, v);
             return v;
+        }
+
+        // the dispatcher's own key (RemoveDeckFilter.paperName): the host's rules name; a face-down host's getName()
+        // is ""
+        private static String paperName(final Card host) {
+            final forge.card.CardRules rules = host.getRules();
+            return rules == null ? null : rules.getName();
         }
 
         private static AiAbilityDecision no(final AiPlayDecision why) {

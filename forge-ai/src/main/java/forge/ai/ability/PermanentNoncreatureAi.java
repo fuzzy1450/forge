@@ -154,6 +154,17 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.ClockOfOmens.considerCast(ai, sa);
         }
 
+        // Eye of Doom (dead-card batch 4, row 55, part 55P3) keeps AI:RemoveDeck:All; G3 lets its owner's own hand cast
+        // through, and that cast is judged here (own Main 2, PermanentAi.checkPhaseRestrictions), RNG-free, before
+        // canPlaySa's canPayCost test payment: only when honest mana pays it and the doom counters each player is
+        // predicted to place, plus those already out, would destroy at least 200 of the opponents' and 200 more than
+        // ours. The gate is the readmit's own key (rule B3-2): a Play-effect cast (Guff Rewrites History's free cast,
+        // Nathan Drake, Krang & Shredder; PermanentAi.doTriggerNoCost ends in this checkApiLogic), a MayPlay thief's
+        // (still filtered) and every other host keep the stock answer.
+        if (SpecialCardAi.EyeOfDoom.isOwnHandCast(ai, sa)) {
+            return SpecialCardAi.EyeOfDoom.considerCast(ai, sa);
+        }
+
         // Lavabrink Floodgates dropped AI:RemoveDeck:All. Its own cast is judged here, after the
         // stock approval (own Main 2 in practice, PermanentAi.checkPhaseRestrictions); a Play-effect
         // cast (Etali's free cast, Nathan Drake's attack trigger) keeps the stock answer, as in A.
