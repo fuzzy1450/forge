@@ -356,6 +356,17 @@ public class DamageDealAi extends DamageAiBase {
             return SpecialCardAi.CleansingBeam.consider(ai, sa);
         }
 
+        if (SpecialCardAi.BloodRites.isOwnAbility(ai, sa)) {
+            // Blood Rites (dead-card batch 4, row 56): its {1}{R}, Sacrifice-a-creature ping, reached behind
+            // G3's readmit with the readmit's own key (rule B3-2): the card's own AB on the battlefield, asked
+            // by its controller. The stock path below finds no fodder (checkSacrificeCost: no AIPreference,
+            // SACRIFICE_DEFAULT_PREF_ENABLE=false), shuffles the threatened bodies it does find (MyRandom),
+            // draws in its targeting, and lets the payment take getWorstAI's pick. A Mairsil grant, a Copy
+            // Enchantment copy and every other host fail the key and keep exactly the path they took before,
+            // as does every other DamageDeal card.
+            return SpecialCardAi.BloodRites.consider(ai, sa);
+        }
+
         final String damage = sa.getParam("NumDmg");
         int dmg = calculateDamageAmount(sa, source, damage);
 

@@ -5382,6 +5382,310 @@ public class SpecialCardAi {
         }
     }
 
+    // Blood Rites (dead-card batch 4, row 56, W8; precon:Power Hungry (C13), deck 211, an anchor)
+    // "{1}{R}, Sacrifice a creature: Blood Rites deals 2 damage to any target." ({3}{R}{R} Enchantment.)
+    // Never cast by its owner from hand on any engine, and never activated: AI:RemoveDeck:All dropped the
+    // hand spell AND the ping in AiController.getSpellAbilityToPlay's removeIf before any handler ran.
+    // The active engine's one owner cast (1905741) was Guff Rewrites History's free Play from exile, and
+    // the card then sat 18 turns unactivated. The hint is KEPT (rule B3-1): every other isCardRemAIDeck
+    // reader still refuses it and the -10 sort keeps both SAs at the leftover-mana tail. Three name-keyed
+    // points carry it:
+    // - readmit (G3): the ping for whoever controls it (isOwnAbility) while that player has a creature
+    //   and no live mana reservation (noManaHeld); the owner's hand cast is part 56B's, and without it a
+    //   spell answers false, the filter as it was;
+    // - consider, from DamageDealAi.canPlay behind isOwnAbility (rule B3-2), so a Mairsil grant, a Copy
+    //   Enchantment copy (paper name Copy Enchantment) and every probe of another host keep A's path;
+    // - chooseSacrifice, from ComputerUtil.chooseSacrificeType: the payment sacrifices the creature
+    //   consider priced.
+    // Value floor of the ping, in order (every tier needs G2 to pay {1}{R} at the test-mode cost):
+    // A. a creature of ours that is leaving anyway: VisceraSeer.chooseSacrifice, called unchanged (B3-4).
+    //    A stack object destroys, exiles or steals it for good, its evoke trigger is pending, it dies in
+    //    this combat without a trade (declare blockers), or it is an end-of-turn token in our own Main 2.
+    //    Then any target is profit: lethal, a planeswalker the hit kills, a creature worth MIN_KILL_EVAL
+    //    killed for good, else the lowest-life opponent's face, else any creature killed for good;
+    // B. lethal: a targetable opponent who can lose, whose life the predicted hit times
+    //    min(affordable activations, fodder) reaches, in any window. The fodder is a creature token
+    //    first, else the worst creature;
+    // C. outside the stack, in our own Main 2, an opponent's end step before our turn, or an opponent's
+    //    declare-attackers / declare-blockers step with attackers on us: the worst creature token with no
+    //    mana ability (Artillerize.chooseSacrifice, unchanged) for an opposing planeswalker the hit kills
+    //    (not in their combat) or an opposing creature the hit kills for good, worth MIN_KILL_EVAL and
+    //    more than the token, not already dying (those attackers only when defending).
+    // Ward (skeptic FINAL 7.2): no creature or planeswalker with Ward is a target in any tier.
+    // ComputerUtilCost.canPayCost's ward loop would refuse such an approval after test payments that
+    // draw, and the same board would pick it again at every pass.
+    // Never: a nontoken that is not leaving, outside a lethal chain; a creature whose own mana ability
+    // sacrifices it (an Eldrazi Spawn could be spent for mana first).
+    // RNG: A never evaluated either SA. Every decline returns before canPlaySa's canPayCost and draws
+    // nothing: the windows, predictDamageTo, HonestMana, the test-mode calculateManaCost, canTarget,
+    // evaluateCreature, getEnoughDamageToKill, predictThreatenedObjects (through VisceraSeer). There is no
+    // preventRunAwayActivations, damageTargetAI, getDamagingSAToChain or SacMe shuffle. Residual: in
+    // combat, the combat predictors (VisceraSeer's leavers, filterCreaturesThatWillDieThisTurn) reach
+    // ComputerUtil.canRegenerate, which runs canPayCost and draws only when a Regenerate ability covers a
+    // combatant (Tower Defense's and Artillerize's documented residual). Targets are reset first and set
+    // only on a WillPlay; nothing is held or remembered.
+    public static class BloodRites {
+        public static final String NAME = "Blood Rites";
+        static final int MIN_KILL_EVAL = 160; // a vanilla nontoken 2/2 (Artillerize, Fiery Gambit, Titan's Presence)
+
+        // the paper card (rule B3-3), as RemoveDeckFilter.paperName reads it
+        private static boolean isBloodRites(final Card host) {
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // part 56A's key, carried by the DamageDealAi route and the payment hook (rule B3-2): the card's own
+        // sacrifice-another DealDamage AB, on the battlefield, asked by its controller
+        public static boolean isOwnAbility(final Player ai, final SpellAbility sa) {
+            if (sa == null || !sa.isActivatedAbility() || sa.getApi() != ApiType.DealDamage) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            if (!isBloodRites(host) || !host.isInPlay() || !ai.equals(host.getController())) {
+                return false;
+            }
+            final CostSacrifice sac = sa.getPayCosts() == null ? null
+                    : sa.getPayCosts().getCostPartByType(CostSacrifice.class);
+            return sac != null && !sac.payCostFromSource(); // script drift: a decline
+        }
+
+        // RemoveDeckFilter.readmit's case: cheapest checks first, RNG-free, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (sa.isSpell()) {
+                return false; // the owner's hand cast is part 56B's
+            }
+            return isOwnAbility(ai, sa) && !ai.getCreaturesInPlay().isEmpty()
+                    && RemoveDeckFilter.noManaHeld(ai, false);
+        }
+
+        // DamageDealAi.canPlay's route (isOwnAbility). Every decline before WillPlay draws nothing.
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.resetTargets();
+            final Game game = ai.getGame();
+            final Card host = sa.getHostCard();
+            final int dmg = AbilityUtils.calculateAmount(host, sa.getParam("NumDmg"), sa);
+            final CardCollection opts = fodderOptions(ai, sa);
+            if (dmg <= 0 || opts.isEmpty()) {
+                return no(AiPlayDecision.CantAfford);
+            }
+            final PhaseHandler ph = game.getPhaseHandler();
+            final Combat combat = game.getCombat();
+            final boolean stackLive = !game.getStack().isEmpty();
+            final boolean ownTurn = ph.isPlayerTurn(ai);
+            final boolean ownMain2 = ph.is(PhaseType.MAIN2, ai);
+            final boolean blockStep = combat != null && ph.is(PhaseType.COMBAT_DECLARE_BLOCKERS);
+            final boolean oppEnd = !ownTurn && ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn());
+            final boolean defensive = !ownTurn && combat != null
+                    && (ph.is(PhaseType.COMBAT_DECLARE_ATTACKERS) || blockStep)
+                    && !combat.getAttackersOf(ai).isEmpty();
+            final boolean killWindow = !stackLive && (ownMain2 || oppEnd || defensive);
+            final boolean leaverWindow = stackLive || blockStep || ownMain2; // VisceraSeer.chooseSacrifice's own
+            final boolean lethalReach = lethalOpponent(ai, sa, host, dmg, opts.size()) != null;
+            if (!killWindow && !leaverWindow && !lethalReach) {
+                return no(AiPlayDecision.AnotherTime); // O(players + creatures) in every idle window
+            }
+            // G2 against the test-mode cost, less one per source whose mana sacrifices another permanent
+            // (Artillerize.sacrificingManaSources, unchanged): mana is paid before the sacrifice (Cost.sort)
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int sacSources = Artillerize.sacrificingManaSources(ai);
+            final int perTotal = Math.max(1, cost.getConvertedManaCost());
+            final int perRed = cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+            final int total = mana.total() - sacSources;
+            final int red = mana.colour(MagicColor.RED) - sacSources;
+            final int activations = Math.min(total / perTotal, perRed == 0 ? Integer.MAX_VALUE : red / perRed);
+            if (activations <= 0) {
+                return no(AiPlayDecision.CantAfford);
+            }
+            // A: a creature leaving anyway (no-op outside its windows)
+            if (leaverWindow && VisceraSeer.chooseSacrifice(ai, sa, opts) != null) {
+                final GameEntity t = freeTarget(ai, sa, host, dmg);
+                return t == null ? no(AiPlayDecision.TargetingFailed) : target(sa, t);
+            }
+            // B: lethal on one opponent over the affordable chain
+            final Player lethal = lethalReach
+                    ? lethalOpponent(ai, sa, host, dmg, Math.min(activations, opts.size())) : null;
+            if (lethal != null) {
+                return target(sa, lethal);
+            }
+            // C: a token for a real kill
+            if (!killWindow) {
+                return no(AiPlayDecision.AnotherTime);
+            }
+            final Card token = Artillerize.chooseSacrifice(ai, opts);
+            if (token == null) {
+                return no(AiPlayDecision.CantAfford); // never a nontoken outside A and B
+            }
+            final GameEntity kill = killTarget(ai, sa, host, dmg, ComputerUtilCard.evaluateCreature(token),
+                    defensive ? combat : null);
+            return kill == null ? no(AiPlayDecision.CantPlayAi) : target(sa, kill);
+        }
+
+        // the payment's pick (chooseSacrificeType) and the decision's, in the decision's order: the leaver
+        // (A), else the token (B and C), else the worst creature (B only: consider approved nothing else)
+        public static Card chooseSacrifice(final Player ai, final SpellAbility sa, final CardCollection typeList) {
+            final CardCollection opts = CardLists.filter(typeList, c -> c.isCreature() && !sacrificesItselfForMana(c));
+            final Card leaver = VisceraSeer.chooseSacrifice(ai, sa, opts);
+            if (leaver != null) {
+                return leaver;
+            }
+            final Card token = Artillerize.chooseSacrifice(ai, opts);
+            if (token != null) {
+                return token;
+            }
+            return opts.isEmpty() ? null : ComputerUtilCard.getWorstCreatureAI(opts);
+        }
+
+        // chooseSacrificeType's own list and order (Artillerize.sacrificable, unchanged), minus self-sacrificing
+        // mana creatures
+        static CardCollection fodderOptions(final Player ai, final SpellAbility sa) {
+            return CardLists.filter(Artillerize.sacrificable(ai, sa), c -> c.isCreature() && !sacrificesItselfForMana(c));
+        }
+
+        static boolean sacrificesItselfForMana(final Card c) {
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final CostSacrifice s = ma.getPayCosts() == null ? null : ma.getPayCosts().getCostPartByType(CostSacrifice.class);
+                if (s != null && s.payCostFromSource()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // tier A's target: lethal by one hit; a planeswalker the hit kills (not warded); an opposing creature
+        // killed for good worth MIN_KILL_EVAL, not warded, not dying anyway, best evaluation then card id; the
+        // lowest-life targetable opponent who can lose and takes a hit > 0 (turn order on ties); any opposing
+        // creature killed for good (not warded); else null
+        static GameEntity freeTarget(final Player ai, final SpellAbility sa, final Card host, final int dmg) {
+            final Player lethal = lethalOpponent(ai, sa, host, dmg, 1);
+            if (lethal != null) {
+                return lethal;
+            }
+            final Card pw = bestPlaneswalkerKill(ai, sa, host, dmg);
+            if (pw != null) {
+                return pw;
+            }
+            final CardCollection worthy = new CardCollection();
+            final CardCollection anyKill = new CardCollection();
+            for (final Card c : CardLists.getTargetableCards(ai.getOpponents().getCreaturesInPlay(), sa)) {
+                if (!c.isCreature() || !ai.isOpponentOf(c.getController()) || c.hasKeyword(Keyword.WARD)
+                        || !isKill(c, host, dmg)) {
+                    continue;
+                }
+                anyKill.add(c);
+                if (ComputerUtilCard.evaluateCreature(c) >= MIN_KILL_EVAL) {
+                    worthy.add(c);
+                }
+            }
+            final Card best = bestByEval(ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, worthy));
+            if (best != null) {
+                return best;
+            }
+            Player face = null;
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.canLoseLife() || opp.cantLoseForZeroOrLessLife() || opp.cantLose() || !sa.canTarget(opp)) {
+                    continue;
+                }
+                if (ComputerUtilCombat.predictDamageTo(opp, dmg, host, false) <= 0) {
+                    continue;
+                }
+                if (face == null || opp.getLife() < face.getLife()) {
+                    face = opp;
+                }
+            }
+            if (face != null) {
+                return face;
+            }
+            return bestByEval(anyKill);
+        }
+
+        // tier C's target, Artillerize.consider's steps 3-4 at this damage: a planeswalker the hit kills outside an
+        // opponent's combat (not warded); a creature from combat.getAttackersOf(ai) when defending, else the
+        // opponents' creatures, not warded, v >= MIN_KILL_EVAL, v > fodderEval and killed for good; then
+        // filterCreaturesThatWillDieThisTurn; best evaluation then card id
+        static GameEntity killTarget(final Player ai, final SpellAbility sa, final Card host, final int dmg,
+                final int fodderEval, final Combat defCombat) {
+            if (defCombat == null) {
+                final Card pw = bestPlaneswalkerKill(ai, sa, host, dmg);
+                if (pw != null) {
+                    return pw;
+                }
+            }
+            final CardCollection pool = defCombat != null ? defCombat.getAttackersOf(ai) : ai.getOpponents().getCreaturesInPlay();
+            final CardCollection kills = new CardCollection();
+            for (final Card c : CardLists.getTargetableCards(pool, sa)) {
+                if (!c.isCreature() || !ai.isOpponentOf(c.getController()) || c.hasKeyword(Keyword.WARD)) {
+                    continue;
+                }
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                if (v >= MIN_KILL_EVAL && v > fodderEval && isKill(c, host, dmg)) {
+                    kills.add(c);
+                }
+            }
+            return bestByEval(ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, kills));
+        }
+
+        // an opposing planeswalker the hit kills, not warded (getBestPlaneswalkerAI)
+        private static Card bestPlaneswalkerKill(final Player ai, final SpellAbility sa, final Card host, final int dmg) {
+            final CardCollection pws = CardLists.filter(CardLists.getTargetableCards(CardLists.filter(
+                    CardLists.filterControlledBy(ai.getGame().getCardsIn(ZoneType.Battlefield), ai.getOpponents()),
+                    CardPredicates.PLANESWALKERS), sa),
+                    c -> !c.hasKeyword(Keyword.WARD) && dies(c, host, dmg));
+            return pws.isEmpty() ? null : ComputerUtilCard.getBestPlaneswalkerAI(pws);
+        }
+
+        // the best evaluation, then the lowest card id
+        private static Card bestByEval(final Iterable<Card> list) {
+            Card best = null;
+            int bestEval = -1;
+            for (final Card c : list) {
+                final int v = ComputerUtilCard.evaluateCreature(c);
+                if (best == null || v > bestEval || (v == bestEval && c.getId() < best.getId())) {
+                    best = c;
+                    bestEval = v;
+                }
+            }
+            return best;
+        }
+
+        // the lowest-life opponent who can lose, targetable, whose life the predicted hit times k reaches; ties
+        // in turn order
+        static Player lethalOpponent(final Player ai, final SpellAbility sa, final Card host, final int dmg, final int k) {
+            Player best = null;
+            for (final Player opp : ai.getOpponents()) {
+                if (!opp.canLoseLife() || opp.cantLoseForZeroOrLessLife() || opp.cantLose() || !sa.canTarget(opp)) {
+                    continue;
+                }
+                final int hit = ComputerUtilCombat.predictDamageTo(opp, dmg, host, false);
+                if (hit <= 0 || (long) hit * k < opp.getLife()) {
+                    continue;
+                }
+                if (best == null || opp.getLife() < best.getLife()) {
+                    best = opp;
+                }
+            }
+            return best;
+        }
+
+        // Artillerize's kill tests at this damage (private copies: Artillerize's are fixed at its own 5)
+        static boolean dies(final Card c, final Card host, final int dmg) {
+            return ComputerUtilCombat.getEnoughDamageToKill(c, dmg, host, false) <= dmg;
+        }
+
+        static boolean isKill(final Card c, final Card host, final int dmg) {
+            return !c.hasSVar("SacMe") && !ComputerUtilCard.hasActiveUndyingOrPersist(c) && dies(c, host, dmg);
+        }
+
+        private static AiAbilityDecision target(final SpellAbility sa, final GameEntity t) {
+            sa.resetTargets();
+            sa.getTargets().add(t);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision d) {
+            return new AiAbilityDecision(0, d);
+        }
+    }
+
     // Borderland Explorer
     // "When this enters, each player may discard a card. Each player who discarded a card this
     // way may search their library for a basic land card, reveal it, put it into their hand."
@@ -48954,7 +49258,7 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35, 50, 12, 34, 41, 45 and 55, keepOff for batch 2's row 68 (Trench
+    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35, 50, 12, 34, 41, 45, 55 and 56, keepOff for batch 2's row 68 (Trench
     // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -49135,6 +49439,8 @@ public class SpecialCardAi {
                     return ClockOfOmens.readmit(ai, sa);
                 case EyeOfDoom.NAME:                     // batch 4, row 55 (W8)
                     return EyeOfDoom.readmit(ai, sa);
+                case BloodRites.NAME:                    // batch 4, row 56 (W8)
+                    return BloodRites.readmit(ai, sa);
                 default:
                     return false;
             }
