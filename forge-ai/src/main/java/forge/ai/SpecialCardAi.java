@@ -21909,14 +21909,39 @@ public class SpecialCardAi {
     }
 
     // Finale of Revelation (dead-card batch 4, row 75, parts 75B and 75A; deck review 2026-10-17, Arcanis F8)
-    // Part 75B lands first; 75A and 75B are kept or reverted together (separate commits for bisection only).
-    // keepsX, which DrawAi.chkDrawback asks before targetAI, keeps an X announced on the root of the owner's own
-    // hand cast (handles) instead of letting targetAI's ConsiderPrimary branch re-size it to the leftover mana
-    // clamped to the hand-size room plus one and refuse a hand above getMaxHandSize(). Part 75A adds the judgment
-    // that announces X (consider, routed from ChangeZoneAllAi.canPlay), which clears X at every consult it judges.
-    // Reads game state only: no random draw, no SpellAbility id, no held or remembered state.
+    // "Draw X cards. If X is 10 or more, instead shuffle your graveyard into your library, draw X cards,
+    // untap up to five lands, and you have no maximum hand size for the rest of the game. Exile Finale
+    // of Revelation." ({X}{U}{U} sorcery.) The script's root is the ChangeZoneAll shuffle (Graveyard to
+    // Library, Card.YouOwn, ConditionCheckSVar X GE10) and the draw a ConsiderPrimary sub, so
+    // ChangeZoneAllAi judged the spell by its generic "graveyard larger than library" rule
+    // (ChangeZoneAllAi:235-238), and when that passed, DrawAi.targetAI re-announced X as the leftover
+    // mana clamped to the hand-size room plus one (DrawAi:463-488): the 10+ mode was unreachable and
+    // 93% of held copies ended the game in hand. Judge the owner's hand cast here and announce X.
+    // - Big, X >= 10: our Main 1 or Main 2, not a reanimator deck (the stock rule's own exception).
+    //   Main 1: X = 10, the rider at its least price; the turn's other mana and the five untapped lands
+    //   go to what it draws. Main 2: every payable X. The library after the shuffle keeps LIB_KEEP.
+    // - Small, 3 <= X <= 9: our Main 2 only, on the mana the turn's other plays left (saComparator
+    //   consults this X spell as mana value 2); every drawn card kept through cleanup unless we have no
+    //   maximum hand size; the library keeps LIB_KEEP.
+    // - Never: we can't draw; an opponent's draw thief or punisher would see the draws
+    //   (KnollspineDragon.drawOrDiscardIsPunished, batch 1, called not edited); a CantDraw static cuts
+    //   them (StaticAbilityCantDraw.canDrawAmount).
+    // Draws are X doubled per Teferi's Ageless Insight we control, ArcanisTheOmnipotent.effectiveDraw's
+    // term. Mana: HonestMana (G2, held sources skipped) against the engine's test-mode price at X
+    // (calculateManaCost: taxes, RaiseCost and ReduceCost statics) in total and in blue; RNG-free, and
+    // read-only on five byte-strict census games. Past that floor only, the exact test payment at the
+    // candidate X (ComputerUtilMana.canPayManaCost, stepping down to the mode's floor) draws in
+    // isManaSourceReserved. A decline returns null with X cleared and the caller runs the stock path after
+    // the same run-away roll. DrawAi.chkDrawback keeps the announced X (keepsX, part 75B). Only the owner's
+    // own cast from hand with its X mana cost: a Play-effect or copied cast (Mizzix's Mastery), a thief's
+    // (the Nathan Drake family), and a ritual probe's no-mana copy (ManaAi) keep the stock path.
+    // No SpellAbility id, no held or remembered state.
     public static class FinaleOfRevelation {
         public static final String NAME = "Finale of Revelation";
+        public static final int BIG_X = 10;       // the printed threshold
+        public static final int SMALL_MIN_X = 3;  // five mana for three cards: two past the card spent
+        public static final int LIB_KEEP = 10;    // cards left in the library once the draws resolve
+        private static final String DOUBLER = "Teferi's Ageless Insight";
 
         public static boolean handles(final Player ai, final SpellAbility sa) {
             final Card host = sa.getHostCard();
@@ -21934,6 +21959,80 @@ public class SpecialCardAi {
             }
             final SpellAbility root = sub.getRootAbility();
             return root != sub && root.getXManaCostPaid() != null && handles(ai, root);
+        }
+
+        // WillPlay with X announced, or null: decline, X cleared, the stock path runs
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            sa.setXManaCostPaid(null); // nothing from an earlier consult or a declined payment
+            final Game game = ai.getGame();
+            final PhaseHandler ph = game.getPhaseHandler();
+            final boolean main2 = ph.is(PhaseType.MAIN2, ai);
+            if (!(main2 || ph.is(PhaseType.MAIN1, ai)) || !game.getStack().isEmpty() || !ai.canDraw()) {
+                return null;
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < SMALL_MIN_X) {
+                return null; // no X >= 3 at any reduction: most early consults stop here
+            }
+            final int doubling = CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.nameEquals(DOUBLER));
+            final int library = ai.getCardsIn(ZoneType.Library).size();
+            int graveyard = 0; // what the shuffle returns: cards we own (UseAllOriginZones)
+            for (final Card c : ai.getCardsIn(ZoneType.Graveyard)) {
+                if (ai.equals(c.getOwner())) {
+                    graveyard++;
+                }
+            }
+            final int handAfter = ai.getCardsIn(ZoneType.Hand).size() - 1;
+            // caps in X: the draws each guard allows, divided back by the doubling
+            int bigCap = Math.min(main2 ? mana.total() : BIG_X, (library + graveyard - LIB_KEEP) >> doubling);
+            int smallCap = main2 ? Math.min(Math.min(BIG_X - 1, mana.total()), (library - LIB_KEEP) >> doubling) : 0;
+            if (smallCap >= SMALL_MIN_X && !ai.isUnlimitedHandSize()) {
+                smallCap = Math.min(smallCap, (ai.getMaxHandSize() - handAfter) >> doubling);
+            }
+            if (bigCap >= BIG_X && ComputerUtil.isPlayingReanimator(ai)) {
+                bigCap = 0;
+            }
+            if (bigCap < BIG_X && smallCap < SMALL_MIN_X) {
+                return null;
+            }
+            int x = priced(ai, sa, mana, bigCap, BIG_X);
+            int floor = BIG_X;
+            if (x == 0) {
+                x = priced(ai, sa, mana, smallCap, SMALL_MIN_X);
+                floor = SMALL_MIN_X;
+            }
+            if (x == 0 || KnollspineDragon.drawOrDiscardIsPunished(ai, sa.getHostCard())
+                    || StaticAbilityCantDraw.canDrawAmount(ai, x << doubling) < (x << doubling)) {
+                return null; // every decline so far is RNG-free
+            }
+            // past the floor only: the exact test payment (draws in isManaSourceReserved)
+            while (x >= floor && !ComputerUtilMana.canPayManaCost(sa, ai, x, false)) {
+                x--;
+            }
+            if (x < floor && floor == BIG_X && smallCap >= SMALL_MIN_X) {
+                x = Math.min(x, smallCap);
+                while (x >= SMALL_MIN_X && !ComputerUtilMana.canPayManaCost(sa, ai, x, false)) {
+                    x--;
+                }
+                floor = SMALL_MIN_X;
+            }
+            if (x < floor) {
+                return null; // the residual: a decline after test payments (verify plan M5)
+            }
+            sa.setXManaCostPaid(x);
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // the highest X in [lo, cap] whose test-mode price HonestMana covers, in total and in blue; 0 if none
+        private static int priced(final Player ai, final SpellAbility sa, final HonestMana mana, final int cap, final int lo) {
+            for (int k = cap; k >= lo; k--) {
+                final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, k, false);
+                if (cost.getConvertedManaCost() <= mana.total()
+                        && cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE) <= mana.colour(MagicColor.BLUE)) {
+                    return k;
+                }
+            }
+            return 0;
         }
     }
 

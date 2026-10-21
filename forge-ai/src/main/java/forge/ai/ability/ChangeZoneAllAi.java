@@ -108,6 +108,18 @@ public class ChangeZoneAllAi extends SpellAbilityAi {
             return SpecialCardAi.CalamityOfTheTitans.consider(ai, sa, false);
         }
 
+        if (SpecialCardAi.FinaleOfRevelation.handles(ai, sa)) {
+            // Dead-card batch 4, row 75 (part 75A). Finale of Revelation's root is this
+            // ChangeZoneAll shuffle, so the Graveyard branch below judged the whole spell by "graveyard
+            // larger than library" (never, in a Commander library). The owner's hand cast is judged by
+            // its draw there. After the run-away roll above: a decline (null) leaves X cleared and runs
+            // the stock path below exactly as before, the same random draws included.
+            final AiAbilityDecision finale = SpecialCardAi.FinaleOfRevelation.consider(ai, sa);
+            if (finale != null) {
+                return finale;
+            }
+        }
+
         oppType = AbilityUtils.filterListByType(oppType, sa.getParam("ChangeType"), sa);
         computerType = AbilityUtils.filterListByType(computerType, sa.getParam("ChangeType"), sa);
         
