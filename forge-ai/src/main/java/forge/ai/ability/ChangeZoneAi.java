@@ -2209,11 +2209,30 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 }
                 // nothing our filter would return: the stock Battlefield pick below
             } else if ("Intuition".equals(logic)) {
-                CardCollection chosen = cardsToChoose();
-                if (!chosen.isEmpty()) {
-                    Card choice = chosen.get(0);
-                    chosen.remove(0);
-                    return choice;
+                if (SpecialCardAi.IntuitionPile.handles(sa) && !(sa instanceof AbilitySub)) {
+                    // Dead-card batch 4, row 9, part 9C: Intuition's own three picks, by the searching player (the
+                    // targeted opponent's pick is DBChangeZone1, an AbilitySub with no AILogic, which never comes
+                    // here). The stock branch below returned the per-game scratch's first card with no check that it
+                    // is in fetchList, and ChangeZoneEffect moves it unchecked: a scratch that any ChangeZone consult
+                    // between the cast and its resolution cleared (a fetch land, a tutor in hand) lost the pick, and
+                    // one an opposing Intuition's consult refilled (the carriers' mirror) named a card of the other
+                    // player's library, binned to its owner's graveyard. Read afresh instead
+                    // (SpecialCardAi.IntuitionPile.choosePick: the stock evaluator's first card still in fetchList),
+                    // else the stock pick below. It draws only at a resolution A never reached. A face-down cast is
+                    // named by its card state (handles); a copy's host is named Intuition and picks from the
+                    // copier's library. Burning-Rune Demon fails handles() and keeps the stock branch.
+                    final Card pick = SpecialCardAi.IntuitionPile.choosePick(decider, sa, fetchList);
+                    if (pick != null) {
+                        return pick;
+                    }
+                    // nothing the evaluator wants is still searchable: the stock pick below
+                } else {
+                    CardCollection chosen = cardsToChoose();
+                    if (!chosen.isEmpty()) {
+                        Card choice = chosen.get(0);
+                        chosen.remove(0);
+                        return choice;
+                    }
                 }
             } else if (logic.startsWith("ExilePreference")) {
                 return doExilePreferenceLogic(decider, sa, fetchList);

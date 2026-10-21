@@ -29351,6 +29351,24 @@ public class SpecialCardAi {
             }
             return false;
         }
+
+        // 9C: the library owner's pick at Intuition's resolution, read afresh from the stock evaluator
+        // (Intuition.considerMultiple, called not edited), never from ChangeZoneAi's per-game choice scratch,
+        // which every seat's ChangeZone consult clears and refills: the first of its cards still in fetchList,
+        // else null (the stock pick). The picked cards stay in the library until the search ends
+        // (ChangeZoneEffect only removes each from fetchList), so the three calls read one library and come
+        // out in the evaluator's order; a list that differs between calls (Main 2's first test payment clears
+        // HELD_MANA_SOURCES_FOR_MAIN2) still returns a card the search can take. decider is the searching
+        // player (PlayerControllerAi passes its own player; the root has no Chooser$). Draws (the evaluator's
+        // test payments) only at a resolution, on a cast A never made.
+        public static Card choosePick(final Player decider, final SpellAbility sa, final CardCollectionView fetchList) {
+            for (final Card c : Intuition.considerMultiple(decider, sa)) {
+                if (fetchList.contains(c)) {
+                    return c;
+                }
+            }
+            return null;
+        }
     }
 
     // Gifts Ungiven (dead-card batch 4, row 32; Blue Farm 4Matic and All the world's power, site uploads)
