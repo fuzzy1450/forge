@@ -1027,6 +1027,13 @@ public class CountersPutAi extends CountersAi {
             // the plan's creature or none, never the parity-blind best-creature pick below
             return SpecialCardAi.ZimonesHypothesis.chooseCounterTarget(ai, sa, options);
         }
+        if (SpecialCardAi.EyeOfDoom.isDoomChoice(sa, params)) {
+            // Eye of Doom's ETB, "each player chooses a nonland permanent" (dead-card batch 4, row 55, part 55P1):
+            // stock (no IsCurse$) reached getBestAI over the chooser's own permanents below, so every AI doomed its
+            // own best. The best opposing permanent the activation would destroy instead, else the Eye, else a
+            // harmless opposing pick, else our least valuable; RNG-free, as getBestAI was
+            return SpecialCardAi.EyeOfDoom.chooseDoomed(ai, sa, options);
+        }
         // Bolster does use this
         // TODO need more or less logic there?
         final CounterType m1m1 = CounterEnumType.M1M1;

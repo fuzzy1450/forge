@@ -20572,6 +20572,110 @@ public class SpecialCardAi {
         }
     }
 
+    // Eye of Doom (dead-card batch 4, row 55, wave 8; a former cut: batch 2's row 8, "design C", rebuilt to that
+    // review's amendments and amended again by b4/eye-of-doom/skeptic.md FINAL, which wins). {4} artifact: "When Eye
+    // of Doom enters, each player chooses a nonland permanent and puts a doom counter on it. {2}, {T}, Sacrifice Eye
+    // of Doom: Destroy each permanent with a doom counter on it." The script keeps AI:RemoveDeck:All (rule B3-1).
+    // - chooseDoomed (55P1; CountersPutAi.chooseSingleCard, for every chooser of every Eye's ETB, whoever controls the
+    //   Eye and however it was cast): the best opposing permanent the activation would destroy (never the Eye
+    //   itself); else the Eye (sacrificed as the activation's cost, so its own counter destroys nothing); else any
+    //   opposing option (an undestroyable one: the counter is harmless); else our own or an ally's least valuable, an
+    //   undestroyable one first. Never our best, never null on a non-empty pool. Stock (no IsCurse$) took getBestAI
+    //   over the chooser's own permanents (CountersPutAi's `mine` branch): every AI doomed its own best permanent.
+    // value: CreatureEvaluator for a creature, else 50 + 30 * CMC (+10 per loyalty counter), Act of Authority's
+    // ranking copied privately (never a predicate shared with an accepted card) and without
+    // getBestRemovalTargetAI's board term, which can draw; + TAX for a commander. Memoised per call in a
+    // method-local map: lookups only, never iterated, no static state (safe across serve slots). destroyable is what
+    // the activation destroys: DestroyAllAi's predicate (no indestructible, no shield counter) plus canBeDestroyed
+    // (in play, not phased out).
+    // RNG parity: every read is zones, controllers, counters, keywords and CreatureEvaluator. No MyRandom, no
+    // SpellAbility created, nothing remembered or held.
+    public static class EyeOfDoom {
+        public static final String NAME = "Eye of Doom";
+        static final int TAX = 100;            // a commander is recast for 2 more, both sides: EdictForAll.COMMANDER_TAX
+
+        // 55P1's key: the ETB's doom-counter choice (CountersPutEffect's Chooser$ Remembered, each player in turn).
+        // getName(): a copy entering as the Eye is keyed too
+        public static boolean isDoomChoice(final SpellAbility sa, final Map<String, Object> params) {
+            final Card host = sa.getHostCard();
+            if (host == null || !NAME.equals(host.getName()) || params == null) {
+                return false;
+            }
+            final Object t = params.get("CounterType");
+            return t instanceof CounterType && ((CounterType) t).is(CounterEnumType.DOOM);
+        }
+
+        // 55P1, from CountersPutAi.chooseSingleCard after Zimone's gate: the chooser's own pick, four rungs
+        public static Card chooseDoomed(final Player chooser, final SpellAbility sa, final Iterable<Card> options) {
+            final Card eye = sa.getHostCard();
+            final Map<Card, Integer> memo = new HashMap<>();           // lookups only: never iterated
+            final Card pick = bestDoomable(chooser, options, eye, memo);
+            if (pick != null) {
+                return pick;
+            }
+            for (final Card c : options) {
+                if (c.equals(eye)) {
+                    return c;                                          // sacrificed by its own activation
+                }
+            }
+            for (final Card c : options) {
+                if (c.getController().isOpponentOf(chooser)) {
+                    return c;                                          // undestroyable: the counter is harmless
+                }
+            }
+            Card least = null;                                         // ours or an ally's: an undestroyable one first
+            int lv = Integer.MAX_VALUE;
+            for (final Card c : options) {
+                final int v = destroyable(c) ? value(c, memo) : -1;
+                if (v < lv) {
+                    least = c;
+                    lv = v;
+                }
+            }
+            return least;
+        }
+
+        // the most valuable destroyable permanent an opponent of the chooser controls, the Eye excluded (first max
+        // wins); null when there is none
+        static Card bestDoomable(final Player chooser, final Iterable<Card> options, final Card eye,
+                final Map<Card, Integer> memo) {
+            Card best = null;
+            int bv = Integer.MIN_VALUE;
+            for (final Card c : options) {
+                if (c.equals(eye) || !c.getController().isOpponentOf(chooser) || !destroyable(c)) {
+                    continue;
+                }
+                final int v = value(c, memo);
+                if (v > bv) {
+                    best = c;
+                    bv = v;
+                }
+            }
+            return best;
+        }
+
+        // what the activation destroys: DestroyAllAi's predicate (no indestructible, no shield counter), plus
+        // canBeDestroyed (in play, not phased out)
+        static boolean destroyable(final Card c) {
+            return c.canBeDestroyed() && !c.hasKeyword(Keyword.INDESTRUCTIBLE)
+                    && c.getCounters(CounterEnumType.SHIELD) == 0;
+        }
+
+        static int value(final Card c, final Map<Card, Integer> memo) {
+            final Integer known = memo.get(c);
+            if (known != null) {
+                return known;
+            }
+            int v = c.isCreature() ? ComputerUtilCard.evaluateCreature(c)
+                    : 50 + 30 * c.getCMC() + (c.isPlaneswalker() ? 10 * c.getCounters(CounterEnumType.LOYALTY) : 0);
+            if (c.isCommander()) {
+                v += TAX;
+            }
+            memo.put(c, v);
+            return v;
+        }
+    }
+
     // Face Yourself (dead-card batch 3, row 112; carrier Boros Miracle Spells 73ed3acd, an upload, not an
     // anchor). {5}{R}{R} Sorcery: "For each creature target player controls, create a token that's a copy
     // of that creature, except it has haste and 'At the beginning of the end step, if you don't control a
