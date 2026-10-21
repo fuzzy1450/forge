@@ -652,6 +652,20 @@ public class ComputerUtil {
             // the board changed between decision and payment: fall through to the stock chooser
         }
 
+        if (amount == 1 && !effect && SpecialCardAi.CullingTheWeak.handles(ability)
+                && ai.equals(ability.getHostCard().getOwner())) {
+            // Culling the Weak's owner pays with the creature CullingTheWeak priced (never the commander
+            // or a mana creature, the cheapest safe body), not getCardPreference's getWorstAI over
+            // Creature.cmcLE2. Here, not in getCardPreference (whose AIPreference block returns first and
+            // also answers checkSacrificeCost), as Artillerize's. The card is on the stack by now, so the
+            // key is the name and the owner, not the hand.
+            final Card pick = SpecialCardAi.CullingTheWeak.choosePayment(ai, ability, typeList);
+            if (pick != null) {
+                return new CardCollection(pick);
+            }
+            // the board changed between decision and payment: fall through to the stock chooser
+        }
+
         if (amount == 1 && effect && SpecialCardAi.ReadTheRunes.handles(ability)) {
             // Read the Runes' "discard a card unless you sacrifice a permanent" (an unless cost, so
             // effect is true): only the worst token or SacMe permanent that is not a land, a
