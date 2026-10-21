@@ -36,6 +36,16 @@ public class ManaAi extends SpellAbilityAi {
     @Override
     protected boolean checkAiLogic(Player ai, SpellAbility sa, String aiLogic) {
         if (aiLogic.startsWith("ManaRitual") || aiLogic.startsWith("BlackLotus")) {
+            // Dead-card batch 4, row 50 (Culling the Weak): the owner's own cast, in a window its G3 readmit
+            // admits, is judged on the follow-ups that floor priced (CullingTheWeak.consider), not the stock
+            // look-ahead whose "a spell real mana could already pay" sold the creature for nothing (the
+            // script's TODO). Every consult outside an admitted window, a direct canPlaySa caller's included
+            // (TapAi's first-land shockland hasReasonToPlayCardThisTurn), keeps the stock ritual logic and its
+            // draws (rule B3-2: the readmit's key AND its RNG-free admit test); inside one, that caller is
+            // answered by consider too. A name compare first: inert for every other ritual.
+            if (SpecialCardAi.CullingTheWeak.isOwnCast(ai, sa) && SpecialCardAi.CullingTheWeak.readmit(ai, sa)) {
+                return SpecialCardAi.CullingTheWeak.consider(ai, sa);
+            }
             return doManaRitualLogic(ai, sa, false);
         } else if ("Always".equals(aiLogic)) {
             return true;
