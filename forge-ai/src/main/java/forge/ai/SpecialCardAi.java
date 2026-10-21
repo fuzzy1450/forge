@@ -37488,9 +37488,10 @@ public class SpecialCardAi {
     // exchange and copy pickers) stays as it was. The -10 in the sort (ComputerUtilAbility.saEvaluator)
     // only orders it behind other FREE abilities: "use 0 cmc abilities first" sorts a printed {0} ahead
     // of every costed ability, which is why the cast is readmitted only at a cost of {0} (below). The
-    // G3 dispatcher readmits, for the player who OWNS the card, exactly one ability, its cast (the
-    // crack stays filtered), and the stock chain judges it behind the filter
-    // (PermanentNoncreatureAi/PermanentAi WillPlay for a {0} permanent):
+    // G3 dispatcher readmits, for the player who OWNS the card, exactly two abilities, and the stock
+    // chain judges them behind the filter (PermanentNoncreatureAi/PermanentAi WillPlay for a {0}
+    // permanent; PeekAndRevealAi WillPlay on the preferred opponent; DelayedTriggerAi -> DrawAi's
+    // slowtrip guards: a library of 5+, and no draw into a hand already over the maximum):
     // - 20A the cast from our own hand (not a Play-effect cast, not a copy), in our own main phase on
     //   an empty stack, only while the engine's test-mode cost is {0} and nothing counters it or harms
     //   its caster: no cast trigger working where it is counters it (our own Vexing Bauble, Chalice of
@@ -37501,6 +37502,11 @@ public class SpecialCardAi {
     //   including its commander, and spend real mana on a cantrip. At {0} the test payment ends at the
     //   pool short-circuit, so no isManaSourceReserved roll is possible. "Opponent draws" taxes (Rhystic
     //   Study, Mystic Remora, Esper Sentinel) stay stock, as in TravelThroughCaradhras.castPunished.
+    // - 20B the crack of a Bauble we own AND control (a thief keeps the filter), untapped, face up: at
+    //   an end step on an empty stack, any player's turn, or with the stack non-empty when
+    //   predictThreatenedObjects names it. The draw comes at the next turn's upkeep whenever in a turn
+    //   the Bauble is cracked, so waiting for the end step costs no tempo and keeps the artifact for the
+    //   turn (Mox Opal's metalcraft in the carrier).
     // Draws nothing, holds nothing, remembers nothing, and allocates no SpellAbility id: trigger chains are
     // read as SVar text, never ensureAbility (Hour of Eternity's idiom). Its only write is
     // setActivatingPlayer on a hand SA with no activator yet (as getOriginalAndAltCostAbilities does
@@ -37518,7 +37524,7 @@ public class SpecialCardAi {
             if (sa.isSpell()) {
                 return readmitCast(ai, sa, host);
             }
-            return false; // the crack stays filtered
+            return sa.isActivatedAbility() && sa.getApi() == ApiType.PeekAndReveal && readmitCrack(ai, host);
         }
 
         // 20A
@@ -37544,6 +37550,18 @@ public class SpecialCardAi {
                 return false;
             }
             return !answeredOnCast(ai, host);
+        }
+
+        // 20B
+        static boolean readmitCrack(final Player ai, final Card host) {
+            if (!host.isInPlay() || host.isFaceDown() || host.isTapped() || !ai.equals(host.getController())) {
+                return false;
+            }
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty()) {
+                return game.getPhaseHandler().is(PhaseType.END_OF_TURN);
+            }
+            return ComputerUtil.predictThreatenedObjects(ai, null).contains(host);
         }
 
         // a SpellCast trigger working where it is that matches this free cast by us and whose chain counters
