@@ -1919,6 +1919,26 @@ public class AiController {
                 }
                 memory.clearMemorySet(AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
             }
+            // High Tide (dead-card batch 4, row 8, part 8A): our own hand High Tide may take the place of the
+            // play the AI just chose, or of no play, in our own Main 2, when its extra {U} per Island makes the
+            // first permanent spell of ours in saList's own order, ahead of that play, newly affordable this
+            // turn, and that spell is our commander or of mana value 4 or more (SpecialCardAi.HighTide.findPreCast).
+            // The card keeps AI:RemoveDeck:All and has no G3 readmit, so saList never holds it and A's loop, sort
+            // and handler path are untouched. Inert (a phase test, then a hand scan by paper name) unless our own
+            // tide is in hand in our Main 2 on an empty stack; a decline draws nothing, holds nothing, allocates
+            // no SpellAbility and returns chosenSa unchanged; only an approval's own canPlayAndPayFor draws
+            // (canPayCost's test payment), at a cast A was not about to make.
+            SpellAbility tide = SpecialCardAi.HighTide.findPreCast(player, chosenSa, saList);
+            if (tide != null) {
+                SpecialCardAi.HighTide.PENDING.set(tide);
+                try {
+                    if (canPlayAndPayFor(tide) == AiPlayDecision.WillPlay) {
+                        return tide;
+                    }
+                } finally {
+                    SpecialCardAi.HighTide.PENDING.remove();
+                }
+            }
         }
 
         return chosenSa;

@@ -104,6 +104,16 @@ public class EffectAi extends SpellAbilityAi {
             // stock engine made for this unhinted card.
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
+        if (SpecialCardAi.HighTide.isPending(sa)) {
+            // High Tide (dead-card batch 4, row 8, part 8A), offered by AiController.getSpellAbilityToPlay
+            // (HighTide.findPreCast) on the game thread in place of the play the AI chose. Only that consult
+            // sees PENDING: it is one the stock engine never made (AI:RemoveDeck:All keeps the card off the
+            // playable list, and no G3 case readmits it), so it draws nothing. Every other consult - ManaAi's
+            // ritual probe and the other direct canPlaySa callers (Nykthos' devotion scan skips the hinted card
+            // since W4's 74N), Play-effect casts (Jeleva's) and copies - takes the stock path below unchanged:
+            // the randomReturn roll, then the no-AILogic CantPlayAi.
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         final Game game = ai.getGame();
         final PhaseHandler phase = game.getPhaseHandler();
         boolean randomReturn = MyRandom.getRandom().nextFloat() <= .6667;

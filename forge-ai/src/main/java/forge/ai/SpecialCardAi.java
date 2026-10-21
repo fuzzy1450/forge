@@ -27541,6 +27541,307 @@ public class SpecialCardAi {
         }
     }
 
+    // High Tide (dead-card batch 4, row 8, wave 9, part 8A; Arcanis - i LOVE drawing cards 87715b77, deck 508)
+    // "Until end of turn, whenever a player taps an Island for mana, that player adds an additional {U}." ({U}
+    // Instant.) The script (h/high_tide.txt) matches the printed text: SP$ Effect whose Static$ True TapsForMana
+    // trigger (ValidCard$ Island) adds {U} for the TriggeredActivator, plus AI:RemoveDeck:All. The hint takes the
+    // owner's hand cast off the playable list (AiController.getSpellAbilityToPlay's saList.removeIf; no G3 case
+    // names the card), and behind it EffectAi.checkApiLogic draws its randomReturn roll and refuses at the
+    // no-AILogic fallthrough at every consult that does reach it (ManaAi's ritual probe and the other direct
+    // canPlaySa scanners, a thief's Play effect): the owner never cast it. A G3 readmit would not do: the
+    // handler cannot tell the playable-list consult from the direct canPlaySa scanners that pass the same hand
+    // SA, and a readmit would re-open Nykthos' devotion scan to it (deck 508 plays Nykthos; W4's 74N skips a
+    // hinted card only while no G3 case takes it back), with an unconditional WillPlay; and a readmitted tide
+    // sorts last (-10), behind the cheaper permanent the AI spends the mana on.
+    // So the hint stays, no readmit is added, and the card takes Rite of Harmony's pre-cast idiom with Benevolent
+    // Offering's hoist: AiController.getSpellAbilityToPlay, its play already chosen in our own Main 2 on an empty
+    // stack, asks findPreCast whether the tide may take the place of that play (or of no play), and offers the
+    // hand SA to canPlayAndPayFor with PENDING set. EffectAi answers WillPlay for that one consult, before its
+    // roll: a consult the stock engine never made. Every other consult (the "Game AI Eval" thread, every direct
+    // canPlaySa caller, Play-effect casts, copies) sees PENDING null and keeps the stock roll-then-decline.
+    // The tide is cast only when its extra {U} per Island turns the permanent spell the engine would cast next
+    // from unaffordable into affordable this turn. findPreCast's refusals, in order (skeptic.md FINAL):
+    //  1. our own Main 2 on an empty stack (8B, the Main-1 window, is not taken);
+    //  2. our own High Tide in our hand by paper name, face up: its own Effect spell, not a copy, not skipped
+    //     (A2: a real cast that failed after WillPlay leaves it skipped, and the tide is never in saList, whose
+    //     skip list alone is cleared, so it is never offered again);
+    //  3. the play A chose is nothing, or our own permanent spell (not a copy, not a Play-effect cast) that is
+    //     not a commander: an instant, a sorcery, an ability or a commander cast A chose stands;
+    //  4. no live mana reservation (G3's noManaHeld) and no mana multiplier on any battlefield or command zone
+    //     (a TapsForMana trigger, an active tide's effect included, or a ProduceMana replacement: Ob Nixilis of
+    //     the Black Oath's scan, a private copy), where HonestMana under-counts what the payment makes;
+    //  5. MIN_ISLANDS (3) or more untapped Islands of ours: one pays the tide, each other one adds its {U};
+    //  6. the opponents' untapped Islands, all together, fewer than ours less one: they gain less this turn;
+    //  7. the tide priced (A1): its test-mode cost (taxes and reductions, B3-5) is exactly {U}, so an opposing
+    //     tax refuses (two Islands paid could leave the chosen play short), and G2 counts a blue source;
+    //  8. pre = G2's total; gain = Islands - 2 (the paying Island, then one {U} per Island left); post = pre +
+    //     gain, and blue + gain in blue;
+    //  9. the target by the engine's own order (A3): saList as chooseSpellAbilityToPlayFromList left it (sorted,
+    //     then sequenced), front to back. The walk stops at the play A chose (matched by host card and API, so
+    //     an alt-cost choice, which is not in saList, stops there too): that play precedes any target, and the
+    //     stock pass after the tide would cast it again. The first own permanent spell from our hand or command
+    //     zone with no X whose test-mode cost G2 cannot pay now (in total or in blue) and can pay after the tide
+    //     is the target; it must be our commander or of printed mana value MIN_MV (4) or more, eligible, and its
+    //     white, black, red and green pips covered by G2, else the cast declines. So does a walk that finds no
+    //     such spell, or that meets one whose cost asks a controller (delve, convoke, improvise, assist, emerge,
+    //     offering, waterbend, Announce$ NumTimes): it cannot be priced without asking, and it may be the
+    //     engine's next cast. (The FINAL names those words in the target's eligible list; refusing at the walk
+    //     is the integrator's reading of B3-5's never-test-cost-them rule, and only ever removes casts.)
+    // eligible: owned by us, not hinted (isCardRemAIDeck), not skipped, no Announce$; a command-zone card our
+    // commander; a hand card a nonland, non-Aura permanent other than a High Tide, face up; no Flash (the flash
+    // hold); none of Backup, Blitz, Riot, Start your engines and no RaidTest SVar (castPermanentInMain1's attack
+    // simulations); not a legend whose name we control; not a NonStackingEffect card already in play.
+    // RNG: a pre-cast decided after A's own evaluation is finished, at a draw-free point (B4-9). Every decline
+    // reads the phase, the zones, AiCardMemory (noManaHeld), card types, triggers and replacements, the test-mode
+    // calculateManaCost (it restores castFrom) and HonestMana (its only write, setActivatingPlayer on our own
+    // mana abilities); the activator writes on the tide and the saList entries repeat the list builder's own: it
+    // draws nothing, holds nothing, remembers nothing, makes no SpellAbility and returns chosenSa unchanged, so
+    // B is A up to its first approval. The approval's canPlayAndPayFor is a consult A never made: divergent by
+    // design, its only draws canPayCost's per-source reserve rolls.
+    // Reach: the owner's own hand High Tide, by paper name, for any AI seat whose hand holds its own tide (deck
+    // 508, the only registered carrier). A thief's cast (Jeleva's exile Play, 1634334), a copy and every direct
+    // canPlaySa scanner keep the stock path (not in its owner's hand, or PENDING null). After the tide resolves
+    // the engine's own predictMana sees UU per Island, while G1 and G2 ceilings in other rows' gates do not (the
+    // safe side). The hint and its -10 sort stay, so every other isCardRemAIDeck reader is unchanged.
+    // Residuals: the target is forecast, never asked (its canPlaySa would draw on a decline path), so the stock
+    // pass after the tide may still decline it (the card and a mana spent, the extra mana usually going to A's
+    // chosen play); the tide's {U} paid from a multi-mana source (Gilded Lotus) gives less than the forecast, one
+    // paid from a non-Island land gives more; the opponents' non-Island blue sources are not bounded, their own
+    // Islands' extra {U} on our turn only by step 6; instants and sorceries the tide would unlock are not
+    // targets; a hybrid_sim seat's one-play safety check (saSideEffects) may refuse the approval, a consult A
+    // never made (deck 508's stored seats are default); W6's 77C OwnLibraryFloor.breachesCast, the last veto
+    // after canPayCost, meets the approved tide (our instant): its cost is 0 unless a cast draw or copy trigger of
+    // ours fires on it, so it declines only then, near an empty library, after canPayCost drew; the first window
+    // with a mana value 4 card in hand spends the tide (greedy by design; the pre-registered lever is to
+    // restrict the targets to our commander).
+    public static class HighTide {
+        public static final String NAME = "High Tide";
+        static final int MIN_ISLANDS = 3; // one pays the tide's {U}; at least one more must add its extra {U}
+        static final int MIN_MV = 4;      // a target other than our commander must be worth the card
+        // The SA findPreCast is offering, set on the game thread by AiController and read by EffectAi on that
+        // same thread. The ordinary evaluation loop runs on the "Game AI Eval" thread, where it is always null.
+        public static final ThreadLocal<SpellAbility> PENDING = new ThreadLocal<>();
+
+        public static boolean isPending(final SpellAbility sa) {
+            return sa != null && PENDING.get() == sa;
+        }
+
+        // Our own hand High Tide's spell to cast now in place of chosenSa (null when A chose nothing), or null.
+        public static SpellAbility findPreCast(final Player ai, final SpellAbility chosenSa,
+                final List<SpellAbility> saList) {
+            // 1. our own Main 2, an empty stack (top == null at the call site already)
+            final Game game = ai.getGame();
+            if (!game.getPhaseHandler().is(PhaseType.MAIN2, ai) || !game.getStack().isEmpty()) {
+                return null;
+            }
+            // 2. our own High Tide in our hand, by paper name: the card's own spell (no SpellAbility is made)
+            final SpellAbility tide = ownHandTide(ai);
+            if (tide == null) {
+                return null;
+            }
+            // 3. what A chose: nothing, or a permanent spell of ours that is not a commander. Interaction, draw
+            //    spells, abilities and a chosen commander cast stand; the hook asks again at the next pass.
+            final Card chosenHost = chosenSa == null ? null : chosenSa.getHostCard();
+            if (chosenSa != null) {
+                final ApiType api = chosenSa.getApi();
+                if (chosenHost == null || !chosenSa.isSpell() || chosenSa.isCopied() || chosenSa.isCastFromPlayEffect()
+                        || (api != ApiType.PermanentCreature && api != ApiType.PermanentNoncreature)
+                        || chosenHost.isCommander()) {
+                    return null;
+                }
+            }
+            // 4. honest counts: no live reservation (G3), no TapsForMana trigger or ProduceMana replacement on any
+            //    side (HonestMana would under-count what predictMana counts; covers an active tide too)
+            if (!RemoveDeckFilter.noManaHeld(ai, true) || manaMultiplierInPlay(game)) {
+                return null;
+            }
+            // 5. our untapped Islands
+            final int islands = untappedIslands(ai);
+            if (islands < MIN_ISLANDS) {
+                return null;
+            }
+            // 6. symmetric: the opponents' untapped Islands gain less this turn than ours
+            int theirs = 0;
+            for (final Player opp : ai.getOpponents()) {
+                theirs += untappedIslands(opp);
+            }
+            if (theirs >= islands - 1) {
+                return null;
+            }
+            // 7. the tide priced (A1): exactly {U} after taxes and reductions, and a blue source to pay it
+            tide.setActivatingPlayer(ai);
+            final ManaCostBeingPaid tideCost = ComputerUtilMana.calculateManaCost(tide.getPayCosts(), tide, ai, true, 0, false);
+            if (tideCost.getConvertedManaCost() != 1
+                    || tideCost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE) != 1) {
+                return null;
+            }
+            final HonestMana mana = HonestMana.of(ai, tide, true);
+            final int blue = mana.colour(MagicColor.BLUE);
+            if (blue < 1) {
+                return null;
+            }
+            // 8. the mana before and after: -1 for the Island that pays, +1 for each Island left
+            final int gain = islands - 2;
+            final int pre = mana.total();
+            final int post = pre + gain;
+            // 9. the target (A3): the first own permanent spell in the engine's sorted saList, ahead of the
+            //    chosen play, that the tide newly makes affordable
+            for (final SpellAbility s : saList) {
+                final Card c = s.getHostCard();
+                if (c == null) {
+                    continue;
+                }
+                if (chosenSa != null && c.equals(chosenHost) && s.getApi() == chosenSa.getApi()) {
+                    return null; // the chosen play comes first: the stock pass after the tide would cast it again
+                }
+                if (!isOwnPermanentSpell(ai, s, c)) {
+                    continue;
+                }
+                if (asksController(s)) {
+                    return null; // cannot be priced without asking a controller, and may be the next cast
+                }
+                s.setActivatingPlayer(ai);
+                final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(s.getPayCosts(), s, ai, true, 0, false);
+                final int cmc = cost.getConvertedManaCost();
+                final int pips = cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE);
+                final boolean now = cmc <= pre && pips <= blue;
+                final boolean after = cmc <= post && pips <= blue + gain;
+                if (now || !after) {
+                    continue;
+                }
+                // the first newly affordable spell is the one the stock pass casts: it must be worth the tide
+                if (!(c.isCommander() || c.getCMC() >= MIN_MV) || !eligible(ai, c, s) || !othersCovered(mana, cost)) {
+                    return null;
+                }
+                return tide;
+            }
+            return null;
+        }
+
+        // a hand card whose paper name is High Tide, owned by us and face up: its own Effect spell, not a copy,
+        // not skipped (A2)
+        private static SpellAbility ownHandTide(final Player ai) {
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.getRules() == null || !NAME.equals(c.getRules().getName()) || !ai.equals(c.getOwner())
+                        || c.isFaceDown()) {
+                    continue;
+                }
+                for (final SpellAbility sa : c.getSpells()) {
+                    if (sa.isSpell() && sa.getApi() == ApiType.Effect && !sa.isCopied() && !sa.isSkip()
+                            && sa.getPayCosts() != null) {
+                        return sa;
+                    }
+                }
+            }
+            return null;
+        }
+
+        // a walk candidate: our own permanent spell (not a copy, not a Play-effect cast) from our hand or command
+        // zone, with no X in its cost
+        private static boolean isOwnPermanentSpell(final Player ai, final SpellAbility s, final Card c) {
+            if (!s.isSpell() || s.isCopied() || s.isCastFromPlayEffect()
+                    || (s.getApi() != ApiType.PermanentCreature && s.getApi() != ApiType.PermanentNoncreature)
+                    || !ai.equals(c.getOwner()) || !(c.isInZone(ZoneType.Hand) || c.isInZone(ZoneType.Command))) {
+                return false;
+            }
+            final Cost cost = s.getPayCosts();
+            return cost != null && cost.getTotalMana().countX() == 0;
+        }
+
+        // the diagnosis' eligible list (skeptic.md FINAL step 9), the target's own holds
+        private static boolean eligible(final Player ai, final Card c, final SpellAbility s) {
+            if (s.isSkip() || ComputerUtilCard.isCardRemAIDeck(c) || s.hasParam("Announce")) {
+                return false;
+            }
+            if (c.isInZone(ZoneType.Command)) {
+                if (!c.isCommander()) {
+                    return false;
+                }
+            } else if (c.isLand() || c.isAura() || c.isFaceDown() || c.getRules() == null
+                    || NAME.equals(c.getRules().getName())) {
+                return false;
+            }
+            if (c.hasKeyword(Keyword.FLASH)) {
+                return false; // PermanentCreatureAi's flash hold
+            }
+            if (c.hasKeyword(Keyword.BACKUP) || c.hasKeyword(Keyword.BLITZ) || c.hasKeyword(Keyword.RIOT)
+                    || c.hasKeyword(Keyword.START_YOUR_ENGINES) || c.hasSVar("RaidTest")) {
+                return false; // castPermanentInMain1's attack simulations
+            }
+            if (c.getType().isLegendary() && ai.isCardInPlay(c.getName())) {
+                return false;
+            }
+            return !("True".equals(c.getSVar("NonStackingEffect")) && ComputerUtilCard.isNonDisabledCardInPlay(ai, c.getName()));
+        }
+
+        // SylvanOffering.asksController, a private copy (B3-4): a cost whose test-mode pricing asks a
+        // controller or test-pays (Convoke, Delve, Improvise, Assist, Emerge, Offering, Waterbend; the
+        // Announce$ NumTimes loop's canPayManaCost test payments can draw MyRandom)
+        private static boolean asksController(final SpellAbility s) {
+            final Card h = s.getHostCard();
+            if (h != null && (h.hasKeyword(Keyword.CONVOKE) || h.hasKeyword(Keyword.DELVE) || h.hasKeyword(Keyword.IMPROVISE)
+                    || h.hasKeyword(Keyword.ASSIST) || h.hasKeyword(Keyword.EMERGE) || h.hasKeyword(Keyword.OFFERING))) {
+                return true;
+            }
+            if (s.getPayCosts() != null && s.getPayCosts().getMaxWaterbend() != null) {
+                return true;
+            }
+            final String announce = s.getParam("Announce");
+            return announce != null && announce.contains("NumTimes");
+        }
+
+        // every white, black, red and green pip of the target's test-mode cost is covered by G2's colour count:
+        // the tide adds only blue
+        private static boolean othersCovered(final HonestMana mana, final ManaCostBeingPaid cost) {
+            return mana.colour(MagicColor.WHITE) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WHITE)
+                    && mana.colour(MagicColor.BLACK) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)
+                    && mana.colour(MagicColor.GREEN) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+
+        // a player's untapped lands with the Island subtype and a mana ability: types only, and no activator is
+        // stamped on an opponent's abilities (B4-4)
+        private static int untappedIslands(final Player p) {
+            int n = 0;
+            for (final Card c : p.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isLand() && c.isUntapped() && c.getType().hasSubtype("Island") && !c.getManaAbilities().isEmpty()) {
+                    n++;
+                }
+            }
+            return n;
+        }
+
+        // ObNixilisOfTheBlackOath.hasManaMultiplier and multiplies, private copies (B3-4): a TapsForMana trigger
+        // or a ProduceMana replacement on any battlefield or command zone (an active tide's effect included)
+        private static boolean manaMultiplierInPlay(final Game game) {
+            for (final Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (multiplies(c)) {
+                    return true;
+                }
+            }
+            for (final Card c : game.getCardsIn(ZoneType.Command)) {
+                if (multiplies(c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean multiplies(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() == TriggerType.TapsForMana) {
+                    return true;
+                }
+            }
+            for (final ReplacementEffect re : c.getReplacementEffects()) {
+                if (re.getMode() == ReplacementType.ProduceMana) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Hour of Devastation (dead-card batch 4, row 7; Neera - Wild Magic)
     // "All creatures lose indestructible until end of turn. Hour of Devastation deals 5 damage to
     // each creature and each non-Bolas planeswalker." ({3}{R}{R} Sorcery.) The script
