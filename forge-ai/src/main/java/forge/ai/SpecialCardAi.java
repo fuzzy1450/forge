@@ -66977,6 +66977,226 @@ public class SpecialCardAi {
         }
     }
 
+    // Tempt with Mayhem (dead-card batch 4, row 29)
+    // "Tempting offer -- Choose target instant or sorcery spell. Each opponent may copy that spell and may choose
+    // new targets for the copy they control. You copy that spell once plus an additional time for each opponent
+    // who copied the spell this way. You may choose new targets for the copies you control." ({1}{R}{R}
+    // instant.) Never cast (0 of 2,531 holds on any engine, no thief and no copy cast either):
+    // RepeatEachAi.canPlay answers WillPlay without aiming the root, and CopySpellAbilityAi.checkApiLogic refuses
+    // the untargeted DBCopySelf sub (it falls to "isMandatory() || Always"). Routed from
+    // CopySpellAbilityAi.chkDrawback after that stock refusal, for the owner's own hand cast only. Every AI
+    // opponent takes the offer (CopySpellAbilityAi.confirmAction is true), so in a duel the opponent gets its
+    // spell once more and we get it twice. Cast only when that extra copy cannot touch our side and our
+    // (opponents + 1) copies cannot hurt us, so the swing is one copy of the spell for us, net of the card. In
+    // order, every decline returning the stock decision:
+    // - window: an opponent's (not a teammate's) instant or sorcery spell on top of the stack;
+    // - mirror: every part of its chain is untargeted, its api on MIRROR_ROOT / MIRROR_SUB, it names no player
+    //   but You, a ChangeZone part searches its controller's own library (Origin$ Library), every destination
+    //   of a ChangeZone or Dig part is Hand, Library or Battlefield, a Draw part draws a literal count; so
+    //   neither side's copy has a target to choose. MIRROR_SUB has no LoseLife: our copies multiply a self life
+    //   loss that LifeLoseAi judges once (Ancient Craving, Cruel Bargain), and no part mills or exiles
+    //   (Demonic Bargain exiles 13 a copy), so a Dig's rest stays in the library and our copies spend only the
+    //   cards they take;
+    // - our searches: no LimitSearchLibrary keyword and canSearchLibraryWith on every ChangeZone part (rule
+    //   B3-7: Aven Mindcensor or Stranglehold would cap or stop ours while the opponent's copy searches freely);
+    // - their payoff: no opposing permanent pays off what the copies make: a draw (Drawn trigger or draw
+    //   replacement, PromiseOfPower.drawPunished, which also catches our draw punishers), a card entering the
+    //   battlefield (a ChangesZone(All) trigger to the battlefield that is not the card's own: landfall), a
+    //   life gain (LifeGained); and no search punisher sees our searches (searchPunished, LongTermPlans' check,
+    //   a private verbatim copy);
+    // - draws: our draws, (opponents + 1) x the literal count, are not capped by a CantDraw static (Narset,
+    //   Parter of Veils caps ours and not the opponent's own) and leave more than LIBRARY_MARGIN cards;
+    // - price (B3-5): G2 covers the engine's adjusted {1}{R}{R} in total and in red;
+    // - WildRicochet.consider on the root (B3-4, called unchanged): copyable, mana value 3+, no X, no
+    //   mana-spent reader, its api whitelist, and one copy is a spell the AI would cast itself for free now
+    //   with valid targets (canPlayFromEffectAI); on WillPlay it aims the root at that spell.
+    // RNG parity: the stock canPlay ran first, so A's one draw is made exactly as in A. Every check up to
+    // WildRicochet's copy judgment reads parameters, keywords, statics, triggers and G2 only (G2's one write is
+    // setActivatingPlayer on the mana abilities it reads): a decline there is A's answer with A's draws. The
+    // judgment (topSA.copy, canPlayFromEffectAI, the copied api's handler) can draw and allocates
+    // SpellAbility ids; it runs only past every floor, and a decline there diverges from A by design. The
+    // root's targets are reset on entry and on every decline: nothing is held past a refusal.
+    // Reach: the name compare (this class's key) matches only t/tempt_with_mayhem.txt; copies of it,
+    // Play-effect casts and thieves (none recorded) fail the key and keep the stock refusal.
+    public static class TemptWithMayhem {
+        public static final String NAME = "Tempt with Mayhem";
+        static final int LIBRARY_MARGIN = 3; // DrawAi's own self-draw guard (numCards >= library - 3)
+        private static final EnumSet<ApiType> MIRROR_ROOT = EnumSet.of(ApiType.Draw, ApiType.Dig, ApiType.ChangeZone);
+        private static final EnumSet<ApiType> MIRROR_SUB = EnumSet.of(ApiType.Draw, ApiType.Dig, ApiType.ChangeZone,
+                ApiType.Cleanup, ApiType.GainLife, ApiType.Scry);
+        private static final String[] PLAYER_PARAMS = {"Defined", "DefinedPlayer", "TokenOwner", "Chooser"};
+        // the zones a mirrored ChangeZone or Dig part may put cards into: never a graveyard or exile
+        private static final Set<String> DESTINATIONS = Set.of("Hand", "Library", "Battlefield");
+
+        // CopySpellAbilityAi.chkDrawback's key: this card's own DBCopySelf (the root's direct sub) under the
+        // owner's own paid cast from hand (AllianceOfArms.readmit's key, rules B3-2 / B3-3).
+        public static boolean isOwnCastSelfCopy(final Player ai, final SpellAbility sub) {
+            if (!(sub instanceof AbilitySub) || sub.getApi() != ApiType.CopySpellAbility) {
+                return false;
+            }
+            final SpellAbility root = sub.getRootAbility();
+            if (root == null || sub.getParent() != root || root.getApi() != ApiType.RepeatEach) {
+                return false;
+            }
+            final Card host = root.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && root.isSpell() && root.getParent() == null && !root.isCopied() && !root.isCastFromPlayEffect()
+                    && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner()) && ai.equals(host.getController());
+        }
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sub, final AiAbilityDecision stock) {
+            final SpellAbility root = sub.getRootAbility();
+            root.resetTargets();
+            final Game game = ai.getGame();
+            if (game.getStack().isEmpty()) {
+                return stock;
+            }
+            final SpellAbility top = ComputerUtilAbility.getTopSpellAbilityOnStack(game, root);
+            if (!(top instanceof forge.game.ability.SpellApiBased) || !top.isSpell() || top.getHostCard() == null
+                    || !(top.getHostCard().isInstant() || top.getHostCard().isSorcery())) {
+                return stock;
+            }
+            final Player caster = top.getActivatingPlayer();
+            if (caster == null || !caster.isOpponentOf(ai) || ai.getYourTeam().contains(caster)) {
+                return stock;
+            }
+            int draws = 0;
+            boolean drawPart = false, search = false, gain = false, landsEnter = false, cardsEnter = false;
+            for (SpellAbility part = top; part != null; part = part.getSubAbility()) {
+                final ApiType api = part.getApi();
+                if (api == null || !(part == top ? MIRROR_ROOT : MIRROR_SUB).contains(api) || part.usesTargeting()) {
+                    return stock;
+                }
+                for (final String k : PLAYER_PARAMS) {
+                    final String v = part.getParam(k);
+                    if (v != null && !"You".equals(v)
+                            && !(api == ApiType.ChangeZone && "Defined".equals(k) && v.startsWith("Remembered"))) {
+                        return stock; // Defined$ Remembered on a ChangeZone names cards (Cultivate's halves)
+                    }
+                }
+                if (api == ApiType.ChangeZone) {
+                    final String destination = part.getParam("Destination");
+                    if (!"Library".equals(part.getParam("Origin")) || !keeps(destination)) {
+                        return stock;
+                    }
+                    if (ai.hasKeyword("LimitSearchLibrary") || !ai.canSearchLibraryWith(part, ai)) {
+                        return stock;
+                    }
+                    search |= !part.hasParam("Defined");
+                    if ("Battlefield".equals(destination)) {
+                        if (String.valueOf(part.getParam("ChangeType")).contains("Land")) {
+                            landsEnter = true;
+                        } else {
+                            cardsEnter = true;
+                        }
+                    }
+                } else if (api == ApiType.Dig) {
+                    final String first = part.getParamOrDefault("DestinationZone", "Hand");
+                    if (!keeps(first) || !keeps(part.getParamOrDefault("DestinationZone2", "Library"))) {
+                        return stock;
+                    }
+                    cardsEnter |= "Battlefield".equals(first);
+                } else if (api == ApiType.Draw) {
+                    final String n = part.getParamOrDefault("NumCards", "1");
+                    if (n.isEmpty() || !n.chars().allMatch(Character::isDigit)) {
+                        return stock;
+                    }
+                    draws += Integer.parseInt(n);
+                    drawPart = true;
+                } else if (api == ApiType.GainLife) {
+                    gain = true;
+                }
+            }
+            if ((drawPart && PromiseOfPower.drawPunished(ai)) || (search && searchPunished(ai))
+                    || theirPayoff(ai, landsEnter, cardsEnter, gain)) {
+                return stock;
+            }
+            final int ours = draws * (ai.getOpponents().size() + 1);
+            if (draws > 0 && StaticAbilityCantDraw.canDrawAmount(ai, ours) < ours) {
+                return stock;
+            }
+            if (ours >= ai.getCardsIn(ZoneType.Library).size() - LIBRARY_MARGIN) {
+                return stock;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(root.getPayCosts(), root, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, root, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.RED) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED)) {
+                return stock;
+            }
+            final AiAbilityDecision judged = WildRicochet.consider(ai, root);
+            if (!judged.willingToPlay()) {
+                root.resetTargets();
+                return stock;
+            }
+            return judged;
+        }
+
+        // a zone a mirrored part may put cards into (an absent Destination$ is not one)
+        private static boolean keeps(final String zone) {
+            return zone != null && DESTINATIONS.contains(zone);
+        }
+
+        // An opposing permanent paying off what the opponents' copies make. Parameter reads only.
+        private static boolean theirPayoff(final Player ai, final boolean landsEnter, final boolean cardsEnter,
+                                           final boolean gain) {
+            if (!landsEnter && !cardsEnter && !gain) {
+                return false;
+            }
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        final TriggerType mode = t.getMode();
+                        if (gain && mode == TriggerType.LifeGained) {
+                            return true;
+                        }
+                        if ((mode == TriggerType.ChangesZone || mode == TriggerType.ChangesZoneAll)
+                                && String.valueOf(t.getParam("Destination")).contains("Battlefield")) {
+                            final String valid = t.hasParam("ValidCard") ? t.getParam("ValidCard") : t.getParam("ValidCards");
+                            if (valid != null && valid.contains(".Self")) {
+                                continue; // the card's own enters trigger
+                            }
+                            if (cardsEnter || valid == null || valid.contains("Land") || valid.startsWith("Permanent")
+                                    || valid.startsWith("Card")) {
+                                return true; // landfall, or any-permanent enters payoff
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // LongTermPlans.searchPunished, a private verbatim copy (accepted helpers are not shared: Wild
+        // Endeavor's rule): an opposing permanent that triggers on our search or takes it over, or a permanent on
+        // any battlefield whose Shuffled trigger our own shuffle fires (an absent ValidPlayer matches: a
+        // conservative decline). Parameter reads only.
+        private static boolean searchPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.SearchedLibrary) {
+                            return true;
+                        }
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (st.hasParam("ControlOpponentsSearchingLibrary")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Shuffled && t.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Winding Way (dead-card batch 2, row 49)
     // "Choose creature or land. Reveal the top four cards of your library. Put all cards of the
     // chosen type revealed this way into your hand and the rest into your graveyard." ({1}{G}

@@ -174,6 +174,15 @@ public class CopySpellAbilityAi extends SpellAbilityAi {
 
         AiAbilityDecision decision = canPlay(aiPlayer, sa);
         if (!decision.willingToPlay()) {
+            // Dead-card batch 4, row 29: Tempt with Mayhem's own copy (DBCopySelf) under its owner's
+            // hand cast. The stock canPlay above has run (A's one percentTrue draw on a non-empty
+            // stack, none on an empty one) and refused, as it refuses every untargeted Defined$ Targeted
+            // copy sub; RepeatEachAi.canPlay never aims the root. TemptWithMayhem.consider judges the
+            // whole spell, aims the root and answers WillPlay, or returns this stock decision unchanged.
+            // A key compare: inert for every other sub. See the class comment.
+            if (SpecialCardAi.TemptWithMayhem.isOwnCastSelfCopy(aiPlayer, sa)) {
+                return SpecialCardAi.TemptWithMayhem.consider(aiPlayer, sa, decision);
+            }
             if (sa.isMandatory()) {
                 return super.chkDrawback(aiPlayer, sa);
             }
