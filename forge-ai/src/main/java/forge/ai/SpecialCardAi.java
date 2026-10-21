@@ -20582,6 +20582,14 @@ public class SpecialCardAi {
     //   opposing option (an undestroyable one: the counter is harmless); else our own or an ally's least valuable, an
     //   undestroyable one first. Never our best, never null on a non-empty pool. Stock (no IsCurse$) took getBestAI
     //   over the chooser's own permanents (CountersPutAi's `mine` branch): every AI doomed its own best permanent.
+    // - considerActivation (55P2; DestroyAllAi.checkApiLogic, its first decision): G3's readmit case lets the
+    //   {2}, {T}, sacrifice through for the Eye's controller (owner, thief or free caster alike; the hint filtered it
+    //   for every controller, so no stored game ever activated an Eye). G2 covers the {2} (the test-mode cost against
+    //   HonestMana); then over the permanents that carry a doom counter and would be destroyed (the Eye excluded: it
+    //   is sacrificed as a cost), gain >= ACT_GAIN_MIN and gain - loss >= ACT_NET_MIN, else hold. The activation
+    //   destroys every doom counter on the table (Armageddon Clock's, Imminent Doom's, Lavabrink Floodgates', an
+    //   earlier Eye's), and the floor counts counters, not picks. The Eye stays and is judged again at every
+    //   priority: it improves when our doomed permanent dies first, as in combat.
     // value: CreatureEvaluator for a creature, else 50 + 30 * CMC (+10 per loyalty counter), Act of Authority's
     // ranking copied privately (never a predicate shared with an accepted card) and without
     // getBestRemovalTargetAI's board term, which can draw; + TAX for a commander. Memoised per call in a
@@ -20589,10 +20597,29 @@ public class SpecialCardAi {
     // the activation destroys: DestroyAllAi's predicate (no indestructible, no shield counter) plus canBeDestroyed
     // (in play, not phased out).
     // RNG parity: every read is zones, controllers, counters, keywords and CreatureEvaluator. No MyRandom, no
-    // SpellAbility created, nothing remembered or held.
+    // SpellAbility created, nothing remembered or held. A floor's every decline returns before canPlaySa's
+    // canPayCost, whose test payment draws in isManaSourceReserved, adding only the test-mode calculateManaCost and
+    // G2 HonestMana (whose only write is setActivatingPlayer on our mana abilities) to those reads.
     public static class EyeOfDoom {
         public static final String NAME = "Eye of Doom";
+        static final int ACT_GAIN_MIN = 100;   // the Eye is already spent: a card's worth
+        static final int ACT_NET_MIN = 100;    // about a 1/1 token (106) once our own loss is paid: EdictForAll.NET_MARGIN
         static final int TAX = 100;            // a commander is recast for 2 more, both sides: EdictForAll.COMMANDER_TAX
+
+        // RemoveDeckFilter.readmit's case (the dispatcher already matched the paper name): the activation by the
+        // Eye's controller (55P2). Zone, controller and API only; RNG-free, holds nothing; a false is the old filter
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isActivation(ai, sa);
+        }
+
+        // 55P2's key: G3's case and DestroyAllAi.checkApiLogic's gate. The {2}, {T}, sacrifice DestroyAll of an Eye
+        // on the battlefield that this AI controls (owner, thief or free caster); getName(): a copy is keyed too
+        public static boolean isActivation(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && sa.isActivatedAbility() && sa.getApi() == ApiType.DestroyAll
+                    && NAME.equals(host.getName()) && host.isInZone(ZoneType.Battlefield)
+                    && ai.equals(host.getController());
+        }
 
         // 55P1's key: the ETB's doom-counter choice (CountersPutEffect's Chooser$ Remembered, each player in turn).
         // getName(): a copy entering as the Eye is keyed too
@@ -20635,6 +20662,33 @@ public class SpecialCardAi {
             return least;
         }
 
+        // 55P2, from DestroyAllAi.checkApiLogic (its first decision): G2, then the doomed values that would die. Every
+        // decline is its own RNG-free return, before canPlaySa's canPayCost
+        public static AiAbilityDecision considerActivation(final Player ai, final SpellAbility sa) {
+            final int price = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false)
+                    .getConvertedManaCost();
+            if (HonestMana.of(ai, sa, true).total() < price) {
+                return no(AiPlayDecision.CantAfford);
+            }
+            final Card eye = sa.getHostCard();
+            final Map<Card, Integer> memo = new HashMap<>();           // lookups only: never iterated
+            int gain = 0;
+            int loss = 0;
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                if (c.equals(eye) || c.getCounters(CounterEnumType.DOOM) <= 0 || !destroyable(c)) {
+                    continue;
+                }
+                final int v = value(c, memo);
+                if (c.getController().equals(ai)) {
+                    loss += v;
+                } else if (c.getController().isOpponentOf(ai)) {
+                    gain += v;
+                }
+            }
+            return gain < ACT_GAIN_MIN || gain - loss < ACT_NET_MIN ? no(AiPlayDecision.CantPlayAi)
+                    : new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
         // the most valuable destroyable permanent an opponent of the chooser controls, the Eye excluded (first max
         // wins); null when there is none
         static Card bestDoomable(final Player chooser, final Iterable<Card> options, final Card eye,
@@ -20673,6 +20727,10 @@ public class SpecialCardAi {
             }
             memo.put(c, v);
             return v;
+        }
+
+        private static AiAbilityDecision no(final AiPlayDecision why) {
+            return new AiAbilityDecision(0, why);
         }
     }
 
@@ -48826,7 +48884,7 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35, 50, 12, 34, 41 and 45, keepOff for batch 2's row 68 (Trench
+    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35, 50, 12, 34, 41, 45 and 55, keepOff for batch 2's row 68 (Trench
     // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -49005,6 +49063,8 @@ public class SpecialCardAi {
                     return Earthcraft.readmit(ai, sa);
                 case ClockOfOmens.NAME:                  // batch 4, row 45 (W8)
                     return ClockOfOmens.readmit(ai, sa);
+                case EyeOfDoom.NAME:                     // batch 4, row 55 (W8)
+                    return EyeOfDoom.readmit(ai, sa);
                 default:
                     return false;
             }

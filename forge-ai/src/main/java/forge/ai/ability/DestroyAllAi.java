@@ -75,6 +75,15 @@ public class DestroyAllAi extends SpellAbilityAi {
         // based on what the expected targets could be
         final String aiLogic = sa.getParamOrDefault("AILogic", "");
 
+        // Eye of Doom (dead-card batch 4, row 55, part 55P2) keeps AI:RemoveDeck:All; G3 readmits its {2}, {T},
+        // sacrifice for the Eye's controller (owner, thief or free caster), and it is judged here, ahead of Fell the
+        // Mighty, Gaze of Granite and Deadly Tempest: by the values its doom counters would destroy, RNG-free, before
+        // doMassRemovalLogic (which reads only the first opponent, and whose creature branch runs a Main-2 block
+        // simulation that draws) and before canPlaySa's canPayCost. Every other DestroyAll keeps its path.
+        if (SpecialCardAi.EyeOfDoom.isActivation(ai, sa)) {
+            return SpecialCardAi.EyeOfDoom.considerActivation(ai, sa);
+        }
+
         if ("FellTheMighty".equals(aiLogic)) {
             return SpecialCardAi.FellTheMighty.consider(ai, sa);
         }
