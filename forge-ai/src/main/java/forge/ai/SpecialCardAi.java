@@ -5391,8 +5391,9 @@ public class SpecialCardAi {
     // reader still refuses it and the -10 sort keeps both SAs at the leftover-mana tail. Three name-keyed
     // points carry it:
     // - readmit (G3): the ping for whoever controls it (isOwnAbility) while that player has a creature
-    //   and no live mana reservation (noManaHeld); the owner's hand cast is part 56B's, and without it a
-    //   spell answers false, the filter as it was;
+    //   and no live mana reservation (noManaHeld); the owner's own hand cast (isOwnHandCast) in our own
+    //   Main 2 on an empty stack, nothing held, G2 against the test-mode cost in total and red, with a
+    //   creature to feed it (part 56B);
     // - consider, from DamageDealAi.canPlay behind isOwnAbility (rule B3-2), so a Mairsil grant, a Copy
     //   Enchantment copy (paper name Copy Enchantment) and every probe of another host keep A's path;
     // - chooseSacrifice, from ComputerUtil.chooseSacrificeType: the payment sacrifices the creature
@@ -5433,6 +5434,18 @@ public class SpecialCardAi {
             return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
         }
 
+        // part 56B's key: the owner's own spell from hand that pays its mana cost
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            if (sa == null || !sa.isSpell() || sa.isCastFromPlayEffect() || sa.isCopied() || sa.isCastFaceDown()
+                    || sa.hasParam("WithoutManaCost")) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            final Player activator = sa.getActivatingPlayer();
+            return isBloodRites(host) && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner())
+                    && (activator == null || ai.equals(activator));
+        }
+
         // part 56A's key, carried by the DamageDealAi route and the payment hook (rule B3-2): the card's own
         // sacrifice-another DealDamage AB, on the battlefield, asked by its controller
         public static boolean isOwnAbility(final Player ai, final SpellAbility sa) {
@@ -5451,10 +5464,40 @@ public class SpecialCardAi {
         // RemoveDeckFilter.readmit's case: cheapest checks first, RNG-free, holds nothing
         public static boolean readmit(final Player ai, final SpellAbility sa) {
             if (sa.isSpell()) {
-                return false; // the owner's hand cast is part 56B's
+                return isOwnHandCast(ai, sa) && castFloor(ai, sa); // 56B (56A alone: return false)
             }
             return isOwnAbility(ai, sa) && !ai.getCreaturesInPlay().isEmpty()
                     && RemoveDeckFilter.noManaHeld(ai, false);
+        }
+
+        // 56B: own Main 2 (where PermanentAi's wait casts it), empty stack, nothing held, G2 against the
+        // test-mode cost in total and red (rule B3-5), and a creature to feed it. The stock
+        // PermanentNoncreatureAi path then approves (PermanentAi.checkApiLogic's WillPlay) and canPayCost
+        // runs A's test payment.
+        static boolean castFloor(final Player ai, final SpellAbility sa) {
+            if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai) || !ai.canCastSorcery()
+                    || !RemoveDeckFilter.noManaHeld(ai, true) || !fodderProspect(ai)) {
+                return false; // outside our own Main 2 the list stays exactly A's
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return mana.total() >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.RED) >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.RED);
+        }
+
+        // a creature on our battlefield, a creature card in our hand, or a creature commander of ours in the
+        // command zone (Prossh's recast makes Kobolds)
+        static boolean fodderProspect(final Player ai) {
+            if (!ai.getCreaturesInPlay().isEmpty()
+                    || ai.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.CREATURES)) {
+                return true;
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Command)) {
+                if (c.isCommander() && c.isCreature() && ai.equals(c.getOwner())) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         // DamageDealAi.canPlay's route (isOwnAbility). Every decline before WillPlay draws nothing.
