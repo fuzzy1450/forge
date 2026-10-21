@@ -37584,7 +37584,7 @@ public class SpecialCardAi {
     //   our own copy engines add (resolutions(), a private copy of CommuneWithLava.resolutions' reading), times the
     //   card's own library cost (libraryCost: an amount that is not a number, a hand-size count aside, keeps the card
     //   out; so does a reveal-until whose revealed cards leave the library).
-    // No pick: the stock answer and target stand.
+    // No pick: the stock answer and target stand (a copy's new targets decline instead: considerFree, retry 1).
     // RNG: the stock known-origin evaluation runs first, unchanged and RNG-free, as A ran it. The paid cast (63A,
     // consider) keeps the stock timing (isPreferredTarget's Main 2, end-step and no-creature gates for a graveyard
     // exile, read with the same calls) and G2 affordability (HonestMana against the engine's test-mode cost, in total
@@ -37640,8 +37640,25 @@ public class SpecialCardAi {
         // 63B: an optional free consult, after the stock knownOriginTriggerAI: a Play-effect cast (Neera's reveal, a
         // Mizzix's Mastery or Arcane Bombardment copy, a thief's free cast) or a Swarm Intelligence or Melek copy's new
         // targets (PlayerControllerAi.chooseNewTargetsForCopy asks doTrigger(copy, false) of our own spell). No hold and
-        // no cost: the chooser alone; no pick, the stock answer and target.
+        // no cost: the chooser alone; no pick, the stock answer and target for a Play-effect cast, a decline for a copy.
+        // Retry 1 (63B; tools/deadcards/b4/mnemonic-deluge/verdict-w6-n24.md, V2): a copy's no-pick consult let the
+        // stock re-pick stand, the opponents' most expensive instant or sorcery whatever its copies do: 19 of the W6
+        // build's 21 copy resolutions fell back to it, 9 of them cast nothing, and in 1665196 one cast an opponent's
+        // Farewell that exiled our Swarm Intelligence and every graveyard. A copy (sa.isCopied(): a Swarm Intelligence,
+        // Melek, Primal Wellspring, Twinning Staff or Storm of Saruman copy of our Deluge) with no pick now resets its
+        // targets and declines, so chooseNewTargetsForCopy restores its old targets, its original's: the copy resolves on
+        // that card, and the original then fizzles into the graveyard, where Lier or a Mastery can recast it. Decided
+        // after choose(), so the decline draws nothing of its own; 63F's decline below then meets Play-effect casts
+        // only, which are never copies and keep the stock fallback.
         public static AiAbilityDecision considerFree(final Player ai, final SpellAbility sa, final AiAbilityDecision stock) {
+            if (sa.isCopied()) {
+                final Card pick = choose(ai, sa);
+                if (pick == null) {
+                    sa.resetTargets();
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                return target(sa, pick);
+            }
             final Card pick = choose(ai, sa);
             if (pick == null && stock.willingToPlay() && givesTokens(sa)) {
                 // 63F: no pick, and the stock answer that would stand aims at Death by Dragons' shape (declines below)
