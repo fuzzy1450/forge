@@ -48722,7 +48722,7 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35, 50, 12 and 34, keepOff for batch 2's row 68 (Trench
+    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35, 50, 12, 34 and 41, keepOff for batch 2's row 68 (Trench
     // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -48897,6 +48897,8 @@ public class SpecialCardAi {
                     return LimDulsVault.readmit(ai, sa);
                 case Firestorm.NAME:                     // batch 4, row 34 (W8)
                     return Firestorm.readmit(ai, sa);
+                case Earthcraft.NAME:                    // batch 4, row 41 (W8)
+                    return Earthcraft.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -55805,6 +55807,193 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+    }
+
+    // Earthcraft (dead-card batch 4, row 41, wave 8; Crackhead Math fca770e4, deck 517, a site upload and the only
+    // registered carrier, commander Tayam, Luminous Enigma)
+    // "Tap an untapped creature you control: Untap target basic land." ({1}{G} enchantment; printed text = Oracle =
+    // script, e/earthcraft.txt: A:AB$ Untap | Cost$ tapXType<1/Creature> | ValidTgts$ Land.Basic, NonStackingEffect,
+    // AI:RemoveDeck:All.) The hint dropped both of its spell abilities, the hand cast and the battlefield untap, at
+    // AiController.getSpellAbilityToPlay's filter for every AI player, and no G3 case named the card: 0 owner casts
+    // in 843 held games on 2.0.15+499e03087c5 (452 distinct held libraries); its 7 casts were other players' (Etali,
+    // Primal Storm's free casts in two precon games, five in games against Neera - Wild Magic), which never meet the
+    // filter. The hint is KEPT (rule B3-1: the -10 sort and the tutor, steal, copy and clone pickers stay as they
+    // were) and G3 readmits, for the OWNER only:
+    // - 41A, the hand cast (readmitCast): our own regular cast from our hand (not a Play-effect cast, not a copy), in
+    //   our Main 2 on an empty stack with no mana held (G3's noManaHeld), while a basic land of ours taps for mana
+    //   (hasBasic: the untap has a target) and a creature of ours is on the battlefield or in our hand (hasBody: the
+    //   cost has a body), and {1}{G} as the engine prices it (test-mode calculateManaCost) fits HonestMana (G2) less
+    //   sacrificeBound in total and in green, before canPayCost's test payment draws. The floor lives in the readmit,
+    //   not in a handler: the stock PermanentNoncreatureAi path judges the rest (Main 2, WillPlay), and every direct
+    //   canPlaySa probe of the hand SA (TapAi's shockland probe through ComputerUtil.hasReasonToPlayCardThisTurn;
+    //   deck 517 runs three shocks) keeps A's answer.
+    // A thief keeps the filter (readmit asks for the owner) and every stock path; a Play-effect cast never meets the
+    // filter (canPlayFromEffectAI -> PermanentAi.doTriggerNoCost). A Copy Enchantment copy answers to Copy
+    // Enchantment's own case and a token copy or a Mairsil grant to none (rule B3-3: the paper name).
+    // RNG parity: A never evaluated the hand cast (the filter, draw-free). Every refusal here is that filter's false,
+    // and every read is RNG-free (zones, the phase, AiCardMemory, the test-mode cost, HonestMana, mana abilities'
+    // canPlay); the first draws are the cast's canPayCost after the floor passed. Holds nothing and remembers
+    // nothing; its only writes are setActivatingPlayer on a hand SA with no activator yet (as
+    // getOriginalAndAltCostAbilities does right after the filter) and on the mana abilities G2 and sacrificeBound
+    // read (G2's own stamp).
+    public static class Earthcraft {
+        public static final String NAME = "Earthcraft";
+
+        // RemoveDeckFilter.readmit's case: the owner only; RNG-free, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getOwner())) {
+                return false; // opponents and thieves keep the filter
+            }
+            return sa.isSpell() && readmitCast(ai, sa, host); // 41A; every ability keeps the filter
+        }
+
+        // 41A, cheapest first: the shape and the zone, the activator, the window, the memory and board reads, then
+        // the price
+        private static boolean readmitCast(final Player ai, final SpellAbility sa, final Card host) {
+            if (sa.getApi() != ApiType.PermanentNoncreature || sa.isCastFromPlayEffect() || sa.isCopied()
+                    || !host.isInZone(ZoneType.Hand)) {
+                return false; // a Play-effect cast, a copy, another zone's cast: the filter as it was
+            }
+            final Player activator = sa.getActivatingPlayer();
+            if (activator != null && !ai.equals(activator)) {
+                return false;
+            }
+            if (!ai.canCastSorcery() || !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2)) {
+                return false; // the stock Main-2 wait (PermanentAi.checkPhaseRestrictions), answered first
+            }
+            if (activator == null) {
+                sa.setActivatingPlayer(ai); // as getOriginalAndAltCostAbilities does right after the filter
+            }
+            if (!RemoveDeckFilter.noManaHeld(ai, true) || !hasBasic(ai) || !hasBody(ai, host)) {
+                return false; // a refusal only waits
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int[] sac = sacrificeBound(ai, sa); // {total, green}
+            return mana.total() - sac[0] >= cost.getConvertedManaCost()
+                    && mana.colour(MagicColor.GREEN) - sac[1]
+                            >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN);
+        }
+
+        // a basic land of ours, tapped or not, whose mana ability is a plain {T} (tapOnlyMana): the untap's target
+        private static boolean hasBasic(final Player ai) {
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isBasicLand() && tapOnlyMana(c) != null) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // a creature of ours on the battlefield (tapped ones untap, summoning-sick ones may pay: CR 302.6), or a
+        // creature card in our hand other than this one: the cost's body now or soon. SpringleafDrum.hasFodder
+        // without its command-zone clause: Tayam is always there, so it would make the clause vacuous.
+        private static boolean hasBody(final Player ai, final Card self) {
+            if (!ai.getCreaturesInPlay().isEmpty()) {
+                return true;
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c != self && c.isCreature()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // {total, green}: an upper bound of what HonestMana (G2) counted for our sources whose mana ability discards
+        // (a CostDiscard: Lion's Eye Diamond, our hand) or sacrifices another permanent (a CostSacrifice not paid
+        // from the source: Phyrexian Tower, Ashnod's Altar, a creature), so the floor errs low and the payer never
+        // has to sell a creature, or LED and our hand, for this card; a Treasure or an Eldrazi Spawn sacrificing
+        // itself stays counted. Per source, the largest such ability by G2's own formula (Amount for a choice
+        // production, else Amount times its symbols; in green, what one activation makes of green), under G2's own
+        // tests (canPlay, no mana in its cost, its conditions met, spendable on sa) after G2's own activator stamp.
+        // RNG-free.
+        static int[] sacrificeBound(final Player ai, final SpellAbility sa) {
+            int total = 0;
+            int green = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int best = 0;
+                int bestGreen = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null || ma.getPayCosts() == null || !sellsOther(ma.getPayCosts())) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai); // G2's stamp, written by HonestMana.of on the same ability
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    final String produced = mp.getOrigProduced().trim();
+                    final boolean reflectedOrSpecial = ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana();
+                    final boolean choice = reflectedOrSpecial || produced.isEmpty() || mp.isComboMana()
+                            || mp.isAnyMana() || produced.contains("Chosen");
+                    best = Math.max(best, choice ? amount : amount * produced.split(" ").length);
+                    final String letters;
+                    if (reflectedOrSpecial) {
+                        letters = "";
+                    } else if (mp.isComboMana()) {
+                        letters = mp.getComboColors(ma);
+                    } else if (mp.isAnyMana()) {
+                        letters = "W U B R G";
+                    } else if (produced.contains("Chosen")) {
+                        letters = produced.replace("Chosen", mp.getChosenColor(ma));
+                    } else {
+                        letters = produced;
+                    }
+                    int g = 0;
+                    for (final String t : letters.split(" ")) {
+                        if ("G".equals(t)) {
+                            g++;
+                        }
+                    }
+                    final int each = produced.contains("AnyDifferent") ? Math.min(1, amount) : amount;
+                    bestGreen = Math.max(bestGreen, choice ? (g > 0 ? each : 0) : g * amount);
+                }
+                total += best;
+                green += bestGreen;
+            }
+            return new int[] {total, green};
+        }
+
+        // a mana ability's cost that discards, or sacrifices a permanent other than its own source
+        private static boolean sellsOther(final Cost cost) {
+            for (final CostPart part : cost.getCostParts()) {
+                if (part instanceof CostDiscard
+                        || (part instanceof CostSacrifice && !((CostSacrifice) part).payCostFromSource())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // VizierOfTumblingSands.tapOnlyMana, copied (predicates of accepted cards are not shared, rule B3-4): a
+        // tap-only cost (no mana, sacrifice or sub), no spending restriction, no Special or reflected production, no
+        // activation condition (IsPresent, CheckSVar, ActivationLimit, ActivationPhases), at least one mana. Never
+        // canPlay() on a tapped source; RNG-free. Every basic land's own {T} qualifies.
+        private static SpellAbility tapOnlyMana(final Card c) {
+            for (final SpellAbility ma : c.getManaAbilities()) {
+                final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                if (mp == null || ma.getApi() == ApiType.ManaReflected || ma.getPayCosts() == null
+                        || !ma.getPayCosts().hasTapCost()
+                        || !ma.getPayCosts().hasOnlySpecificCostType(CostTap.class)
+                        || ma.getSubAbility() != null || mp.isSpecialMana()
+                        || !mp.getManaRestrictions().isEmpty()
+                        || ma.hasParam("IsPresent") || ma.hasParam("CheckSVar")
+                        || ma.hasParam("ActivationLimit") || ma.hasParam("ActivationPhases")) {
+                    continue;
+                }
+                if (ma.amountOfManaGenerated(true) >= 1) {
+                    return ma;
+                }
+            }
+            return null;
         }
     }
 
