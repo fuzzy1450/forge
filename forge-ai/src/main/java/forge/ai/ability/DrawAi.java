@@ -927,6 +927,16 @@ public class DrawAi extends SpellAbilityAi {
         }
         // TODO add logic for Discard + Draw Effects
 
-        return super.willPayUnlessCost(payer, sa, cost, alreadyPaid, payers);
+        final boolean stock = super.willPayUnlessCost(payer, sa, cost, alreadyPaid, payers);
+        // Mystic Remora's {4} (dead-card batch 4, row 69): pay only when it costs no cast this turn
+        if (stock && host != null && SpecialCardAi.MysticRemoraTax.NAME.equals(host.getName())
+                && !SpecialCardAi.MysticRemoraTax.willPay(payer, sa, cost)) {
+            // RNG parity: A approved here (stock is A's answer) and went on to PlayerControllerAi.
+            // payCostToPreventEffect's canPayCost, whose test payment draws (ComputerUtilMana.isManaSourceReserved).
+            // Make the same call, so a {4} that A could not pay either leaves the random stream where A left it.
+            ComputerUtilCost.canPayCost(cost, sa, payer, true);
+            return false;
+        }
+        return stock;
     }
 }

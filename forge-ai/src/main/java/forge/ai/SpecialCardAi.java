@@ -33617,6 +33617,98 @@ public class SpecialCardAi {
         }
     }
 
+    // Mystic Remora, the opponent's {4} (dead-card batch 4, row 69, part 69A)
+    // "Whenever an opponent casts a noncreature spell, you may draw a card unless that player pays {4}."
+    // TrigDraw (DB$ Draw | UnlessCost$ 4 | UnlessPayer$ TriggeredActivator) resolves through
+    // AbilityUtils.handleUnlessCost -> the payer's PlayerControllerAi.payCostToPreventEffect ->
+    // DrawAi.willPayUnlessCost. Its stock answer (SpellAbilityAi.willPayUnlessCost) approves any mana cost, so the AI
+    // paid the {4} whenever it could afford it, right after casting its own spell, and spent the rest of its turn on it
+    // (base census 2026-10-18: 4 of the 5 affordable {4}s cost a cast. In 1616421 t16 the AI paid four of its seven
+    // mana after Galvanic Iteration with a hand of 4, 3, 4, 2, 3, 3 and then cast one 3-drop).
+    // The value floor, W1's Remora upkeep rule from the other side of the table: pay only when the payment changes
+    // nothing this turn could still cast. The stock answer stands:
+    // - outside our own sorcery window (another player's turn, or our End step and Cleanup): mana spent there comes
+    //   back at our untap and could cost only an instant, the likeliest card the AI never casts;
+    // - when the triggering spell makes mana (a ritual, Rousing Refrain, a mana rock): G2 counts what is untapped now,
+    //   not what that spell is about to make (1738405 t25: Refrain's ten R would have made the payment free);
+    // - when G2 cannot see the {4} at all (Signets, filters): the stock canPayCost decides, as in A.
+    // Otherwise avail = HonestMana (G2, every source, the pool included), plus the land drop when one is open and a
+    // land with no ETB replacement is in hand; demand = the nonland hand (an X spell at X = 1) and our commanders in
+    // the command zone (with tax). Pay iff the best subset sum of the demand that fits avail still fits avail - {4}.
+    // Every {4} this pays is one the stock path paid; the only change is a decline, which gives the Remora's controller
+    // a card (two under Teferi's Ageless Insight) and keeps our mana for the turn. Draws nothing (HonestMana, the hand,
+    // the commanders, the triggering spell's abilities). Keyed on the host's paper name (B3-3): any AI payer, any
+    // Remora controller, a copy or a stolen Remora alike. Rhystic Study, Esper Sentinel and every other unless-draw
+    // card keep the stock path. W1's MysticRemora (the upkeep) is not touched; this class keeps its own subset sum.
+    public static class MysticRemoraTax {
+        public static final String NAME = "Mystic Remora";
+
+        public static boolean willPay(final Player payer, final SpellAbility sa, final Cost cost) {
+            if (cost == null || !cost.isOnlyManaCost()) {
+                return true; // not the printed {4}: stock
+            }
+            final PhaseHandler ph = payer.getGame().getPhaseHandler();
+            if (!ph.isPlayerTurn(payer) || ph.getPhase().isAfter(PhaseType.MAIN2)) {
+                return true; // outside our own sorcery window: stock
+            }
+            final Object cast = sa.getTriggeringObject(forge.game.ability.AbilityKey.SpellAbility);
+            if (cast instanceof SpellAbility && makesMana((SpellAbility) cast)) {
+                return true; // G2 counts what is untapped now, not what this spell is about to make
+            }
+            final int pay = cost.getTotalMana().getCMC();
+            final CardCollectionView hand = payer.getCardsIn(ZoneType.Hand);
+            int avail = HonestMana.of(payer, sa, false).total();
+            if ((payer.getMaxLandPlaysInfinite() || payer.getLandsPlayedThisTurn() < payer.getMaxLandPlays())
+                    && CardLists.count(hand, c -> c.isLand() && !c.hasETBReplacement()) > 0) {
+                avail++; // this turn's land drop, on a land with no ETB replacement
+            }
+            if (avail < pay) {
+                return true; // G2 under-counts (Signets, filters): leave it to the stock canPayCost
+            }
+            final int cap = Math.min(avail, 62);
+            final long mask = (1L << (cap + 1)) - 1;
+            long reach = 1L; // bit i: some subset of the demand costs exactly i
+            for (final Card c : hand) {
+                if (c.isLand()) {
+                    continue;
+                }
+                final boolean x = c.getManaCost() != null && c.getManaCost().countX() > 0;
+                final int k = c.getCMC() + (x ? 1 : 0);
+                if (k <= cap) {
+                    reach |= (reach << k) & mask;
+                }
+            }
+            for (final Card cmdr : payer.getCommanders()) {
+                if (cmdr.isInZone(ZoneType.Command)) {
+                    final int k = cmdr.getCMC() + 2 * payer.getCommanderCast(cmdr);
+                    if (k <= cap) {
+                        reach |= (reach << k) & mask;
+                    }
+                }
+            }
+            return best(reach, Math.min(avail - pay, cap)) == best(reach, cap);
+        }
+
+        private static boolean makesMana(final SpellAbility cast) {
+            for (SpellAbility ab = cast; ab != null; ab = ab.getSubAbility()) {
+                if (ab.getApi() == ApiType.Mana || ab.getApi() == ApiType.ManaReflected) {
+                    return true; // a ritual, Rousing Refrain
+                }
+            }
+            final Card src = cast.getHostCard();
+            return src != null && cast.isSpell() && src.isPermanent() && !src.getManaAbilities().isEmpty(); // a rock
+        }
+
+        private static int best(final long reach, final int x) {
+            for (int i = x; i > 0; i--) {
+                if ((reach & (1L << i)) != 0) {
+                    return i;
+                }
+            }
+            return 0;
+        }
+    }
+
     // Kheru Spellsnatcher (dead-card batch 2, row 41)
     // {3}{U} 3/3, "Morph {4}{U}{U}. When Kheru Spellsnatcher is turned face up, counter target
     // spell. If that spell is countered this way, exile it instead of putting it into its owner's
