@@ -29257,6 +29257,102 @@ public class SpecialCardAi {
         }
     }
 
+    // Intuition (dead-card batch 4, row 9; All the world's power, Blue Farm 4Matic and The Sting of Ping, site
+    // uploads)
+    // "Search your library for three cards and reveal them. Target opponent chooses one. Put that card into
+    // your hand and the rest into your graveyard. Then shuffle." ({2}{U} Instant.) Never owner-cast: before
+    // Main 2 the root's hidden-origin timing gate (ChangeZoneAi.hiddenOriginCanPlayAI, a Library destination)
+    // refused it, and from Main 2 on the cast died on its sub-ability, DBChangeZone1 (ValidTgts$ Opponent),
+    // which carried no IsCurse$: ChangeZoneAi.hiddenOriginPlayDrawbackAI aimed the non-curse at the AI
+    // itself, could not, and answered TargetingFailed. Part 9A puts IsCurse$ True on that line, and the stock
+    // sub then targets choosePreferredDefenderPlayer.
+    // This floor (9B1) is asked from ChangeZoneAi.checkApiLogic's AILogic$ Intuition branch, right after the
+    // stock fill of the per-game choice scratch (Intuition.considerMultiple, called not edited: its
+    // hasEnoughManaSourcesToCast test payments draw MyRandom, in A and B alike), so a decline has made exactly
+    // A's draws and left A's scratch. worthSearching declines, cheapest check first:
+    // - a library under SEARCHED + LIBRARY_KEEP: three cards leave it and at least four must stay (DrawAi's
+    //   own self-draw refusal, numCards >= library - 3), so the search never decks its caster;
+    // - a search an opponent controls (Opposition Agent's ControlOpponentsSearchingLibrary, recorded on us for
+    //   as long as the Agent is out: the three cards would be exiled for its controller);
+    // - our LimitSearchLibrary (Aven Mindcensor: the search sees only the top four);
+    // - a punished search (searchPunished, LongTermPlans' private verbatim copy, rule B3-7): an opposing
+    //   SearchedLibrary trigger (Archivist of Oghma, Wan Shi Tong: a card and a life for them per search), an
+    //   opposing ControlOpponentsSearchingLibrary static, or a Shuffled trigger on any battlefield whose
+    //   ValidPlayer matches us (Widespread Panic: the closing shuffle fires it).
+    // A cast is then three cards of our own library, one of them to our hand and two to our graveyard (the
+    // carriers' recursion: Underworld Breach, Yawgmoth's Will, Sevinne's Reclamation, Reanimate), at {2}{U}
+    // for one card. The stock checks stay where they are: an unsearchable library (canSearchLibraryWith:
+    // Stranglehold, Leonin Arbiter, Ashiok) and the timing gate in hiddenOriginCanPlayAI, an opponent the sub
+    // cannot target (Leyline of Sanctity) at its TargetingFailed.
+    // handles() reads the source name, the host's name or the card state's name, so a face-down cast from
+    // exile (a Gonti-class thief) meets the floor too (HourOfEternity.isHour's idiom, rule B3-3); the
+    // consulting player is the caster, a thief included (Mnemonic Betrayal, Commandeer). Play-effect casts and
+    // copies (Twincast, Flare of Duplication) go through doTriggerNoCost -> hiddenTriggerAI and never reach
+    // checkApiLogic. Burning-Rune Demon, the other AILogic$ Intuition card, fails handles() and keeps the
+    // stock branch.
+    // RNG: reads only (zone sizes, keywords, the search-control record, trigger and static parameters); no
+    // draw, no write, no SpellAbility allocated. A decline returns right after the stock fill, so it ends with
+    // A's draws and A's scratch: in 1v1 the stock hiddenOriginCanPlayAI and the sub's targeting after it draw
+    // nothing; in a pod a decline skips their two choosePreferredDefenderPlayer rolls (no pod game is stored).
+    public static class IntuitionPile {
+        public static final String NAME = "Intuition";
+        static final int SEARCHED = 3;      // "search your library for three cards"
+        static final int LIBRARY_KEEP = 4;  // DrawAi's refusal, numCards >= library - 3
+
+        // the card, by its source name, its host's name (the face-up LKI canPlayAndPayFor switched in) or the
+        // card state's name: getAbilitySourceName reads "" for a card cast face down from exile
+        public static boolean handles(final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                    || (host != null && NAME.equals(host.getName()))
+                    || (sa.getCardState() != null && NAME.equals(sa.getCardState().getName()));
+        }
+
+        // RNG-free. ai = the consulting player, whose own library is searched: the caster, or a thief casting it.
+        public static boolean worthSearching(final Player ai) {
+            // never decks its caster: three leave the library, at least four stay
+            if (ai.getCardsIn(ZoneType.Library).size() < SEARCHED + LIBRARY_KEEP) {
+                return false;
+            }
+            // an opponent's Opposition Agent controls the search: the three cards are exiled for them
+            if (ai.getControlledWhileSearching() != null) {
+                return false;
+            }
+            // Aven Mindcensor: the search sees only the top four
+            if (ai.hasKeyword("LimitSearchLibrary")) {
+                return false;
+            }
+            // B3-7: nobody profits from the search or the closing shuffle
+            return !searchPunished(ai);
+        }
+
+        // LongTermPlans.searchPunished, a private verbatim copy (an accepted helper is not shared)
+        private static boolean searchPunished(final Player ai) {
+            for (final Player opp : ai.getOpponents()) {
+                for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+                    for (final Trigger t : c.getTriggers()) {
+                        if (t.getMode() == TriggerType.SearchedLibrary) {
+                            return true;
+                        }
+                    }
+                    for (final StaticAbility st : c.getStaticAbilities()) {
+                        if (st.hasParam("ControlOpponentsSearchingLibrary")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.Shuffled && t.matchesValidParam("ValidPlayer", ai)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     // Gifts Ungiven (dead-card batch 4, row 32; Blue Farm 4Matic and All the world's power, site uploads)
     // "Search your library for up to four cards with different names and reveal them. Target opponent
     // chooses two of those cards. Put the chosen cards into your graveyard and the rest into your hand.

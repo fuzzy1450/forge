@@ -595,6 +595,18 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 CardCollection chosen = cardsToChoose();
                 chosen.clear();
                 chosen.addAll(SpecialCardAi.Intuition.considerMultiple(aiPlayer, sa));
+                // Dead-card batch 4, row 9, part 9B1: Intuition. After the stock fill above, which A made at every
+                // consult (its test payments draw MyRandom), so a decline here has made exactly A's draws and leaves
+                // A's scratch. A declined every consult anyway, before Main 2 at hiddenOriginCanPlayAI's timing gate
+                // and from Main 2 on at the sub's TargetingFailed, which 9A lifted. The floor
+                // (SpecialCardAi.IntuitionPile.worthSearching) is RNG-free: a library of seven or more, a search
+                // nobody else controls, limits or profits from. It sits inside canPlaySa, so its direct callers see
+                // it too. Burning-Rune Demon (the other AILogic$ Intuition card) fails handles() and keeps the stock
+                // path; Play-effect casts and copies (doTriggerNoCost -> hiddenTriggerAI) never come here.
+                if (SpecialCardAi.IntuitionPile.handles(sa) && !(sa instanceof AbilitySub)
+                        && !SpecialCardAi.IntuitionPile.worthSearching(aiPlayer)) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
             } else if (aiLogic.equals("MazesEnd")) {
                 return SpecialCardAi.MazesEnd.consider(aiPlayer, sa);
             } else if (aiLogic.equals("HuaTuo")) {
