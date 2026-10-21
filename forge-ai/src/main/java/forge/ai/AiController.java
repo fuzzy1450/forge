@@ -933,6 +933,23 @@ public class AiController {
             }
         }
 
+        // Dead-card batch 4, row 9, part 9B2: Intuition. In A its sub-ability's targeting
+        // (ChangeZoneAi.hiddenOriginPlayDrawbackAI, a non-curse that could only target opponents) refused
+        // every consult inside canPlaySa, so canPayCost never ran for it; with IsCurse$ on that sub (9A)
+        // canPlaySa approves from Main 2 on, and an unpayable window would now draw canPayCost's
+        // isManaSourceReserved rolls (the IsCurse-only prototype left A's stream before its first cast in all
+        // three logged games). G1 refuses those windows first, drawing nothing, as A's decline drew nothing
+        // after canPlaySa (its stock considerMultiple fill, inside canPlaySa, draws alike in A and B). Placed
+        // after canPlaySa, so B has made exactly A's evaluation first, and after W5's Gifts Ungiven block: its
+        // own block, as rows 9 and 32 land in different builds. Own paid casts (from hand, or a thief's or
+        // graveyard caster's regular cast); a Play-effect cast never comes here. The paper name is compared
+        // here, not 9B1's IntuitionPile.NAME, so this block stands if 9B1 is reverted alone. G1 under G4's
+        // contract, called not edited. A name compare: inert for every other SA.
+        if (sa.isSpell() && host != null && "Intuition".equals(host.getName())
+                && !sa.isCastFromPlayEffect() && !SpecialCardAi.CommanderCastCeiling.affordable(player, sa)) {
+            return AiPlayDecision.CantAfford;
+        }
+
         if (!ComputerUtilCost.canPayCost(sa, player, sa.isTrigger())) {
             // for dependent costs with X, e.g. Repeal, which require a valid target to be specified before a decision can be made
             // on whether the cost can be paid, this can only be checked late after canPlaySa has been run (or the AI will misplay)
