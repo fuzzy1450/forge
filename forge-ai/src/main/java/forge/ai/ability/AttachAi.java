@@ -1638,8 +1638,9 @@ public class AttachAi extends SpellAbilityAi {
 
         Card c = attachGeneralAI(aiPlayer, sa, prefList, mandatory, attachSource, sa.getParam("AILogic"));
 
-        // Swiftfoot Boots (dead-card batch 4, row 71, part 71A; a W1 follow-up, deck review F4,
-        // Arcanis - i LOVE drawing cards 87715b77). The Pump preference above gives the first equip
+        // Swiftfoot Boots (dead-card batch 4, row 71, part 71A) and Lightning Greaves (part 71B, with
+        // the class's shroud floor); a W1 follow-up, deck review F4, Arcanis - i LOVE drawing cards
+        // 87715b77. The Pump preference above gives the first equip
         // to the best creature the keywords help, and from_useless_only below then pins the
         // equipment there while that creature is useful, so a commander cast later never gets its
         // haste or protection (one move onto a commander, off a useless holder, in 137 logged

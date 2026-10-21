@@ -28858,9 +28858,10 @@ public class SpecialCardAi {
         }
     }
 
-    // Swiftfoot Boots (dead-card batch 4, row 71, part 71A; a W1 follow-up, B4-14: deck review F4,
-    // Arcanis - i LOVE drawing cards 87715b77). Printed "Equipped creature has hexproof and haste.
-    // Equip {1}"; the script matches. commanderTarget answers our own commander for A's approved
+    // Swiftfoot Boots (dead-card batch 4, row 71, part 71A) and Lightning Greaves (part 71B); a W1
+    // follow-up, B4-14: deck review F4, Arcanis - i LOVE drawing cards 87715b77. Printed "Equipped
+    // creature has hexproof and haste. Equip {1}" / "Equipped creature has haste and shroud. Equip
+    // {0}"; the scripts match. commanderTarget answers our own commander for A's approved
     // equip (a first equip re-aimed, or a move A's from_useless_only refused), or null for A's path:
     // - only under from_useless_only (every stored seat), so "never" and "always" keep their own rules
     //   and no profile can trade the equipment back and forth with this one;
@@ -28873,18 +28874,26 @@ public class SpecialCardAi {
     //   evaluateCreature among partners;
     // - hexproof does not stop our own spells and abilities from targeting that commander, so the Boots
     //   need no further floor;
+    // - [71B] Lightning Greaves only: shroud stops our own targets too, so not while another Equipment of
+    //   ours is not on that commander (Swiftfoot Boots and Illusionist's Bracers among them), an
+    //   Equipment or a Pump-logic Aura is in our hand, or, for a commander with a non-mana {T} ability, a
+    //   targeted untapper of ours is on the battlefield or in hand (shroudCosts). AI:RemoveDeck:All cards
+    //   count (Freed from the Real, Aphetto Alchemist): batch 4's rows 53 and 74 readmit them, and both
+    //   aim at that commander;
     // - a move whose Equip has a printed mana value above 0 is payable on HonestMana (G2, held sources
     //   skipped) or it is A's TargetingFailed, so canPayCost's test payment never runs where A's did not.
     // ATTACHED_THIS_TURN is not read: A writes it on a consult that found no target, which would refuse
     // the commander's own cast turn, and this move is one-way, so it cannot go back and forth.
-    // Draws nothing and builds no ability; its only writes are HonestMana's activator stamps, and the
-    // caller's ATTACHED_THIS_TURN on an approval.
+    // Draws nothing and builds no ability (a trigger's Execute SVar is read as text: Trigger.ensureAbility
+    // could build one); its only writes are HonestMana's activator stamps, and the caller's
+    // ATTACHED_THIS_TURN on an approval.
     public static class GreavesAndBoots {
+        public static final String GREAVES = "Lightning Greaves";   // [71B]
         public static final String BOOTS = "Swiftfoot Boots";
 
         public static boolean handles(final Player ai, final SpellAbility sa, final Card eq, final boolean mandatory) {
             return !mandatory && eq != null && sa.isEquip() && eq.equals(sa.getHostCard())
-                    && BOOTS.equals(eq.getName())
+                    && (BOOTS.equals(eq.getName()) || GREAVES.equals(eq.getName()))   // [71B] adds GREAVES
                     && ai.equals(eq.getController())
                     && "from_useless_only".equals(AiProfileUtil.getProperty(ai, AiProps.MOVE_EQUIPMENT_TO_BETTER_CREATURES));
         }
@@ -28901,7 +28910,8 @@ public class SpecialCardAi {
             for (final Card c : ComputerUtil.getSafeTargets(ai, sa, prefList)) {
                 if (!ours(ai, c) || c.equals(holder) || ComputerUtilCard.isUselessCreature(ai, c)
                         || c.hasKeyword(Keyword.SHROUD) || c.hasKeyword(Keyword.HEXPROOF)
-                        || c.getTimesCrewedThisTurn() > 0) {
+                        || c.getTimesCrewedThisTurn() > 0
+                        || (GREAVES.equals(eq.getName()) && shroudCosts(ai, eq, c))) {   // [71B]
                     continue;
                 }
                 final int e = ComputerUtilCard.evaluateCreature(c);
@@ -28924,6 +28934,82 @@ public class SpecialCardAi {
 
         private static boolean ours(final Player ai, final Card c) {
             return c != null && c.isCreature() && c.isCommander() && ai.equals(c.getOwner()) && ai.equals(c.getController());
+        }
+
+        // [71B] (a) another Equipment of ours not on cmdr; (b) an Equipment, or a Pump-logic Aura (one aimed
+        // at our own creatures), in our hand; (c) cmdr has a non-mana {T} activated ability and a targeted
+        // untapper of ours is on the battlefield or in hand
+        static boolean shroudCosts(final Player ai, final Card greaves, final Card cmdr) {
+            for (final Card o : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (o.isEquipment() && !o.equals(greaves) && !cmdr.equals(o.getEquipping())) {
+                    return true;
+                }
+            }
+            for (final Card o : ai.getCardsIn(ZoneType.Hand)) {
+                if (o.isEquipment() || (o.isAura() && "Pump".equals(o.getSVar("AttachAILogic")))) {
+                    return true;
+                }
+            }
+            if (!tapEngine(cmdr)) {
+                return false;
+            }
+            for (final Card o : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!o.equals(cmdr) && untapper(o)) {
+                    return true;
+                }
+            }
+            for (final Card o : ai.getCardsIn(ZoneType.Hand)) {
+                if (untapper(o)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // [71B] a non-mana activated ability with a {T} cost
+        private static boolean tapEngine(final Card c) {
+            for (final SpellAbility s : c.getNonManaAbilities()) {
+                if (s.isActivatedAbility() && s.getPayCosts() != null && s.getPayCosts().hasTapCost()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // [71B] a targeted Untap among the card's own spell abilities, or a trigger whose Execute SVar is one
+        // (read as text: Trigger.ensureAbility could build an ability), that can target a creature
+        private static boolean untapper(final Card o) {
+            for (final SpellAbility s : o.getSpellAbilities()) {
+                if (s.getApi() == ApiType.Untap && s.usesTargeting() && s.getTargetRestrictions() != null
+                        && creatureTgt(s.getTargetRestrictions().getValidTgts())) {
+                    return true;
+                }
+            }
+            for (final Trigger t : o.getTriggers()) {
+                final String exe = t.getParam("Execute");
+                final String text = exe == null ? null : o.getSVar(exe);
+                if (text != null && text.contains("DB$ Untap") && text.contains("ValidTgts$")) {
+                    final String v = text.substring(text.indexOf("ValidTgts$") + 10).split("\\|")[0].trim();
+                    if (creatureTgt(v.split(","))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // [71B] a ValidTgts entry starting Creature, Permanent or Card
+        private static boolean creatureTgt(final String[] valid) {
+            if (valid == null) {
+                return false;
+            }
+            for (final String v : valid) {
+                final String s = v.trim();
+                if (s.startsWith("Creature") || s.startsWith("Permanent") || s.startsWith("Card")) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
