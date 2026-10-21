@@ -48722,7 +48722,7 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35, 50, 12, 34 and 41, keepOff for batch 2's row 68 (Trench
+    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35, 50, 12, 34, 41 and 45, keepOff for batch 2's row 68 (Trench
     // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
@@ -48899,6 +48899,8 @@ public class SpecialCardAi {
                     return Firestorm.readmit(ai, sa);
                 case Earthcraft.NAME:                    // batch 4, row 41 (W8)
                     return Earthcraft.readmit(ai, sa);
+                case ClockOfOmens.NAME:                  // batch 4, row 45 (W8)
+                    return ClockOfOmens.readmit(ai, sa);
                 default:
                     return false;
             }
@@ -56817,6 +56819,197 @@ public class SpecialCardAi {
                 if ((a.isActivatedAbility() || a.isManaAbility()) && a.getPayCosts() != null
                         && a.getPayCosts().hasTapCost() && a.getPayCosts().isReusuableResource()) {
                     return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    // Clock of Omens (dead-card batch 4, wave 8, row 45; Mulligan's Championship Series January 2026 Champion
+    // 931bb1b8, deck 518, commander Magda, Brazen Outlaw; a site upload, not an anchor, and the only registered list
+    // with the card)
+    // "Tap two untapped artifacts you control: Untap target artifact." ({4} artifact; printed text = Oracle = script,
+    // c/clock_of_omens.txt: A:AB$ Untap | Cost$ tapXType<2/Artifact> | ValidTgts$ Artifact, NonStackingEffect,
+    // AI:RemoveDeck:All. The ability has no {T}: the Clock may be one of its own two taps and activates while tapped.)
+    // The hint dropped both of its spell abilities, the hand cast and the battlefield untap, at
+    // AiController.getSpellAbilityToPlay's filter for every AI player, and no G3 case named the card: 0 owner casts in
+    // 763 held games on 2.0.15+499e03087c5 (about 500 distinct held libraries); its one cast was a theft (Neera - Wild
+    // Magic's Plargg and Nassari free cast, game 1691917), which never met the filter. The hint is KEPT (rule B3-1: the
+    // -10 sort and the tutor, steal, copy and clone pickers stay as they were) and G3 readmits two abilities, for the
+    // player who OWNS the card:
+    // - the hand cast (isOwnHandCast: our own regular cast of the paper card from our hand, not a Play-effect cast),
+    //   judged by considerCast (45A) from PermanentNoncreatureAi.checkApiLogic under the same key (rule B3-2), after
+    //   the stock PermanentAi approval (our Main 2 in practice: the card has no PlayMain1). Cheapest first, every
+    //   refusal its own return: the Treasure engine is live (L1, engineLive), no opposing token punisher (punished,
+    //   mode-only), no opposing CantBeActivated static that would forbid its untap once it is on the battlefield
+    //   (locked: Null Rod, Collector Ouphe, Stony Silence, Karn, the Great Creator, a Pithing Needle or a Phyrexian
+    //   Revoker naming it), then {4} as the engine prices it (test-mode calculateManaCost) within HonestMana (G2), all
+    //   before canPayCost's test payment draws.
+    // - the untap (isOwnUntap: the root activated Untap of a paper Clock on the battlefield, ours to own AND control;
+    //   a thief's Clock keeps the filter, the Squallmonger shape), judged by UntapAi.checkApiLogic's route under the
+    //   same key. Stock untapPrefTargeting there churns it (the skeptic's hint-drop probe: tap two artifacts to untap
+    //   the most expensive one, eight times in one game, Treasures and a copied Arcane Signet for nothing).
+    // The value is the Treasure-on-tap engine: a mandatory Taps trigger of ours whose Execute is a Treasure Token
+    // (census: Magda, Brazen Outlaw only) watching an artifact D we control (the deck's changeling artifact
+    // creatures, Firdoch Core, a Dwarf-naming Adaptive Automaton, Metallic Mimic or Roaming Throne, anything under
+    // Mycosynth Lattice). Tapping D for the cost makes a Treasure before the untap resolves.
+    // A Play-effect cast never meets the filter (canPlayFromEffectAI -> PermanentAi.doTriggerNoCost); a Sculpting
+    // Steel copy, a token copy or a Mairsil grant answers to no case (rule B3-3: the paper name).
+    // RNG parity: A never evaluated either ability (the filter is draw-free). Every check here reads zones, triggers'
+    // and statics' params, SVar text and the test-mode cost, with no MyRandom, no LKI copy, no SpellAbility created
+    // (watchers are read from the Execute SVar's text, never ensureAbility; the lock scan reads the card's own untap)
+    // and no AiCardMemory; the only writes are G2's own activator stamps on the mana abilities it reads. The first new
+    // draw is the cast's canPayCost test payment after the floor passed.
+    public static class ClockOfOmens {
+        public static final String NAME = "Clock of Omens";
+
+        // the host's paper name (rule B3-3), never getAbilitySourceName, which reads a granted copy's original host
+        private static boolean isPaper(final Card host) {
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName());
+        }
+
+        // the cast's key: G3's case and PermanentNoncreatureAi's gate. Our own regular cast of the paper card from our
+        // hand; a Play-effect cast (Plargg and Nassari, Nathan Drake, Tibalt's Trickery) keeps A's path
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return sa.isSpell() && !sa.isCastFromPlayEffect() && isPaper(host)
+                    && host.isInZone(ZoneType.Hand) && ai.equals(host.getOwner());
+        }
+
+        // the untap's key: G3's case, UntapAi.checkApiLogic's route and AiCostDecision's chooser. The root activated
+        // Untap of a paper Clock on the battlefield that this AI owns AND controls
+        public static boolean isOwnUntap(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return !(sa instanceof AbilitySub) && sa.isActivatedAbility() && sa.getApi() == ApiType.Untap
+                    && isPaper(host) && host.isInPlay()
+                    && ai.equals(host.getController()) && ai.equals(host.getOwner());
+        }
+
+        // RemoveDeckFilter.readmit's case: zone, owner, controller and name; RNG-free, holds nothing
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            return isOwnHandCast(ai, sa) || isOwnUntap(ai, sa);
+        }
+
+        // 45A, from PermanentNoncreatureAi.checkApiLogic after the stock approval: cheapest first (skeptic M5), every
+        // refusal its own return, all before canPlaySa's canPayCost, whose test payment draws in isManaSourceReserved
+        public static AiAbilityDecision considerCast(final Player ai, final SpellAbility sa) {
+            if (!engineLive(ai, watchers(ai))) {
+                return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards); // L1: no engine to untap
+            }
+            if (punished(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);         // an opposing token punisher
+            }
+            if (locked(ai, sa.getHostCard())) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);         // its untap could never activate
+            }
+            // G2 last: the engine's test-mode cost (taxes, RaiseCost and ReduceCost statics; rule B3-5) against honest
+            // mana with held sources skipped, so an unpayable window stops here, drawing nothing
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            if (HonestMana.of(ai, sa, true).total() < cost.getConvertedManaCost()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // L1: an artifact of ours, not a token and not a Clock (the D the untap taps and untaps), that a watcher
+        // matches and that an effect can untap, tapped or not; the cheap flags first (skeptic M3)
+        static boolean engineLive(final Player ai, final List<Trigger> watchers) {
+            if (watchers.isEmpty()) {
+                return false;
+            }
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isArtifact() && !c.isToken() && !isPaper(c) && c.canUntap(null, true)
+                        && treasuresPerTap(watchers, c) > 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // the Treasure-on-tap watchers on our battlefield, computed once per call (skeptic M3): Taps triggers whose
+        // Execute SVar's text is a DB$ Token naming a treasure script (Magda, Brazen Outlaw's today). One carrying
+        // OptionalDecider is not ours to count on, and one carrying Attacker, ValidCause, Teamwork, FirstTime or
+        // ValidPlayer does not fire on every cost tap: skipped, so a future upload cannot fool the floor (rule B3-13).
+        // Reads the SVar's text (the trigger's own, then its host's), never ensureAbility: no SpellAbility is created
+        static List<Trigger> watchers(final Player ai) {
+            final List<Trigger> res = new ArrayList<>();
+            for (final Card w : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : w.getTriggers()) {
+                    if (t.getMode() != TriggerType.Taps || !t.hasParam("Execute") || t.hasParam("OptionalDecider")
+                            || t.hasParam("Attacker") || t.hasParam("ValidCause") || t.hasParam("Teamwork")
+                            || t.hasParam("FirstTime") || t.hasParam("ValidPlayer")) {
+                        continue;
+                    }
+                    final String ex = t.getSVar(t.getParam("Execute"));
+                    if (ex.startsWith("DB$ Token") && ex.toLowerCase(Locale.ROOT).contains("treasure")) {
+                        res.add(t);
+                    }
+                }
+            }
+            return res;
+        }
+
+        // Treasures one tap of c makes: the watchers whose ValidCard matches c (Magda's Dwarf.YouCtrl)
+        static int treasuresPerTap(final List<Trigger> watchers, final Card c) {
+            int k = 0;
+            for (final Trigger t : watchers) {
+                if (t.matchesValidParam("ValidCard", c)) {
+                    k++;
+                }
+            }
+            return k;
+        }
+
+        // an opposing trigger the Treasures would feed: any TokenCreated or TokenCreatedOnce trigger (the mode-only
+        // rule, all the cast floor asks), and, for each proxy, a Taps trigger or a ChangesZone trigger into the
+        // Battlefield whose ValidCard matches it (the untap's taps: an artifact of ours like the Treasures the loop
+        // makes, and the engine D, which an opposing "enchanted creature becomes tapped" curse matches: skeptic M2).
+        // Coarse by design: a refusal only costs activations
+        static boolean punished(final Player ai, final Card... proxies) {
+            for (final Card o : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : o.getTriggers()) {
+                    final TriggerType m = t.getMode();
+                    if (m == TriggerType.TokenCreated || m == TriggerType.TokenCreatedOnce) {
+                        return true;
+                    }
+                    if (m != TriggerType.Taps && !(m == TriggerType.ChangesZone
+                            && t.getParamOrDefault("Destination", "").contains("Battlefield"))) {
+                        continue;
+                    }
+                    for (final Card p : proxies) {
+                        if (p != null && t.matchesValidParam("ValidCard", p)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // skeptic M4: an opposing CantBeActivated static that would forbid the Clock's own untap once it is on the
+        // battlefield. AffectedZone is ignored on purpose: the Clock is still in hand, where
+        // StaticAbilityCantBeCast.cantBeActivatedAbility cannot be asked. The untap is the card's own SA, read from
+        // getSpellAbilities: no SpellAbility is created. On the battlefield, canPlaySa's checkRestrictions reads the
+        // same statics for the activation itself
+        static boolean locked(final Player ai, final Card host) {
+            SpellAbility untap = null;
+            for (final SpellAbility s : host.getSpellAbilities()) {
+                if (s.isActivatedAbility() && s.getApi() == ApiType.Untap) {
+                    untap = s;
+                    break;
+                }
+            }
+            if (untap == null) {
+                return false;
+            }
+            for (final Card o : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
+                for (final StaticAbility st : o.getStaticAbilities()) {
+                    if (st.checkConditions(StaticAbilityMode.CantBeActivated)
+                            && st.matchesValidParam("ValidCard", host)
+                            && st.matchesValidParam("ValidSA", untap)
+                            && st.matchesValidParam("Activator", ai)) {
+                        return true;
+                    }
                 }
             }
             return false;

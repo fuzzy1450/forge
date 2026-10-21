@@ -145,6 +145,15 @@ public class PermanentNoncreatureAi extends PermanentAi {
             return SpecialCardAi.SylvanLibrary.considerCast(ai, sa);
         }
 
+        // Clock of Omens (dead-card batch 4, row 45, part 45A) keeps AI:RemoveDeck:All; G3 lets its owner's own hand
+        // cast through, and that cast is judged here (own Main 2 in practice, PermanentAi.checkPhaseRestrictions):
+        // only while its Treasure engine is live, no opposing token punisher or artifact lock is out, and honest mana
+        // pays it. The gate is the readmit's own key (rule B3-2): a Play-effect cast (Plargg and Nassari's free cast,
+        // Nathan Drake), a thief's and every other host keep the stock answer. Every decline draws nothing.
+        if (SpecialCardAi.ClockOfOmens.isOwnHandCast(ai, sa)) {
+            return SpecialCardAi.ClockOfOmens.considerCast(ai, sa);
+        }
+
         // Lavabrink Floodgates dropped AI:RemoveDeck:All. Its own cast is judged here, after the
         // stock approval (own Main 2 in practice, PermanentAi.checkPhaseRestrictions); a Play-effect
         // cast (Etali's free cast, Nathan Drake's attack trigger) keeps the stock answer, as in A.
