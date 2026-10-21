@@ -34211,40 +34211,18 @@ public class SpecialCardAi {
     //   readmit; PeekAndRevealAi is not touched, so every direct canPlaySa caller
     //   (hasReasonToPlayCardThisTurn, ManaAi's ritual look-ahead, the effect-cast picker, the Nykthos
     //   and Yawgmoth's Will scanners) keeps A's answer.
-    // - willDig() (part 12B), from StoreSVarAi.willPayUnlessCost for the script's UnlessAI$
-    //   LimDulsVault on the repeated "pay 1 life" StoreSVar, asked once per look: only the owner's own
-    //   hand-cast resolution digs (a thief, a copy and a Play-effect cast keep the script's old
-    //   Never's false), at most MAX_DIGS times (digsSoFar counts the fives already bottomed), only
-    //   while the next five are cards this resolution has not seen, only while life after the payment
-    //   stays at or above floor() (Ad Nauseam's), and only when the five on top hold fewer than
-    //   KEEP_MIN cards the AI's own scry rule keeps (ComputerUtil.scryWillMoveCardToBottomOfLibrary,
-    //   the rule the end of the resolution stacks the five by: PlayerControllerAi.
-    //   orderMoveToZoneList). Removing Never alone would be worse: the stock rule pays on every look
-    //   down to about 5 life.
+    // - the resolution is stock (UnlessAI$ Never: no dig), so the next five draws are the same five
+    //   cards, stacked by the Ponder rule (PlayerControllerAi.orderMoveToZoneList).
     // RNG parity: A never evaluated the card for its owner (gate 1), so A drew nothing for it. readmit
     // reads parameters, zones, the phase, the stack, the held-mana memory (noManaHeld), the test-mode
     // cost, HonestMana, mana abilities' canPlay, statics, a parsed Cost string and triggers: it draws
     // nothing and holds nothing, and the O(1) tests come first, so its false is the old filter
-    // exactly. canPayCost's draws follow a true readmit only. willDig reads the SA chain, the cost, the
-    // library, life, the AI profile, combat predictions without abilities and AiCardMemory: it draws
-    // nothing and allocates no SpellAbility id, and its only writes are LIM_DULS_VAULT_DUG on a dig.
-    // The stock DBShuffle pick still draws its CardLists.shuffle, as in A's effect casts.
+    // exactly. canPayCost's draws follow a true readmit only.
     public static class LimDulsVault {
         public static final String NAME = "Lim-D\u00fbl's Vault"; // the paper name (B3-3), u-circumflex escaped
         static final int LOOK = 5;                                  // printed: the top five, each time
         static final int LIBRARY_MARGIN = 3;                        // DrawAi's deck-out margin
         static final int MIN_LIBRARY = 2 * LOOK + LIBRARY_MARGIN;   // the cast must afford one dig
-        public static final String UNLESS_AI = "LimDulsVault";      // the script's UnlessAI$ (12B), no other script's
-        static final int MAX_DIGS = 3;                              // at most 3 life and 20 cards seen
-        // A five holding KEEP_MIN cards the scry rule keeps is kept. The rule as Default.ai sets it, which
-        // the stored games play (SCRY_IMMEDIATELY_UNCASTABLE_TO_BOTTOM true and its CMC_DIFF 1; the AiProps
-        // code default is false): land-light (under SCRY_NUM_LANDS_TO_STILL_NEED_MORE, 4, mana lands, none
-        // in hand) it keeps lands only; at SCRY_NUM_LANDS_TO_NOT_NEED_MORE, 7, mana lands it keeps no land;
-        // and a nonland is kept only when its mana value is at most getAvailableManaEstimate(p, false),
-        // which counts every mana source tapped or not, plus the lands in hand. So the dig fires on the
-        // fives the AI itself would scry away, more often early than late; MAX_DIGS and floor() bound it.
-        static final int KEEP_MIN = 2;
-        static final int MIN_LIFE_AFTER = 10;                       // Ad Nauseam's and Moonlight Bargain's floor
 
         // RemoveDeckFilter.readmit's case, the O(1) tests first
         public static boolean readmit(final Player ai, final SpellAbility sa) {
@@ -34419,91 +34397,6 @@ public class SpecialCardAi {
                 }
             }
             return true;
-        }
-
-        // StoreSVarAi.willPayUnlessCost (12B): pay 1 life, put these five on the bottom and look at the
-        // next five? Asked of the payer (UnlessPayer$ You) once per look of one resolution.
-        public static boolean willDig(final Player payer, final SpellAbility sa, final Cost cost) {
-            final Card host = sa.getHostCard();
-            final SpellAbility root = sa.getRootAbility();   // the repeat sub's parent chain ends at the spell
-            if (host == null || root == null || root.isCopied() || root.isCastFromPlayEffect()
-                    || !payer.equals(host.getOwner()) || !payer.equals(root.getActivatingPlayer())
-                    || host.getCastFrom() == null || !host.getCastFrom().is(ZoneType.Hand)) {
-                return false; // a thief, a copy, a Play-effect cast: the script's old UnlessAI$ Never
-            }
-            final forge.game.cost.CostPayLife part = cost.getCostPartByType(forge.game.cost.CostPayLife.class);
-            if (part == null || cost.getCostParts().size() != 1 || part.getAbilityAmount(sa) != 1) {
-                return false; // the script drifted
-            }
-            final forge.game.zone.PlayerZone lib = payer.getZone(ZoneType.Library);
-            final int digs = digsSoFar(payer, lib);
-            if (digs >= MAX_DIGS || lib.size() < LOOK * (digs + 2) + LIBRARY_MARGIN) {
-                return false; // the next five must be cards this resolution has not seen
-            }
-            if (!payer.canPayLife(1, true, sa) || payer.getLife() - 1 < floor(payer)) {
-                return false;
-            }
-            int keeps = 0;
-            for (int i = 0; i < LOOK; i++) {
-                final Card c = lib.get(i);
-                if (!host.isRemembered(c)) {
-                    return false; // the top five are not the five we looked at: never dig blind
-                }
-                if (!ComputerUtil.scryWillMoveCardToBottomOfLibrary(payer, c)) {
-                    keeps++;
-                }
-            }
-            if (keeps >= KEEP_MIN) {
-                return false;
-            }
-            if (digs == 0) {
-                AiCardMemory.clearMemorySet(payer, AiCardMemory.MemorySet.LIM_DULS_VAULT_DUG); // a stale set
-            }
-            for (int i = 0; i < LOOK; i++) {
-                AiCardMemory.rememberCard(payer, lib.get(i), AiCardMemory.MemorySet.LIM_DULS_VAULT_DUG);
-            }
-            return true;
-        }
-
-        // The fives this resolution already bottomed: the remembered cards, when they are exactly the
-        // library's bottom cards (GoToBottom puts each five at the bottom and nothing else moves there
-        // during the resolution). A set an earlier resolution left was shuffled away or drawn, so it
-        // fails the test and counts 0. RNG-free, exact.
-        static int digsSoFar(final Player ai, final forge.game.zone.PlayerZone lib) {
-            final Set<Card> dug = AiCardMemory.getMemorySet(ai, AiCardMemory.MemorySet.LIM_DULS_VAULT_DUG);
-            if (dug == null || dug.isEmpty() || dug.size() % LOOK != 0 || dug.size() > lib.size()) {
-                return 0;
-            }
-            for (int i = lib.size() - dug.size(); i < lib.size(); i++) {
-                if (!dug.contains(lib.get(i))) {
-                    return 0;
-                }
-            }
-            return dug.size() / LOOK;
-        }
-
-        // AdNauseam.floor, a private verbatim copy (rule B3-4): max(MIN_LIFE_AFTER,
-        // AI_IN_DANGER_MAX_THRESHOLD + 1 + the opponents' damageIfUnblocked next turn, without
-        // abilities), our blockers ignored, plus the burden counters on every The One Ring we control
-        // (lost at our next upkeep, before that attack). Not Moonlight Bargain's sumDamageIfUnblocked,
-        // which prices pump abilities through canPayCost, whose test payment draws.
-        static int floor(final Player ai) {
-            int unblocked = 0;
-            for (final Player opp : ai.getOpponents()) {
-                for (final Card c : opp.getCreaturesInPlay()) {
-                    if (ComputerUtilCombat.canAttackNextTurn(c, ai)) {
-                        unblocked += ComputerUtilCombat.damageIfUnblocked(c, ai, null, true);
-                    }
-                }
-            }
-            int burden = 0;
-            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
-                if ("The One Ring".equals(c.getName())) {
-                    burden += c.getCounters(CounterType.getType("BURDEN"));
-                }
-            }
-            return Math.max(MIN_LIFE_AFTER,
-                    AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_MAX_THRESHOLD) + 1 + unblocked) + burden;
         }
     }
 

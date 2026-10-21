@@ -43,15 +43,6 @@ public class StoreSVarAi extends SpellAbilityAi {
 
     @Override
     public boolean willPayUnlessCost(Player payer, SpellAbility sa, Cost cost, boolean alreadyPaid, FCollectionView<Player> payers) {
-        // Lim-Dul's Vault (dead-card batch 4, row 12, part 12B): "As many times as you choose, you may
-        // pay 1 life" is this StoreSVar's UnlessCost, asked once per look. Its UnlessAI$ LimDulsVault (no
-        // other script carries it) is answered here and never reaches the stock rule, which would pay on
-        // every look down to about 5 life: willDig answers a thief, a copy and a Play-effect cast false
-        // (the script's old Never) before reading anything else. Draws nothing.
-        if (SpecialCardAi.LimDulsVault.UNLESS_AI.equals(sa.getParam("UnlessAI"))) {
-            return SpecialCardAi.LimDulsVault.willDig(payer, sa, cost);
-        }
-
         // Join Forces cards
         if (sa.hasParam("UnlessSwitched") && payers.size() > 1) {
             final Player p = sa.getActivatingPlayer();
