@@ -36140,14 +36140,15 @@ public class SpecialCardAi {
     //   card's own {0} mode is live (its AlternativeCost static's CheckSVar, the test
     //   StaticAbilityAlternativeCost.alternativeCosts runs), or no mana reservation is live (G3's noManaHeld)
     //   and G1 (CommanderCastCeiling.affordable, under G4's contract) prices the engine's {2}{U}{U}, blue
-    //   shards included, within HonestMana. A refusal leaves the spell ability at the removeIf where A's
-    //   filter dropped it, before getOriginalAndAltCostAbilities could copy the {0} mode: no SpellAbility id,
-    //   no LKI copy, no target, no random number.
+    //   shards included, within HonestMana, and then (the W6 retry, below) the same test-mode cost still fits
+    //   HonestMana once unusableMana takes off the mana the payment never spends. A refusal leaves the spell
+    //   ability at the removeIf where A's filter dropped it, before getOriginalAndAltCostAbilities could copy
+    //   the {0} mode: no SpellAbility id, no LKI copy, no target, no random number.
     // - consider(), from the head of ChangeZoneAi.checkApiLogic behind isOwnHandCast (the readmit's own key,
     //   rule B3-2), replaces the stock path for that cast only: outside the window AnotherTime; a paid spell
-    //   ability that fails noManaHeld or G1, CantAfford; else every worthy spell as a target, top first,
-    //   while canAddMoreTarget (MaxTgts counts the stack's spells, and the Trap is still in hand), WillPlay;
-    //   with none, CantPlayAi. Every decline resets the targets.
+    //   ability that fails noManaHeld, G1 or the retry's second test (payable()), CantAfford; else every
+    //   worthy spell as a target, top first, while canAddMoreTarget (MaxTgts counts the stack's spells, and
+    //   the Trap is still in hand), WillPlay; with none, CantPlayAi. Every decline resets the targets.
     // The floor (worthy): an opponent's spell on the stack the Trap can target, that no spell or ability of
     // ours on the stack already targets (our counter, Misdirection or Hullbreaker Horror trigger answers it,
     // and the Trap would only make that answer fizzle), and that is
@@ -36171,6 +36172,22 @@ public class SpecialCardAi {
     // read by ValidCards, not SacValid); free in consider is this spell ability's mana alone (another card's
     // alternative cost, Omniscience or Dream Halls, would be judged free); an opposing sweeper of mana value 4
     // or more that kills nothing of ours still counts by size.
+    // The paid mode's second test (row 52's W6 retry, tools/deadcards/b4/mindbreak-trap/verdict-w6-n10.md).
+    // G1's count is not exact for this cost, though the review held it so (its only blind spots, it said, the
+    // multicolour over-count and the hand mana and multipliers it under-counts): G2 counts every usable mana
+    // ability under its filter, two kinds of source ComputerUtilMana's payment never spends among them. Lion's
+    // Eye Diamond's Produced$ Any 3 is InstantSpeed$ True, which getAIPlayableMana skips; G2 counts it in the
+    // total and in blue. In game 1992510 (The Sting of Ping) G1 read 6 total and 5 blue where the payment had 3
+    // and 2, the readmit and consider approved seven paid passes, and canPayCost refused each one after its
+    // isManaSourceReserved draws, with no cast. So payable(), only once noManaHeld and G1 pass, prices the same
+    // test-mode cost against HonestMana again with unusableMana's {total, blue} taken off: a private copy of
+    // row 18's W3-retry BorneUponAWind.unusableMana (itself 23A1's QuicksilverElemental.instantOnlyMana,
+    // widened), which takes an instant-speed-only source (Lion's Eye Diamond) off the total and off blue, and a
+    // reflection that reflects nothing now (Mox Amber with nothing legendary of ours out, an unimprinted Chrome
+    // Mox, an Exotic Orchard facing no coloured land) off the total only. It reads and draws nothing, so a
+    // refusal it adds is still A's filter at the readmit and a CantAfford before canPayCost in consider; the
+    // {0} mode never asks it. G2's other over-counts stand: a one-shot source (a Treasure, a Mana Vault) is
+    // counted and may be spent, and a pain source the payment refuses at low life is counted.
     public static class MindbreakTrap {
         public static final String NAME = "Mindbreak Trap";
         static final int MIN_MV_ANY = 4;          // worth {2}{U}{U} and a card on its size alone
@@ -36218,9 +36235,78 @@ public class SpecialCardAi {
             return false;
         }
 
-        // the paid mode: no mana reservation live (G3), and G1 prices the engine's {2}{U}{U}
+        // the paid mode: no mana reservation live (G3), and G1 prices the engine's {2}{U}{U}; then, asked only
+        // where both passed (the W6 retry), the same test-mode cost fits HonestMana with unusableMana's
+        // {total, blue} taken off
         static boolean payable(final Player ai, final SpellAbility sa) {
-            return RemoveDeckFilter.noManaHeld(ai, false) && CommanderCastCeiling.affordable(ai, sa);
+            if (!(RemoveDeckFilter.noManaHeld(ai, false) && CommanderCastCeiling.affordable(ai, sa))) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            final int[] off = unusableMana(ai, sa); // the second scan, only where noManaHeld and G1 passed
+            return cost.getConvertedManaCost() <= mana.total() - off[0]
+                    && cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLUE) <= mana.colour(MagicColor.BLUE) - off[1];
+        }
+
+        // {total off, blue off}: the mana G2 counted that ComputerUtilMana's payment never spends on this
+        // spell now. A private copy of row 18's W3-retry BorneUponAWind.unusableMana (da6019f3654; itself a
+        // widened copy of 23A1's QuicksilverElemental.instantOnlyMana test), its body unchanged: neither is
+        // called or edited (B3-4). It reads every battlefield source of ours G2 counted (HonestMana.isHeld's
+        // sources skipped, as G2 skips them; isHeld is called, not edited) and, under G2's own filter, its
+        // usable mana abilities (setActivatingPlayer, canPlay, no mana in the cost, metConditions,
+        // meetsManaRestrictions, Amount > 0). A source comes off only when every one of them is
+        // - instant-speed only (getRestrictions().isInstantSpeed(): Lion's Eye Diamond, whose abilities
+        //   ComputerUtilMana.getAIPlayableMana and canPayShardWithSpellAbility skip): its amount comes off
+        //   the total and off blue (G2 counts Produced$ Any in every colour), or
+        // - a ManaReflected ability with ReflectProperty Is or Produce whose
+        //   CardUtil.getReflectableManaColors is empty (the payment's reflected branch finds no colour to
+        //   make): its amount comes off the total only (G2 gives a reflection no colour).
+        // The source gives its best such amount. A source with any other usable ability keeps G2's count,
+        // and a Produced reflection (a read of a triggering object) is left as G2 counted it. Errs toward
+        // under-counting (instant-only mana of another colour comes off blue too). Draws nothing and holds
+        // nothing; its only writes are setActivatingPlayer on the mana abilities it reads, as G2's, and the
+        // reflection read's own stamps, as the payment's.
+        private static int[] unusableMana(final Player ai, final SpellAbility sa) {
+            int total = 0;
+            int blue = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (HonestMana.isHeld(ai, src)) {
+                    continue;
+                }
+                int instantBest = 0;
+                int reflectedBest = 0;
+                boolean other = false;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null) {
+                        continue;
+                    }
+                    ma.setActivatingPlayer(ai);
+                    if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                            || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    if (ma.getRestrictions() != null && ma.getRestrictions().isInstantSpeed()) {
+                        instantBest = Math.max(instantBest, amount);
+                    } else if (ma.getApi() == ApiType.ManaReflected
+                            && ("Is".equals(ma.getParam("ReflectProperty")) || "Produce".equals(ma.getParam("ReflectProperty")))
+                            && CardUtil.getReflectableManaColors(ma).isEmpty()) {
+                        reflectedBest = Math.max(reflectedBest, amount);
+                    } else {
+                        other = true;
+                    }
+                }
+                if (!other) {
+                    total += Math.max(instantBest, reflectedBest);
+                    blue += instantBest;
+                }
+            }
+            return new int[] {total, blue};
         }
 
         // G3's case (RemoveDeckFilter.readmit): the cheap tests first, then the floor, then the mode's cost,
