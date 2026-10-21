@@ -50,6 +50,13 @@ public class ChoosePlayerAi extends SpellAbilityAi {
             // effect casts (doTriggerNoCost below) keep the stock answer.
             return SpecialCardAi.IntellectualOffering.consider(ai, sa);
         }
+        if (SpecialCardAi.CruelEntertainment.isOwnHandCast(ai, sa)) {
+            // Dead-card batch 4, row 21 (W7): the owner's own hand cast only, the G3 readmit's key. Cast only
+            // as a Vial Smasher kill, both targets set here (DBControlPlayer1 is CannotPlayAi's otherwise).
+            // Cascade and other effect casts (doTriggerNoCost below), copies, flashback and thefts keep the stock
+            // WillPlay, which the ControlPlayer sub still refuses.
+            return SpecialCardAi.CruelEntertainment.consider(ai, sa);
+        }
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 

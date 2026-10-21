@@ -7455,6 +7455,121 @@ public class SpecialCardAi {
         }
     }
 
+    // Cruel Entertainment (dead-card batch 4, row 21, wave 7; batch 1's row 15 cut, re-diagnosed under B4-20; carrier
+    // precon:Entropic Uprising (C16) 28fe4b83, deck 3, an anchor)
+    // "Choose target player and another target player. The first player controls the second player during the
+    // second player's next turn, and the second player controls the first player during the first player's next
+    // turn." {6}{B} sorcery. In AI-vs-AI 1v1 the swap is a near-blank (LobbyPlayerAi's mind-slave controller plays
+    // for the slave), so the card's only simulator value is its cast trigger. The one forced win: Vial Smasher the
+    // Fierce's first-spell trigger deals this spell's mana value, 7, to our only opponent, and it resolves above the
+    // spell, so a kill ends the game before any turn changes hands (1853491 T18: opponent at 6, Smasher out, no
+    // spell yet; the AI cast Yidris for 4 and lost on T19). Cast only then. The script keeps AI:RemoveDeck:All:
+    // every other isCardRemAIDeck reader still refuses the card.
+    // RNG parity: A dropped the card at the RemoveDeck filter. Every refusal reads state only (phase, stack,
+    // getSpellsCastThisTurn, life and cantLose flags, triggers' params, predictDamageTo's static
+    // replacement/prevention, test-mode calculateManaCost, HonestMana): no MyRandom, no card, no SpellAbility id,
+    // no memory write. Targets are set only on an approval. canPayCost's draws follow a WillPlay only.
+    // Effect casts (cascade), copies, flashback and thefts keep the stock path (CannotPlayAi's CantPlayAi).
+    public static class CruelEntertainment {
+        public static final String NAME = "Cruel Entertainment";
+        static final String SMASHER = "Vial Smasher the Fierce";
+        public static final int SORT_WINDOW = 10;   // undoes the hint's -10 inside the kill window
+        public static final int SORT_LETHAL = 30;   // ahead of every other spell: the first spell takes the trigger
+        // readmit's verdict for the sort, keyed by the hand SA (BreathOfFury.LETHAL's pattern, game thread only)
+        private static final ThreadLocal<java.lang.ref.WeakReference<SpellAbility>> LETHAL = new ThreadLocal<>();
+
+        public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
+                    && sa.isSpell() && sa.getParent() == null && sa.getApi() == ApiType.ChoosePlayer
+                    && !sa.isCastFromPlayEffect() && !sa.isCopied() && !host.isFaceDown()
+                    && ai.equals(host.getController()) && ai.equals(host.getOwner()) && host.isInZone(ZoneType.Hand);
+        }
+
+        // the floor (diagnosis section 4, steps 2-7); null = no kill now
+        static Player killNow(final Player ai, final SpellAbility sa) {
+            if (!ai.canCastSorcery() || ai.getSpellsCastThisTurn() > 0) return null;
+            final PlayerCollection opps = ai.getOpponents();
+            if (opps.size() != 1) return null;
+            final Player opp = opps.get(0);
+            if (!opp.canLoseLife() || opp.cantLoseForZeroOrLessLife() || opp.cantLose()) return null;
+            final int mv = sa.getHostCard().getCMC();                     // 7: the trigger's CardManaCostLKI
+            final CardCollection smashers = new CardCollection();
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {     // phased-out excluded
+                if (SMASHER.equals(c.getName()) && firstSpellTrigger(c)) smashers.add(c);
+            }
+            if (smashers.isEmpty() || opp.getLife() > smashers.size() * mv) return null;
+            int dmg = 0;
+            for (final Card c : smashers) dmg += ComputerUtilCombat.predictDamageTo(opp, mv, c, false);
+            if (dmg < opp.getLife()) return null;
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < cost.getConvertedManaCost()
+                    || mana.colour(MagicColor.BLACK) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)) {
+                return null;
+            }
+            return opp;
+        }
+
+        private static boolean firstSpellTrigger(final Card c) {
+            for (final Trigger t : c.getTriggers()) {
+                if (t.getMode() == TriggerType.SpellCast && t.hasParam("ActivatorThisTurnCast")) return true;
+            }
+            return false;
+        }
+
+        // RemoveDeckFilter.readmit's case (game thread, just before the sort)
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa)) return false;
+            LETHAL.remove();
+            if (killNow(ai, sa) == null) return false;
+            LETHAL.set(new java.lang.ref.WeakReference<>(sa));
+            return true;
+        }
+
+        // 21A2: getSpellAbilityPriority's bonus, O(1), fixed for the whole sort (the comparator stays transitive)
+        public static int sortBonus(final Player ai, final SpellAbility sa) {
+            if (!isOwnHandCast(ai, sa) || !ai.canCastSorcery()) return 0;
+            final java.lang.ref.WeakReference<SpellAbility> r = LETHAL.get();
+            return r != null && r.get() == sa ? SORT_WINDOW + SORT_LETHAL : 0;
+        }
+
+        // ChoosePlayerAi.canPlay's gate: re-judge (same board as readmit), then set BOTH targets (G3)
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AbilitySub db1 = sa.getSubAbility();
+            final Player opp = killNow(ai, sa);
+            if (opp == null || db1 == null || db1.getApi() != ApiType.ControlPlayer || !db1.usesTargeting()) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);   // A's final answer, no target set
+            }
+            // symmetric in 1v1, and a kill never lets the turns come: us first, else the opponent first
+            for (final Player[] pair : new Player[][] {{ai, opp}, {opp, ai}}) {
+                sa.resetTargets();
+                db1.resetTargets();
+                if (sa.canTarget(pair[0])) {
+                    sa.getTargets().add(pair[0]);
+                    if (db1.canTarget(pair[1])) {
+                        db1.getTargets().add(pair[1]);
+                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+                    }
+                }
+            }
+            sa.resetTargets();
+            db1.resetTargets();
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
+        }
+
+        // ControlPlayerAi.chkDrawback's gate: DBControlPlayer1/2 of a root consider() targeted, nothing else
+        public static boolean approvesSub(final Player ai, final SpellAbility sub) {
+            if (!NAME.equals(ComputerUtilAbility.getAbilitySourceName(sub))) return false;
+            final SpellAbility root = sub.getRootAbility();
+            final AbilitySub db1 = root.getSubAbility();
+            if (!isOwnHandCast(ai, root) || db1 == null) return false;
+            final Player p1 = root.getTargets().getFirstTargetedPlayer();
+            final Player p2 = db1.getTargets().getFirstTargetedPlayer();
+            return p1 != null && p2 != null && !p1.equals(p2);
+        }
+    }
+
     // Brokers Confluence
     // "Choose three. You may choose the same mode more than once." CharmAi's multi-mode picker
     // (chooseMultipleOptionsAi) ignores CanRepeatModes and needs three distinct modes that each pass
@@ -46451,8 +46566,8 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49, 52, 66, 67 and 20, keepOff for batch 2's row 68 (Trench Gorger; batch 3's
-    // row 68 is Sunbird Standard, a readmit).
+    // 25, 31, 30, 42, 49, 52, 66, 67, 20 and 21, keepOff for batch 2's row 68 (Trench Gorger; batch
+    // 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -46616,6 +46731,8 @@ public class SpecialCardAi {
                     return FaithlessLooting.readmit(ai, sa);
                 case MishrasBauble.NAME:                 // batch 4, row 20 (W7)
                     return MishrasBauble.readmit(ai, sa);
+                case CruelEntertainment.NAME:            // batch 4, row 21 (W7)
+                    return CruelEntertainment.readmit(ai, sa);
                 default:
                     return false;
             }
