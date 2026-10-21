@@ -56873,6 +56873,10 @@ public class SpecialCardAi {
     //   Thorn of Amethyst, Clues; never Tangle Wire, Static Orb, Mana Vault), then untapped noncreature Treasure
     //   tokens; never D, never another creature, never a mana rock or {T} utility that is not a Treasure.
     // - The punisher scan is asked of D and X (loop) and of D and both partners (setup): skeptic M2.
+    // - The payment (45C): AiCostDecision.visit(CostTapType) taps the pair considerUntap approved (chooseTaps: D and
+    //   the first partner for the loop step, the first two partners for the setup step), recomputed from the target
+    //   and the same ordered partner list, never ComputerUtil.chooseTapType's lowest-power pick (the rocks and
+    //   Treasures first, the engine Dwarf last). Pure: no memo, no static state, safe across serve slots.
     // A Play-effect cast never meets the filter (canPlayFromEffectAI -> PermanentAi.doTriggerNoCost); a Sculpting
     // Steel copy, a token copy or a Mairsil grant answers to no case (rule B3-3: the paper name).
     // RNG parity: A never evaluated either ability (the filter is draw-free; A never had the owner's Clock on the
@@ -56981,6 +56985,32 @@ public class SpecialCardAi {
             }
             sa.getTargets().add(dt);                                        // setup step: tap the Clock and X, untap D
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // 45C, AiCostDecision.visit(CostTapType)'s pair: the same order as considerUntap, from the target it set and
+        // the cards the payment already chose (exclude); null when it cannot name the pair (the stock chooser pays)
+        public static CardCollection chooseTaps(final Player ai, final SpellAbility sa, final CardCollectionView exclude) {
+            final Card target = sa.getTargetCard();
+            if (target == null) {
+                return null;
+            }
+            final List<Card> xs = new ArrayList<>(partners(ai, sa.getHostCard(), target));
+            xs.removeAll(exclude);
+            final CardCollection pick = new CardCollection();
+            if (target.isUntapped()) {                                      // loop step
+                if (xs.isEmpty() || exclude.contains(target)) {
+                    return null;
+                }
+                pick.add(target);
+                pick.add(xs.get(0));
+            } else {                                                        // setup step
+                if (xs.size() < 2) {
+                    return null;
+                }
+                pick.add(xs.get(0));
+                pick.add(xs.get(1));
+            }
+            return pick;
         }
 
         // L1: an artifact of ours, not a token and not a Clock (the D the untap taps and untaps), that a watcher

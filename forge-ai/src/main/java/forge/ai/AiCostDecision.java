@@ -496,7 +496,16 @@ public class AiCostDecision extends CostDecisionMakerBase {
             totap = ComputerUtil.chooseTapTypeAccumulatePower(player, type, ability, !cost.canTapSource, Integer.parseInt(totalP), exclude);
         } else {
             int c = cost.getAbilityAmount(ability);
-            totap = ComputerUtil.chooseTapType(player, type, source, !cost.canTapSource, c, exclude, ability);
+            // Dead-card batch 4, row 45, part 45C: our own Clock of Omens untap (SpecialCardAi.ClockOfOmens.isOwnUntap:
+            // the paper name, owner and controller) taps the pair its evaluator approved, ClockOfOmens.chooseTaps (the
+            // engine D and one partner for the loop step, the Clock and one partner for the setup step), never
+            // chooseTapType's lowest-power pick (the rocks and Treasures first, the engine Dwarf last). A pure function
+            // of the board and the target, so the decision and the payment agree; null falls back to the stock chooser.
+            // Inert for every other tap-type cost. Draws nothing.
+            final CardCollection clock = c == 2 && SpecialCardAi.ClockOfOmens.isOwnUntap(player, ability)
+                    ? SpecialCardAi.ClockOfOmens.chooseTaps(player, ability, exclude) : null;
+            totap = clock != null ? clock
+                    : ComputerUtil.chooseTapType(player, type, source, !cost.canTapSource, c, exclude, ability);
         }
 
         if (totap == null) {
