@@ -63,7 +63,8 @@ public class AiCardMemory {
         PAYS_TAP_COST, // These cards will be tapped as part of a cost and cannot be chosen in another part
         PAYS_SAC_COST, // These cards will be sacrificed as part of a cost and cannot be chosen in another part
         REVEALED_CARDS, // These cards were recently revealed to the AI by a call to PlayerControllerAi.reveal
-        THE_MASTER_BODY // the body a The Master, Formed Anew cast was approved for
+        THE_MASTER_BODY, // the body a The Master, Formed Anew cast was approved for
+        LIM_DULS_VAULT_DUG // the fives a Lim-Dul's Vault resolution put on the bottom (dead-card batch 4, row 12)
     }
 
     public enum MemorySetMana implements MemoryType<ManaCostBeingPaid> {
