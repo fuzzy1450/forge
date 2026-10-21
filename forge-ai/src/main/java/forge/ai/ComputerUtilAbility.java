@@ -393,6 +393,13 @@ public class ComputerUtilAbility {
                 if (sa.isSpell() && SpecialCardAi.CleansingBeam.NAME.equals(source.getName())) {
                     p += SpecialCardAi.CleansingBeam.sortBonus(ai, sa);
                 }
+                // Cruel Entertainment keeps its hint (-10 above) for every other reader. Only inside its kill window
+                // (RemoveDeckFilter.readmit's memo for this hand SA, set on the game thread just before this sort)
+                // does +10 restore its cost and +30 put it ahead of every other spell: Vial Smasher's trigger goes
+                // on the FIRST spell, and 1853491 T18's Yidris (sort 5 > -3) took it and the kill.
+                if (sa.isSpell() && SpecialCardAi.CruelEntertainment.NAME.equals(source.getName())) {
+                    p += SpecialCardAi.CruelEntertainment.sortBonus(ai, sa);
+                }
                 // try to use it before it's gone
                 if (source.isInPlay() && source.hasSVar("EndOfTurnLeavePlay")) {
                     p += 1;
