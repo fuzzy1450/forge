@@ -133,6 +133,14 @@ public class CopySpellAbilityAi extends SpellAbilityAi {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
+        // Rings of Brighthearth (dead-card batch 4, row 73, part 73A): its optional {2} copy, asked only at
+        // resolution (confirmTrigger -> SpellAbilityAi.doTrigger, after canPayCost's test payment); judged
+        // whole, RNG-free, a refusal being the stock answer below. The stack-time consult is mandatory
+        // (orderAndPlaySimultaneousSa) and keeps the stock WillPlay above.
+        if (SpecialCardAi.RingsOfBrighthearth.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))) {
+            return SpecialCardAi.RingsOfBrighthearth.consider(aiPlayer, sa);
+        }
+
         if (logic.contains("Always")) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }

@@ -50701,6 +50701,170 @@ public class SpecialCardAi {
         }
     }
 
+    // Rings of Brighthearth (dead-card batch 4, row 73, part 73A; deck review 2026-10-17, Arcanis F3)
+    // "Whenever you activate an ability, if it isn't a mana ability, you may pay {2}. If you do, copy that
+    // ability. You may choose new targets for the copy." Optional (OptionalDecider$ You; a cost-bearing
+    // trigger is optional anyway, TriggerHandler:521-531). At resolution WrappedAbility.resolve asks
+    // confirmTrigger -> AiController.doTrigger(sa, false) -> SpellAbilityAi.doTrigger, whose canPayCost test
+    // payment runs first (A's isManaSourceReserved draws), then CopySpellAbilityAi.doTriggerNoCost, which
+    // refused every non-mandatory copy without AILogic$ Always: 0 copies in 75 logged triggers. A script
+    // AILogic$ Always copied everything: Clever Conjurer's untap re-aimed at an Island, an Equip that
+    // fizzles, Nezahal's self-exile, and Arcanis draws into a Milled loss (probe X).
+    // Copy when all of these hold:
+    // R1 the copied ability is our own activated, non-mana, untargeted, single-part ability (so the copy
+    //    does what the original does: no new target for chooseNewTargetsForCopy's API AI to pick, no rider
+    //    to judge) of a payoff shape, a copy yielding at least a card, a body, a land or an opponent's mill:
+    //    Draw (Defined absent or You), Token (TokenOwner absent or You, no AtEOT), Dig to hand, a land search
+    //    from our library (to the battlefield; to hand only with no land in hand), Mill with Defined$
+    //    Opponent. Never a self-bounce or self-flicker (Arcanis' {2}{U}{U}, Nezahal), an Equip, an Untap, a
+    //    counter (Midnight Clock), a scry, a symmetric draw (Geier Reach Sanitarium).
+    // R5 a draw copy is not seen by an opposing draw thief or punisher (Notion Thief, Alms Collector, Orcish
+    //    Bowmasters, Sheoldred, Consecrated Sphinx, Spiteful Visions, Nekusar, Fate Unraveler) or discard
+    //    punisher: KnollspineDragon.drawOrDiscardIsPunished (batch 1's helper, called; it over-declines).
+    // R3 a draw copy leaves DrawAi's 3 plus one more copy: library > pending + 2 x copy + 3, where pending is
+    //    ArcanisTheOmnipotent.effectiveDraw of the original (NumCards x (1 + Bracers) << Teferi's Ageless
+    //    Insight; a Bracers copy that already resolved is counted again, the safe side) and copy is NumCards <<
+    //    TAI; decksUsNow's Laboratory Maniac exemption applies (B4-5, without editing effectiveDraw).
+    // R4 a draw copy on our own turn fits the hand: hand + pending + copy <= max hand size (DrawAi.targetAI's
+    //    own-turn guard, hand + draw > max refuses, on what the hand holds once the original and this copy
+    //    land); the opponent's turn and an unlimited hand size discard nothing, and Laboratory Maniac takes
+    //    the stock exemption.
+    // R2 the {2} is spare: HonestMana (G2, held sources skipped) covers it, and paying it costs no cast in
+    //    this turn's remaining windows (MysticRemora's subset rule, called: on our turn every nonland card in
+    //    hand and our commanders in the command zone with tax; on an opponent's turn the instants and flash
+    //    cards; in the end step or cleanup before our own turn, nothing, as that mana is lost at our untap).
+    //    A copy that draws two or more cards is worth any two mana and needs only HonestMana >= 2.
+    // Reads game state only (the punisher helper is read-only): no random number, no SpellAbility id, no
+    // memory write (HonestMana's activator stamps on our mana abilities are its accepted write). Keyed on the
+    // host's paper name (B3-3): any controller, a thief and a clone of Rings included; no other copier changes.
+    public static class RingsOfBrighthearth {
+        public static final String NAME = "Rings of Brighthearth";
+        static final int COPY_COST = 2;     // the trigger's Cost$ 2
+        static final int LIBRARY_KEEP = 3;  // DrawAi's guard (numCards >= library - 3 refuses, DrawAi:742)
+        static final int BIG_DRAW = 2;      // a copy drawing this many is worth any {2}: R2 skipped
+
+        public static AiAbilityDecision consider(final Player ai, final SpellAbility sa) {
+            final AiAbilityDecision no = new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            final Object o = sa.getRootAbility().getTriggeringObject(forge.game.ability.AbilityKey.SpellAbility);
+            if (!(o instanceof SpellAbility orig)) {
+                return no;
+            }
+            final int worth = payoff(ai, orig);          // R1 + R3-R5; 0 = not worth {2}
+            if (worth <= 0) {
+                return no;
+            }
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            if (mana.total() < COPY_COST) {
+                return no;                               // canPayCost passed on a source G2 does not count
+            }
+            if (!(orig.getApi() == ApiType.Draw && worth >= BIG_DRAW) && !spare(ai, mana.total())) {
+                return no;                               // R2
+            }
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
+
+        // R1 (+ R5, R3 and R4 for a draw): the copy's yield in cards, bodies, lands or "a mill", 0 = no copy
+        static int payoff(final Player ai, final SpellAbility orig) {
+            if (!orig.isActivatedAbility() || orig.isManaAbility() || orig.isCopied() || orig.isEquip()
+                    || orig.getApi() == null || !ai.equals(orig.getActivatingPlayer())
+                    || orig.usesTargeting() || orig.getSubAbility() != null) {
+                return 0;
+            }
+            final Card host = orig.getHostCard();
+            final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
+            switch (orig.getApi()) {
+            case Draw: {
+                if (!isYou(orig.getParam("Defined")) || !ai.canDraw()) {
+                    return 0;                            // Geier Reach: each player
+                }
+                final int tai = CardLists.count(ai.getCardsIn(ZoneType.Battlefield),
+                        CardPredicates.nameEquals("Teferi's Ageless Insight"));
+                final int copy = AbilityUtils.calculateAmount(host, orig.getParamOrDefault("NumCards", "1"), orig) << tai;
+                if (copy <= 0) {
+                    return 0;
+                }
+                // R5: an opposing draw thief / punisher / discard punisher sees the copy's cards (batch 1's helper, called)
+                if (KnollspineDragon.drawOrDiscardIsPunished(ai, host)) {
+                    return 0;
+                }
+                if (ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin()) {
+                    return copy;                         // decksUsNow's exemption, and the stock hand-size one
+                }
+                final int pending = ArcanisTheOmnipotent.effectiveDraw(ai, orig);
+                if (library.size() <= pending + copy + copy + LIBRARY_KEEP) {
+                    return 0;                            // R3
+                }
+                // R4: DrawAi.targetAI's own-turn guard (hand + draw > max hand size refuses), on what the hand will hold
+                // once the original and this copy land; the opponent's turn and an unlimited hand size discard nothing
+                if (ai.getGame().getPhaseHandler().isPlayerTurn(ai) && !ai.isUnlimitedHandSize()
+                        && ai.getCardsIn(ZoneType.Hand).size() + pending + copy > ai.getMaxHandSize()) {
+                    return 0;
+                }
+                return copy;
+            }
+            case Token:
+                return isYou(orig.getParam("TokenOwner")) && !orig.hasParam("AtEOT")
+                        && AbilityUtils.calculateAmount(host, orig.getParamOrDefault("TokenAmount", "1"), orig) > 0 ? 1 : 0;
+            case Dig:
+                return isYou(orig.getParam("Defined")) && !library.isEmpty()
+                        && "Hand".equals(orig.getParamOrDefault("DestinationZone", "Hand")) ? 1 : 0;
+            case ChangeZone: {
+                // a land search from our own library (Myriad Landscape, Thaumatic Compass). Origin$ Battlefield
+                // (Arcanis' {2}{U}{U} self-bounce, a flicker) never matches: a second return does nothing
+                final String type = orig.getParam("ChangeType");
+                if (!"Library".equals(orig.getParam("Origin")) || orig.hasParam("Defined")
+                        || type == null || !type.startsWith("Land")) {
+                    return 0;
+                }
+                final String dest = orig.getParam("Destination");
+                final boolean toPlay = "Battlefield".equals(dest);
+                final boolean toHand = "Hand".equals(dest)
+                        && !ai.getCardsIn(ZoneType.Hand).anyMatch(CardPredicates.LANDS);
+                return (toPlay || toHand)
+                        && library.anyMatch(c -> c.isValid(type.split(","), ai, host, orig)) ? 1 : 0;
+            }
+            case Mill:
+                // The Water Crystal: "each opponent"; a count of 0 mills nothing (MillEffect returns at 0)
+                return "Opponent".equals(orig.getParam("Defined"))
+                        && AbilityUtils.calculateAmount(host, orig.getParamOrDefault("NumCards", "1"), orig) > 0
+                        && ai.getOpponents().anyMatch(p -> !p.getCardsIn(ZoneType.Library).isEmpty()) ? 1 : 0;
+            default:
+                return 0;
+            }
+        }
+
+        private static boolean isYou(final String defined) {
+            return defined == null || "You".equals(defined);
+        }
+
+        // R2: paying the {2} costs no cast in this turn's remaining windows (MysticRemora's subset rule)
+        static boolean spare(final Player ai, final int avail) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            final boolean ourTurn = ph.isPlayerTurn(ai);
+            if (!ourTurn && ph.getNextTurn() == ai && (ph.is(PhaseType.END_OF_TURN) || ph.is(PhaseType.CLEANUP))) {
+                return true;  // the end step before our turn (TheWaterCrystal's window): lost at our untap
+            }
+            final int cap = Math.min(avail, 62);
+            final long mask = (1L << (cap + 1)) - 1;
+            long reach = 1L;
+            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                if (c.isLand() || (!ourTurn && !(c.isInstant() || c.hasKeyword(Keyword.FLASH)))) {
+                    continue;
+                }
+                final boolean x = c.getManaCost() != null && c.getManaCost().countX() > 0;
+                reach = MysticRemora.fit(reach, c.getCMC() + (x ? 1 : 0), cap, mask);
+            }
+            if (ourTurn) {
+                for (final Card cmdr : ai.getCommanders()) {
+                    if (cmdr.isInZone(ZoneType.Command)) {
+                        reach = MysticRemora.fit(reach, cmdr.getCMC() + 2 * ai.getCommanderCast(cmdr), cap, mask);
+                    }
+                }
+            }
+            return MysticRemora.best(reach, Math.min(avail - COPY_COST, cap)) == MysticRemora.best(reach, cap);
+        }
+    }
+
     // Riot Control (dead-card batch 3, row 26)
     // "You gain 1 life for each creature your opponents control. Prevent all damage that would be
     // dealt to you this turn." ({2}{W} Instant.) A fog with a life rider, judged only as a fog: the
