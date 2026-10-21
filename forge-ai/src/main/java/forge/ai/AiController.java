@@ -814,10 +814,12 @@ public class AiController {
 
         if (sa.isSpell() && host != null && (SpecialCardAi.HierophantBioTitan.NAME.equals(host.getName())
                 || SpecialCardAi.SkeletalScrying.NAME.equals(host.getName())
-                || SpecialCardAi.ToxicDeluge.NAME.equals(host.getName()))) {
-            // drop a counter X (Hierophant), a graveyard-exile X (Skeletal Scrying) or a life X
-            // (Toxic Deluge) left by an evaluation that declined after choosing it: canPlayFromHost
-            // checks the additional cost against it before chooseX runs again
+                || SpecialCardAi.ToxicDeluge.NAME.equals(host.getName())
+                || SpecialCardAi.SickeningShoal.NAME.equals(host.getName()))) {
+            // drop a counter X (Hierophant), a graveyard-exile X (Skeletal Scrying), a life X
+            // (Toxic Deluge) or a hand-exile X (Sickening Shoal's pitch copy, which inherits the hard
+            // cast's) left by an evaluation that declined after choosing it: canPlayFromHost checks
+            // the additional cost against it before chooseX runs again
             sa.setXManaCostPaid(null);
         }
 
