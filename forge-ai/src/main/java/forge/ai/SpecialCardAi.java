@@ -15197,6 +15197,8 @@ public class SpecialCardAi {
     // RNG: every decline draws nothing and returns before canPayCost; X is cleared on entry and on
     // every decline, set only on WillPlay. Residual (B3x-3): a readmitted pass builds the pitch copy
     // in getOriginalAndAltCostAbilities, one SpellAbility id A did not allocate.
+    // Part 35D: a creature an opposing permanent returns to the battlefield when it dies (Luminous
+    // Broodmoth) is no target, for the pitch or the hard cast (diesAndReturns).
     public static class SickeningShoal {
         public static final String NAME = "Sickening Shoal";
         static final int PITCH_MIN_VALUE = 200; // two cards for one: a non-token 3/3 with an ability
@@ -15270,6 +15272,7 @@ public class SpecialCardAi {
                     && c.getEnchantedBy().stream().noneMatch(a -> ai.equals(a.getController()))
                     && !targetedByOurStack(ai, game, c)
                     && !leavesThisTurn(c)
+                    && !diesAndReturns(c)
                     && (c.isCommander() || ComputerUtilCard.evaluateCreature(c) >= floor));
             if (list.isEmpty()) {
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
@@ -15350,6 +15353,27 @@ public class SpecialCardAi {
                 }
                 for (SpellAbility a = s; a != null; a = a.getSubAbility()) {
                     if (a.usesTargeting() && a.getTargetRestrictions().canTgtCreature()) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // part 35D: an opposing permanent that returns what dies (Luminous Broodmoth: game 1627334 t17, the
+        // hard cast's kill undone at once and a flying counter given): a "dies -> Origin Graveyard,
+        // Destination Battlefield" trigger. Over-broad on purpose (its ValidCard, Broodmoth's "without
+        // flying", is not read), which only skips a kill. RNG-free: the controller's battlefield triggers
+        // and SVars, read in place.
+        static boolean diesAndReturns(final Card c) {
+            for (final Card p : c.getController().getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : p.getTriggers()) {
+                    if (t.getMode() != TriggerType.ChangesZone || !"Battlefield".equals(t.getParam("Origin"))
+                            || !"Graveyard".equals(t.getParam("Destination")) || !t.hasParam("Execute")) {
+                        continue;
+                    }
+                    final String ex = p.getSVar(t.getParam("Execute"));
+                    if (ex.contains("Origin$ Graveyard") && ex.contains("Destination$ Battlefield")) {
                         return true;
                     }
                 }
