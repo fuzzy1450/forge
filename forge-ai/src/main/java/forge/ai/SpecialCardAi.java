@@ -14485,6 +14485,336 @@ public class SpecialCardAi {
         }
     }
 
+    // Culling the Weak (dead-card batch 4, row 50; Ping King 47e3b761, deck 514)
+    // "As an additional cost to cast this spell, sacrifice a creature. Add {B}{B}{B}{B}." ({B} instant;
+    // c/culling_the_weak.txt matches it: SP$ Mana, Cost$ B Sac<1/Creature>, Amount$ 4, AILogic$
+    // ManaRitual, AINoRecursiveCheck$ True, SVar:AIPreference:SacCost$Creature.cmcLE2.) AI:RemoveDeck:All
+    // dropped every owner cast at AiController.getSpellAbilityToPlay's removeIf before ManaAi ran: 0
+    // owner casts in 649 held games on 524 distinct held libraries on 2.0.15+499e03087c5. The script's
+    // TODO is why: the stock ritual look-ahead (ManaAi.doManaRitualLogic) keeps any black or colourless
+    // hand spell under sources + 3 the AI would cast free, one the real mana could already pay
+    // included, so it sold a creature for nothing. The hint stays (B3-1); this G3 case readmits the
+    // owner's own cast only where the floor below holds, ManaAi judges that cast on the follow-ups the
+    // floor priced (consider, part 50B), and the payment sacrifices the creature the floor priced
+    // (choosePayment, part 50C).
+    // Floor (RNG-free, in order): the owner's own paid cast of the reviewed script from hand, or from
+    // exile under a mayPlay (isOwnCast; 50E: Ob Nixilis's or Prosper's "you may play that card"); our
+    // own Main 1 or Main 2 on an empty stack (the stock ManaRitual phase rule, and every follow-up is
+    // sorcery-speed); no live mana hold (RemoveDeckFilter.noManaHeld); G1 on the adjusted {B}; no
+    // counted source the payment never uses (phantomMana: an instant-speed mana ability, Lion's Eye
+    // Diamond); a sacrifice (chooseSacrifice); and a follow-up (followUps) the ritual buys:
+    // - a non-instant, non-land, unhinted hand spell, or (50D) our commander in the command zone,
+    //   black or colourless, its printed spell with a mana-only cost and no AINoRecursiveCheck; a
+    //   non-haste permanent only in Main 2 (doManaRitualLogic's rules);
+    // - its adjusted cost (calculateManaCost, test mode, the commander tax priced) above G2's total
+    //   (real mana cannot cast it now) and at most G2's total + NET less reflectedCredit (A3: the mana
+    //   G2 credits a ManaReflected or Special source that may make none now, Mox Amber with no
+    //   legendary permanent of ours, Chrome Mox with nothing imprinted), with no X, at most four black
+    //   pips, no hybrid, Phyrexian, {C} or snow pip, and for each other colour a source to spare beyond
+    //   its pips (G2 colour >= pips + 1: the {B} payment may tap a multicolour source);
+    // - mana value >= max(MIN_MV, the sacrificed body's mana value + MV_GAP): the spell bought is worth
+    //   a card and two mana more than the body sold.
+    // Sacrifice (choose; one chooser serves the readmit, ManaAi and the payment): among the script's own
+    // AIPreference set (Creature.cmcLE2, which checkSacrificeCost's getCardPreference also reads, so
+    // willPayCosts passes exactly when this pick exists): never the commander, a creature with a mana
+    // ability (G2 counts its mana), one carrying our Aura, or one the payment cannot sacrifice; tier 0
+    // a body leaving anyway (blitz, an end-of-turn token), a SacMe body or our own undying/persist
+    // creature; tier 1 a token, tier 2 a nontoken body, both at evaluateCreature <= MAX_EVAL; a body
+    // that is not leaving only when we survive the opponents' next attack unblocked. Lowest tier, then
+    // evaluation, then card id.
+    // consider is the stock ritual test (doManaRitualLogic's canPlaySa of a no-cost copy) on the
+    // follow-ups the floor priced, in their order; a command-zone commander is probed through its
+    // mayPlay variant (GameActionUtil.getMayPlaySpellOptions), because its raw spell fails
+    // SpellAbilityRestriction.checkZoneRestrictions and answers CantPlaySa (the skeptic's M1).
+    // RNG: A never evaluated this spell. readmit and choose draw nothing, hold nothing and allocate no
+    // SpellAbility (the census: 8 games strict at 615 consults), so a window the floor refuses is A's
+    // exactly. An admitted window that reaches Culling in the sort evaluates the spell A never did:
+    // consider's canPlaySa probes (a copyWithNoManaCost id each, and a mayPlay copy per commander) and
+    // canPayCost's test payment draw there, divergent by design. A readmitted Culling sorted behind a
+    // castable spell is not evaluated, and its place on the list costs no draw.
+    // Coupling (B3-4): calls G1 CommanderCastCeiling.affordable, G2 HonestMana, G3
+    // RemoveDeckFilter.noManaHeld and aiPlayableManaNoManaCost unchanged; survivesUnblocked is a
+    // private verbatim copy of LifesLegacy's (as DiabolicIntent's is), SHARDS a private copy of G1's.
+    public static class CullingTheWeak {
+        public static final String NAME = "Culling the Weak";
+        static final String PREFERENCE = "Creature.cmcLE2"; // the script's SVar:AIPreference SacCost$...
+        static final int MAX_EVAL = 200;   // the census bodies are 130-181; a grown Ballista or Construct is out
+        static final int MIN_MV = 3;
+        static final int MV_GAP = 2;
+        static final int NET = 3;          // {B} in, {B}{B}{B}{B} out
+        // the five coloured shards, in MagicColor.WUBRG order (G1's own copy is private)
+        private static final forge.card.mana.ManaCostShard[] SHARDS = {
+                forge.card.mana.ManaCostShard.WHITE, forge.card.mana.ManaCostShard.BLUE,
+                forge.card.mana.ManaCostShard.BLACK, forge.card.mana.ManaCostShard.RED,
+                forge.card.mana.ManaCostShard.GREEN };
+
+        // the name, a spell: the payment key (the card is on the stack by then, CR 601.2a)
+        public static boolean handles(final SpellAbility sa) {
+            final Card host = sa == null ? null : sa.getHostCard();
+            return host != null && host.getRules() != null && NAME.equals(host.getRules().getName()) && sa.isSpell();
+        }
+
+        // the owner's own paid cast of the reviewed script (B3-13: ApiType.Mana with a CostSacrifice):
+        // from hand, or from exile under a mayPlay (50E)
+        public static boolean isOwnCast(final Player ai, final SpellAbility sa) {
+            if (!handles(sa) || sa instanceof AbilitySub || sa.isCopied() || sa.isCastFromPlayEffect()
+                    || sa.getApi() != ApiType.Mana || sa.getPayCosts() == null
+                    || sa.getPayCosts().getCostPartByType(CostSacrifice.class) == null) {
+                return false;
+            }
+            final Card host = sa.getHostCard();
+            final Player act = sa.getActivatingPlayer();
+            if (!ai.equals(host.getOwner()) || !ai.equals(host.getController()) || (act != null && !ai.equals(act))) {
+                return false;
+            }
+            return host.isInZone(ZoneType.Hand)
+                    || (host.isInZone(ZoneType.Exile) && !host.mayPlay(ai).isEmpty());   // 50E
+        }
+
+        static boolean inWindow(final Player ai) {
+            final PhaseHandler ph = ai.getGame().getPhaseHandler();
+            return (ph.is(PhaseType.MAIN1, ai) || ph.is(PhaseType.MAIN2, ai)) && ai.getGame().getStack().isEmpty();
+        }
+
+        // G3's case: cheapest test first
+        public static boolean readmit(final Player ai, final SpellAbility sa) {
+            if (!isOwnCast(ai, sa) || !inWindow(ai) || !RemoveDeckFilter.noManaHeld(ai, true)
+                    || !CommanderCastCeiling.affordable(ai, sa) || phantomMana(ai)) {
+                return false;
+            }
+            final Card sac = chooseSacrifice(ai, sa);
+            return sac != null && !followUps(ai, sa, sac).isEmpty();
+        }
+
+        // 50B's question, asked only behind readmit: the stock ritual test (ManaAi.doManaRitualLogic's
+        // canPlaySa of a no-cost copy), on the follow-ups the floor priced, in their fixed order
+        public static boolean consider(final Player ai, final SpellAbility sa) {
+            final Card sac = chooseSacrifice(ai, sa);
+            if (sac == null) {
+                return false;
+            }
+            final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+            for (final SpellAbility f : followUps(ai, sa, sac)) {
+                SpellAbility base = f;
+                if (f.getHostCard().isInZone(ZoneType.Command)) {
+                    // 50D (the skeptic's M1): the raw spell of a command-zone card fails
+                    // SpellAbilityRestriction.checkZoneRestrictions (zone Hand, no mayPlay option) and
+                    // answers CantPlaySa; the castable spell is the mayPlay copy
+                    final List<SpellAbility> v = forge.game.GameActionUtil.getMayPlaySpellOptions(f, f.getHostCard(), ai, false);
+                    if (v.isEmpty()) {
+                        continue;
+                    }
+                    base = v.get(0);
+                }
+                final SpellAbility probe = base.copyWithNoManaCost();
+                if (probe == null) {
+                    continue;
+                }
+                probe.setActivatingPlayer(ai);
+                if (aic.canPlaySa(probe) == AiPlayDecision.WillPlay) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static Card chooseSacrifice(final Player ai, final SpellAbility sa) {
+            final Card host = sa.getHostCard();
+            final CostSacrifice cs = sa.getPayCosts().getCostPartByType(CostSacrifice.class);
+            final CardCollection typeList = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                    cs.getType().split(";"), ai, host, sa);
+            return choose(ai, sa, CardLists.getValidCards(typeList, PREFERENCE, ai, host, null));
+        }
+
+        // 50C: the payment's typeList (canBeSacrificedBy and paymentChoicesWithoutTargets applied)
+        public static Card choosePayment(final Player ai, final SpellAbility sa, final CardCollectionView typeList) {
+            return choose(ai, sa, CardLists.getValidCards(typeList, PREFERENCE, ai, sa.getHostCard(), null));
+        }
+
+        static Card choose(final Player ai, final SpellAbility sa, final Iterable<Card> options) {
+            Boolean safe = null; // survivesUnblocked, computed at most once per call
+            Card best = null;
+            int bestTier = 0, bestEval = 0;
+            for (final Card c : options) {
+                if (!c.isCreature() || !ai.equals(c.getController()) || c.isCommander()
+                        || !c.getManaAbilities().isEmpty() || !c.canBeSacrificedBy(sa, false)
+                        || !CardLists.filterControlledBy(c.getEnchantedBy(), ai).isEmpty()) {
+                    continue;
+                }
+                // "leaving anyway": blitz sacrifices it at the end step; a token with any end-of-turn
+                // leave ceases to exist
+                final boolean leaving = "Blitz".equals(c.getSVar("EndOfTurnLeavePlay"))
+                        || (c.isToken() && c.hasSVar("EndOfTurnLeavePlay"));
+                final int eval = ComputerUtilCard.evaluateCreature(c);
+                final int tier;
+                if (leaving || c.hasSVar("SacMe")
+                        // a stolen undying/persist creature returns to its owner's battlefield
+                        || (ComputerUtilCard.hasActiveUndyingOrPersist(c) && ai.equals(c.getOwner()))) {
+                    tier = 0;
+                } else if (eval > MAX_EVAL) {
+                    continue;
+                } else {
+                    tier = c.isToken() ? 1 : 2;
+                }
+                if (!leaving) {
+                    if (safe == null) {
+                        safe = survivesUnblocked(ai);
+                    }
+                    if (!safe) {
+                        continue; // it may be a blocker we need
+                    }
+                }
+                // lowest tier, then the least valuable body, then card id
+                if (best == null || tier < bestTier || (tier == bestTier && (eval < bestEval
+                        || (eval == bestEval && c.getId() < best.getId())))) {
+                    best = c;
+                    bestTier = tier;
+                    bestEval = eval;
+                }
+            }
+            return best;
+        }
+
+        // the spells the ritual buys this turn; reads f only when Card.getAllPossibleAbilities stamped it
+        // with ai on this pass (never writes the activator)
+        static List<SpellAbility> followUps(final Player ai, final SpellAbility sa, final Card sac) {
+            final List<SpellAbility> out = new ArrayList<>();
+            final HonestMana real = HonestMana.of(ai, sa, true);
+            final int ceiling = real.total() - reflectedCredit(ai, sa) + NET;   // A3
+            final boolean main2 = ai.getGame().getPhaseHandler().is(PhaseType.MAIN2, ai);
+            final CardCollection pool = new CardCollection(ai.getCardsIn(ZoneType.Hand));
+            for (final Card c : ai.getCardsIn(ZoneType.Command)) {                        // 50D
+                if (c.isCommander() && ai.equals(c.getOwner())) {
+                    pool.add(c);
+                }
+            }
+            for (final Card c : pool) {
+                if (c == sa.getHostCard() || c.isLand() || c.isInstant() || ComputerUtilCard.isCardRemAIDeck(c)
+                        || (c.isPermanent() && !c.hasKeyword(Keyword.HASTE) && !main2)
+                        || (!c.isColorless() && !c.isBlack())) {
+                    continue;
+                }
+                for (final SpellAbility f : basicSpells(c)) {
+                    if (f.hasParam("AINoRecursiveCheck") || !ai.equals(f.getActivatingPlayer()) || !manaOnly(f)) {
+                        continue;
+                    }
+                    final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(f.getPayCosts(), f, ai, true, 0, false);
+                    if (buys(cost, real, ceiling, sac)) {
+                        out.add(f);
+                    }
+                }
+            }
+            return out;
+        }
+
+        static boolean buys(final ManaCostBeingPaid cost, final HonestMana real, final int ceiling, final Card sac) {
+            final int mv = cost.getConvertedManaCost();
+            if (cost.getXcounter() > 0 || mv <= real.total() || mv > ceiling
+                    || mv < Math.max(MIN_MV, sac.getCMC() + MV_GAP)) {
+                return false;
+            }
+            int mono = 0, other = 0;
+            for (int i = 0; i < SHARDS.length; i++) {
+                final int p = cost.getUnpaidShards(SHARDS[i]);
+                mono += p;
+                if (MagicColor.WUBRG[i] == MagicColor.BLACK) {
+                    if (p > 4) {
+                        return false;
+                    }
+                } else {
+                    other += p;
+                    if (p > 0 && real.colour(MagicColor.WUBRG[i]) < p + 1) {
+                        return false;
+                    }
+                }
+            }
+            // nothing but generic and the five coloured pips; the other colours' pips from the rest
+            return mv - cost.getGenericManaAmount() - mono == 0 && other <= real.total() - 1;
+        }
+
+        private static boolean manaOnly(final SpellAbility f) {
+            for (final CostPart p : f.getPayCosts().getCostParts()) {
+                if (!(p instanceof CostPartMana)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // A3 (the skeptic's F2): the mana G2 credits a source through a ManaReflected or Special ability
+        // beyond what its plain abilities make. HonestMana counts such an ability at its Amount whenever
+        // it can be activated, whether or not it can make mana now: Mox Amber with no legendary creature
+        // or planeswalker of ours on the battlefield, Chrome Mox with nothing imprinted (each +1 total, no
+        // colour). Subtracted from the NET ceiling only, so no follow-up that only such mana would pay is
+        // bought; under-counting only loses a cast. Read-only: it reads only abilities stamped with ai
+        // (followUps' HonestMana has just stamped every source it counts; a held source it skipped is
+        // read only when an earlier stamp says ai, and is then subtracted, the safe side), with
+        // HonestMana's own per-ability tests and worth.
+        private static int reflectedCredit(final Player ai, final SpellAbility sa) {
+            int credit = 0;
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                int reflected = 0, plain = 0;
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    final forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+                    if (mp == null || !ai.equals(ma.getActivatingPlayer()) || !ma.canPlay()
+                            || ma.getPayCosts().hasManaCost() || !ma.metConditions() || !mp.meetsManaRestrictions(sa)) {
+                        continue;
+                    }
+                    final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    if (ma.getApi() == ApiType.ManaReflected || mp.isSpecialMana()) {
+                        reflected = Math.max(reflected, amount);
+                    } else {
+                        final String produced = mp.getOrigProduced().trim();
+                        final boolean choice = produced.isEmpty() || mp.isComboMana() || mp.isAnyMana()
+                                || produced.contains("Chosen");
+                        plain = Math.max(plain, choice ? amount : amount * produced.split(" ").length);
+                    }
+                }
+                credit += Math.max(0, reflected - plain);
+            }
+            return credit;
+        }
+
+        // a battlefield source G2 counts that the payment never uses: no getAIPlayableMana ability
+        // (ComputerUtilMana.getAIPlayableMana skips instant-speed mana) but a playable mana ability with
+        // no mana cost (Lion's Eye Diamond, 3 any). Reads the stamps G1's HonestMana just wrote.
+        private static boolean phantomMana(final Player ai) {
+            for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (src.getManaAbilities().isEmpty() || !aiPlayableManaNoManaCost(src).isEmpty()) {
+                    continue;
+                }
+                for (final SpellAbility ma : src.getManaAbilities()) {
+                    if (ma.getActivatingPlayer() != null && ma.canPlay() && !ma.getPayCosts().hasManaCost()) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Deterministic next-turn safety: the AI survives every opponent's next attack even if nothing
+        // blocks, so no creature it cashes in was a needed blocker. Independent of the candidate.
+        // LifesLegacy.survivesUnblocked, copied verbatim (an accepted helper is not refactored).
+        private static boolean survivesUnblocked(final Player ai) {
+            if (ai.cantLose()) {
+                return true;
+            }
+            int damage = 0, poison = 0;
+            for (final Player opp : ai.getOpponents()) {
+                final CardCollection attackers = CardLists.filter(opp.getCreaturesInPlay(),
+                        c -> ComputerUtilCombat.canAttackNextTurn(c, ai));
+                damage += ComputerUtilCombat.sumDamageIfUnblocked(attackers, ai);
+                poison += ComputerUtilCombat.sumPoisonIfUnblocked(attackers, ai);
+            }
+            final boolean lifeSafe = ai.cantLoseForZeroOrLessLife()
+                    || ai.getLife() - damage >= AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_THRESHOLD);
+            return lifeSafe && ai.getPoisonCounters() + poison < 7;
+        }
+    }
+
     // Disaster Radius (dead-card batch 3, row 64)
     // {5}{R}{R} Sorcery. "As an additional cost to cast this spell, reveal a creature card from your
     // hand. Disaster Radius deals X damage to each creature your opponents control, where X is the
@@ -46913,8 +47243,8 @@ public class SpecialCardAi {
     // 8, 10, 11, 16, 17, 19, 21, 23, 25, 27, 28, 30, 32, 33, 35, 36, 38, 39, 41, 48, 49, 50, 52,
     // 57, 58, 59, 60, 61, 63, 68, 69, 71, 73, 75, 76, 79, 80, 82, 83 and 84 and the extension's
     // rows 93, 101 and 111 and batch 4's rows 23, 51, 65, 15, 16, 28, 47, 58, 74, 53, 19, 40, 46, 24,
-    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21 and 35, keepOff for batch 2's row 68 (Trench Gorger;
-    // batch 3's row 68 is Sunbird Standard, a readmit).
+    // 25, 31, 30, 42, 49, 52, 66, 67, 20, 21, 35 and 50, keepOff for batch 2's row 68 (Trench
+    // Gorger; batch 3's row 68 is Sunbird Standard, a readmit).
     // A case must draw no random number and hold nothing, so that its false is exactly the old
     // filter.
     // Frozen once accepted: a row that needs other semantics keeps a private copy.
@@ -47082,6 +47412,8 @@ public class SpecialCardAi {
                     return CruelEntertainment.readmit(ai, sa);
                 case SickeningShoal.NAME:                // batch 4, row 35 (W7)
                     return SickeningShoal.readmit(ai, sa);
+                case CullingTheWeak.NAME:                // batch 4, row 50 (W7)
+                    return CullingTheWeak.readmit(ai, sa);
                 default:
                     return false;
             }
