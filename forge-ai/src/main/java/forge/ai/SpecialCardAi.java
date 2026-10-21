@@ -205,6 +205,8 @@ public class SpecialCardAi {
     //    installs a static for Flying, Vigilance or Defender and a trigger for Prowess); highest
     //    CreatureEvaluator value, first max;
     // 2. else no target -- never our commander, never a creature of ours.
+    // affordable (59B) is the cast's ceiling in AiController.canPlayAndPayForFace, after the Ambitious
+    // Dragonborn slot's blocks and before canPayCost.
     // Draws nothing, holds nothing, remembers nothing, allocates no SpellAbility; it writes targets only on the
     // SpellAbility it was handed (the dry run's copy, or the trigger on the stack), as the stock fallback did.
     public static class AbigaleEloquentFirstYear {
@@ -265,6 +267,21 @@ public class SpecialCardAi {
                 }
             }
             return false;
+        }
+
+        // 59B: G1 (frozen, called) checks hybrid shards through the total only; add max(white, black) honest
+        // mana for the W/B pips. An under-count, the safe side: a W-only source with a B-only one (Savannah or
+        // Temple Garden with Overgrown Tomb or Bayou, a Plains with Elves of Deep Shadow) is refused although
+        // payable, which costs a window and never a draw. RNG-free: test-mode calculateManaCost (no Announce$)
+        // and G2 HonestMana.
+        public static boolean affordable(final Player ai, final SpellAbility sa) {
+            if (!CommanderCastCeiling.affordable(ai, sa)) {
+                return false;
+            }
+            final ManaCostBeingPaid cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, true, 0, false);
+            final HonestMana mana = HonestMana.of(ai, sa, true);
+            return Math.max(mana.colour(MagicColor.WHITE), mana.colour(MagicColor.BLACK))
+                    >= cost.getUnpaidShards(forge.card.mana.ManaCostShard.WB);
         }
     }
 

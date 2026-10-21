@@ -952,6 +952,20 @@ public class AiController {
             return AiPlayDecision.CantAfford;
         }
 
+        // Dead-card batch 4, row 59, part 59B: Abigale, Eloquent First-Year. canPlaySa approved the cast now that
+        // its enters trigger may take no target (59A); A declined it inside canPlaySa (BadEtbEffects at
+        // saSideEffects, after the same draws), so canPayCost never ran for it, and an unpayable window would now
+        // draw canPayCost's isManaSourceReserved rolls with no visible cast. Refuse a window real mana cannot pay
+        // ({W/B}{W/B}: G1 plus the hybrid pips, AbigaleEloquentFirstYear.affordable) here, drawing nothing. Placed
+        // after canPlaySa, so B has made exactly A's evaluation first, and after the Intuition block (W7's
+        // order: 9B2, then 59B). Own paid casts (from hand, or a thief's or graveyard caster's regular cast); a
+        // Play-effect cast never comes here. G1 under G4's contract, called not edited. A name compare: inert for
+        // every other SA. See the class comment.
+        if (sa.isSpell() && host != null && SpecialCardAi.AbigaleEloquentFirstYear.NAME.equals(host.getName())
+                && !sa.isCastFromPlayEffect() && !SpecialCardAi.AbigaleEloquentFirstYear.affordable(player, sa)) {
+            return AiPlayDecision.CantAfford;
+        }
+
         if (!ComputerUtilCost.canPayCost(sa, player, sa.isTrigger())) {
             // for dependent costs with X, e.g. Repeal, which require a valid target to be specified before a decision can be made
             // on whether the cost can be paid, this can only be checked late after canPlaySa has been run (or the AI will misplay)
