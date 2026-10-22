@@ -23,6 +23,7 @@ import com.google.common.eventbus.Subscribe;
 import forge.GuiDesktop;
 import forge.ai.AIOption;
 import forge.ai.AiProfileUtil;
+import forge.ai.combo.ComboTable;
 import forge.card.CardEdition;
 import forge.deck.Deck;
 import forge.deck.io.DeckSerializer;
@@ -161,6 +162,13 @@ public class GameRunner {
                 throw new IllegalStateException("AI profile 'Default' is missing from " + ForgeConstants.AI_PROFILE_DIR
                         + ": this Forge tree cannot run the simulation");
             }
+            // The combo table rides forge-ai's jar: a tree without it would play the stock AI under the same engine
+            // id. Read once here, before any game thread exists; stderr, because serve mode's stdout carries records.
+            final int combos = ComboTable.shipped().size();
+            if (combos == 0) {
+                throw new IllegalStateException("the combo table " + ComboTable.RESOURCE + " is empty");
+            }
+            System.err.println("Read combos: " + combos + " rows");
             booted = true;
         }
         SimScope.setStrict(true);   // on every call: a test class may have relaxed it after itself
