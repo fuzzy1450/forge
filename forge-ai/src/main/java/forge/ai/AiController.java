@@ -24,6 +24,8 @@ import forge.ai.AiCardMemory.MemorySet;
 import forge.ai.ability.ChangeZoneAi;
 import forge.ai.ability.ConniveAi;
 import forge.ai.ability.LearnAi;
+import forge.ai.combo.ComboLines;
+import forge.ai.combo.ComboTracker;
 import forge.ai.simulation.GameStateEvaluator;
 import forge.ai.simulation.OnePlaySafetyChecker;
 import forge.ai.simulation.SpellAbilityPicker;
@@ -107,12 +109,19 @@ public class AiController {
     // would be shared by every concurrent game of a serve JVM. Read only by
     // SpecialCardAi.DramaticReversal.
     private final List<SpecialCardAi.DramaticReversal.Refused> approvedUnaffordable = new ArrayList<>();
+    // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.2): which of piece 1's
+    // empty-library lines this AI's own deck holds, and where each of their pieces is. It reads nothing until its
+    // first query, because this constructor runs before the player is registered with its game. An instance field:
+    // a static would be shared by every concurrent game of a serve JVM. Read by forge.ai.combo, through
+    // ComboTracker.of.
+    private final ComboTracker combos;
 
     public AiController(final Player computerPlayer, final Game game0) {
         player = computerPlayer;
         game = game0;
         memory = new AiCardMemory();
         loops = new LoopTracker();
+        combos = new ComboTracker(player, ComboLines.shipped());
         simPicker = new SpellAbilityPicker(player);
     }
 
@@ -154,6 +163,11 @@ public class AiController {
     /** How this AI judges the loops it controls: spent or still paying, and which names a spent loop avoids. */
     public LoopTracker getLoopTracker() {
         return loops;
+    }
+
+    /** Which of piece 1's combo lines this AI's deck holds, and where their pieces are: read by forge.ai.combo. */
+    public ComboTracker getComboTracker() {
+        return combos;
     }
 
     public Combat getPredictedCombat() {
