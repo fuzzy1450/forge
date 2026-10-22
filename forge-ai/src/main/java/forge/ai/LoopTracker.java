@@ -24,7 +24,7 @@ import forge.game.zone.ZoneType;
  * generation and the count it last saw, the board {@link Snapshot} it took when it first saw that count, how many
  * consecutive rounds changed nothing, and the kind of change the last compared round made. From those it answers two
  * questions: is this loop <em>spent</em> (two idle rounds, or a loop winning by the AI's own board whose board is
- * decisive, ten times the life of the opponents who can lose, or a winning one which has gone round more than
+ * decisive, {@link #LETHAL_MULTIPLE} times the life of the opponents who can lose, or a winning one which has gone round more than
  * {@link #MAX_PROGRESS_ROUNDS} times),
  * which stops an optional loop in PlayerControllerAi.confirmTrigger (CR 732.2a: the controller of an optional loop
  * chooses how many times it repeats) and breaks a mandatory copy loop by its target choice in CopyPermanentAi; and, for
@@ -35,14 +35,19 @@ import forge.game.zone.ZoneType;
  */
 public final class LoopTracker {
 
-    /** Evan's rule for an unbounded loop: push it to ten times lethal. */
-    public static final int LETHAL_MULTIPLE = 10;
+    /**
+     * Evan's rule for an unbounded loop: push it to a multiple of lethal. Ten was his first word ("good practice when you
+     * have an infinite loop is to go for 10x lethal"); five is his pick of 2026-10-22, after stored game 1749529 showed
+     * what ten costs the engine: a second Ondu Spiritdancer chain against a lifegain opponent at 67 life ran to about 190
+     * copies and that one turn took 1,021 s (the chain, then combat planning over 200 attackers), a 10-s win turned Timeout.
+     */
+    public static final int LETHAL_MULTIPLE = 5;
 
     /**
      * The budget for a loop that pays toward lethal but is not yet decisive. A bare-board Ondu Spiritdancer chain costs
      * about 0.4 ms times the square of its length (101 copies in 3 s, 201 in 9 s, 1,001 in 391 s) and about ten times
      * that on a real board, and past about a hundred creatures the AI's combat planning slows: 200 rounds is about two
-     * minutes on such a board and 600 power at 3/3s, ten times lethal against 60 life.
+     * minutes on such a board and 600 power at 3/3s, five times lethal against 120 life.
      */
     public static final int MAX_PROGRESS_ROUNDS = 200;
 
@@ -149,7 +154,7 @@ public final class LoopTracker {
             return false;
         }
 
-        /** Ten times lethal: the AI's attack power against the summed life of the opponents who can lose (none: never). */
+        /** {@link #LETHAL_MULTIPLE} times lethal: the AI's attack power against the summed life of the opponents who can lose (none: never). */
         public boolean isDecisive() {
             int sum = 0;
             for (final int[] o : opponents.values()) {

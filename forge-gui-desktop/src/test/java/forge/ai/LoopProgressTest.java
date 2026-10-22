@@ -33,7 +33,8 @@ import forge.game.zone.ZoneType;
 
 /**
  * The AI plays the loops it controls the way a strong player does (docs/superpowers/specs/2026-10-21-loop-aware-ai-design.md
- * in MTG_DeckMaker): it keeps a loop going while each round pays toward lethal, pushes a winning one to ten times lethal,
+ * in MTG_DeckMaker): it keeps a loop going while each round pays toward lethal, pushes a winning one to LETHAL_MULTIPLE
+ * times lethal (five since Evan's pick of 2026-10-22, ten at first),
  * stops one that changes nothing after two rounds, and breaks a mandatory copy loop by its target choice. The judge is
  * {@link LoopTracker}, which reads the stack's rounds of a trigger's loop key (CR 732.2a's count, MagicStack.getTriggerRepeats)
  * and compares a cheap board snapshot from round to round.
@@ -104,16 +105,17 @@ public class LoopProgressTest extends AITest {
     }
 
     @Test(timeOut = 300_000)
-    public void decisiveIsTenTimesTheLifeOfOpponentsWhoCanLose() {
+    public void decisiveIsTheLethalMultipleOfTheLifeOfOpponentsWhoCanLose() {
         start();
-        opponent.setLife(2, null);
+        opponent.setLife(4, null);
         addCards("Grizzly Bears", 10, ai);
         settle();
         assertEquals(20, Snapshot.of(ai).ownPower());
-        assertTrue("20 power against 2 life", Snapshot.of(ai).isDecisive());
+        assertEquals("Evan's pick of 2026-10-22: five times lethal", 5, LoopTracker.LETHAL_MULTIPLE);
+        assertTrue("20 power against 4 life: five times", Snapshot.of(ai).isDecisive());
 
-        opponent.setLife(3, null);
-        assertFalse("20 power against 3 life", Snapshot.of(ai).isDecisive());
+        opponent.setLife(5, null);
+        assertFalse("20 power against 5 life: four times", Snapshot.of(ai).isDecisive());
 
         addCard("Wall of Reverence", ai);
         settle();
@@ -357,9 +359,12 @@ public class LoopProgressTest extends AITest {
         return most;
     }
 
-    /** Evan's rule: an unbounded loop that pays goes to ten times lethal, past the old count of 50. 3 power a copy against 40 life is 134 Ondus. */
+    /**
+     * Evan's rule: an unbounded loop that pays goes to LETHAL_MULTIPLE times lethal, past the old count of 50. 3 power a
+     * copy against 40 life is 67 Ondus at five times (134 at the ten of Evan's first rule, which cost 1749529's 1,021-s turn).
+     */
     @Test(timeOut = 300_000)
-    public void onduChainRunsPastFiftyToTenTimesLethal() {
+    public void onduChainRunsPastFiftyToTheLethalMultiple() {
         start();
         opponent.setLife(40, null);
         int ondus = runOnduChain();
@@ -475,7 +480,7 @@ public class LoopProgressTest extends AITest {
     /**
      * A mandatory copy loop that pays: the opponent's Venser is a nonlegendary token (a copy made with NonLegendary$
      * True, as the legend rule read-ahead reads only legendary candidates), so every copy of it stays, attacks for 5
-     * and triggers again. The AI rides it to ten times the opponent's life, then its target choice takes the Bears
+     * and triggers again. The AI rides it to LETHAL_MULTIPLE times the opponent's life, then its target choice takes the Bears
      * and the loop drains, instead of running to the stack-size draw.
      */
     @Test(timeOut = 300_000)
@@ -500,7 +505,7 @@ public class LoopProgressTest extends AITest {
 
         assertFalse("the loop never broke", OptionalTriggerLoopTest.chainGoesOn(game));
         assertFalse("drawn at the stack limit", game.isGameOver());
-        assertTrue("ten times 4 life: " + Snapshot.of(ai).ownPower(), Snapshot.of(ai).ownPower() >= LoopTracker.LETHAL_MULTIPLE * 4);
+        assertTrue("the multiple of 4 life: " + Snapshot.of(ai).ownPower(), Snapshot.of(ai).ownPower() >= LoopTracker.LETHAL_MULTIPLE * 4);
         assertTrue("the spent loop took the Bears", tokensNamed(ai, "Grizzly Bears") >= 2);
     }
 

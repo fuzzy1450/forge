@@ -194,7 +194,7 @@ public class CopyPermanentAi extends SpellAbilityAi {
             // dropped, since one of the copies dies to the legend rule at the next state-based check. Cursed Mirror as
             // the opponent's Venser, Fervent Forger copied that Venser twice, kept one, and each token's trigger did it
             // again until the stack-size draw (16 of the active engine's 65 stored Draws). (b) Once the loop this
-            // trigger feeds is spent (LoopTracker: two idle rounds, or a winning one at ten times lethal or past its
+            // trigger feeds is spent (LoopTracker: two idle rounds, or a winning one at LETHAL_MULTIPLE times lethal or past its
             // budget), the names its rounds kept choosing are dropped for as long as the loop key lasts: a Venser round
             // puts two triggers on the stack, so the drop must outlive the round that first judged the loop spent.
             // Each rule drops only with another candidate left: with nothing else legal the trigger takes what it has,

@@ -36,7 +36,7 @@ import forge.game.zone.ZoneType;
  * engine's Blight Curse Timeouts are the same loop). CR 732.2a: the controller of an optional loop names a number
  * of iterations and then stops. The AI first stopped at MagicStack.MAX_TRIGGER_REPEATS rounds; since
  * LoopTracker (MTG_DeckMaker, docs/superpowers/specs/2026-10-21-loop-aware-ai-design.md) it stops a loop whose rounds
- * change nothing after LoopTracker.IDLE_ROUNDS of them, keeps one that pays toward lethal going to ten times lethal,
+ * change nothing after LoopTracker.IDLE_ROUNDS of them, keeps one that pays toward lethal going to LETHAL_MULTIPLE times lethal (five since Evan's pick of 2026-10-22),
  * and keeps the old count for a loop that only adds material.
  */
 public class OptionalTriggerLoopTest extends AITest {
@@ -161,7 +161,7 @@ public class OptionalTriggerLoopTest extends AITest {
     }
 
     /**
-     * Decisive is read only inside a repeating loop: a one-off optional trigger with ten times lethal on the board is
+     * Decisive is read only inside a repeating loop: a one-off optional trigger with a decisive board (LETHAL_MULTIPLE times lethal) is
      * still the handler's call, and the AI takes its Elf.
      */
     @Test(timeOut = 300_000)
@@ -454,15 +454,15 @@ public class OptionalTriggerLoopTest extends AITest {
      * own, so the count by id never passed 1 and the AI never stopped: precon:Miracle Worker's turn never ended
      * (stored games 1929599 and 1934332, 20-minute Timeouts on turns 16 and 17). The copies share the first Ondu's
      * loop key, so the AI reads the chain as one loop; each copy is a 3/3 that attacks next turn, win progress, and
-     * the AI keeps copying until the board is ten times the opponent's life (Evan's rule for an unbounded loop), 67
-     * Ondus against 20 life, where the old count stopped at 51.
+     * the AI keeps copying until the board is LETHAL_MULTIPLE times the opponent's life (Evan's rule for an unbounded
+     * loop; five since his pick of 2026-10-22, ten at first), 67 Ondus against 40 life, where the old count stopped at 51.
      */
     @Test(timeOut = 300_000)
-    public void onduSpiritdancerCopyingItselfUnderSecretArcadeStopsAtTenTimesLethal() {
+    public void onduSpiritdancerCopyingItselfUnderSecretArcadeStopsAtTheLethalMultiple() {
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
         Player opponent = game.getPlayers().get(0);
-        opponent.setLife(20, null);
+        opponent.setLife(40, null);
         Card arcade = addCard("Secret Arcade // Dusty Parlor", ai);
         arcade.unlockRoom(ai, CardStateName.LeftSplit);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
@@ -491,8 +491,8 @@ public class OptionalTriggerLoopTest extends AITest {
 
         assertFalse("the loop never ended: " + ondus.size() + " Ondus in " + steps + " steps", chainGoesOn(game));
         assertFalse("an optional loop is no draw", game.isGameOver());
-        // 3 power a copy against 20 life: the copy that first reaches 200 power is the last the AI makes.
-        assertEquals((LoopTracker.LETHAL_MULTIPLE * 20 + 2) / 3, ondus.size());
+        // 3 power a copy against 40 life: the copy that first reaches five times 40 power is the last the AI makes.
+        assertEquals((LoopTracker.LETHAL_MULTIPLE * 40 + 2) / 3, ondus.size());
         assertTrue("past the old count", ondus.size() > MagicStack.MAX_TRIGGER_REPEATS + 1);
         assertEquals("each copy's trigger has an id of its own", ondus.size(), triggerIds.size());
     }

@@ -433,7 +433,7 @@ public class PlayerControllerAi extends PlayerController {
         // every round comes from a new copy of its own host, Ondu Spiritdancer under Secret Arcade copying itself, is
         // one loop too) and by what each round did to the board (LoopTracker; MTG_DeckMaker's spec
         // 2026-10-21-loop-aware-ai-design): declined once two rounds changed nothing, once a winning loop's board is
-        // ten times lethal or its rounds pass the budget, and past the old count of 50 for a loop that only adds
+        // LoopTracker.LETHAL_MULTIPLE times lethal or its rounds pass the budget, and past the old count of 50 for a loop that only adds
         // material. While the stack is past half the draw limit every optional trigger is declined: resolving what
         // is already there must never draw the game.
         final MagicStack stack = getGame().getStack();
