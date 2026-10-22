@@ -180,4 +180,36 @@ public class ComboTableTest {
         assertTrue(e.getMessage().contains("/forge/ai/combo/no-such-table.txt"), e.getMessage());
         assertTrue(ComboTable.parse(List.of("# only a comment", "")).size() == 0);
     }
+
+    @Test
+    public void needsEveryStartZoneTheFirstOneIncluded() {
+        // A piece's first zone letter is a start zone like the rest: most pieces have only one (H:Thassa's Oracle),
+        // and the tracker asks needs() of exactly that letter.
+        for (final char z : ComboTable.ZONES.toCharArray()) {
+            final Piece one = new Piece("Thassa's Oracle", String.valueOf(z), false);
+            for (final char other : ComboTable.ZONES.toCharArray()) {
+                assertEquals(one.needs(other), other == z, "a piece in zone " + z + " asked of zone " + other);
+            }
+        }
+        final ComboTable table = ComboTable.parse(List.of(WIN, EXILE,
+                "V|742-1295|3|{U}{U}{B}|2,88|H:Demonic Consultation|H:Thassa's Oracle",
+                "V|1-2|4||2|BC*:Kinnan, Bonder Prodigy|H:Basalt Monolith"));
+        assertTrue(table.variants().get(0).pieces().get(1).needs('H'));
+        final Piece kinnan = table.variants().get(1).pieces().get(0);
+        assertTrue(kinnan.needs('B'));
+        assertTrue(kinnan.needs('C'));
+        assertFalse(kinnan.needs('H'));
+    }
+
+    @Test
+    public void theShippedTableReadsItsNamesAsUtf8() {
+        // The builder writes UTF-8, in Forge's spelling; read in another charset these names would be mojibake that
+        // never meets a card. Twenty distinct names in the 2026-10-22 build are not ASCII.
+        final Set<String> names = ComboTable.shipped().variants().stream()
+                .flatMap(v -> v.pieces().stream()).map(Piece::name).collect(Collectors.toSet());
+        for (final String name : List.of("Bartolom\u00e9 del Presidio", "Alta\u00efr Ibn-La'Ahad",
+                "\u00c9omer, Marshal of Rohan")) {
+            assertTrue(names.contains(name), "the shipped table lacks a piece named " + name);
+        }
+    }
 }
