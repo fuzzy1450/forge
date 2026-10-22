@@ -14,11 +14,18 @@ import org.testng.annotations.Test;
 import forge.ai.LoopTracker.Loop;
 import forge.ai.LoopTracker.Progress;
 import forge.ai.LoopTracker.Snapshot;
+import forge.card.CardStateName;
 import forge.game.Game;
+import forge.game.ability.AbilityKey;
+import forge.game.ability.effects.CopyPermanentEffect;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.trigger.Trigger;
+import forge.game.trigger.WrappedAbility;
+import forge.game.zone.MagicStack;
+import forge.game.zone.ZoneType;
 
 /**
  * The AI plays the loops it controls the way a strong player does (docs/superpowers/specs/2026-10-21-loop-aware-ai-design.md
@@ -233,5 +240,109 @@ public class LoopProgressTest extends AITest {
         two.add(addCard("Forest", opponent));
         assertEquals(1, t.loop(7).withoutAvoided(two).size());
         assertEquals("Forest", t.loop(7).withoutAvoided(two).getFirst().getName());
+    }
+
+    /** Steps enough for a 201-copy chain or an 80-Ondu crowd; without a stop they run out. */
+    private static final int MAX_STEPS = 200_000;
+
+    /**
+     * Secret Arcade unlocked and an Ondu Spiritdancer entering from hand in the AI's main 2 (OptionalTriggerLoopTest
+     * has why that loops); plays the chain out and returns the Ondus on the battlefield.
+     */
+    private int runOnduChain() {
+        addCard("Secret Arcade // Dusty Parlor", ai).unlockRoom(ai, CardStateName.LeftSplit);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+        settle();
+        game.getAction().moveToPlay(addCardToZone("Ondu Spiritdancer", ai, ZoneType.Hand), null, AbilityKey.newMap());
+        int steps = 0;
+        do {
+            game.getPhaseHandler().mainLoopStep();
+        } while (OptionalTriggerLoopTest.chainGoesOn(game) && ++steps < MAX_STEPS);
+        assertFalse("the chain never ended", OptionalTriggerLoopTest.chainGoesOn(game));
+        return countCardsWithName(game, "Ondu Spiritdancer");
+    }
+
+    /**
+     * Secret Arcade unlocked, then {@code n} Ondu Spiritdancers (one, and n - 1 copies of it made as a token copy is,
+     * so none has entered this turn or used its once each turn), then a Sol Ring entering, which Secret Arcade makes an
+     * enchantment: every Ondu triggers, and every copy that resolves triggers the ones that have not copied yet. Plays
+     * the crowd out and returns the most items the stack held.
+     */
+    private int crowd(int n) {
+        addCard("Secret Arcade // Dusty Parlor", ai).unlockRoom(ai, CardStateName.LeftSplit);
+        Card ondu = addCard("Ondu Spiritdancer", ai);
+        for (int i = 1; i < n; i++) {
+            Card copy = CopyPermanentEffect.getProtoType(ondu.getFirstSpellAbility(), ondu, ai);
+            copy.setGameTimestamp(game.getNextTimestamp());
+            ai.getZone(ZoneType.Battlefield).add(copy);
+        }
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+        settle();
+        assertEquals(n, countCardsWithName(game, "Ondu Spiritdancer"));
+
+        game.getAction().moveToPlay(addCardToZone("Sol Ring", ai, ZoneType.Hand), null, AbilityKey.newMap());
+        int most = 0;
+        int steps = 0;
+        do {
+            game.getPhaseHandler().mainLoopStep();
+            most = Math.max(most, game.getStack().size());
+        } while (OptionalTriggerLoopTest.chainGoesOn(game) && ++steps < MAX_STEPS);
+        assertFalse("the crowd never ended", OptionalTriggerLoopTest.chainGoesOn(game));
+        return most;
+    }
+
+    /** Evan's rule: an unbounded loop that pays goes to ten times lethal, past the old count of 50. 3 power a copy against 40 life is 134 Ondus. */
+    @Test(timeOut = 300_000)
+    public void onduChainRunsPastFiftyToTenTimesLethal() {
+        start();
+        opponent.setLife(40, null);
+        int ondus = runOnduChain();
+        assertFalse(game.isGameOver());
+        assertEquals((LoopTracker.LETHAL_MULTIPLE * 40 + 2) / 3, ondus);
+        assertTrue(ondus > MagicStack.MAX_TRIGGER_REPEATS + 1);
+    }
+
+    /** Against a player who cannot lose nothing is decisive, and the budget for a winning loop ends it. */
+    @Test(timeOut = 300_000)
+    public void onduChainAgainstAPlayerWhoCannotLoseStopsAtTheCap() {
+        start();
+        addCard("Platinum Angel", opponent);
+        settle();
+        assertEquals(LoopTracker.MAX_PROGRESS_ROUNDS + 1, runOnduChain());
+        assertFalse(game.isGameOver());
+    }
+
+    /**
+     * 80 fresh Ondus would put about 3,240 items on the stack and draw the game at MagicStack.MAX_STACK_SIZE. The AI
+     * declines every optional trigger while the stack is past half the limit, so the crowd never passes the headroom
+     * by more than its own size, and the copies, material, stay under the old count.
+     */
+    @Test(timeOut = 300_000)
+    public void aCrowdNeverPassesTheHeadroom() {
+        start();
+        int most = crowd(80);
+        assertFalse("the crowd drew the game", game.isGameOver());
+        assertTrue(game.getStack().isEmpty());
+        assertTrue("peak " + most, most <= LoopTracker.stackHeadroom() + 80);
+        int rings = countCardsWithName(game, "Sol Ring");
+        assertTrue("Sol Rings: " + rings, rings >= 2 && rings <= MagicStack.MAX_TRIGGER_REPEATS + 1);
+    }
+
+    /** The headroom guard reads optional triggers only: a mandatory one is confirmed whatever the stack holds. */
+    @Test(timeOut = 300_000)
+    public void theHeadroomGuardNeverDeclinesAMandatoryTrigger() {
+        start();
+        Card blowfly = addCard("Blowfly Infestation", ai);
+        settle();
+        Trigger trigger = blowfly.getTriggers().iterator().next();
+        pushAbilities(game, ai, LoopTracker.stackHeadroom() + 1);
+        assertTrue(game.getStack().size() > LoopTracker.stackHeadroom());
+
+        WrappedAbility mandatory = OptionalTriggerLoopTest.wrap(trigger, blowfly, ai);
+        assertTrue(mandatory.isMandatory());
+        assertTrue(ai.getController().confirmTrigger(mandatory));
+        WrappedAbility optional = OptionalTriggerLoopTest.wrap(trigger, blowfly, ai);
+        optional.setOptionalTrigger(true);
+        assertFalse("an optional trigger above the headroom is declined", ai.getController().confirmTrigger(optional));
     }
 }

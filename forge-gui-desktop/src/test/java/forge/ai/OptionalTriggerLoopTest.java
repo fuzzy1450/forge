@@ -31,17 +31,20 @@ import forge.game.zone.ZoneType;
  * precon:Blight Curse's Blowfly Infestation and Flourishing Defenses loop for ever once the opponents have no
  * creature: Blowfly's mandatory, targeted -1/-1 counter falls back to the AI's own 1/1 Elf token, the Elf dies with
  * the counter (Blowfly again), and the counter made Flourishing's optional "you may create a 1/1 Elf" trigger, which
- * the AI always accepts. The draw detector (MagicStack.isRepeatingTrigger) counts only mandatory, untargeted
+ * the AI always accepted. The draw detector (MagicStack.isRepeatingTrigger) counts only mandatory, untargeted
  * triggers, so it never sees this loop and the stack never empties (stored game 994130 ran out of heap; the active
  * engine's Blight Curse Timeouts are the same loop). CR 732.2a: the controller of an optional loop names a number
- * of iterations and then stops.
+ * of iterations and then stops. The AI first stopped at MagicStack.MAX_TRIGGER_REPEATS rounds; since
+ * LoopTracker (MTG_DeckMaker, docs/superpowers/specs/2026-10-21-loop-aware-ai-design.md) it stops a loop whose rounds
+ * change nothing after LoopTracker.IDLE_ROUNDS of them, keeps one that pays toward lethal going to ten times lethal,
+ * and keeps the old count for a loop that only adds material.
  */
 public class OptionalTriggerLoopTest extends AITest {
 
     /** Ten times the steps the chain takes when the AI stops (four a round); without a stop it runs out of steps. */
     private static final int MAX_STEPS = 2000;
 
-    private static boolean chainGoesOn(Game game) {
+    static boolean chainGoesOn(Game game) {
         return !game.isGameOver() && (!game.getStack().isEmpty() || game.getStack().hasSimultaneousStackEntries());
     }
 
@@ -50,33 +53,38 @@ public class OptionalTriggerLoopTest extends AITest {
     }
 
     /** One -1/-1 counter on a creature, put the way a resolving effect puts it: Flourishing triggers on it. */
-    private static void putACounterOn(Game game, Player ai, Card creature) {
+    static void putACounterOn(Game game, Player ai, Card creature) {
         GameEntityCounterTable table = new GameEntityCounterTable();
         creature.addCounter(CounterEnumType.M1M1, 1, ai, table);
         table.replaceCounterEffect(game, null);
     }
 
     private Card[] startTheLoop(Game game, Player ai) {
-        return startTheLoop(game, ai, false);
+        return startTheLoop(game, ai, false, 0);
     }
 
     /**
-     * Blowfly, Flourishing and two 1/1 Elf tokens for the AI, no creature for the opponent, and a -1/-1 counter on
-     * the first Elf, put the way a resolving effect puts it: Flourishing triggers, and the Elf dies with the counter
-     * at the next priority, so Blowfly triggers with only the other Elf to target. With a waiting trigger, the AI's
-     * Grizzly Bears first takes a counter it survives, and the Flourishing trigger for it goes on the stack before the
-     * Elf's counter, to wait below the loop. Returns Blowfly and Flourishing.
+     * Blowfly, Flourishing and two 1/1 Elf tokens for the AI, {@code opposingElves} 1/1 Elf tokens for the opponent
+     * (none, and the loop turns on the AI's own Elves at once; a 2/2 would survive its first counter and end the loop
+     * in a round), and a -1/-1 counter on the first Elf, put the way a resolving effect puts it: Flourishing triggers,
+     * and the Elf dies with the counter at the next priority, so Blowfly triggers with the opponent's Elves, a curse's
+     * first choice, or else only the other Elf, to target. With a waiting trigger, the AI's Grizzly
+     * Bears first takes a counter it survives, and the Flourishing trigger for it goes on the stack before the Elf's
+     * counter, to wait below the loop. Returns Blowfly and Flourishing.
      */
-    private Card[] startTheLoop(Game game, Player ai, boolean aWaitingTrigger) {
+    private Card[] startTheLoop(Game game, Player ai, boolean aWaitingTrigger, int opposingElves) {
         Player opponent = game.getPlayers().get(0);
         Card blowfly = addCard("Blowfly Infestation", ai);
         Card flourishing = addCard("Flourishing Defenses", ai);
         Card first = addToken("g_1_1_elf_warrior", ai);
         addToken("g_1_1_elf_warrior", ai);
         Card bears = aWaitingTrigger ? addCard("Grizzly Bears", ai) : null;
+        for (int i = 0; i < opposingElves; i++) {
+            addToken("g_1_1_elf_warrior", opponent);
+        }
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
         game.getAction().checkStateEffects(true);
-        assertTrue("the opponent has no creature for Blowfly", opponent.getCreaturesInPlay().isEmpty());
+        assertEquals("the opponent's creatures for Blowfly", opposingElves, opponent.getCreaturesInPlay().size());
 
         if (bears != null) {
             putACounterOn(game, ai, bears);
@@ -91,8 +99,13 @@ public class OptionalTriggerLoopTest extends AITest {
         return new Card[] {blowfly, flourishing};
     }
 
+    /**
+     * Each round makes an Elf and loses one to Blowfly's counter, so the board after a round is the board before it:
+     * the loop changes nothing, and the AI gives it up after LoopTracker.IDLE_ROUNDS such rounds instead of after
+     * MagicStack.MAX_TRIGGER_REPEATS. The first round has nothing to compare and is the handler's call.
+     */
     @Test(timeOut = 300_000)
-    public void blowflyAndFlourishingStopOnceTheOptionalElfHasRepeatedFiftyTimes() {
+    public void blowflyAndFlourishingStopOnceTwoRoundsAddedNothing() {
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
         startTheLoop(game, ai);
@@ -113,8 +126,69 @@ public class OptionalTriggerLoopTest extends AITest {
         assertFalse("the loop never ended: " + elves.size() + " Elves in " + steps + " steps", chainGoesOn(game));
         assertFalse("an optional loop is no draw", game.isGameOver());
         assertTrue("Blowfly killed the last Elf", ai.getCreaturesInPlay().isEmpty());
-        // The two Elves we started with, then one for each of Flourishing's first 50 triggers: its 51st is declined.
-        assertEquals(MagicStack.MAX_TRIGGER_REPEATS + 2, elves.size());
+        // The two Elves we started with, then one for the first round and one for each idle round the AI allows
+        // before it declines: far fewer than the 52 of the old count.
+        assertEquals(2 + LoopTracker.IDLE_ROUNDS, elves.size());
+        assertTrue(elves.size() < MagicStack.MAX_TRIGGER_REPEATS + 2);
+    }
+
+    /**
+     * The same loop pays while the opponent has creatures: Blowfly's counter is a curse, so it goes on an opposing
+     * 1/1 Elf, which dies of it, and each round the AI's Elves grow and the opponent's shrink, win progress both
+     * ways. The AI keeps going until the opponent's Elves are gone, then the loop turns idle on its own and stops.
+     */
+    @Test(timeOut = 300_000)
+    public void blowflyAgainstARowOfOpposingElvesKeepsGoingWhileTheyDie() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        Player opponent = game.getPlayers().get(0);
+        startTheLoop(game, ai, false, 20);
+
+        int mostElves = 0;
+        int steps = 0;
+        while (chainGoesOn(game) && steps++ < 10 * MAX_STEPS) {
+            game.getPhaseHandler().mainLoopStep();
+            mostElves = Math.max(mostElves, ai.getCreaturesInPlay().size());
+        }
+
+        assertFalse("the loop never ended", chainGoesOn(game));
+        assertFalse(game.isGameOver());
+        assertTrue("Blowfly cleared the opponent's Elves", opponent.getCreaturesInPlay().isEmpty());
+        // an Elf a counter: the AI's Elves grew past twenty while the opponent's died, before Blowfly, with nothing
+        // else to hit, turned on them and the AI gave the idle loop up
+        assertTrue("the Elves that paid: " + mostElves, mostElves >= 20);
+        assertTrue("Blowfly then killed the Elves", ai.getCreaturesInPlay().isEmpty());
+    }
+
+    /**
+     * Decisive is read only inside a repeating loop: a one-off optional trigger with ten times lethal on the board is
+     * still the handler's call, and the AI takes its Elf.
+     */
+    @Test(timeOut = 300_000)
+    public void decisiveIsReadOnlyInsideALoop() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        Player opponent = game.getPlayers().get(0);
+        opponent.setLife(1, null);
+        addCards("Grizzly Bears", 5, ai);
+        addCard("Flourishing Defenses", ai);
+        Card bear = addCard("Grizzly Bears", opponent);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        game.getAction().checkStateEffects(true);
+        assertTrue(LoopTracker.Snapshot.of(ai).isDecisive());
+
+        putACounterOn(game, ai, bear);
+        int steps = 0;
+        while (chainGoesOn(game) && steps++ < MAX_STEPS) {
+            game.getPhaseHandler().mainLoopStep();
+        }
+        int tokens = 0;
+        for (Card c : ai.getCreaturesInPlay()) {
+            if (c.isToken()) {
+                tokens++;
+            }
+        }
+        assertEquals("a one-off Elf is still taken", 1, tokens);
     }
 
     /**
@@ -163,23 +237,24 @@ public class OptionalTriggerLoopTest extends AITest {
     /**
      * The loop can start above an earlier Flourishing trigger that then waits below it for as long as the loop goes
      * on (here the one for a counter the AI's Grizzly Bears survived). Every round's Flourishing trigger still goes on
-     * the stack after something resolved, so each is a repeat and the AI stops the loop as it does with nothing
-     * waiting. Counting only a trigger with no instance already on the stack never stopped it: each round saw the
-     * waiting one, and the stack, three deep, never reaches the item limit that would draw the game
-     * (MagicStack.MAX_STACK_SIZE).
+     * the stack after something resolved, so each is a round and the AI judges the loop as it does with nothing
+     * waiting: idle, and given up after LoopTracker.IDLE_ROUNDS rounds. The waiting trigger is the spent loop's too
+     * and is declined at the end, or its Elf would still be there. Counting only a trigger with no instance already
+     * on the stack never stopped it: each round saw the waiting one, and the stack, three deep, never reaches the item
+     * limit that would draw the game (MagicStack.MAX_STACK_SIZE).
      */
     @Test(timeOut = 300_000)
     public void aFlourishingTriggerWaitingBelowTheLoopDoesNotHideItsRepeats() {
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
-        int flourishing = triggerId(startTheLoop(game, ai, true)[1]);
+        int flourishing = triggerId(startTheLoop(game, ai, true, 0)[1]);
         MagicStack stack = game.getStack();
         SpellAbilityStackInstance waiting = stack.peek();
 
         Set<Integer> elves = new HashSet<>();
         int deepest = 0;
-        boolean pastTheLimit = false;
-        boolean stillWaitingAtTheLimit = false;
+        boolean idleRoundsReached = false;
+        boolean stillWaitingThen = false;
         int steps = 0;
         do {
             for (Card c : ai.getCreaturesInPlay()) {
@@ -188,10 +263,10 @@ public class OptionalTriggerLoopTest extends AITest {
                 }
             }
             deepest = Math.max(deepest, stack.size());
-            if (!pastTheLimit && stack.getTriggerRepeats(flourishing) > MagicStack.MAX_TRIGGER_REPEATS) {
-                pastTheLimit = true;
+            if (!idleRoundsReached && stack.getTriggerRepeats(flourishing) >= 1 + LoopTracker.IDLE_ROUNDS) {
+                idleRoundsReached = true;
                 for (SpellAbilityStackInstance si : stack) {
-                    stillWaitingAtTheLimit |= si == waiting;
+                    stillWaitingThen |= si == waiting;
                 }
             }
             if (!chainGoesOn(game) || steps == MAX_STEPS) {
@@ -204,49 +279,47 @@ public class OptionalTriggerLoopTest extends AITest {
         assertFalse("the loop never ended: " + elves.size() + " Elves in " + steps + " steps, Flourishing counted "
                 + stack.getTriggerRepeats(flourishing) + " times", chainGoesOn(game));
         assertFalse("an optional loop is no draw", game.isGameOver());
-        assertTrue("the Bears' Flourishing trigger still waited when the count passed the limit",
-                stillWaitingAtTheLimit);
+        assertTrue("the Bears' Flourishing trigger still waited when the loop's rounds turned idle", stillWaitingThen);
         assertEquals("the stack holds the waiting trigger and one round, no more", 3, deepest);
         assertTrue("Blowfly killed every creature", ai.getCreaturesInPlay().isEmpty());
-        // The two Elves we started with, then one for each Flourishing trigger that resolved before the count passed
-        // 50: the first Elf's, which went on with nothing resolved since the waiting one and so shares its count of 1,
-        // and those for Blowfly's first 49 counters (2 to 50). The one for its 50th is declined, and so is the waiting
-        // one at the end, or its Elf would still be there.
-        assertEquals(MagicStack.MAX_TRIGGER_REPEATS + 2, elves.size());
+        // The two Elves we started with, then one for the loop's first round (which went on with nothing resolved
+        // since the waiting one and so shares its count) and one for each idle round the AI allows. The waiting one is
+        // declined at the end, as the spent loop's.
+        assertEquals(2 + LoopTracker.IDLE_ROUNDS, elves.size());
     }
 
     /**
-     * The stop is for an optional trigger only: a mandatory one is never declined, however often it has repeated.
-     * Blowfly's targeted trigger is counted with Flourishing's, past the limit, and the AI still takes it, where the
-     * same trigger made optional is declined at that count.
+     * The stop is for an optional trigger only: a mandatory one is never declined, however the loop stands. With the
+     * loop's rounds idle and its next trigger on the stack, Flourishing's trigger made optional is declined, and the
+     * same trigger mandatory is confirmed.
      */
     @Test(timeOut = 300_000)
-    public void aMandatoryTriggerPastTheLimitIsNeverDeclined() {
+    public void aMandatoryTriggerIsNeverDeclinedWhereTheOptionalOneIs() {
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
-        Card blowfly = startTheLoop(game, ai)[0];
-        Trigger trigger = blowfly.getTriggers().iterator().next();
+        Card flourishing = startTheLoop(game, ai)[1];
+        Trigger trigger = flourishing.getTriggers().iterator().next();
         MagicStack stack = game.getStack();
         int steps = 0;
-        while (chainGoesOn(game) && stack.getTriggerRepeats(trigger.getId()) <= MagicStack.MAX_TRIGGER_REPEATS
+        while (chainGoesOn(game) && stack.getTriggerRepeats(trigger.getLoopKey()) < 1 + LoopTracker.IDLE_ROUNDS
                 && steps++ < MAX_STEPS) {
             game.getPhaseHandler().mainLoopStep();
         }
-        assertEquals(MagicStack.MAX_TRIGGER_REPEATS + 1, stack.getTriggerRepeats(trigger.getId()));
+        assertEquals(1 + LoopTracker.IDLE_ROUNDS, stack.getTriggerRepeats(trigger.getLoopKey()));
 
-        WrappedAbility mandatory = wrap(trigger, blowfly, ai);
+        WrappedAbility mandatory = wrap(trigger, flourishing, ai);
         assertTrue(mandatory.isMandatory());
         assertTrue("a mandatory trigger is never declined", ai.getController().confirmTrigger(mandatory));
 
-        WrappedAbility optional = wrap(trigger, blowfly, ai);
+        WrappedAbility optional = wrap(trigger, flourishing, ai);
         optional.setOptionalTrigger(true);
         assertFalse(optional.isMandatory());
-        assertFalse("the same trigger, optional, is declined at this count",
+        assertFalse("the same trigger, optional, is declined: its loop is spent",
                 ai.getController().confirmTrigger(optional));
     }
 
     /** The trigger's ability as TriggerHandler wraps it when it goes off, with the AI as the decider. */
-    private static WrappedAbility wrap(Trigger trigger, Card host, Player ai) {
+    static WrappedAbility wrap(Trigger trigger, Card host, Player ai) {
         return new WrappedAbility(trigger, trigger.ensureAbility().copy(host, ai, false, true), ai);
     }
 
@@ -298,14 +371,17 @@ public class OptionalTriggerLoopTest extends AITest {
         assertEquals("counted again after a reset", 1, stack.getTriggerRepeats(flourishing));
     }
 
-    /** The count the AI reads: every trigger, optional and targeted alike, on the draw detector's own resets. */
+    /**
+     * The count the AI reads: every trigger, optional and targeted alike, on the draw detector's own resets. Against
+     * a row of opposing 1/1 Elves the loop pays, so the AI keeps it going long enough to read the counts.
+     */
     @Test(timeOut = 300_000)
     public void theStackCountsTheLoopsOptionalAndTargetedTriggersUntilAReset() {
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
         Player opponent = game.getPlayers().get(0);
         Card forest = addCard("Forest", opponent);
-        Card[] enchantments = startTheLoop(game, ai);
+        Card[] enchantments = startTheLoop(game, ai, false, 20);
         int blowfly = triggerId(enchantments[0]);
         int flourishing = triggerId(enchantments[1]);
         MagicStack stack = game.getStack();
@@ -361,8 +437,10 @@ public class OptionalTriggerLoopTest extends AITest {
             most = Math.max(most, stack.getTriggerRepeats(flourishing));
         }
         assertFalse(chainGoesOn(game));
-        // Flourishing triggers on every counter: the first Elf's, then each of Blowfly's 51 (one per Elf but the last).
-        assertEquals(MagicStack.MAX_TRIGGER_REPEATS + 2, most);
+        // Flourishing triggers on every counter: the first Elf's, then each of Blowfly's, one per Elf but the last,
+        // the loop's rounds being the first, the idle ones the AI allows, the declined one, and the one for the
+        // counter that kills the last Elf, declined too.
+        assertEquals(2 + LoopTracker.IDLE_ROUNDS, most);
 
         game.getPhaseHandler().mainLoopStep();
         assertEquals(0, stack.getTriggerRepeats(flourishing));
@@ -375,12 +453,16 @@ public class OptionalTriggerLoopTest extends AITest {
      * itself in turn and copies itself again. Every round's trigger comes from a new copy, with a trigger id of its
      * own, so the count by id never passed 1 and the AI never stopped: precon:Miracle Worker's turn never ended
      * (stored games 1929599 and 1934332, 20-minute Timeouts on turns 16 and 17). The copies share the first Ondu's
-     * loop key, so the AI declines the 51st copy, as it declines Flourishing's 51st Elf.
+     * loop key, so the AI reads the chain as one loop; each copy is a 3/3 that attacks next turn, win progress, and
+     * the AI keeps copying until the board is ten times the opponent's life (Evan's rule for an unbounded loop), 67
+     * Ondus against 20 life, where the old count stopped at 51.
      */
     @Test(timeOut = 300_000)
-    public void onduSpiritdancerCopyingItselfUnderSecretArcadeStopsOnceItHasRepeatedFiftyTimes() {
+    public void onduSpiritdancerCopyingItselfUnderSecretArcadeStopsAtTenTimesLethal() {
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
+        Player opponent = game.getPlayers().get(0);
+        opponent.setLife(20, null);
         Card arcade = addCard("Secret Arcade // Dusty Parlor", ai);
         arcade.unlockRoom(ai, CardStateName.LeftSplit);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
@@ -409,8 +491,9 @@ public class OptionalTriggerLoopTest extends AITest {
 
         assertFalse("the loop never ended: " + ondus.size() + " Ondus in " + steps + " steps", chainGoesOn(game));
         assertFalse("an optional loop is no draw", game.isGameOver());
-        // The Ondu we started with, then one copy for each of the first 50 triggers: the 51st is declined.
-        assertEquals(MagicStack.MAX_TRIGGER_REPEATS + 1, ondus.size());
+        // 3 power a copy against 20 life: the copy that first reaches 200 power is the last the AI makes.
+        assertEquals((LoopTracker.LETHAL_MULTIPLE * 20 + 2) / 3, ondus.size());
+        assertTrue("past the old count", ondus.size() > MagicStack.MAX_TRIGGER_REPEATS + 1);
         assertEquals("each copy's trigger has an id of its own", ondus.size(), triggerIds.size());
     }
 

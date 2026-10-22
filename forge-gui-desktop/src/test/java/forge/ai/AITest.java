@@ -188,6 +188,28 @@ public class AITest {
         return c;
     }
 
+    /**
+     * Puts {@code n} copies of a Merfolk Looter's activated ability (a non-mana ability, so each is a stack item) on
+     * the stack directly, no cost paid and nothing resolved: how a test fills the stack without a game loop.
+     */
+    protected void pushAbilities(Game game, Player p, int n) {
+        Card looter = findCardWithName(game, "Merfolk Looter");
+        if (looter == null || !looter.getController().equals(p)) {
+            looter = addCard("Merfolk Looter", p);
+        }
+        SpellAbility ability = null;
+        for (SpellAbility sa : looter.getSpellAbilities()) {
+            if (sa.isAbility() && !sa.isManaAbility()) {
+                ability = sa;
+                break;
+            }
+        }
+        ability.setActivatingPlayer(p);
+        for (int i = 0; i < n; i++) {
+            game.getStack().add(ability);
+        }
+    }
+
     protected void fillLibrary(Player player, int count) {
         for (int i = 0; i < count; i++) {
             addCardToZone("Runeclaw Bear", player, ZoneType.Library);
