@@ -16,12 +16,16 @@ import forge.ai.LoopTracker.Progress;
 import forge.ai.LoopTracker.Snapshot;
 import forge.card.CardStateName;
 import forge.game.Game;
+import forge.game.GameEndReason;
+import forge.game.ability.AbilityFactory;
 import forge.game.ability.AbilityKey;
 import forge.game.ability.effects.CopyPermanentEffect;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
+import forge.game.card.CardLists;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.spellability.SpellAbility;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.WrappedAbility;
 import forge.game.zone.MagicStack;
@@ -344,5 +348,120 @@ public class LoopProgressTest extends AITest {
         WrappedAbility optional = OptionalTriggerLoopTest.wrap(trigger, blowfly, ai);
         optional.setOptionalTrigger(true);
         assertFalse("an optional trigger above the headroom is declined", ai.getController().confirmTrigger(optional));
+    }
+
+    private static int tokensNamed(Player p, String name) {
+        return CardLists.filter(p.getCreaturesInPlay(), c -> c.isToken() && c.getName().equals(name)).size();
+    }
+
+    /** The AI's own Venser, Fervent Forger entering from hand: its trigger chooses a mode and a target as the engine does. */
+    private Card enterOurVenser() {
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        settle();
+        return game.getAction().moveToPlay(addCardToZone("Venser, Fervent Forger", ai, ZoneType.Hand), null,
+                AbilityKey.newMap());
+    }
+
+    /** Plays the chain out, stepping first: right after moveToPlay the trigger waits in the trigger handler, not yet on the stack. */
+    private int playOut(int maxSteps) {
+        int steps = 0;
+        do {
+            game.getPhaseHandler().mainLoopStep();
+        } while (OptionalTriggerLoopTest.chainGoesOn(game) && ++steps < maxSteps);
+        return steps;
+    }
+
+    /**
+     * Cursed Mirror entering as a copy of the opponent's Venser, Fervent Forger copied that Venser twice, the legend
+     * rule kept one of the three, each token's trigger did the same, and the game ended at the stack-size draw (16 of
+     * the active engine's 65 stored Draws). A legendary candidate whose name the AI already controls a legendary of is
+     * dropped: the trigger copies the Grizzly Bears, and no loop starts.
+     */
+    @Test(timeOut = 300_000)
+    public void vensersTriggerNeverCopiesTheLegendTheAiAlreadyControls() {
+        start();
+        addCard("Venser, Fervent Forger", opponent);
+        addCard("Grizzly Bears", opponent);
+        Card venser = enterOurVenser();
+        int key = venser.getTriggers().iterator().next().getLoopKey();
+
+        int most = 0;
+        int steps = 0;
+        do {
+            game.getPhaseHandler().mainLoopStep();
+            most = Math.max(most, game.getStack().getTriggerRepeats(key));
+        } while (OptionalTriggerLoopTest.chainGoesOn(game) && ++steps < 2000);
+        assertFalse(OptionalTriggerLoopTest.chainGoesOn(game));
+        assertFalse(game.isGameOver());
+        assertEquals("one round: the trigger copied the Bears, not Venser", 1, most);
+        assertEquals("two hasty Bears", 2, tokensNamed(ai, "Grizzly Bears"));
+        assertEquals("no Venser token was ever kept", 0, tokensNamed(ai, "Venser, Fervent Forger"));
+    }
+
+    /**
+     * A mandatory copy loop that pays: the opponent's Venser is a nonlegendary token (a copy made with NonLegendary$
+     * True, as the legend rule read-ahead reads only legendary candidates), so every copy of it stays, attacks for 5
+     * and triggers again. The AI rides it to ten times the opponent's life, then its target choice takes the Bears
+     * and the loop drains, instead of running to the stack-size draw.
+     */
+    @Test(timeOut = 300_000)
+    public void aPayingMandatoryCopyLoopIsBrokenOnceTheBoardIsDecisive() {
+        start();
+        Card oppVenser = addCard("Venser, Fervent Forger", opponent);
+        SpellAbility maker = AbilityFactory.getAbility("DB$ CopyPermanent | Defined$ Self | NonLegendary$ True", oppVenser);
+        Card token = CopyPermanentEffect.getProtoType(maker, oppVenser, opponent);
+        token.setGameTimestamp(game.getNextTimestamp());
+        opponent.getZone(ZoneType.Battlefield).add(token);
+        game.getAction().moveToGraveyard(oppVenser, null);
+        addCard("Grizzly Bears", opponent);
+        opponent.setLife(4, null);
+        settle();
+        assertFalse("the opponent's Venser is a nonlegendary token", token.getType().isLegendary());
+        assertEquals(2, opponent.getCreaturesInPlay().size());
+
+        enterOurVenser();
+        // a bounded number of steps, not a timeout: a loop that never breaks grows the board by two creatures a
+        // resolution and slows every step, and a test interrupted mid-game leaves the shared engine state behind
+        playOut(2_000);
+
+        assertFalse("the loop never broke", OptionalTriggerLoopTest.chainGoesOn(game));
+        assertFalse("drawn at the stack limit", game.isGameOver());
+        assertTrue("ten times 4 life: " + Snapshot.of(ai).ownPower(), Snapshot.of(ai).ownPower() >= LoopTracker.LETHAL_MULTIPLE * 4);
+        assertTrue("the spent loop took the Bears", tokensNamed(ai, "Grizzly Bears") >= 2);
+    }
+
+    /** With no other legal target the rules drop nothing, the trigger takes the one it has, and the game's own draw rule is the last word. */
+    @Test(timeOut = 300_000)
+    public void withNoOtherTargetTheFullListIsUsed() {
+        start();
+        addCard("Venser, Fervent Forger", opponent);
+        enterOurVenser();
+        playOut(20_000);
+
+        assertTrue("a loop with no other choice is the engine's draw", game.isGameOver());
+        assertEquals(GameEndReason.Draw, game.getOutcome().getWinCondition());
+    }
+
+    /**
+     * The two rules read a trigger's ability only. Rite of Replication cast from hand goes through the same target
+     * loop (CopyPermanentAi.checkApiLogic calls it with mandatory false), and with the opponent's Venser the best
+     * creature it is still the pick, our own Venser notwithstanding.
+     */
+    @Test(timeOut = 300_000)
+    public void aCastCopySpellKeepsTodaysPick() {
+        start();
+        addCard("Venser, Fervent Forger", opponent);
+        addCard("Grizzly Bears", opponent);
+        addCard("Venser, Fervent Forger", ai);
+        addCards("Island", 9, ai);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        settle();
+        Card rite = addCardToZone("Rite of Replication", ai, ZoneType.Hand);
+        SpellAbility cast = rite.getFirstSpellAbility();
+        cast.setActivatingPlayer(ai);
+        assertFalse(cast.isTrigger());
+
+        assertTrue("the AI would cast it", SpellApiToAi.Converter.get(cast).doTrigger(ai, cast, false));
+        assertEquals("Venser, Fervent Forger", cast.getTargets().getTargetCards().get(0).getName());
     }
 }

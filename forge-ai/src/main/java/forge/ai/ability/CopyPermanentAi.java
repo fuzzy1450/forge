@@ -188,6 +188,30 @@ public class CopyPermanentAi extends SpellAbilityAi {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
 
+            // MTG_DeckMaker's loop-aware AI (its spec 2026-10-21-loop-aware-ai-design, 4.4), for a trigger's ability only; a
+            // cast copy spell or activated ability (Rite of Replication, Heat Shimmer) keeps the pick it took above.
+            // (a) The legend rule, read ahead: a legendary candidate whose name we already control a legendary of is
+            // dropped, since one of the copies dies to the legend rule at the next state-based check. Cursed Mirror as
+            // the opponent's Venser, Fervent Forger copied that Venser twice, kept one, and each token's trigger did it
+            // again until the stack-size draw (16 of the active engine's 65 stored Draws). (b) Once the loop this
+            // trigger feeds is spent (LoopTracker: two idle rounds, or a winning one at ten times lethal or past its
+            // budget), the names its rounds kept choosing are dropped for as long as the loop key lasts: a Venser round
+            // puts two triggers on the stack, so the drop must outlive the round that first judged the loop spent.
+            // Each rule drops only with another candidate left: with nothing else legal the trigger takes what it has,
+            // and the game's own draw rule stays the last word.
+            LoopTracker.Loop loop = null;
+            if (sa.isTrigger()) {
+                list = withoutLegendsWeControl(list, aiPlayer, canCopyLegendary);
+                if (aiPlayer.getController() instanceof PlayerControllerAi) {
+                    final int loopKey = sa.getSourceTriggerLoopKey();
+                    loop = ((PlayerControllerAi) aiPlayer.getController()).getAi().getLoopTracker().observe(loopKey,
+                            game.getStack().getTriggerRepeats(loopKey), LoopTracker.Snapshot.of(aiPlayer));
+                    if (loop != null) {
+                        list = loop.withoutAvoided(list);
+                    }
+                }
+            }
+
             // Saheeli Rai + Felidar Guardian combo support
             if ("Saheeli Rai".equals(sourceName)) {
                 CardCollection felidarGuardian = CardLists.filter(list, CardPredicates.nameEquals("Felidar Guardian"));
@@ -238,6 +262,11 @@ public class CopyPermanentAi extends SpellAbilityAi {
                 }
                 list.remove(choice);
                 sa.getTargets().add(choice);
+            }
+            if (loop != null) {
+                for (final Card chosen : sa.getTargets().getTargetCards()) {
+                    loop.remember(chosen.getName());
+                }
             }
         } else if (sa.hasParam("Choices")) {
             // only check for options, does not select there
@@ -303,6 +332,28 @@ public class CopyPermanentAi extends SpellAbilityAi {
         final String filter = canCopyLegendary ? "Permanent" : "Permanent.YouDontCtrl,Permanent.nonLegendary";
         // TODO add filter to not select Legendary from Other Player when ai already have a Legendary with that name
         return CardLists.getValidCards(options, filter, ctrl, host, sa);
+    }
+
+    /**
+     * The legend rule, read ahead (the loop-aware AI's spec, 4.4 (a)): unless the effect says NonLegendary, a legendary
+     * candidate whose name {@code ai} already controls a legendary permanent of is dropped; the list itself when nothing
+     * else would be left.
+     */
+    private static CardCollection withoutLegendsWeControl(final CardCollection list, final Player ai, final boolean canCopyLegendary) {
+        if (canCopyLegendary) {
+            return list;
+        }
+        final CardCollection kept = CardLists.filter(list, c -> !c.getType().isLegendary() || !controlsLegendNamed(ai, c.getName()));
+        return kept.isEmpty() ? list : kept;
+    }
+
+    private static boolean controlsLegendNamed(final Player ai, final String name) {
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            if (c.getType().isLegendary() && c.getName().equals(name)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
