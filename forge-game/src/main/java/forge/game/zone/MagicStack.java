@@ -101,6 +101,10 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
     // since is one more of the same crowd, not a repeat
     private final Map<Integer, Integer> anyTriggerCountedAt = new HashMap<>();
     private int resolutions = 0;
+    // the generation of the two counts above: one more at every reset, so a reader that observes a key only at its own
+    // decisions (forge-ai's LoopTracker) can tell a later chain from the one it last saw, whatever the counts say: a
+    // player's action, a loss of life or an empty stack in between may have come and gone unseen
+    private int triggerRepeatsEpoch = 0;
 
     private final Game game;
 
@@ -130,6 +134,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
         triggerRepeats.clear();
         anyTriggerRepeats.clear();
         anyTriggerCountedAt.clear();
+        triggerRepeatsEpoch++;
         frozenStack.clear();
         clearUndoStack();
         clear();
@@ -521,6 +526,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
             triggerRepeats.clear();
             anyTriggerRepeats.clear();
             anyTriggerCountedAt.clear();
+            triggerRepeatsEpoch++;
         } else if (!Integer.valueOf(resolutions).equals(anyTriggerCountedAt.put(sp.getSourceTriggerLoopKey(), resolutions))) {
             // a crowd of one trigger (or of copies of it), put on the stack with nothing resolving in between, is one repeat
             anyTriggerRepeats.merge(sp.getSourceTriggerLoopKey(), 1, Integer::sum);
@@ -541,6 +547,16 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
         triggerRepeats.clear();
         anyTriggerRepeats.clear();
         anyTriggerCountedAt.clear();
+        triggerRepeatsEpoch++;
+    }
+
+    /**
+     * The generation of the counts {@link #getTriggerRepeats(int)} reads: one more at every reset (a player did something, a
+     * player who can lose lost life, the stack emptied, the stack was reset). Two readings of one key in different
+     * generations are two chains, however their counts compare.
+     */
+    public final int getTriggerRepeatsEpoch() {
+        return triggerRepeatsEpoch;
     }
 
     /**

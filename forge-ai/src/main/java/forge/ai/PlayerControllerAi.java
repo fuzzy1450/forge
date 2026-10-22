@@ -442,7 +442,8 @@ public class PlayerControllerAi extends PlayerController {
         }
         final int loopKey = wrapper.getSourceTriggerLoopKey();
         final LoopTracker.Snapshot now = LoopTracker.Snapshot.of(player);
-        final LoopTracker.Loop loop = brains.getLoopTracker().observe(loopKey, stack.getTriggerRepeats(loopKey), now);
+        final LoopTracker.Loop loop = brains.getLoopTracker().observe(loopKey, stack.getTriggerRepeats(loopKey),
+                stack.getTriggerRepeatsEpoch(), now);
         if (loop != null && loop.declinesOptional(now)) {
             return false;
         }

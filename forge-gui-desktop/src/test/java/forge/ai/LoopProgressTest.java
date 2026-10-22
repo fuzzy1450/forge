@@ -146,26 +146,26 @@ public class LoopProgressTest extends AITest {
         settle();
         LoopTracker t = new LoopTracker();
         Snapshot s = Snapshot.of(ai);
-        assertNull("not a trigger's ability: never tracked", t.observe(-1, 3, s));
+        assertNull("not a trigger's ability: never tracked", t.observe(-1, 3, 0, s));
 
-        Loop loop = t.observe(7, 1, s);
+        Loop loop = t.observe(7, 1, 0, s);
         assertEquals(0, loop.comparedRounds());
         assertNull(loop.last());
-        assertSame("the same count is the same round", loop, t.observe(7, 1, s));
+        assertSame("the same count is the same round", loop, t.observe(7, 1, 0, s));
         assertEquals(0, t.loop(7).comparedRounds());
 
-        t.observe(7, 2, s);
+        t.observe(7, 2, 0, s);
         assertEquals(1, t.loop(7).comparedRounds());
         assertEquals(1, t.loop(7).idleRounds());
         assertEquals(Progress.IDLE, t.loop(7).last());
         assertFalse("one idle round is not spent", t.loop(7).isSpent(s));
 
-        t.observe(7, 3, s);
+        t.observe(7, 3, 0, s);
         assertEquals(2, t.loop(7).idleRounds());
         assertTrue("two idle rounds: spent", t.loop(7).isSpent(s));
         assertTrue(t.loop(7).declinesOptional(s));
 
-        Loop fresh = t.observe(7, 1, s);
+        Loop fresh = t.observe(7, 1, 0, s);
         assertNotSame("the count fell: a new chain", loop, fresh);
         assertEquals(0, fresh.comparedRounds());
         assertFalse(fresh.isSpent(s));
@@ -178,23 +178,23 @@ public class LoopProgressTest extends AITest {
         settle();
         LoopTracker t = new LoopTracker();
         Snapshot s = Snapshot.of(ai);
-        t.observe(7, 0, s).remember("Venser, Fervent Forger");
-        t.observe(7, 1, s).remember("Venser, Fervent Forger");
+        t.observe(7, 0, 0, s).remember("Venser, Fervent Forger");
+        t.observe(7, 1, 0, s).remember("Venser, Fervent Forger");
         assertTrue(t.loop(7).avoided().isEmpty());
-        t.observe(7, 2, s);
+        t.observe(7, 2, 0, s);
         assertEquals(Set.of("Venser, Fervent Forger"), t.loop(7).avoided());
 
         t.loop(7).remember("Grizzly Bears");
         addCard("Grizzly Bears", ai);
         settle();
         Snapshot paid = Snapshot.of(ai);
-        Loop loop = t.observe(7, 3, paid);
+        Loop loop = t.observe(7, 3, 0, paid);
         assertEquals(Progress.WIN, loop.last());
         assertEquals(0, loop.idleRounds());
         assertTrue("spent stays spent", loop.isSpent(paid));
         assertEquals("the avoided set is frozen", Set.of("Venser, Fervent Forger"), loop.avoided());
 
-        assertTrue("the reset forgets", t.observe(7, 0, paid).avoided().isEmpty());
+        assertTrue("the reset forgets", t.observe(7, 0, 0, paid).avoided().isEmpty());
     }
 
     /** Decisive is read only inside a repeating loop; a key with no comparison keeps the old count rule alone. */
@@ -206,24 +206,86 @@ public class LoopProgressTest extends AITest {
         settle();
         Snapshot s = Snapshot.of(ai);
         assertTrue(s.isDecisive());
-        assertFalse(new LoopTracker().observe(7, 1, s).declinesOptional(s));
-        assertTrue("the old count rule still applies", new LoopTracker().observe(7, 51, s).declinesOptional(s));
+        assertFalse(new LoopTracker().observe(7, 1, 0, s).declinesOptional(s));
+        assertTrue("the old count rule still applies", new LoopTracker().observe(7, 51, 0, s).declinesOptional(s));
     }
 
-    /** A one-round key seen again at count 1 on a later turn is a new chain, not a round to compare. */
+    /**
+     * The stack's reset generation tells one chain from the next, whatever the counts: a key seen again in another
+     * generation starts fresh, at the same count or a higher one, and an old spent record never declines a new chain.
+     */
     @Test(timeOut = 300_000)
-    public void theSameCountOnALaterTurnIsAFreshChain() {
+    public void aKeySeenInAnotherGenerationIsAFreshChain() {
         start();
+        opponent.setLife(1, null);
+        addCards("Grizzly Bears", 5, ai);
+        settle();
+        Snapshot s = Snapshot.of(ai);
+        assertTrue("a decisive board", s.isDecisive());
+        LoopTracker t = new LoopTracker();
+        Loop first = t.observe(7, 1, 0, s);
+        Loop again = t.observe(7, 1, 1, s);
+        assertNotSame(first, again);
+        assertEquals("nothing compared across generations", 0, again.comparedRounds());
+        // a later chain whose first confirmation lands at a higher count (two of its triggers were added before one
+        // resolved) is not compared with the one-round record either, so the decisive board declines nothing
+        Loop later = t.observe(7, 2, 2, s);
+        assertEquals(0, later.comparedRounds());
+        assertFalse(later.declinesOptional(s));
+        // nor does an idle-spent record outlive its generation
+        for (int c = 1; c <= 3; c++) {
+            t.observe(8, c, 0, s);
+        }
+        assertTrue(t.loop(8).isSpent(s));
+        Loop fresh = t.observe(8, 4, 1, s);
+        assertFalse(fresh.isSpent(s));
+        assertFalse(fresh.declinesOptional(s));
+    }
+
+    /** The stack counts its resets: a player who can lose losing life, a player doing something, a reset of the whole stack. */
+    @Test(timeOut = 300_000)
+    public void theStackCountsItsResets() {
+        start();
+        Card forest = addCard("Forest", opponent);
+        settle();
+        MagicStack stack = game.getStack();
+        int epoch = stack.getTriggerRepeatsEpoch();
+        opponent.loseLife(1, false, false, null);
+        assertEquals(epoch + 1, stack.getTriggerRepeatsEpoch());
+        SpellAbility mana = forest.getManaAbilities().getFirst();
+        mana.setActivatingPlayer(opponent);
+        stack.add(mana);
+        assertEquals(epoch + 2, stack.getTriggerRepeatsEpoch());
+        stack.reset();
+        assertEquals(epoch + 3, stack.getTriggerRepeatsEpoch());
+    }
+
+    /** Decisive cuts a loop that wins by the AI's own board; one that moves an opponent toward a loss (poison here) runs on. */
+    @Test(timeOut = 300_000)
+    public void decisiveNeverCutsALoopThatMovesAnOpponent() {
+        start();
+        opponent.setLife(1, null);
+        addCards("Grizzly Bears", 5, ai);
         settle();
         LoopTracker t = new LoopTracker();
-        Loop first = t.observe(7, 1, Snapshot.of(ai));
-        int turn = game.getPhaseHandler().getTurn();
-        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai, turn + 1);
+        t.observe(7, 1, 0, Snapshot.of(ai));
+        opponent.setPoisonCounters(opponent.getPoisonCounters() + 1, ai);
+        Snapshot poisoned = Snapshot.of(ai);
+        Loop poison = t.observe(7, 2, 0, poisoned);
+        assertEquals(Progress.WIN, poison.last());
+        assertTrue(poison.lastMovedOpponent());
+        assertTrue(poisoned.isDecisive());
+        assertFalse("a poison loop one round from the kill is not cut by the board", poison.isSpent(poisoned));
+        assertFalse(poison.declinesOptional(poisoned));
+
+        t.observe(8, 1, 0, poisoned);
         addCard("Grizzly Bears", ai);
         settle();
-        Loop again = t.observe(7, 1, Snapshot.of(ai));
-        assertNotSame(first, again);
-        assertEquals("nothing compared across turns", 0, again.comparedRounds());
+        Snapshot grown = Snapshot.of(ai);
+        Loop board = t.observe(8, 2, 0, grown);
+        assertEquals(Progress.WIN, board.last());
+        assertFalse(board.lastMovedOpponent());
+        assertTrue("a loop that only grows the board is cut once the board is decisive", board.isSpent(grown));
     }
 
     /** The rules drop, never empty: with no other candidate the full list stands. */
@@ -234,7 +296,7 @@ public class LoopProgressTest extends AITest {
         LoopTracker t = new LoopTracker();
         Snapshot s = Snapshot.of(ai);
         for (int c = 0; c <= 2; c++) {
-            t.observe(7, c, s).remember("Grizzly Bears");
+            t.observe(7, c, 0, s).remember("Grizzly Bears");
         }
         assertEquals(Set.of("Grizzly Bears"), t.loop(7).avoided());
 
@@ -387,20 +449,25 @@ public class LoopProgressTest extends AITest {
     @Test(timeOut = 300_000)
     public void vensersTriggerNeverCopiesTheLegendTheAiAlreadyControls() {
         start();
-        addCard("Venser, Fervent Forger", opponent);
+        Card oppVenser = addCard("Venser, Fervent Forger", opponent);
         addCard("Grizzly Bears", opponent);
+        // a token copy of the opponent's Venser carries the opponent's trigger's loop key, so that key is the loop's
+        int oppKey = oppVenser.getTriggers().iterator().next().getLoopKey();
         Card venser = enterOurVenser();
         int key = venser.getTriggers().iterator().next().getLoopKey();
 
         int most = 0;
+        int mostOpp = 0;
         int steps = 0;
         do {
             game.getPhaseHandler().mainLoopStep();
             most = Math.max(most, game.getStack().getTriggerRepeats(key));
+            mostOpp = Math.max(mostOpp, game.getStack().getTriggerRepeats(oppKey));
         } while (OptionalTriggerLoopTest.chainGoesOn(game) && ++steps < 2000);
         assertFalse(OptionalTriggerLoopTest.chainGoesOn(game));
         assertFalse(game.isGameOver());
         assertEquals("one round: the trigger copied the Bears, not Venser", 1, most);
+        assertEquals("no copy of the opponent's Venser ever triggered", 0, mostOpp);
         assertEquals("two hasty Bears", 2, tokensNamed(ai, "Grizzly Bears"));
         assertEquals("no Venser token was ever kept", 0, tokensNamed(ai, "Venser, Fervent Forger"));
     }
@@ -468,7 +535,10 @@ public class LoopProgressTest extends AITest {
         cast.setActivatingPlayer(ai);
         assertFalse(cast.isTrigger());
 
-        assertTrue("the AI would cast it", SpellApiToAi.Converter.get(cast).doTrigger(ai, cast, false));
+        // doTrigger(.., false) is the handler's own entry to the same target loop checkApiLogic reaches for a cast
+        // (SpellAbilityAi.doTrigger -> doTriggerNoCostWithSubs -> CopyPermanentAi.doTriggerNoCost), which is what the
+        // isTrigger() gate is read in; the AI's decision to cast (timing, mana) is not what this test is about
+        assertTrue("the handler takes the spell", SpellApiToAi.Converter.get(cast).doTrigger(ai, cast, false));
         assertEquals("Venser, Fervent Forger", cast.getTargets().getTargetCards().get(0).getName());
     }
 }

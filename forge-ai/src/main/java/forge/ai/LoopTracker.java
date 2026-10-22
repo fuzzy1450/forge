@@ -19,11 +19,13 @@ import forge.game.zone.ZoneType;
  * <p>
  * A loop is a trigger's loop key ({@link forge.game.trigger.Trigger#getLoopKey()}); a round is one count of
  * {@link MagicStack#getTriggerRepeats(int)}, which already folds a crowd into one round and forgets the key at every
- * reset (a player did something, a loss of life by a player who can lose, an empty stack). The tracker adds nothing to
- * that counting. Per key it keeps the count it last saw, the board {@link Snapshot} it took when it first saw that
- * count, how many consecutive rounds changed nothing, and the kind of change the last compared round made. From those
- * it answers two questions: is this loop <em>spent</em> (two idle rounds, or a winning one whose board is decisive, ten
- * times the life of the opponents who can lose, or which has gone round more than {@link #MAX_PROGRESS_ROUNDS} times),
+ * reset (a player did something, a loss of life by a player who can lose, an empty stack), each reset one more of
+ * {@link MagicStack#getTriggerRepeatsEpoch()}. The tracker adds nothing to that counting. Per key it keeps the
+ * generation and the count it last saw, the board {@link Snapshot} it took when it first saw that count, how many
+ * consecutive rounds changed nothing, and the kind of change the last compared round made. From those it answers two
+ * questions: is this loop <em>spent</em> (two idle rounds, or a loop winning by the AI's own board whose board is
+ * decisive, ten times the life of the opponents who can lose, or a winning one which has gone round more than
+ * {@link #MAX_PROGRESS_ROUNDS} times),
  * which stops an optional loop in PlayerControllerAi.confirmTrigger (CR 732.2a: the controller of an optional loop
  * chooses how many times it repeats) and breaks a mandatory copy loop by its target choice in CopyPermanentAi; and, for
  * that choice, which names the spent loop's rounds kept choosing, to be avoided until the key resets.
@@ -115,27 +117,36 @@ public final class LoopTracker {
 
         /** What changed since {@code earlier}, classified as the spec's section 4.2 says. */
         public Progress progressSince(final Snapshot earlier) {
-            if (ownPower > earlier.ownPower) {
+            if (ownPower > earlier.ownPower || opponentMovedSince(earlier)) {
                 return Progress.WIN;
             }
+            if (ownPermanents > earlier.ownPermanents || ownHand > earlier.ownHand || ownLife > earlier.ownLife) {
+                return Progress.MATERIAL;
+            }
+            return Progress.IDLE;
+        }
+
+        /**
+         * Whether an opponent who could lose moved toward a loss since {@code earlier}: life down, poison up, library down,
+         * creature power down, or gone from the game. The half of win progress that decisive never cuts: a poison or mill
+         * loop one round from the kill runs on however big the AI's board is.
+         */
+        public boolean opponentMovedSince(final Snapshot earlier) {
             for (final Map.Entry<Integer, int[]> e : earlier.opponents.entrySet()) {
                 final int[] was = e.getValue();
                 final int[] now = opponents.get(e.getKey());
                 if (now == null) {
-                    return Progress.WIN; // gone from the game
+                    return true; // gone from the game
                 }
                 if (was[CAN_LOSE] == 0) {
                     continue; // a strong player knows the Angel is there
                 }
                 if (now[LIFE] < was[LIFE] || now[POISON] > was[POISON] || now[LIBRARY] < was[LIBRARY]
                         || now[POWER] < was[POWER]) {
-                    return Progress.WIN;
+                    return true;
                 }
             }
-            if (ownPermanents > earlier.ownPermanents || ownHand > earlier.ownHand || ownLife > earlier.ownLife) {
-                return Progress.MATERIAL;
-            }
-            return Progress.IDLE;
+            return false;
         }
 
         /** Ten times lethal: the AI's attack power against the summed life of the opponents who can lose (none: never). */
@@ -146,22 +157,25 @@ public final class LoopTracker {
                     sum += Math.max(0, o[LIFE]);
                 }
             }
-            return sum > 0 && ownPower >= LETHAL_MULTIPLE * sum;
+            return sum > 0 && (long) ownPower >= (long) LETHAL_MULTIPLE * sum;
         }
     }
 
     /** One loop key's record. */
     public static final class Loop {
+        private final int epoch;
         private int count;
         private Snapshot at;
         private int compared;
         private int idle;
         private Progress last;
+        private boolean lastMovedOpponent;
         private boolean spent;
         private final Set<String> chosen = new HashSet<>();
         private Set<String> avoided = Collections.emptySet();
 
-        private Loop(final int count, final Snapshot now) {
+        private Loop(final int epoch, final int count, final Snapshot now) {
+            this.epoch = epoch;
             this.count = count;
             this.at = now;
         }
@@ -171,6 +185,7 @@ public final class LoopTracker {
             compared++;
             idle = p == Progress.IDLE ? idle + 1 : 0;
             last = p;
+            lastMovedOpponent = p == Progress.WIN && now.opponentMovedSince(at);
             at = now;
             count = newCount;
         }
@@ -202,9 +217,15 @@ public final class LoopTracker {
             return last;
         }
 
+        /** Whether the last compared round's win progress moved an opponent toward a loss (and not only the AI's board). */
+        public boolean lastMovedOpponent() {
+            return lastMovedOpponent;
+        }
+
         /**
-         * Two idle rounds, or a winning loop whose board is decisive or which has gone round more than
-         * {@link #MAX_PROGRESS_ROUNDS} times; once spent, spent until the key resets.
+         * Two idle rounds; or a winning loop that has gone round more than {@link #MAX_PROGRESS_ROUNDS} times; or a loop
+         * winning by the AI's own board alone whose board is decisive (one that moved an opponent toward a loss, a poison
+         * or mill loop, is never cut by decisive). Once spent, spent until the key resets.
          */
         public boolean isSpent(final Snapshot now) {
             if (spent) {
@@ -216,7 +237,7 @@ public final class LoopTracker {
             if (idle >= IDLE_ROUNDS) {
                 return true;
             }
-            return last == Progress.WIN && (now.isDecisive() || count > MAX_PROGRESS_ROUNDS);
+            return last == Progress.WIN && (count > MAX_PROGRESS_ROUNDS || (!lastMovedOpponent && now.isDecisive()));
         }
 
         /** The optional-trigger stop: spent, or, for a loop not winning, past the old count (CR 732.2a's 50). */
@@ -248,17 +269,17 @@ public final class LoopTracker {
 
     /**
      * Folds the current round of {@code loopKey} in and returns its record (null for a key below zero: not a trigger's
-     * ability). A count below the one last seen, or the same count on another turn, is a reset: the key starts fresh.
-     * The same count on the same turn is the same round. A higher count is a new round, compared against the previous
-     * one's snapshot.
+     * ability). {@code epoch} is {@link MagicStack#getTriggerRepeatsEpoch()}: a key seen in another generation is another
+     * chain and starts fresh, whatever the counts (so does a count below the one last seen). The same count in the same
+     * generation is the same round. A higher count is a new round, compared against the previous one's snapshot.
      */
-    public Loop observe(final int loopKey, final int count, final Snapshot now) {
+    public Loop observe(final int loopKey, final int count, final int epoch, final Snapshot now) {
         if (loopKey < 0) {
             return null;
         }
         Loop loop = loops.get(loopKey);
-        if (loop == null || count < loop.count || (count == loop.count && now.turn() != loop.at.turn())) {
-            loop = new Loop(count, now);
+        if (loop == null || epoch != loop.epoch || count < loop.count) {
+            loop = new Loop(epoch, count, now);
             loops.put(loopKey, loop);
         } else if (count > loop.count) {
             loop.round(count, now);

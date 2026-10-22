@@ -205,7 +205,8 @@ public class CopyPermanentAi extends SpellAbilityAi {
                 if (aiPlayer.getController() instanceof PlayerControllerAi) {
                     final int loopKey = sa.getSourceTriggerLoopKey();
                     loop = ((PlayerControllerAi) aiPlayer.getController()).getAi().getLoopTracker().observe(loopKey,
-                            game.getStack().getTriggerRepeats(loopKey), LoopTracker.Snapshot.of(aiPlayer));
+                            game.getStack().getTriggerRepeats(loopKey), game.getStack().getTriggerRepeatsEpoch(),
+                            LoopTracker.Snapshot.of(aiPlayer));
                     if (loop != null) {
                         list = loop.withoutAvoided(list);
                     }
