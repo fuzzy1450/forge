@@ -23,9 +23,21 @@ import forge.util.Aggregates;
 import forge.util.IterableUtil;
 
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class ManaAi extends SpellAbilityAi {
+
+    /**
+     * The rituals whose doManaRitualLogic hand scan is asking canPlaySa about another spell on this thread, by name.
+     * A scan skips its own card, but some spells it asks about ask about the ritual in turn: Flare of Duplication
+     * judges a copy of the Jeska's Will on the stack, ritual mode and all, and Galvanic Iteration looks for the next
+     * spell it would copy, Rousing Refrain among them. Such a pair asked each other until the AI's thread overflowed
+     * its stack, which ended the game in an Error. So a ritual asked about while its own scan is still asking answers
+     * no: the scan's skip of its own card, at any depth.
+     */
+    private static final ThreadLocal<Set<String>> SCANNING = ThreadLocal.withInitial(HashSet::new);
 
     /*
      * (non-Javadoc)
@@ -195,6 +207,12 @@ public class ManaAi extends SpellAbilityAi {
             return false;
         }
 
+        final String ritual = ComputerUtilAbility.getAbilitySourceName(sa);
+        if (SCANNING.get().contains(ritual)) {
+            // asked about while its own hand scan is still asking (SCANNING): a second scan would ask the same spells
+            return false;
+        }
+
         String restrictValid = sa.getParamOrDefault("RestrictValid", "Card");
 
         CardCollection cardList = new CardCollection();
@@ -228,7 +246,16 @@ public class ManaAi extends SpellAbilityAi {
                 continue;
             }
             testSaNoCost.setActivatingPlayer(ai);
-            if (((PlayerControllerAi)ai.getController()).getAi().canPlaySa(testSaNoCost) == AiPlayDecision.WillPlay) {
+            final AiPlayDecision decision;
+            final boolean added = SCANNING.get().add(ritual);
+            try {
+                decision = ((PlayerControllerAi)ai.getController()).getAi().canPlaySa(testSaNoCost);
+            } finally {
+                if (added) {
+                    SCANNING.get().remove(ritual);
+                }
+            }
+            if (decision == AiPlayDecision.WillPlay) {
                 if (testSa.getHostCard().isPermanent() && !testSa.getHostCard().hasKeyword(Keyword.HASTE)
                     && !ai.getGame().getPhaseHandler().is(PhaseType.MAIN2)) {
                     // AI will waste a ritual in Main 1 unless the casted permanent is a haste creature

@@ -822,8 +822,47 @@ public class AiController {
         return true;
     }
 
+    // Casts whose payment failed this phase (ComputerUtil.handlePlayingSpellAbility rolled them back). The rollback
+    // puts the card back where it was cast from with its mana untapped, so the next choice sees the board it saw
+    // before. A failure that came from a random draw (the convoke prediction) often succeeds at the next try, so a card
+    // gets one retry; when the payability check and the payment disagree for good it would otherwise be picked again
+    // at once, again and again until PhaseHandler's 999-actions cap (a skip lasts one choice, see
+    // getSpellAbilityToPlay, and an alternative-cost copy never carries it). Two failures in a phase end its tries:
+    // every spell and ability of the card is refused for the rest of the phase, as the stock failure branch skips
+    // all of a card's spells. Nothing here is read or written while no payment has failed (the map stays empty).
+    private static final int FAILED_CAST_TRIES = 2;
+    private final java.util.Map<Card, Integer> failedCasts = new java.util.HashMap<>();
+    private int failedCastsTurn = -1;
+    private forge.game.phase.PhaseType failedCastsPhase;
+
+    public void rememberFailedCast(final Card c) {
+        final forge.game.phase.PhaseHandler ph = game.getPhaseHandler();
+        if (ph.getTurn() != failedCastsTurn || ph.getPhase() != failedCastsPhase) {
+            failedCasts.clear();
+            failedCastsTurn = ph.getTurn();
+            failedCastsPhase = ph.getPhase();
+        }
+        failedCasts.merge(c, 1, Integer::sum);
+    }
+
+    private boolean castFailedThisPhase(final Card c) {
+        if (failedCasts.isEmpty()) {
+            return false;
+        }
+        final forge.game.phase.PhaseHandler ph = game.getPhaseHandler();
+        if (ph.getTurn() != failedCastsTurn || ph.getPhase() != failedCastsPhase) {
+            failedCasts.clear();
+            return false;
+        }
+        return failedCasts.getOrDefault(c, 0) >= FAILED_CAST_TRIES;
+    }
+
     private AiPlayDecision canPlayAndPayFor(final SpellAbility sa) {
         final Card host = sa.getHostCard();
+
+        if (castFailedThisPhase(host)) {
+            return AiPlayDecision.CantPlaySa;
+        }
 
         if (sa.isSpell() && host != null && (SpecialCardAi.HierophantBioTitan.NAME.equals(host.getName())
                 || SpecialCardAi.SkeletalScrying.NAME.equals(host.getName())

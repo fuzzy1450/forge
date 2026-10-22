@@ -59,6 +59,19 @@ import java.util.stream.Collectors;
  */
 public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbilityStackInstance> {
     public static final int MAX_TRIGGER_REPEATS = 50;
+    /**
+     * A stack holding more than this many items draws the game: the last stop for a loop nothing else catches (upstream
+     * #8254 put it at 999 against the heap running out). A legal finite crowd can pass 999: 51 Ondu Spiritdancers,
+     * fresh on a new turn, all trigger on one enchantment entering under Secret Arcade, and every copy that resolves
+     * triggers the ones that have not copied yet, 1,276 triggers on the stack at most, and about 50 more for each other
+     * card in play that triggers on an enchantment entering. 1500 leaves such crowds to resolve. It stays that low
+     * because what an item costs depends on the loop: such a crowd shares one triggering card, about 10 KB an item,
+     * while Venser, Fervent Forger copying an opponent's legendary Venser, whose mandatory targeted trigger puts two
+     * more on the stack each time one resolves (the repeating-trigger draw below skips targeted triggers), makes new
+     * token copies every time, about 620 KB an item: 1.1 GB of live heap at this limit, where 4000 ran a 2.3 GB heap
+     * out.
+     */
+    public static final int MAX_STACK_SIZE = 1500;
 
     private final List<SpellAbility> simultaneousStackEntryList = Lists.newArrayList();
     private final List<SpellAbility> activePlayerSAs = Lists.newArrayList();
@@ -80,7 +93,9 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
     private Card curResolvingCard = null;
     private final Map<Integer, Integer> triggerRepeats = new HashMap<>();
     // every trigger's repeats, optional and targeted ones included, on triggerRepeats' resets: what an optional loop's
-    // controller reads to stop it (CR 732.2a), where triggerRepeats draws only a mandatory loop (CR 104.4b)
+    // controller reads to stop it (CR 732.2a), where triggerRepeats draws only a mandatory loop (CR 104.4b). Keyed by
+    // the source trigger's loop key, which every copy of a trigger shares, so a loop that copies its own trigger's host
+    // each round (Ondu Spiritdancer under Secret Arcade) counts as one trigger; triggerRepeats keeps the trigger's id.
     private final Map<Integer, Integer> anyTriggerRepeats = new HashMap<>();
     // when each of those was last counted, in finished resolutions: one put on the stack again with nothing resolved
     // since is one more of the same crowd, not a repeat
@@ -222,7 +237,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
 
         // Stop infinite loop. E.g. Scalelord Reckoner mirrormatch with only triggering targets is a draw.
         // CR 104.4b the same goes for a mandatory trigger that keeps coming back before the stack clears
-        if (game.getStack().size() > 999 || (si == null && isRepeatingTrigger(sp))) {
+        if (game.getStack().size() > MAX_STACK_SIZE || (si == null && isRepeatingTrigger(sp))) {
             for (Player p : game.getPlayers()) {
                 p.intentionalDraw();
             }
@@ -506,9 +521,9 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
             triggerRepeats.clear();
             anyTriggerRepeats.clear();
             anyTriggerCountedAt.clear();
-        } else if (!Integer.valueOf(resolutions).equals(anyTriggerCountedAt.put(sp.getSourceTrigger(), resolutions))) {
-            // a crowd of one trigger, put on the stack with nothing resolving in between, is one repeat
-            anyTriggerRepeats.merge(sp.getSourceTrigger(), 1, Integer::sum);
+        } else if (!Integer.valueOf(resolutions).equals(anyTriggerCountedAt.put(sp.getSourceTriggerLoopKey(), resolutions))) {
+            // a crowd of one trigger (or of copies of it), put on the stack with nothing resolving in between, is one repeat
+            anyTriggerRepeats.merge(sp.getSourceTriggerLoopKey(), 1, Integer::sum);
         }
         if (!sp.isMandatory() || sp.usesTargeting()) {
             return false;
@@ -529,11 +544,13 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
     }
 
     /**
-     * How many times this trigger went on the stack since the last reset, optional and targeted ones included, not
-     * counting a time it went on with nothing resolved since it was last counted (a crowd is one repeat).
+     * How many times this trigger, or a copy of it, went on the stack since the last reset, optional and targeted ones
+     * included, not counting a time it went on with nothing resolved since it was last counted (a crowd is one
+     * repeat). Takes the trigger's {@link forge.game.trigger.Trigger#getLoopKey() loop key}, which is its id unless it
+     * was copied from another trigger.
      */
-    public final int getTriggerRepeats(final int sourceTriggerId) {
-        return anyTriggerRepeats.getOrDefault(sourceTriggerId, 0);
+    public final int getTriggerRepeats(final int loopKey) {
+        return anyTriggerRepeats.getOrDefault(loopKey, 0);
     }
 
     private void recordUndoableActions(SpellAbility sa) {

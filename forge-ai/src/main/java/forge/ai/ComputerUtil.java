@@ -85,6 +85,11 @@ public class ComputerUtil {
         final Game game = source.getGame();
         final Card host = sa.getHostCard();
         final Zone hz = host.isCopiedSpell() ? null : host.getZone();
+        final boolean castFaceDown = sa.isCastFaceDown();
+        // what a failed payment needs to undo the cast, kept as PlaySpellAbility.playAbility keeps it for a human
+        final boolean refreeze = game.getStack().isFrozen();
+        Zone fromZone = null;
+        int zonePosition = 0;
         source.setSplitStateToPlayAbility(sa);
 
         if (sa.isSpell() && !source.isCopiedSpell()) {
@@ -100,6 +105,10 @@ public class ComputerUtil {
                 }
             }
 
+            fromZone = game.getZoneOf(source);
+            if (fromZone != null) {
+                zonePosition = fromZone.getCards().indexOf(source);
+            }
             sa.setHostCard(game.getAction().moveToStack(source, sa));
         }
 
@@ -125,6 +134,12 @@ public class ComputerUtil {
 
         game.getStack().freezeStack(sa);
 
+        // Empty both paying lists first, as PlaySpellAbility.playAbility does before a human pays. An activated
+        // ability is one SpellAbility for its card's life (MagicStack.add puts a copy on the stack), so the lists still
+        // hold its last activation's mana, and the rollback of a failed payment below would refund that: sources
+        // tapped for the earlier activation untapped for free, mana it spent back in the pool.
+        sa.clearManaPaid();
+        sa.getPayingManaAbilities().clear();
         final CostPayment pay = new CostPayment(cost, sa);
         if (pay.payComputerCosts(new AiCostDecision(ai, sa, false))) {
             game.getStack().addAndUnfreeze(sa);
@@ -136,6 +151,37 @@ public class ComputerUtil {
         // FIXME: Should not arrive here, though the card seems to be stuck on stack zone and invalidated and nowhere to be found, try to put back to original zone and maybe try to cast again if possible at later time?
         System.out.println("[" + sa.getActivatingPlayer() + "] AI failed to play " + sa.getHostCard() + " [" + sa.getHostCard().getZone() + "]");
         sa.setSkip(true);
+        if (!refreeze) {
+            // Undo the cast as a human's cancelled cast is undone (PlaySpellAbility.playAbility): the card goes back
+            // where it was cast from, with its convoke creatures untapped, the mana refunded and the waiting triggers
+            // dropped, and the stack frozen above is unfrozen. Left frozen, every later spell went onto the frozen
+            // stack until the next step began, and a step that gives no priority (first-strike damage with no first
+            // striker) then held those spells' cast triggers back for ever: walk 14's seed-offset-11 timeouts, a
+            // failed Angel of Salvation in Divine Convocation. Its spells sit out the AI's next choice, as the stock
+            // branch below meant them to.
+            GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, pay, source);
+            game.getStack().unfreezeStack();
+            if (fromZone != null) {
+                for (SpellAbility csa : sa.getHostCard().getSpellAbilities()) {
+                    csa.setSkip(true);
+                }
+                if (castFaceDown) {
+                    // a morph or disguise cast turned the card face down before the move, and the rollback turns
+                    // its state back but not the flag: PlaySpellAbility.playSpellAbility turns it face up after its
+                    // rollback, so it does here too, or the card sits back in its zone flagged face down
+                    final Card back = game.getCardState(source);
+                    back.setFaceDown(false);
+                    back.updateStateForView();
+                }
+            }
+            // A skip lasts one choice (AiController.getSpellAbilityToPlay un-skips what it skipped last time), so two
+            // failing casts alternate, and a failing alternative-cost copy never carries the flag at all: tell the AI
+            // to stop offering this card for the rest of the phase once it has failed twice in it.
+            if (ai.getController() instanceof PlayerControllerAi pca) {
+                pca.getAi().rememberFailedCast(source);
+            }
+            return false;
+        }
         if (host != null && hz != null && hz.is(ZoneType.Stack)) {
             Card c = game.getAction().moveTo(hz.getZoneType(), host, null, null);
             for (SpellAbility csa : c.getSpellAbilities()) {
@@ -239,7 +285,8 @@ public class ComputerUtil {
             zonePosition = fromZone.getCards().indexOf(source);
         }
 
-        if (sa.isSpell() && !source.isCopiedSpell()) {
+        final boolean moved = sa.isSpell() && !source.isCopiedSpell();
+        if (moved) {
             sa.setHostCard(game.getAction().moveToStack(source, sa));
             sa = GameActionUtil.addExtraKeywordCost(sa);
         }
@@ -256,6 +303,15 @@ public class ComputerUtil {
         if (pay.payComputerCosts(new AiCostDecision(ai, sa, false))) {
             game.getStack().add(sa);
             return true;
+        }
+        if (moved) {
+            // A spell a play effect casts (playSaFromPlayEffect) whose payment fails goes back where it was cast
+            // from, its convoke creatures untapped and its mana refunded, instead of staying in the Stack zone with
+            // no stack entry, lost to the game. The resolving stack stays frozen, with the spells and the triggers
+            // the resolution has put on it so far: rollbackCast is rollbackAbility without its clearFrozen and
+            // clearWaitingTriggers, which would drop them in the middle of the resolution.
+            System.out.println("[" + sa.getActivatingPlayer() + "] AI failed to play " + sa.getHostCard() + " [" + sa.getHostCard().getZone() + "]");
+            GameActionUtil.rollbackCast(sa, fromZone, zonePosition, pay, source);
         }
         return false;
     }

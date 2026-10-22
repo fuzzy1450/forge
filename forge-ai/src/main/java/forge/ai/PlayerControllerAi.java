@@ -430,7 +430,9 @@ public class PlayerControllerAi extends PlayerController {
         // CR 732.2a: the controller of an optional loop names a number of iterations and then stops. The draw
         // detector counts only mandatory, untargeted triggers, so an optional one that keeps coming back (e.g.
         // Flourishing Defenses fed by Blowfly Infestation) is stopped here once it repeats past the same limit.
-        if (getGame().getStack().getTriggerRepeats(wrapper.getSourceTrigger()) > MagicStack.MAX_TRIGGER_REPEATS) {
+        // Counted by loop key, so one whose every round comes from a new copy of its own host (Ondu Spiritdancer
+        // under Secret Arcade copying itself) is stopped too.
+        if (getGame().getStack().getTriggerRepeats(wrapper.getSourceTriggerLoopKey()) > MagicStack.MAX_TRIGGER_REPEATS) {
             return false;
         }
         // Store/replace target choices more properly to get this SA cleared.

@@ -355,6 +355,11 @@ public class WrappedAbility extends Ability {
     }
 
     @Override
+    public int getSourceTriggerLoopKey() {
+        return sa.getSourceTriggerLoopKey();
+    }
+
+    @Override
     public void setOptionalTrigger(final boolean b) {
         sa.setOptionalTrigger(b);
     }

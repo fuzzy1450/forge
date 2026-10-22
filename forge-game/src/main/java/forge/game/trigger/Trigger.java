@@ -68,6 +68,14 @@ public abstract class Trigger extends TriggerReplacementBase {
     /** The ID. */
     private int id;
 
+    /**
+     * The id this trigger was built with, kept by every copy made of it (copy() gives the copy an id of its own and
+     * leaves this alone), so a copy of a copy still carries the first one's. What the AI's optional-loop stop counts by
+     * (MagicStack.getTriggerRepeats, CR 732.2a): a loop whose trigger makes a copy of its own host, such as Ondu
+     * Spiritdancer under Secret Arcade, puts a trigger with a new id on the stack every round, all with one loop key.
+     */
+    private int loopKey;
+
     private TriggerType mode;
 
     private List<Object> triggerRemembered = Lists.newArrayList();
@@ -90,6 +98,7 @@ public abstract class Trigger extends TriggerReplacementBase {
      */
     public Trigger(final Map<String, String> params, final Card host, final boolean intrinsic) {
         this.id = nextId();
+        this.loopKey = this.id;
         this.intrinsic = intrinsic;
 
         this.originalMapParams.putAll(params);
@@ -513,6 +522,11 @@ public abstract class Trigger extends TriggerReplacementBase {
      */
     public int getId() {
         return this.id;
+    }
+
+    /** The id of the trigger this one was first built as, through any chain of copies (see {@link #loopKey}). */
+    public int getLoopKey() {
+        return this.loopKey;
     }
 
     /**
