@@ -1400,7 +1400,7 @@ public class ComputerUtilMana {
         Zone castFromBackup = null;
         if (test && sa.isSpell() && !host.isInZone(ZoneType.Stack)) {
             castFromBackup = host.getCastFrom();
-            host.setCastFrom(host.getZone() != null ? host.getZone() : null);
+            host.setCastFrom(host.getLastKnownZone());
         }
 
         Cost payCosts;

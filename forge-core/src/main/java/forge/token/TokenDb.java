@@ -4,6 +4,7 @@ import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
 
 import forge.card.CardDb;
 import forge.card.CardEdition;
@@ -14,7 +15,6 @@ import forge.util.Aggregates;
 import forge.util.MyRandom;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
 public class TokenDb implements ITokenDatabase {
@@ -37,7 +37,7 @@ public class TokenDb implements ITokenDatabase {
     private final CardEdition.Collection editions;
     private final Map<String, CardRules> rulesByName;
     // edition codes already reported as missing, so each is logged once
-    private final Set<String> missingEditions = ConcurrentHashMap.newKeySet();
+    private final Set<String> missingEditions = Sets.newConcurrentHashSet();
 
     // null preserves first-alphabetical match; adventure pushes a filter here.
     private Predicate<CardEdition> defaultEditionFilter = null;
