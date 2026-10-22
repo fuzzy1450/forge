@@ -21922,7 +21922,8 @@ public class SpecialCardAi {
     //   go to what it draws. Main 2: every payable X. The library after the shuffle keeps LIB_KEEP.
     // - Small, 3 <= X <= 9: our Main 2 only, on the mana the turn's other plays left (saComparator
     //   consults this X spell as mana value 2); every drawn card kept through cleanup unless we have no
-    //   maximum hand size; the library keeps LIB_KEEP.
+    //   maximum hand size, the hand room also counting one card per cast trigger of ours (castTriggers,
+    //   the row's retry); the library keeps LIB_KEEP.
     // - Never: we can't draw; an opponent's draw thief or punisher would see the draws
     //   (KnollspineDragon.drawOrDiscardIsPunished, batch 1, called not edited); a CantDraw static cuts
     //   them (StaticAbilityCantDraw.canDrawAmount).
@@ -21987,7 +21988,10 @@ public class SpecialCardAi {
             int bigCap = Math.min(main2 ? mana.total() : BIG_X, (library + graveyard - LIB_KEEP) >> doubling);
             int smallCap = main2 ? Math.min(Math.min(BIG_X - 1, mana.total()), (library - LIB_KEEP) >> doubling) : 0;
             if (smallCap >= SMALL_MIN_X && !ai.isUnlimitedHandSize()) {
-                smallCap = Math.min(smallCap, (ai.getMaxHandSize() - handAfter) >> doubling);
+                // the retry: the cast's own triggers fill the hand before the draws land (1709278: Archmage
+                // Emeritus' Magecraft twice and Arcane Bombardment's free Windfall copy, then two cleanup
+                // discards after X = 4)
+                smallCap = Math.min(smallCap, (ai.getMaxHandSize() - (handAfter + castTriggers(ai))) >> doubling);
             }
             if (bigCap >= BIG_X && ComputerUtil.isPlayingReanimator(ai)) {
                 bigCap = 0;
@@ -22033,6 +22037,26 @@ public class SpecialCardAi {
                 }
             }
             return 0;
+        }
+
+        // The small mode's hand room (the row's retry): one hand card per SpellCast or SpellCastOrCopy trigger on a
+        // card on our battlefield, as if each added one before Finale resolves (Archmage Emeritus' Magecraft draws
+        // one, Arcane Bombardment's free Windfall copy refilled the hand; Stella Lee's exile adds none and counts all
+        // the same), its conditions, controller test and effect ignored (an opposing-caster trigger such as our
+        // Mystic Remora's counts too). RNG-free and conservative: an over-count only lowers X or declines into the
+        // stock path after the same run-away roll.
+        // Only the trigger's mode is read, never its ability (row 63's resolutions rule: building one allocates a
+        // SpellAbility id).
+        private static int castTriggers(final Player ai) {
+            int n = 0;
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                for (final Trigger t : c.getTriggers()) {
+                    if (t.getMode() == TriggerType.SpellCast || t.getMode() == TriggerType.SpellCastOrCopy) {
+                        n++;
+                    }
+                }
+            }
+            return n;
         }
     }
 
