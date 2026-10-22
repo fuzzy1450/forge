@@ -91,6 +91,7 @@ public class AiController {
     private final Player player;
     private final Game game;
     private final AiCardMemory memory;
+    private final LoopTracker loops;
     private Combat predictedCombat;
     private Combat predictedCombatNextTurn;
     private AIOption simMode;
@@ -111,6 +112,7 @@ public class AiController {
         player = computerPlayer;
         game = game0;
         memory = new AiCardMemory();
+        loops = new LoopTracker();
         simPicker = new SpellAbilityPicker(player);
     }
 
@@ -147,6 +149,11 @@ public class AiController {
     // Dead-card batch 4, row 33: the record above, read only by SpecialCardAi.DramaticReversal
     public List<SpecialCardAi.DramaticReversal.Refused> getApprovedUnaffordable() {
         return approvedUnaffordable;
+    }
+
+    /** How this AI judges the loops it controls: spent or still paying, and which names a spent loop avoids. */
+    public LoopTracker getLoopTracker() {
+        return loops;
     }
 
     public Combat getPredictedCombat() {

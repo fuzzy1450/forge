@@ -429,10 +429,22 @@ public class PlayerControllerAi extends PlayerController {
         }
         // CR 732.2a: the controller of an optional loop names a number of iterations and then stops. The draw
         // detector counts only mandatory, untargeted triggers, so an optional one that keeps coming back (e.g.
-        // Flourishing Defenses fed by Blowfly Infestation) is stopped here once it repeats past the same limit.
-        // Counted by loop key, so one whose every round comes from a new copy of its own host (Ondu Spiritdancer
-        // under Secret Arcade copying itself) is stopped too.
-        if (getGame().getStack().getTriggerRepeats(wrapper.getSourceTriggerLoopKey()) > MagicStack.MAX_TRIGGER_REPEATS) {
+        // Flourishing Defenses fed by Blowfly Infestation) is judged here, by the rounds of its loop key (so one whose
+        // every round comes from a new copy of its own host, Ondu Spiritdancer under Secret Arcade copying itself, is
+        // one loop too) and by what each round did to the board (LoopTracker; MTG_DeckMaker's spec
+        // 2026-10-21-loop-aware-ai-design): declined once two rounds changed nothing, once a winning loop's board is
+        // LoopTracker.LETHAL_MULTIPLE times lethal or its rounds pass the budget, and past the old count of 50 for a loop that only adds
+        // material. While the stack is past half the draw limit every optional trigger is declined: resolving what
+        // is already there must never draw the game.
+        final MagicStack stack = getGame().getStack();
+        if (stack.size() > LoopTracker.stackHeadroom()) {
+            return false;
+        }
+        final int loopKey = wrapper.getSourceTriggerLoopKey();
+        final LoopTracker.Snapshot now = LoopTracker.Snapshot.of(player);
+        final LoopTracker.Loop loop = brains.getLoopTracker().observe(loopKey, stack.getTriggerRepeats(loopKey),
+                stack.getTriggerRepeatsEpoch(), now);
+        if (loop != null && loop.declinesOptional(now)) {
             return false;
         }
         // Store/replace target choices more properly to get this SA cleared.
