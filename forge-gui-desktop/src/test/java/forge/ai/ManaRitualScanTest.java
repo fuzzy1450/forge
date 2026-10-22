@@ -8,6 +8,7 @@ import java.util.List;
 
 import org.testng.annotations.Test;
 
+import forge.ai.ability.ManaAi;
 import forge.game.Game;
 import forge.game.ability.ApiType;
 import forge.game.ability.effects.CharmEffect;
@@ -18,15 +19,31 @@ import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
 
 /**
- * ManaAi.doManaRitualLogic's hand scan asks canPlaySa about every other spell in hand and skips only its own card. Some
- * of the spells it asks about ask about the ritual in turn, and such a pair asked each other until the AI's thread
- * overflowed its stack, ending the game in an Error. Each test here holds one such pair, and passes when the AI comes
- * back with any answer.
+ * ManaAi.doManaRitualLogic's hand scan asks canPlaySa about every other spell in hand, skipping its own card and every
+ * spell that carries AINoRecursiveCheck (Rite of Flame, Dark Ritual and most rituals; not Jeska's Will or Rousing
+ * Refrain). Some of the spells it asks about ask about the ritual in turn, and such a pair asked each other until the
+ * AI's thread overflowed its stack, ending the game in an Error.
+ *
+ * The libraries here are empty, so Jeska's Will's exile mode is never willing and its charm always asks the ritual
+ * mode. That is the shape of a game whose AI controls a commander, where the charm takes both modes and such a pair
+ * recursed every time. Without a commander the charm takes one mode after a shuffle, and the recursion stopped by
+ * chance.
  */
 public class ManaRitualScanTest extends AITest {
 
     private static AiController aiOf(Player p) {
         return ((PlayerControllerAi) p.getController()).getAi();
+    }
+
+    private void fillHand(Player p, int cards) {
+        for (int i = 0; i < cards; i++) {
+            addCardToZone("Runeclaw Bear", p, ZoneType.Hand);
+        }
+    }
+
+    private static void mainTwo(Game game, Player p) {
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, p);
+        game.getAction().checkStateEffects(true);
     }
 
     @Test(timeOut = 120_000)
@@ -36,9 +53,7 @@ public class ManaRitualScanTest extends AITest {
         Player opp = game.getPlayers().get(0);
         addCards("Mountain", 3, ai);
         addCardToZone("Flare of Duplication", ai, ZoneType.Hand);
-        for (int i = 0; i < 4; i++) {
-            addCardToZone("Runeclaw Bear", opp, ZoneType.Hand);
-        }
+        fillHand(opp, 4);
         // the opponent's Jeska's Will on the stack, its mode chosen as a cast chooses it; its mana mode, if chosen,
         // targets the AI. Flare copies an opponent's spell whenever it can (CopySpellAbilityAi), so the AI judges a
         // copy of this one, whose ritual mode scans the AI's hand and finds Flare again.
@@ -67,36 +82,66 @@ public class ManaRitualScanTest extends AITest {
         addCards("Island", 2, ai);
         addCardToZone("Rousing Refrain", ai, ZoneType.Hand);
         addCardToZone("Galvanic Iteration", ai, ZoneType.Hand);
-        for (int i = 0; i < 4; i++) {
-            addCardToZone("Runeclaw Bear", opp, ZoneType.Hand);
-        }
+        fillHand(opp, 4);
         // the ritual's scan asks about Galvanic Iteration, whose SpellCopy logic (DelayedTriggerAi) looks for the
         // next instant or sorcery it would copy and asks about Rousing Refrain
-        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
-        game.getAction().checkStateEffects(true);
+        mainTwo(game, ai);
 
         aiOf(ai).chooseSpellAbilityToPlay();
     }
 
     @Test(timeOut = 120_000)
-    public void aRitualAskedAboutInsideAnotherRitualsScanStillAnswers() {
+    public void jeskasWillAndRousingRefrainInHandDoNotAskEachOtherForever() {
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
         Player opp = game.getPlayers().get(0);
         addCards("Mountain", 5, ai);
         addCardToZone("Jeska's Will", ai, ZoneType.Hand);
-        addCardToZone("Rite of Flame", ai, ZoneType.Hand);
-        addCardToZone("Shivan Dragon", ai, ZoneType.Hand);
-        for (int i = 0; i < 4; i++) {
-            addCardToZone("Runeclaw Bear", opp, ZoneType.Hand);
-        }
-        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
-        game.getAction().checkStateEffects(true);
+        addCardToZone("Rousing Refrain", ai, ZoneType.Hand);
+        fillHand(opp, 4);
+        // two rituals without AINoRecursiveCheck: each one's scan asks about the other, whose scan asks back
+        mainTwo(game, ai);
 
-        // Jeska's Will's scan asks about Rite of Flame, whose own scan runs inside it and ends: a different ritual,
-        // which the guard leaves alone. The AI plays Rite of Flame first, as it did before the guard.
+        aiOf(ai).chooseSpellAbilityToPlay();
+    }
+
+    @Test(timeOut = 120_000)
+    public void aRitualAskedAboutInsideAnotherRitualsScanStillScans() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        Player opp = game.getPlayers().get(0);
+        addCards("Mountain", 2, ai);
+        addCardToZone("Rite of Flame", ai, ZoneType.Hand);
+        addCardToZone("Jeska's Will", ai, ZoneType.Hand);
+        addCardToZone("Shivan Dragon", ai, ZoneType.Hand);
+        fillHand(opp, 5);
+        mainTwo(game, ai);
+
+        // Two Mountains cannot pay for Jeska's Will, but with Rite of Flame's RR they can. Rite of Flame is worth
+        // casting only if its scan finds Jeska's Will worth casting, which takes Jeska's Will's own scan, run inside
+        // Rite of Flame's, finding Shivan Dragon. A different ritual's scan, so it must still run: refusing every
+        // nested scan would leave the AI nothing to cast.
         List<SpellAbility> choice = aiOf(ai).chooseSpellAbilityToPlay();
-        assertNotNull(choice);
+        assertNotNull("Rite of Flame should be cast toward Jeska's Will", choice);
         assertEquals("Rite of Flame", choice.get(0).getHostCard().getName());
+    }
+
+    @Test(timeOut = 120_000)
+    public void aRitualsScanLeavesNothingBehindOnItsThread() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        Player opp = game.getPlayers().get(0);
+        addCards("Mountain", 4, ai);
+        Card refrain = addCardToZone("Rousing Refrain", ai, ZoneType.Hand);
+        addCardToZone("Shivan Dragon", ai, ZoneType.Hand);
+        fillHand(opp, 7);
+        mainTwo(game, ai);
+        SpellAbility sa = refrain.getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+
+        // the same question twice on one thread: a scan that kept its own name after it ended would answer no the
+        // second time, as if it were still asking
+        assertTrue(ManaAi.doManaRitualLogic(ai, sa, false));
+        assertTrue(ManaAi.doManaRitualLogic(ai, sa, false));
     }
 }
