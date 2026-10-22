@@ -11,10 +11,23 @@ import forge.game.spellability.SpellAbility;
 import forge.util.MyRandom;
 import forge.util.collect.FCollectionView;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class CopySpellAbilityAi extends SpellAbilityAi {
+
+    /**
+     * The spells on the stack whose copy this thread is judging (checkApiLogic). Judging a copy of a spell judges what
+     * the spell would do, and that can judge copying the top of the stack again: Return the Favor's copy mode does, and
+     * so does a Jeska's Will whose ritual mode scans a hand holding a copy spell (ManaAi.SCANNING). Such a loop judged
+     * the same copy without end until the AI's thread overflowed its stack, ending the game in an Error. So a copy of a
+     * spell this thread is already judging a copy of is answered no.
+     */
+    private static final ThreadLocal<Set<SpellAbility>> JUDGING =
+            ThreadLocal.withInitial(() -> Collections.newSetFromMap(new IdentityHashMap<>()));
 
     @Override
     protected AiAbilityDecision checkApiLogic(Player aiPlayer, SpellAbility sa) {
@@ -95,7 +108,20 @@ public class CopySpellAbilityAi extends SpellAbilityAi {
             if (top.canBeTargetedBy(sa)) {
                 AiPlayDecision decision = AiPlayDecision.CantPlaySa;
                 if (top instanceof Spell) {
-                    decision = ((PlayerControllerAi) aiPlayer.getController()).getAi().canPlayFromEffectAI((Spell) topCopy, false, true);
+                    final Set<SpellAbility> judging = JUDGING.get();
+                    if (judging.contains(top)) {
+                        // already judging a copy of this spell further up this thread (JUDGING): judging it again
+                        // would ask the same abilities the same question
+                        decision = AiPlayDecision.CantPlayAi;
+                    } else {
+                        judging.add(top);
+                        try {
+                            decision = ((PlayerControllerAi) aiPlayer.getController()).getAi()
+                                    .canPlayFromEffectAI((Spell) topCopy, false, true);
+                        } finally {
+                            judging.remove(top);
+                        }
+                    }
                 } else if (top.isActivatedAbility() && top.getActivatingPlayer().equals(aiPlayer)
                         && logic.contains("CopyActivatedAbilities")) {
                     decision = AiPlayDecision.WillPlay; // FIXME: we activated it once, why not again? Or bad idea?
