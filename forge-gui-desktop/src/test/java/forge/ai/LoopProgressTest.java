@@ -332,11 +332,16 @@ public class LoopProgressTest extends AITest {
         assertTrue("Sol Rings: " + rings, rings >= 2 && rings <= MagicStack.MAX_TRIGGER_REPEATS + 1);
     }
 
-    /** The headroom guard reads optional triggers only: a mandatory one is confirmed whatever the stack holds. */
+    /**
+     * The headroom guard reads optional triggers only: a mandatory one is confirmed whatever the stack holds. The
+     * opponent's Grizzly Bears gives Blowfly's counter a target the handler takes, so the optional decline is the
+     * guard's and nobody else's.
+     */
     @Test(timeOut = 300_000)
     public void theHeadroomGuardNeverDeclinesAMandatoryTrigger() {
         start();
         Card blowfly = addCard("Blowfly Infestation", ai);
+        addCard("Grizzly Bears", opponent);
         settle();
         Trigger trigger = blowfly.getTriggers().iterator().next();
         pushAbilities(game, ai, LoopTracker.stackHeadroom() + 1);
@@ -347,6 +352,8 @@ public class LoopProgressTest extends AITest {
         assertTrue(ai.getController().confirmTrigger(mandatory));
         WrappedAbility optional = OptionalTriggerLoopTest.wrap(trigger, blowfly, ai);
         optional.setOptionalTrigger(true);
+        assertTrue("the handler itself would take the counter",
+                ((PlayerControllerAi) ai.getController()).getAi().doTrigger(optional.getWrappedAbility(), false));
         assertFalse("an optional trigger above the headroom is declined", ai.getController().confirmTrigger(optional));
     }
 
