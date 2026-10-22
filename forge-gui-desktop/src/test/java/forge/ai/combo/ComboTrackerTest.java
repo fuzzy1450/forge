@@ -271,6 +271,10 @@ public class ComboTrackerTest extends AITest {
         // a spell we cast is ours whoever owns it; so is a permanent on our battlefield (one we control)
         castOnStack(game, ai, opp, CONSULTATION);
         assertEquals(t.where(CONSULTATION), Where.STACK);
+        // an opponent's response on top does not hide our item under it: every item is read, not the top one alone
+        castOnStack(game, opp, opp, "Grizzly Bears");
+        assertEquals(game.getStack().size(), 3);
+        assertEquals(t.where(CONSULTATION), Where.STACK);
         final Card stolen = createCard(LAB, opp);
         stolen.setGameTimestamp(game.getNextTimestamp());
         ai.getZone(ZoneType.Battlefield).add(stolen);
