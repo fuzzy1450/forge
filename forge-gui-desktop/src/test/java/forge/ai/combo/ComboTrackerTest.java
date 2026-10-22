@@ -2,6 +2,7 @@ package forge.ai.combo;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNotSame;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
@@ -29,6 +30,7 @@ import forge.game.card.Card;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
+import forge.gamesimulationtests.util.LobbyPlayerForTests;
 import forge.util.MyRandom;
 
 /** The per-AI combo tracker: which of piece 1's lines the AI's own deck holds, and where each piece is (spec
@@ -43,6 +45,7 @@ public class ComboTrackerTest extends AITest {
     private static final String ORACLE = "Thassa's Oracle";
     private static final String CONSULTATION = "Demonic Consultation";
     private static final String LAB = "Laboratory Maniac";
+    private static final String DOOM = "Doctor Doom, Unrivaled";
 
     // ten distinct nonland names (GiftsUngivenAiTest's): fillLibrary makes ten of one name
     private static final List<String> NAMES = Arrays.asList("Runeclaw Bear", "Grizzly Bears", "Hill Giant",
@@ -330,6 +333,129 @@ public class ComboTrackerTest extends AITest {
         assertEquals(MyRandom.callCount(), draws, "a tracker query drew");
         assertEquals(t.missing(line(LAB_CONSULTATION)), List.of(CONSULTATION));
         assertFalse(t.reachable(line(LAB_CONSULTATION)));
+    }
+
+    @Test
+    public void missingAndReachableReadEveryPlaceAPieceCanBe() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        // the library holds Oracle above Consultation, the reverse of the line's own order
+        final Card oracleInLibrary = addCardToZone(ORACLE, ai, ZoneType.Library);
+        addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        final ComboTracker t = aiOf(ai).getComboTracker();
+        t.useLines(lines(ORACLE_CONSULTATION));
+        final ComboLines.Line l = t.deckLines().get(0);
+
+        // both only in the library: both missing, in the line's order (the emptier, then the winner), not the library's
+        assertEquals(libraryNames(ai), List.of(ORACLE, CONSULTATION));
+        assertEquals(l.names(), List.of(CONSULTATION, ORACLE));
+        assertEquals(t.missing(l), List.of(CONSULTATION, ORACLE));
+        assertTrue(t.reachable(l));
+
+        // Oracle in each other place we can use it from, one at a time: reachable there, and not missing
+        ai.getZone(ZoneType.Library).remove(oracleInLibrary);
+        final Card inHand = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        assertEquals(t.where(ORACLE), Where.HAND);
+        assertEquals(t.missing(l), List.of(CONSULTATION), "a piece in our hand is not missing");
+        assertTrue(t.reachable(l), "a piece in our hand is reachable");
+
+        ai.getZone(ZoneType.Hand).remove(inHand);
+        final Card inPlay = addCard(ORACLE, ai);
+        assertEquals(t.where(ORACLE), Where.BATTLEFIELD);
+        assertEquals(t.missing(l), List.of(CONSULTATION), "a piece on our battlefield is not missing");
+        assertTrue(t.reachable(l), "a piece on our battlefield is reachable");
+
+        ai.getZone(ZoneType.Battlefield).remove(inPlay);
+        final Card inCommand = addCardToZone(ORACLE, ai, ZoneType.Command);
+        assertEquals(t.where(ORACLE), Where.COMMAND);
+        assertEquals(t.missing(l), List.of(CONSULTATION), "a piece in our command zone is not missing");
+        assertTrue(t.reachable(l), "a piece in our command zone is reachable");
+
+        ai.getZone(ZoneType.Command).remove(inCommand);
+        castOnStack(game, ai, ai, ORACLE);
+        assertEquals(t.where(ORACLE), Where.STACK);
+        assertEquals(t.missing(l), List.of(CONSULTATION), "a piece we have on the stack is not missing");
+        assertTrue(t.reachable(l), "a piece we have on the stack is reachable");
+    }
+
+    @Test
+    public void singletonLibraryFindsAPairWhereverItsCardsLie() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        final ComboTracker t = aiOf(ai).getComboTracker();
+        // a pair with another card between them, the first of the pair on top
+        addCardToZone("Island", ai, ZoneType.Library);
+        addCardToZone("Grizzly Bears", ai, ZoneType.Library);
+        assertTrue(t.singletonLibrary());
+        addCardToZone("Island", ai, ZoneType.Library);
+        assertEquals(libraryNames(ai), List.of("Island", "Grizzly Bears", "Island"));
+        assertFalse(t.singletonLibrary(), "two Islands apart");
+
+        // the pair on top, above ten distinct names: the top card is read too
+        ai.getZone(ZoneType.Library).removeAllCards(true);
+        addCardToZone("Island", ai, ZoneType.Library);
+        addCardToZone("Island", ai, ZoneType.Library);
+        for (final String name : NAMES) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        assertEquals(libraryNames(ai).subList(0, 3), List.of("Island", "Island", NAMES.get(0)));
+        assertEquals(libraryNames(ai).size(), 12);
+        assertFalse(t.singletonLibrary(), "two Islands on top");
+    }
+
+    @Test
+    public void whereCountsAnAbilityWeActivatedOnTheStack() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        final Player opp = game.getPlayers().get(0);
+        final ComboTracker t = aiOf(ai).getComboTracker();
+        // Doctor Doom's {T} ability on the stack after Doom itself left play (killed in response): its host is in none
+        // of our zones, so the ability is the only place it is. The opponent's activation of a Doom is not ours.
+        activateOnStack(game, opp, DOOM);
+        assertFalse(game.getStack().peek().isSpell());
+        assertEquals(t.where(DOOM), Where.GONE);
+        final Card host = activateOnStack(game, ai, DOOM);
+        assertFalse(game.getStack().peek().isSpell());
+        assertSame(game.getStack().peek().getSourceCard(), host);
+        assertNull(t.find(DOOM, ZoneType.Battlefield));
+        assertEquals(t.where(DOOM), Where.STACK);
+    }
+
+    @Test
+    public void ofIsNullForAPlayerNoAiDecidesFor() {
+        final Game game = initAndCreateGame();
+        // a player the simulation tests' scripted controller decides for, and a bare one with no controller at all
+        final Player scripted = new LobbyPlayerForTests("scripted", null).createIngamePlayer(game, 98);
+        assertNotNull(scripted.getController());
+        assertFalse(scripted.getController() instanceof PlayerControllerAi);
+        assertNull(ComboTracker.of(scripted));
+        final Player bare = new Player("bare", game, 97);
+        assertNull(bare.getController());
+        assertNull(ComboTracker.of(bare));
+    }
+
+    private static List<String> libraryNames(final Player p) {
+        return p.getCardsIn(ZoneType.Library).stream().map(ComboTracker::nameOf).collect(Collectors.toList());
+    }
+
+    /** A fresh {@code name} owned by {@code activator}, in no zone, whose first activated non-mana ability
+     *  {@code activator} put on the stack: nothing paid or resolved. */
+    private Card activateOnStack(final Game game, final Player activator, final String name) {
+        final Card card = createCard(name, activator);
+        card.setGameTimestamp(game.getNextTimestamp());
+        SpellAbility ability = null;
+        for (final SpellAbility sa : card.getSpellAbilities()) {
+            if (sa.isActivatedAbility() && !sa.isManaAbility()) {
+                ability = sa;
+                break;
+            }
+        }
+        assertNotNull(ability, name + " has no activated ability");
+        ability.setActivatingPlayer(activator);
+        final int before = game.getStack().size();
+        game.getStack().add(ability);
+        assertEquals(game.getStack().size(), before + 1, name + "'s ability did not reach the stack");
+        return card;
     }
 
     /** {@code name}, owned by {@code owner}, cast by {@code caster}: on the stack, nothing paid or resolved. */
