@@ -21,8 +21,10 @@ import forge.ai.AiPlayDecision;
 import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
 import forge.ai.SpecialCardAi;
+import forge.card.MagicColor;
 import forge.game.Game;
 import forge.game.GameEndReason;
+import forge.game.ability.AbilityFactory;
 import forge.game.ability.AbilityKey;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
@@ -642,5 +644,310 @@ public class ComboExecuteAiTest extends AITest {
         assertFalse(ComboExecute.finishesLine(ai, draw));
         t.useLines(lines(JACE_CONSULTATION));
         assertTrue(ComboExecute.finishesLine(ai, draw));
+    }
+
+    // ---- review round 1 ----
+
+    /** Review Focus 4, the colours: the Laboratory Maniac window's draw spell must be payable in its own colours beside
+     *  the emptier's. Two Swamps make the two mana Consultation and Opt cost together, black among it, but no {U}: Opt
+     *  cannot follow, so Consultation waits; an Island opens the window. Tainted Pact alike, resolving and cast. */
+    @Test
+    public void theLabWindowsDrawSpellMustBePayableInItsOwnColours() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        hand(OPT);
+        lands("Swamp", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        final SpecialCardAi.HonestMana mana = SpecialCardAi.HonestMana.of(ai, castOf(consultation), true);
+        assertEquals(mana.total(), 2);
+        assertEquals(mana.colour(MagicColor.BLACK), 2);
+        assertEquals(mana.colour(MagicColor.BLUE), 0);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        lands("Island");
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+
+        // Tainted Pact resolving, its own mana paid: a Swamp pays one mana, never Opt's {U}, so Pact keeps the card
+        start(LAB_PACT);
+        addCard(LAB, ai);
+        hand(OPT);
+        lands("Swamp");
+        singletonLibrary();
+        final Card resolving = castOnStack(PACT);
+        assertEquals(ids(t.executable()), List.of("2836-3093"));
+        assertFalse(ComboExecute.pactDeclines(ai, returnToHand(resolving)));
+        // a hand Pact: three Swamps pay {1}{B} and one more, never Opt's {U}; the line is live, so Pact is held
+        final Card handPact = hand(PACT);
+        lands("Swamp", "Swamp");
+        assertEquals(ids(t.live()), List.of("2836-3093"));
+        assertEquals(ComboExecute.pactCast(ai, castOf(handPact)), Boolean.FALSE);
+        // an Island pays Opt: the hand Pact is cast into the window, and the resolving one declines
+        lands("Island");
+        assertEquals(ComboExecute.pactCast(ai, castOf(handPact)), Boolean.TRUE);
+        assertTrue(ComboExecute.pactDeclines(ai, returnToHand(resolving)));
+    }
+
+    /** Fblthp on our battlefield is no window by itself, in our Main 1 or at the opponent's end step: Consultation
+     *  waits for Fblthp's own trigger on our stack (spec section 6.4: only when that trigger resolves this turn). */
+    @Test
+    public void fblthpInPlayIsNoWindowWithoutItsTrigger() {
+        start(FBLTHP_CONSULTATION);
+        final Card fblthp = ready(FBLTHP);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-8266"));
+        assertTrue(game.getStack().isEmpty());
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        opponentsEndStep();
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        game.getStack().add(fblthpTrigger(fblthp));
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    /** Review Focus 1 with both Oracle rows: in a library holding two Islands, Pact's line is dead and Consultation's
+     *  live, so Oracle's hold rests on Consultation alone. Pact is never held for that line nor cast as its emptier,
+     *  before Oracle's trigger or with it on our stack; it declines nothing and the floor does not exempt it. */
+    @Test
+    public void pactIsNoEmptierWhenOnlyConsultationsOracleLineIsLive() {
+        start(ORACLE_CONSULTATION, ORACLE_PACT);
+        final Card oracle = hand(ORACLE);
+        final Card pact = hand(PACT);
+        library(CONSULTATION, "Island", "Island");
+        lands("Island", "Island", "Swamp", "Swamp");
+        assertEquals(ids(t.deckLines()), List.of("742-1295", "1295-3093"));
+        assertFalse(t.singletonLibrary());
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertNull(ComboExecute.pactCast(ai, castOf(pact)));
+        assertEquals(aiOf(ai).canPlaySa(castOf(pact)), AiPlayDecision.WillPlay);
+
+        // Oracle's trigger on our stack: Consultation's window, not Pact's
+        enters(oracle);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertNull(ComboExecute.pactCast(ai, castOf(pact)));
+        assertFalse(ComboExecute.pactDeclines(ai, returnToHand(pact)));
+        assertTrue(aiOf(ai).confirmAction(returnToHand(pact), null, "", null));
+        assertNull(ComboExecute.floorExemption(ai, castOf(pact)));
+    }
+
+    /** Only Doctor Doom's own {T} draw finishes a Doom line: another creature's {T} draw (Arcanis the Omnipotent's) on
+     *  the emptied library would lose us the game, so it finishes nothing. */
+    @Test
+    public void anotherTapDrawIsNotDoomsFinishingDraw() {
+        start(DOOM_CONSULTATION);
+        final Card doom = ready(DOOM);
+        addCardToZone(CONSULTATION, ai, ZoneType.Graveyard);
+        final Card arcanis = ready("Arcanis the Omnipotent");
+        ai.setLife(1, null);
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+        assertEquals(ids(t.deckLines()), List.of("x-1"));
+        assertTrue(ComboExecute.finishesLine(ai, doomDraw(doom)));
+
+        // doomDraw finds a card's activated Draw: Arcanis's {T}: draw three cards
+        final SpellAbility draw = doomDraw(arcanis);
+        assertEquals(draw.getHostCard(), arcanis);
+        assertTrue(draw.getPayCosts().hasTapCost());
+        assertFalse(ComboExecute.finishesLine(ai, draw));
+    }
+
+    /** Jace, Wielder of Mysteries follows Laboratory Maniac's rules (the plan's calls): Consultation waits in our
+     *  Main 1 with no draw spell, and goes at the opponent's end step with our turn next, or with Opt and the mana for
+     *  both. */
+    @Test
+    public void jacesWindowIsLabsWindow() {
+        start(JACE_CONSULTATION);
+        addCard(JACE, ai);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-3096"));
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        opponentsEndStep();
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        hand(OPT);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        lands("Island");
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    /** The end-step rule is the end step's: the opponent's Main 2, with our turn next as well, is no window. */
+    @Test
+    public void theLabWindowIsTheOpponentsEndStepNotItsMainTwo() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, opp);
+        assertEquals(game.getPhaseHandler().getNextTurn(), ai);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    /** Only Fblthp's own trigger is answered: Oracle's entering trigger on top of our stack asks for no response, with
+     *  Fblthp's line, Consultation and black all there; Fblthp's trigger on top does. */
+    @Test
+    public void onlyFblthpsOwnTriggerIsAnswered() {
+        start(FBLTHP_CONSULTATION);
+        final Card fblthp = ready(FBLTHP);
+        hand(CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        enters(oracle);
+        final SpellAbility oracles = game.getStack().peekAbility();
+        assertEquals(ComboTracker.nameOf(oracles.getHostCard()), ORACLE);
+        assertEquals(ids(t.executable()), List.of("742-8266"));
+        assertFalse(ComboExecute.respondsToOwn(ai, oracles));
+
+        game.getStack().add(fblthpTrigger(fblthp));
+        final SpellAbility fblthps = game.getStack().peekAbility();
+        assertEquals(ComboTracker.nameOf(fblthps.getHostCard()), FBLTHP);
+        assertTrue(ComboExecute.respondsToOwn(ai, fblthps));
+    }
+
+    /** Fblthp's trigger asks for no response while its line is denied: an opposing Platinum Angel (we cannot win)
+     *  leaves no executable line, though the deck holds it and Consultation and black are there. */
+    @Test
+    public void fblthpAsksNoResponseWhileItsLineIsDenied() {
+        start(FBLTHP_CONSULTATION);
+        final Card fblthp = ready(FBLTHP);
+        hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        game.getStack().add(fblthpTrigger(fblthp));
+        final SpellAbility top = game.getStack().peekAbility();
+        assertTrue(ComboExecute.respondsToOwn(ai, top));
+
+        addCard(ANGEL, opp);
+        assertTrue(ai.cantWin());
+        assertEquals(ids(t.deckLines()), List.of("742-8266"));
+        assertEquals(t.executable(), List.of());
+        assertFalse(ComboExecute.respondsToOwn(ai, top));
+    }
+
+    /** The floor's exemption needs an open window: with Doctor Doom sick the same board's Consultation keeps the
+     *  floor's veto, its line executable all the same. */
+    @Test
+    public void theFloorKeepsItsVetoOutsideAWindow() {
+        start(DOOM_CONSULTATION);
+        addCard(EMERITUS, ai);
+        final Card doom = ready(DOOM);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 4);
+        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo");
+        assertFalse(SpecialCardAi.OwnLibraryFloor.breachesCast(ai, castOf(consultation)));
+
+        doom.setSickness(true);
+        assertEquals(ids(t.executable()), List.of("x-1"));
+        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)));
+        assertTrue(SpecialCardAi.OwnLibraryFloor.breachesCast(ai, castOf(consultation)));
+    }
+
+    /** The floor reads the window as the emptier's cast does, the emptier's own mana counted: in a Laboratory Maniac
+     *  window an Island pays Opt but not Opt and Consultation together, so no exemption; a Swamp beside it pays
+     *  both. */
+    @Test
+    public void theFloorsWindowCountsTheEmptiersOwnMana() {
+        start(LAB_CONSULTATION);
+        addCard(EMERITUS, ai);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        hand(OPT);
+        lands("Island");
+        fillLibrary(ai, 4);
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)));
+        lands("Swamp");
+        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo");
+    }
+
+    /** The floor exempts Tainted Pact cast inside its window as it does Consultation: Pact in the opponent's end-step
+     *  Laboratory Maniac window, Archmage Emeritus in play; in our Main 1 with no draw spell, no window, no
+     *  exemption. */
+    @Test
+    public void theFloorExemptsAPactInItsWindow() {
+        start(LAB_PACT);
+        addCard(EMERITUS, ai);
+        addCard(LAB, ai);
+        final Card pact = hand(PACT);
+        lands("Swamp", "Swamp");
+        singletonLibrary();
+        opponentsEndStep();
+        assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.TRUE);
+        assertEquals(ComboExecute.floorExemption(ai, castOf(pact)), "combo");
+
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.FALSE);
+        assertNull(ComboExecute.floorExemption(ai, castOf(pact)));
+    }
+
+    /** Only Tainted Pact's own exile-to-hand step is declined: Distant Memories' DBToHand, the same Exile-to-Hand
+     *  ChangeZone sub, is not, inside the Oracle window where Pact's is. */
+    @Test
+    public void onlyPactsReturnToHandIsDeclined() {
+        start(ORACLE_PACT);
+        final Card oracle = hand(ORACLE);
+        final Card pact = hand(PACT);
+        singletonLibrary();
+        lands("Island", "Island", "Swamp", "Swamp");
+        enters(oracle);
+        assertTrue(ComboExecute.pactDeclines(ai, returnToHand(pact)));
+
+        final Card memories = hand("Distant Memories");
+        final SpellAbility toHand = AbilityFactory.getAbility(memories, "DBToHand");
+        toHand.setActivatingPlayer(ai);
+        assertTrue(toHand instanceof AbilitySub);
+        assertEquals(toHand.getApi(), ApiType.ChangeZone);
+        assertEquals(toHand.getParam("Origin"), "Exile");
+        assertEquals(toHand.getParam("Destination"), "Hand");
+        assertFalse(ComboExecute.pactDeclines(ai, toHand));
+    }
+
+    /** The follow-up draw is ours alone: Prosperity (each player draws) opens no window though the mana pays it and
+     *  Consultation together; Opt does. */
+    @Test
+    public void anEachPlayerDrawIsNoFollowUp() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        hand("Prosperity");
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        hand(OPT);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    /** The follow-up draw is untargeted, as the finishing draw is: with Jace in play stock DrawAi aims a targeted draw
+     *  at our emptied library only with Laboratory Maniac, and finishesLine lifts only an untargeted draw of ours, so
+     *  Ancestral Recall opens no window though the mana pays it and Consultation together; Opt does, and on the emptied
+     *  library Opt's draw finishes the line where Ancestral Recall's does not. */
+    @Test
+    public void aTargetedDrawIsNoFollowUp() {
+        start(JACE_CONSULTATION);
+        addCard(JACE, ai);
+        final Card consultation = hand(CONSULTATION);
+        final Card recall = hand("Ancestral Recall");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertTrue(castOf(recall).usesTargeting());
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        final Card opt = hand(OPT);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+
+        while (!ai.getCardsIn(ZoneType.Library).isEmpty()) {
+            game.getAction().moveTo(ZoneType.Exile, ai.getCardsIn(ZoneType.Library).getFirst(), null,
+                    AbilityKey.newMap());
+        }
+        assertTrue(ComboExecute.finishesLine(ai, castOf(opt).getSubAbility()));
+        assertFalse(ComboExecute.finishesLine(ai, castOf(recall)));
     }
 }
