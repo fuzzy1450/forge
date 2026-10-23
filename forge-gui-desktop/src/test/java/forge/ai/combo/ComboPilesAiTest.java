@@ -328,6 +328,10 @@ public class ComboPilesAiTest extends AITest {
         // 742-1295 is two short (Consultation and Oracle both in the library): Consultation is a piece, no completer
         assertEquals(ids(t.oneShort()), List.of("1295-3093"));
         assertTrue(t.isPiece(CONSULTATION));
+        // the two-short line is live all the same, and its first missing piece is still no completer (review round 2)
+        assertEquals(ids(t.live()), List.of("1295-3093", "742-1295"));
+        assertEquals(t.missing(t.live().get(1)), List.of(CONSULTATION, ORACLE));
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE));
 
         assertEquals(names(pile(spell(INTUITION))), List.of(ORACLE, "Brainstorm", "Ponder"));
     }
@@ -537,5 +541,96 @@ public class ComboPilesAiTest extends AITest {
 
         t.useLines(held);
         assertEquals(names(giftsPicks(gifts)), List.of(LAB, DOOM, ORACLE, "Craw Wurm"));
+    }
+
+    // ---- review round 2 ----
+
+    /** Line 742-1295 one short and live: Demonic Consultation in hand, Thassa's Oracle and OTHERS in the library, so
+     *  Oracle is the completer and Intuition piles it. Returns the line. */
+    private ComboLines.Line liveOracleLine() {
+        start(ORACLE_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        library(ORACLE);
+        library(OTHERS);
+        assertEquals(ids(t.deckLines()), List.of("742-1295"));
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertPiledAgain(l);
+        return l;
+    }
+
+    /** {@code l} is chased again: no signal, one short, Thassa's Oracle its completer, and Intuition piles it. */
+    private void assertPiledAgain(final ComboLines.Line l) {
+        assertNull(ComboSignals.abandon(ai, l, t));
+        assertEquals(t.oneShort(), List.of(l));
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE));
+        assertNotNull(ComboFetch.intuitionPile(ai));
+    }
+
+    /** {@code signal} holds for {@code l}, which is still one short and reachable: it has no completer, and Intuition
+     *  keeps the stock pile. */
+    private void assertNotFetchedFor(final ComboLines.Line l, final ComboSignals.Signal signal) {
+        assertEquals(ComboSignals.abandon(ai, l, t), signal);
+        assertTrue(t.reachable(l));
+        assertEquals(t.missing(l), List.of(ORACLE));
+        assertEquals(t.live(), List.of());
+        assertEquals(t.oneShort(), List.of());
+        assertEquals(ComboFetch.completers(ai), List.of());
+        assertNull(ComboFetch.intuitionPile(ai));
+        final SpellAbility intuition = spell(INTUITION);
+        assertStockParity(() -> pile(intuition), lines(ORACLE_CONSULTATION));
+    }
+
+    @Test
+    public void theSignalsThatStopFetchingLeaveNoCompleters() {
+        // signals 1, 3 and 4 stop fetching (spec section 6.5) while the line stays executable: no completer and the
+        // stock pile, until the signal clears
+
+        // NO_MANA: one land left, and the line's pieces cost three
+        ComboLines.Line l = liveOracleLine();
+        final List<Card> lands = new ArrayList<>(ai.getLandsInPlay());
+        for (final Card land : lands.subList(1, lands.size())) {
+            game.getAction().moveTo(ZoneType.Graveyard, land, null, AbilityKey.newMap());
+        }
+        assertEquals(t.executable(), List.of(l));
+        assertNotFetchedFor(l, ComboSignals.Signal.NO_MANA);
+        addCard("Island", ai);
+        addCard("Swamp", ai);
+        assertPiledAgain(l);
+
+        // DANGER: 5 life against an opposing Colossal Dreadmaw, and no creature of ours to chump it
+        l = liveOracleLine();
+        ai.setLife(5, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(t.executable(), List.of(l));
+        assertNotFetchedFor(l, ComboSignals.Signal.DANGER);
+        addCard("Grizzly Bears", ai);
+        assertPiledAgain(l);
+
+        // SURER_KILL: in our MAIN1 our ready Grizzly Bears reach the opponent's 2 life, and nothing of theirs blocks
+        l = liveOracleLine();
+        opp.setLife(2, null);
+        addCard("Grizzly Bears", ai).setSickness(false);
+        assertEquals(t.executable(), List.of(l));
+        assertNotFetchedFor(l, ComboSignals.Signal.SURER_KILL);
+        opp.setLife(20, null);
+        assertPiledAgain(l);
+    }
+
+    @Test
+    public void aDeniedLineHasNoCompleters() {
+        // signal 2 stops everything (spec section 6.5): with an opposing Platinum Angel we cannot win, and the line,
+        // one short and reachable, is not even executable
+        final ComboLines.Line l = liveOracleLine();
+        final Card angel = addCard("Platinum Angel", opp);
+        game.getAction().checkStateEffects(true);
+        assertTrue(ai.cantWin());
+        assertTrue(ComboSignals.denied(ai, l, t));
+        assertEquals(t.executable(), List.of());
+        assertNotFetchedFor(l, ComboSignals.Signal.DENIED);
+
+        game.getAction().moveTo(ZoneType.Graveyard, angel, null, AbilityKey.newMap());
+        game.getAction().checkStateEffects(true);
+        assertFalse(ai.cantWin());
+        assertPiledAgain(l);
     }
 }
