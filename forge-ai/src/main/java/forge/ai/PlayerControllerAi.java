@@ -1624,6 +1624,10 @@ public class PlayerControllerAi extends PlayerController {
     @Override
     public String chooseCardName(SpellAbility sa, Predicate<ICardFace> cpp, String valid, String message) {
         if ("Demonic Consultation".equals(sa.getHostCard().getName())) {
+            // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): cast as a tutor, it names
+            // the piece its cast was for, still in our library, unless our Oracle or Fblthp trigger now waits on it.
+            final String named = ComboFetch.consultNamed(player, sa);
+            if (named != null) { return named; }
             // Name a card provably absent from our library: a hit would stop
             // the reveal early, leave cards behind, and turn the exile into a
             // guaranteed loss instead of the Oracle win.

@@ -40,7 +40,8 @@ import forge.game.zone.ZoneType;
  * Pact's own singleton-library condition is executable's. None of it while we cannot win or every opponent cannot lose
  * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
  *
- * <p>Nothing here draws a random number, keeps any state or reads the library's order. Mana is read with
+ * <p>Nothing here draws a random number, keeps any state of its own (Consultation's tutor intent lives on the
+ * tracker) or reads the library's order. Mana is read with
  * SpecialCardAi.HonestMana, whose known over-count is that one multicolour land counts toward each of its colours.
  */
 public final class ComboExecute {
@@ -127,7 +128,10 @@ public final class ComboExecute {
 
     /**
      * Our own hand cast of Demonic Consultation (SpecialCardAi.DemonicConsultation.consider, after its Oracle loop):
-     * WillPlay(100) inside a window of a Consultation line, else null for the stock refusal.
+     * WillPlay(100) inside a window of a Consultation line; else, last, WillPlay(100) as a tutor
+     * ({@link ComboFetch#consultTutor}, section 6.3, which records the piece its resolution names); else null for the
+     * stock refusal. Each decision first drops the card's earlier tutor intent, so a Consultation approved as a tutor
+     * and cast later inside a window empties the library, as the window's own decision intends.
      */
     public static AiAbilityDecision consultation(final Player ai, final SpellAbility sa) {
         if (!ownHandCast(ai, sa, Emptier.CONSULTATION)) {
@@ -137,10 +141,11 @@ public final class ComboExecute {
         if (t == null || t.deckLines().isEmpty()) {
             return null;
         }
+        t.takeConsultIntent(sa.getHostCard().getId());
         if (window(ai, t, Emptier.CONSULTATION, sa, true)) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
-        return null;
+        return ComboFetch.consultTutor(ai, sa);
     }
 
     /**
@@ -211,8 +216,9 @@ public final class ComboExecute {
         return window(ai, t, e, sa, true) ? "combo" : null;
     }
 
-    // our own spell from our hand, not a copy and not a Play-effect cast, whose host is that emptier
-    private static boolean ownHandCast(final Player ai, final SpellAbility sa, final Emptier e) {
+    // our own spell from our hand, not a copy and not a Play-effect cast, whose host is that emptier (ComboFetch's
+    // Consultation tutor asks it too)
+    static boolean ownHandCast(final Player ai, final SpellAbility sa, final Emptier e) {
         if (sa == null || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()) {
             return false;
         }

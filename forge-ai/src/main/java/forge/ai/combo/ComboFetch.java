@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
+import forge.ai.AiAbilityDecision;
+import forge.ai.AiPlayDecision;
 import forge.ai.SpecialCardAi;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
@@ -17,13 +19,15 @@ import forge.game.zone.ZoneType;
  * The fetch rules (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a decision that picks cards from our
  * library, or orders its top, takes the missing piece of a combo line exactly one piece short when that is a legal
  * choice, and keeps every piece of a live line on top; otherwise it is today's decision, unchanged. Intuition's and
- * Gifts Ungiven's piles are built from the completers, the missing pieces of the lines one piece short.
+ * Gifts Ungiven's piles are built from the completers, the missing pieces of the lines one piece short. Demonic
+ * Consultation is cast as a tutor from a deep library, and its resolution names the piece it was cast for.
  *
  * <p>Each method answers for one hook beside the stock code, and answers "the stock decision" (null, false, an empty
  * list, or a list left as it was) at once for a deck holding none of piece 1's lines. Nothing here draws a random
- * number, keeps any state or reads the library's order: a piece is fetched for by name, from the cards the decision is
- * already allowed to choose among (the search's list or library, the dig's or the Vault's cards in view), and the
- * tracker reads our library as contents only.
+ * number, keeps any state of its own or reads the library's order: a piece is fetched for by name, from the cards the
+ * decision is already allowed to choose among (the search's list or library, the dig's or the Vault's cards in view,
+ * the library Consultation reveals), and the tracker reads our library as contents only. Consultation's tutor intent,
+ * the one thing carried from a decision to a later one, lives on the AI's own tracker.
  */
 public final class ComboFetch {
     /** Which pieces a fetch to a destination may take: any, or only a piece that may start on the battlefield. */
@@ -35,6 +39,9 @@ public final class ComboFetch {
     /** Gifts Ungiven reveals four and the opponent bins two: with three completers among them, two left still hold
      *  one. */
     private static final int GIFTS_COMPLETERS = 3;
+    /** The smallest library Demonic Consultation tutors from: 6/75 = 8%, the chance the named piece is among the six
+     *  exiled first, which turns the tutor into an exile of the whole library. */
+    public static final int CONSULT_TUTOR_MIN_LIBRARY = 75;
 
     private ComboFetch() {
     }
@@ -221,6 +228,56 @@ public final class ComboFetch {
             }
         }
         return null;
+    }
+
+    /**
+     * Demonic Consultation as a tutor (section 6.3; ComboExecute.consultation, after every winner window), or null for
+     * the stock refusal: our own hand cast, a library of at least {@link #CONSULT_TUTOR_MIN_LIBRARY} cards, and a
+     * {@link ComboTracker#oneShort} line, by rank, that does not name Consultation (cast as a tutor, it is no emptier
+     * of that line) and whose missing piece is in our library. WillPlay(100), with that piece recorded as the cast's
+     * intent for its resolution's namer ({@link #consultNamed}).
+     */
+    public static AiAbilityDecision consultTutor(final Player ai, final SpellAbility sa) {
+        if (!ComboExecute.ownHandCast(ai, sa, ComboLines.Emptier.CONSULTATION)) {
+            return null;
+        }
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null || t.deckLines().isEmpty()
+                || ai.getCardsIn(ZoneType.Library).size() < CONSULT_TUTOR_MIN_LIBRARY) {
+            return null;
+        }
+        for (final ComboLines.Line l : t.oneShort()) {
+            if (l.names().contains(ComboLines.Emptier.CONSULTATION.card)) {
+                continue;
+            }
+            final String name = t.missing(l).get(0);
+            if (t.find(name, ZoneType.Library) != null) {
+                t.setConsultIntent(sa.getHostCard().getId(), name);
+                return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The name Demonic Consultation's resolution chooses (PlayerControllerAi.chooseCardName, ahead of the stock
+     * absent-name loop), or null for the stock namer: the intent {@link #consultTutor} recorded for {@code sa}'s host,
+     * taken (removed) whatever the answer, while no trigger of ours hosted by Thassa's Oracle or Fblthp, Impossibly
+     * Lost is on the stack (Consultation is that trigger's emptier now, and must exile the whole library) and that
+     * piece is still in our library.
+     */
+    public static String consultNamed(final Player ai, final SpellAbility sa) {
+        final Card host = sa.getHostCard();
+        final ComboTracker t = ComboTracker.of(ai);
+        if (host == null || t == null) {
+            return null;
+        }
+        final String name = t.takeConsultIntent(host.getId());
+        if (name == null || t.triggerOnOurStack(ComboLines.Winner.ORACLE.card)
+                || t.triggerOnOurStack(ComboLines.Winner.FBLTHP.card)) {
+            return null;
+        }
+        return t.find(name, ZoneType.Library) != null ? name : null;
     }
 
     // what a fetch to the destination may take: hand and the top of the library any piece, the battlefield a piece

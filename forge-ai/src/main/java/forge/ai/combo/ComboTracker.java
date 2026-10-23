@@ -1,6 +1,7 @@
 package forge.ai.combo;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -26,7 +27,8 @@ import forge.item.PaperCard;
  * GameCopier copies and mind-slave controllers get fresh trackers with no game-start hook. The first query matches the
  * deck against the lines and keeps the result; every other query scans our zones at that moment for the names it is
  * asked about, since tests' {@code addCardToZone} and the engine's moves change zones without any event this could
- * follow. Nothing here draws a random number or reads the library's order.
+ * follow. The one other state kept is Demonic Consultation's tutor intent, from its cast decision to its resolution's
+ * namer (section 6.3). Nothing here draws a random number or reads the library's order.
  */
 public final class ComboTracker {
     /** Where a piece is, read in this order: the first place that holds it wins. GONE is anywhere else, the graveyard
@@ -38,6 +40,9 @@ public final class ComboTracker {
     // the match, null until the first query: the lines the deck holds, and their names, the set read by lookups only
     private List<ComboLines.Line> deckLines;
     private Set<String> pieces;
+    // Demonic Consultation's tutor intents (section 6.3), by the id of the Consultation card cast: the piece its cast
+    // was approved to fetch, recorded at the cast decision and taken by its resolution's namer; read by lookups only
+    private final Map<Integer, String> consultIntents = new HashMap<>();
 
     /** The tracker of {@code ai}'s lines among {@code source}; nothing is read until a query. */
     public ComboTracker(final Player ai, final List<ComboLines.Line> source) {
@@ -199,6 +204,18 @@ public final class ComboTracker {
             }
         }
         return false;
+    }
+
+    /** Records that the Demonic Consultation card {@code hostId} is cast as a tutor for {@code name}
+     *  ({@link ComboFetch#consultTutor}), replacing any earlier intent of that card. */
+    public void setConsultIntent(final int hostId, final String name) {
+        consultIntents.put(hostId, name);
+    }
+
+    /** The piece the Demonic Consultation card {@code hostId} was last approved to fetch, removed; null when none is
+     *  recorded ({@link ComboFetch#consultNamed}). */
+    public String takeConsultIntent(final int hostId) {
+        return consultIntents.remove(hostId);
     }
 
     // a line's standing prerequisites: no piece gone; Thassa's Oracle in play wins only through its entering trigger,
