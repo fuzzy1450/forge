@@ -23,6 +23,7 @@ import forge.ai.PlayerControllerAi;
 import forge.ai.SpecialCardAi;
 import forge.ai.ability.ChangeZoneAi;
 import forge.game.Game;
+import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CardLists;
@@ -433,5 +434,108 @@ public class ComboPilesAiTest extends AITest {
         assertTrue(ai.hasKeyword("LimitSearchLibrary"));
         assertTrue(ComboFetch.giftsReady(ai));
         assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, spell(GIFTS)));
+    }
+
+    // ---- review round 1 ----
+
+    @Test
+    public void intuitionWithTwoCompletersPilesTheCreaturePieceAndTwoSpells() {
+        // two completers make no all-completer pile, whose third card the opponent could hand back: the first is a
+        // creature, so the pile is it and the two cheapest spells that are no piece
+        completerBoard(false, OTHERS.size());
+        assertEquals(ids(t.oneShort()), List.of("742-2836", "742-1295"));
+        assertEquals(ComboFetch.completers(ai), List.of(LAB, ORACLE));
+
+        final List<Card> pile = pile(spell(INTUITION));
+        assertEquals(names(pile), List.of(LAB, "Counterspell", "Divination"));
+        assertSame(pile.get(0), t.find(LAB, ZoneType.Library));
+    }
+
+    @Test
+    public void intuitionWithFourCompletersTakesTheFirstThreeInRankOrder() {
+        // ranks 742-2836, 742-3096 and x-1 (all at one), then 742-1295 (three): Thassa's Oracle, the dearest line's
+        // piece, stays out of the pile
+        start(ORACLE_CONSULTATION, LAB_CONSULTATION, JACE_CONSULTATION, DOOM_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        library(ORACLE, LAB, JACE, DOOM);
+        library(OTHERS);
+        assertEquals(ids(t.oneShort()), List.of("742-2836", "742-3096", "x-1", "742-1295"));
+        assertEquals(ComboFetch.completers(ai), List.of(LAB, JACE, DOOM, ORACLE));
+
+        assertEquals(names(pile(spell(INTUITION))), List.of(LAB, JACE, DOOM));
+    }
+
+    @Test
+    public void theGiftsRouteServesGiftsUngivenAlone() {
+        // three completers in the library, and another search (Entomb's, to the graveyard): it keeps its stock pick and
+        // draws, where Gifts Ungiven's completer pick would bin a piece
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION, LAB_CONSULTATION, DOOM_CONSULTATION);
+        completerBoard(true, OTHERS.size());
+        assertTrue(ComboFetch.giftsReady(ai));
+        final SpellAbility entomb = spell("Entomb");
+        assertEquals(entomb.getParam("Destination"), "Graveyard");
+
+        final Card stock = assertStockParity(() -> ChangeZoneAi.chooseCardToHiddenOriginChangeZone(ZoneType.Graveyard,
+                Arrays.asList(ZoneType.Library), entomb, new CardCollection(ai.getCardsIn(ZoneType.Library)), ai, ai),
+                held);
+        assertNotNull(stock);
+        assertFalse(List.of(LAB, DOOM, ORACLE).contains(ComboTracker.nameOf(stock)), "the stock pick " + stock);
+    }
+
+    @Test
+    public void deadLinesHaveNoCompleters() {
+        // Demonic Consultation in the graveyard is gone (Review Focus 5): 742-1295 is dead, although Thassa's Oracle is
+        // its only piece in the library, and nothing is piled for it
+        start(ORACLE_CONSULTATION);
+        final Card consultation = addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        library(ORACLE);
+        library(OTHERS);
+        // Consultation in hand: the line is one short, and the pile is its creature piece
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE));
+        assertNotNull(ComboFetch.intuitionPile(ai));
+        game.getAction().moveTo(ZoneType.Graveyard, consultation, null, AbilityKey.newMap());
+        assertEquals(t.where(CONSULTATION), ComboTracker.Where.GONE);
+        assertEquals(ids(t.deckLines()), List.of("742-1295"));
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(ORACLE));
+        assertEquals(t.live(), List.of());
+        assertEquals(ComboFetch.completers(ai), List.of());
+        assertNull(ComboFetch.intuitionPile(ai));
+        final SpellAbility consultationGone = spell(INTUITION);
+        assertStockParity(() -> pile(consultationGone), lines(ORACLE_CONSULTATION));
+
+        // Tainted Pact over a library holding two Islands stops at the second (Review Focus 1): 1295-3093 is dead too
+        start(PACT_ORACLE);
+        addCardToZone(PACT, ai, ZoneType.Hand);
+        library(ORACLE, "Island", "Ponder", "Brainstorm");
+        library(BIG);
+        // one Island: the library is singleton, and the pile is the line's creature piece
+        assertTrue(t.singletonLibrary());
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE));
+        assertNotNull(ComboFetch.intuitionPile(ai));
+        library("Island");
+        assertFalse(t.singletonLibrary());
+        assertEquals(ids(t.deckLines()), List.of("1295-3093"));
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(ORACLE));
+        assertEquals(t.live(), List.of());
+        assertEquals(ComboFetch.completers(ai), List.of());
+        assertNull(ComboFetch.intuitionPile(ai));
+        final SpellAbility twoIslands = spell(INTUITION);
+        assertStockParity(() -> pile(twoIslands), lines(PACT_ORACLE));
+    }
+
+    @Test
+    public void keyCardsDoNotBeatTheGiftsCompleters() {
+        // the Gifts route sits ahead of KeyCards, as the search pick does
+        // (ComboFetchAiTest.comboPickGoesAheadOfKeyCards), and KeyCards stays the fallback after it: the fourth pick
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION, LAB_CONSULTATION, DOOM_CONSULTATION);
+        completerBoard(true, OTHERS.size());
+        ai.getRegisteredPlayer().getDeck().addKeyCard("Craw Wurm");
+        final SpellAbility gifts = spell(GIFTS);
+        // with no line the deck's KeyCards decide: Craw Wurm
+        t.useLines(List.of());
+        assertEquals(pick(gifts, new CardCollection(ai.getCardsIn(ZoneType.Library))).getName(), "Craw Wurm");
+
+        t.useLines(held);
+        assertEquals(names(giftsPicks(gifts)), List.of(LAB, DOOM, ORACLE, "Craw Wurm"));
     }
 }
