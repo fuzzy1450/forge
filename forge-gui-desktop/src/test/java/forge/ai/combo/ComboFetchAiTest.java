@@ -19,6 +19,7 @@ import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.testng.annotations.Test;
 
 import forge.ai.AITest;
+import forge.ai.AiCardMemory;
 import forge.ai.AiController;
 import forge.ai.ComputerUtil;
 import forge.ai.LobbyPlayerAi;
@@ -48,6 +49,9 @@ public class ComboFetchAiTest extends AITest {
     private static final String EXILE = "F|88|H|Exile your library";
     private static final String ORACLE_CONSULTATION = "V|742-1295|3|{U}{U}{B}|2,88|H:Demonic Consultation|H:Thassa's Oracle";
     private static final String LAB_CONSULTATION = "V|742-2836|1|{B}|2,88|H:Demonic Consultation|B:Laboratory Maniac";
+    // 742-1295 at mana value 1: it ties 742-2836 and ranks ahead of it on the lower id
+    private static final String CHEAP_ORACLE_CONSULTATION =
+            "V|742-1295|1|{U}{U}{B}|2,88|H:Demonic Consultation|H:Thassa's Oracle";
 
     private static final String ORACLE = "Thassa's Oracle";
     private static final String CONSULTATION = "Demonic Consultation";
@@ -57,6 +61,10 @@ public class ComboFetchAiTest extends AITest {
     // ten distinct names, Consultation on top and Craw Wurm second (fillLibrary makes ten of one name)
     private static final List<String> LIBRARY = Arrays.asList(CONSULTATION, WURM, "Runeclaw Bear", "Grizzly Bears",
             "Hill Giant", "Serra Angel", "Shivan Dragon", "Llanowar Elves", "Counterspell", "Divination");
+
+    // Two cards kept on top shuffle with one draw, nextInt(2): seed 1 leaves the pair as it is (so does every seed
+    // from 1 to 12) and seed 12345 swaps it, so these two try both orders
+    private static final List<Long> SHUFFLE_SEEDS = List.of(1L, 12345L);
 
     private Game game;
     private Player ai;
@@ -117,8 +125,14 @@ public class ComboFetchAiTest extends AITest {
 
     /** The chooser as IntuitionPickAiTest's pick calls it: our own search of our whole library, decided by us. */
     private Card pick(final ZoneType destination, final SpellAbility sa) {
+        return pick(destination, sa, ai);
+    }
+
+    /** The same search of our library, decided by {@code decider}; a fresh list each call, since the stock pick
+     *  edits the list it is given. */
+    private Card pick(final ZoneType destination, final SpellAbility sa, final Player decider) {
         return ChangeZoneAi.chooseCardToHiddenOriginChangeZone(destination, Arrays.asList(ZoneType.Library), sa,
-                new CardCollection(ai.getCardsIn(ZoneType.Library)), ai, ai);
+                new CardCollection(ai.getCardsIn(ZoneType.Library)), ai, decider);
     }
 
     /** Stock parity: {@code decision} reseeded alike, once with no line and once with {@code others}, gives the same
@@ -255,11 +269,15 @@ public class ComboFetchAiTest extends AITest {
         final Card consultation = oracleBoard();
         final Card island = addCardToZone("Island", ai, ZoneType.Library);
         final PlayerControllerAi pc = (PlayerControllerAi) ai.getController();
-        // whatever the shuffle of the cards kept on top does, the piece ends first: on top
-        for (int seed = 1; seed <= 8; seed++) {
+        // whatever the shuffle of the cards kept on top does, the piece ends first: on top. The shuffle's draw is the
+        // scry's only one, so it is each seed's first, and SHUFFLE_SEEDS give it both answers
+        assertNotEquals(new Random(1).nextInt(2), new Random(12345).nextInt(2));
+        for (final long seed : SHUFFLE_SEEDS) {
             MyRandom.setRandom(new Random(seed));
+            final long before = MyRandom.callCount();
             final ImmutablePair<CardCollection, CardCollection> scry =
                     pc.arrangeForScry(new CardCollection(List.of(island, consultation)));
+            assertEquals(MyRandom.callCount() - before, 1, "seed " + seed);
             assertSame(scry.getLeft().get(0), consultation, "seed " + seed);
             assertEquals(list(scry.getRight()), List.of(), "seed " + seed);
         }
@@ -344,10 +362,13 @@ public class ComboFetchAiTest extends AITest {
         // eleven cards: more than the Default profile's SURVEIL_NUM_CARDS_IN_LIBRARY_TO_BAIL (10), so the rule runs
         final Card island = addCardToZone("Island", ai, ZoneType.Library);
         final PlayerControllerAi pc = (PlayerControllerAi) ai.getController();
-        for (int seed = 1; seed <= 8; seed++) {
+        // both orders of the shuffle, as in arrangeForScryPutsThePieceOnTop
+        for (final long seed : SHUFFLE_SEEDS) {
             MyRandom.setRandom(new Random(seed));
+            final long before = MyRandom.callCount();
             final ImmutablePair<CardCollection, CardCollection> surveil =
                     pc.arrangeForSurveil(new CardCollection(List.of(island, consultation)));
+            assertEquals(MyRandom.callCount() - before, 1, "seed " + seed);
             assertSame(surveil.getLeft().get(0), consultation, "seed " + seed);
             assertEquals(list(surveil.getRight()), List.of(), "seed " + seed);
         }
@@ -459,6 +480,159 @@ public class ComboFetchAiTest extends AITest {
         assertFalse(ComboFetch.keepsOnTop(ai, consultation));
     }
 
+    // review round 1
+
+    @Test
+    public void theCheapestOneShortLineThatTheListHoldsIsServed() {
+        start(LAB_CONSULTATION, ORACLE_CONSULTATION);
+        addCard("Swamp", ai);   // Laboratory Maniac (3) and Consultation (1) cost 4
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Library);
+        final Card lab = addCardToZone(LAB, ai, ZoneType.Library);
+        final Card wurm = addCardToZone(WURM, ai, ZoneType.Library);
+        // two lines one piece short: Laboratory Maniac's (mana value 1) ranks ahead of Oracle's (3)
+        assertEquals(ids(t.oneShort()), List.of("742-2836", "742-1295"));
+        final SpellAbility tutor = spell("Demonic Tutor");
+        final SpellAbility impulse = spell("Impulse");
+
+        // both missing pieces offered, Oracle first: the first line's piece is the pick, not the first card
+        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(oracle, lab, wurm)), ai, ai),
+                lab);
+        assertSame(ComboFetch.digPick(ai, impulse, List.of(oracle, lab, wurm), ai), lab);
+        // the first line's piece not offered: the next line is served
+        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(wurm, oracle)), ai, ai),
+                oracle);
+        assertSame(ComboFetch.digPick(ai, impulse, List.of(wurm, oracle), ai), oracle);
+    }
+
+    @Test
+    public void aBattlefieldFetchSkipsALineWhosePieceCannotStartThereForTheNextLine() {
+        start(CHEAP_ORACLE_CONSULTATION, LAB_CONSULTATION);
+        addCard("Swamp", ai);   // Laboratory Maniac (3) and Consultation (1) cost 4
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Library);
+        final Card lab = addCardToZone(LAB, ai, ZoneType.Library);
+        // Oracle's line ranks first (both at 1, the lower id first), and its missing piece starts in hand only (H)
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "742-2836"));
+        final List<Card> both = List.of(oracle, lab);
+
+        // to the battlefield the first line is skipped, not the end of the pick: Laboratory Maniac (B)
+        assertSame(ComboFetch.searchPick(spell("Chord of Calling"), ZoneType.Battlefield, new CardCollection(both),
+                ai, ai), lab);
+        assertSame(ComboFetch.digPick(ai, spell("Collected Company"), both, ai), lab);
+        // to the hand the first line's piece is the pick
+        assertSame(ComboFetch.searchPick(spell("Demonic Tutor"), ZoneType.Hand, new CardCollection(both), ai, ai),
+                oracle);
+    }
+
+    @Test
+    public void aBattlefieldFetchTakesNothingWhenTheMissingPieceIsTheOneThatCannotStartThere() {
+        start(LAB_CONSULTATION);
+        addCard("Swamp", ai);   // Laboratory Maniac (3) and Consultation (1) cost 4
+        addCardToZone(LAB, ai, ZoneType.Hand);   // the line's piece that may start on the battlefield is held
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        assertEquals(ids(t.oneShort()), List.of("742-2836"));
+        final CardCollection library = new CardCollection(ai.getCardsIn(ZoneType.Library));
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        assertSame(ComboFetch.searchPick(spell("Demonic Tutor"), ZoneType.Hand, library, ai, ai), consultation);
+
+        // the missing piece, Consultation, is H: nothing goes to the battlefield, though the line's other piece is B
+        assertNull(ComboFetch.searchPick(spell("Chord of Calling"), ZoneType.Battlefield, library, ai, ai));
+        assertNull(ComboFetch.digPick(ai, spell("Collected Company"), list(library), ai));
+    }
+
+    @Test
+    public void aSearchDecidedByAnotherPlayerIsTheStockPickThroughTheChooser() {
+        final Card consultation = oracleBoard();
+        final SpellAbility tutor = spell("Demonic Tutor");
+        // through the chooser, our library searched with an opponent deciding: the stock pick and the stock draws,
+        // although we hold the line; told counts the seeds whose stock pick is not the piece itself
+        int told = 0;
+        for (final long seed : List.of(7L, 8L, 9L, 10L, 11L, 12L)) {
+            t.useLines(List.of());
+            MyRandom.setRandom(new Random(seed));
+            long before = MyRandom.callCount();
+            final Card stock = pick(ZoneType.Hand, tutor, opp);
+            final long stockDraws = MyRandom.callCount() - before;
+            t.useLines(lines(ORACLE_CONSULTATION));
+            MyRandom.setRandom(new Random(seed));
+            before = MyRandom.callCount();
+            assertSame(pick(ZoneType.Hand, tutor, opp), stock, "seed " + seed);
+            assertEquals(MyRandom.callCount() - before, stockDraws, "seed " + seed);
+            told += stock == consultation ? 0 : 1;
+        }
+        assertTrue(told > 0, "every seed's stock pick was the piece");
+        // decided by us, the same search takes the piece
+        assertSame(pick(ZoneType.Hand, tutor), consultation);
+    }
+
+    @Test
+    public void bothPiecesOfALineStillTwoShortStayOnTopInOrder() {
+        final Card consultation = oracleBoard();
+        final Card wurm = t.find(WURM, ZoneType.Library);
+        game.getAction().moveTo(ZoneType.Library, t.find(ORACLE, ZoneType.Hand), null, AbilityKey.newMap());
+        final Card oracle = t.find(ORACLE, ZoneType.Library);
+        assertEquals(t.oneShort(), List.of());
+        assertEquals(ids(t.live()), List.of("742-1295"));
+
+        // two short, yet live: both pieces stay on top (any live line, not only a one-short one)
+        assertTrue(ComboFetch.keepsOnTop(ai, consultation));
+        assertTrue(ComboFetch.keepsOnTop(ai, oracle));
+        assertFalse(ComputerUtil.scryWillMoveCardToBottomOfLibrary(ai, consultation));
+        assertFalse(ComputerUtil.scryWillMoveCardToBottomOfLibrary(ai, oracle));
+        // and pieceFirst keeps the pieces' own order
+        final List<Card> cards = new ArrayList<>(List.of(wurm, oracle, consultation));
+        ComboFetch.pieceFirst(ai, cards);
+        assertEquals(cards, List.of(oracle, consultation, wurm));
+    }
+
+    @Test
+    public void aPieceSixthFromTheTopIsDugForNotKept() {
+        // the five in view are the top five: Consultation, sixth, is below them, and the AI has not seen it
+        final SpellAbility look = vaultLook(vaultLibrary(14, 5));
+        t.useLines(List.of());
+        assertFalse(willDig(look));
+
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertTrue(willDig(look));
+    }
+
+    @Test
+    public void aComboDigIsRememberedSoThatMaxDigsBoundsIt() {
+        final SpellAbility look = vaultLook(vaultLibrary(14, 7));
+        final List<Card> top = list(ai.getCardsIn(ZoneType.Library)).subList(0, 5);
+        assertTrue(willDig(look));
+        // the five it bottoms are recorded as the stock dig records them: digsSoFar counts them against MAX_DIGS
+        for (final Card c : top) {
+            assertTrue(AiCardMemory.isRememberedCard(ai, c, AiCardMemory.MemorySet.LIM_DULS_VAULT_DUG));
+        }
+    }
+
+    @Test
+    public void aComboDigStaysBehindTheDigCapTheLibraryMarginAndTheLifeFloor() {
+        // each board digs for Consultation below the five until a stock guard stands in front of it
+        assertTrue(willDig(vaultLook(vaultLibrary(25, 8))));
+        // three fives already bottomed: MAX_DIGS
+        final SpellAbility capped = vaultLook(vaultLibrary(25, 8));
+        final List<Card> lib = list(ai.getCardsIn(ZoneType.Library));
+        for (int i = lib.size() - 15; i < lib.size(); i++) {
+            AiCardMemory.rememberCard(ai, lib.get(i), AiCardMemory.MemorySet.LIM_DULS_VAULT_DUG);
+        }
+        assertFalse(willDig(capped));
+
+        // the first dig needs two unseen fives and the margin of 3: 13 cards dig, 12 do not
+        assertTrue(willDig(vaultLook(vaultLibrary(13, 7))));
+        assertFalse(willDig(vaultLook(vaultLibrary(12, 7))));
+
+        // life 10: paying 1 goes below the floor
+        assertTrue(willDig(vaultLook(vaultLibrary(14, 7))));
+        final SpellAbility floored = vaultLook(vaultLibrary(14, 7));
+        ai.setLife(10, null);
+        assertFalse(willDig(floored));
+    }
+
     // Lim-Dul's Vault's last move: the remembered five put back on top, in the order the AI gives
     private SpellAbility vaultReorder() {
         final Card vault = addCardToZone(SpecialCardAi.LimDulsVault.NAME, ai, ZoneType.Hand);
@@ -495,5 +669,17 @@ public class ComboFetchAiTest extends AITest {
 
     private boolean willDig(final SpellAbility look) {
         return SpecialCardAi.LimDulsVault.willDig(ai, look, new Cost("PayLife<1>", false));
+    }
+
+    /** A Vault library of {@code size} cards, top first, Demonic Consultation at {@code pieceAt}: the top five hold
+     *  two Islands while the piece is below them, which the land-light stock rule keeps (its answer: no dig). */
+    private static List<String> vaultLibrary(final int size, final int pieceAt) {
+        final List<String> filler = List.of("Island", "Grizzly Bears", "Island", "Hill Giant", "Serra Angel",
+                "Shivan Dragon", WURM, "Runeclaw Bear", "Llanowar Elves", "Counterspell", "Divination", "Opt",
+                "Cancel", "Mulldrifter", "Air Elemental", "Forest", "Forest", "Forest", "Forest", "Forest",
+                "Mountain", "Mountain", "Mountain", "Mountain", "Mountain");
+        final List<String> lib = new ArrayList<>(filler.subList(0, size - 1));
+        lib.add(pieceAt, CONSULTATION);
+        return lib;
     }
 }
