@@ -842,6 +842,131 @@ public class ComboSignalsTest extends AITest {
         assertEquals(abandon(l), Signal.SURER_KILL);
     }
 
+    // ---- review round 2 ----
+
+    @Test
+    public void aSpentOracleIsNotRevivedByAnotherCardsTrigger() {
+        // a spent Oracle in play waits for its own entering trigger: an entering trigger of ours that some other card
+        // hosts is not it
+        start(ORACLE_CONSULTATION);
+        addCard(ORACLE, ai);
+        final Card consultation = addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        manaForTheLine();
+        assertEquals(t.live(), List.of());
+
+        final SpellAbilityStackInstance other = enters(addCardToZone("Elvish Visionary", ai, ZoneType.Hand));
+        assertSame(other.getActivatingPlayer(), ai);
+        assertEquals(t.where(ORACLE), ComboTracker.Where.BATTLEFIELD);
+        assertEquals(t.live(), List.of());
+        assertEquals(t.executable(), List.of());
+        assertEquals(t.oneShort(), List.of());
+        assertFalse(t.protects(consultation));
+    }
+
+    @Test
+    public void aSpentOracleInPlayLeavesTheLabLinesAlone() {
+        // the spent-Oracle rule kills only the lines Oracle wins: Laboratory Maniac's needs no entering trigger
+        start(ORACLE_CONSULTATION, LAB_CONSULTATION);
+        final Card oracle = addCard(ORACLE, ai);
+        addCard(LAB, ai);
+        final Card consultation = addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        manaForTheLine();
+        assertTrue(game.getStack().isEmpty());
+        assertEquals(ids(t.deckLines()), List.of("742-1295", "742-2836"));
+
+        assertEquals(ids(t.live()), List.of("742-2836"));
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        assertTrue(t.protects(consultation));
+        assertFalse(t.protects(oracle), "the spent Oracle's only line is dead");
+    }
+
+    @Test
+    public void dangerAddsUpEveryOpponentsHits() {
+        // three seats: one ready Grizzly Bears for each opponent, 2 + 2
+        ComboLines.Line l = threeSeatOracleLine();
+        ready(BEARS, 1, game.getPlayers().get(0));
+        ready(BEARS, 1, game.getPlayers().get(2));
+        ai.setLife(5, null);
+        assertNull(abandon(l), "2 + 2 against 5");
+        ai.setLife(4, null);
+        assertEquals(abandon(l), Signal.DANGER, "2 + 2 against 4: both opponents' hits count");
+
+        // a fresh three seats: a ready Colossal Dreadmaw held only by the opponent the reading meets second (turn
+        // order from us, seat 2 then seat 0)
+        l = threeSeatOracleLine();
+        final Player second = ai.getOpponents().get(1);
+        ready(DREADMAW, 1, second);
+        ai.setLife(5, null);
+        assertEquals(abandon(l), Signal.DANGER);
+    }
+
+    @Test
+    public void aLineWithNothingMissingIsNotOneShort() {
+        // every piece in hand: live, nothing to fetch, so not one short
+        start(ORACLE_CONSULTATION);
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        final Card consultation = addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        manaForTheLine();
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertEquals(t.missing(l), List.of());
+        assertEquals(t.oneShort(), List.of());
+
+        // the same line with Consultation in the library is one short
+        ai.getZone(ZoneType.Hand).remove(consultation);
+        addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        assertEquals(t.missing(l), List.of(CONSULTATION));
+        assertEquals(ids(t.oneShort()), List.of("742-1295"));
+    }
+
+    @Test
+    public void linvalaDeniesOnlyDoomsLine() {
+        // Linvala bars our Doctor Doom's {T} ability, which only the Doom line uses
+        start(DOOM_CONSULTATION, ORACLE_CONSULTATION);
+        addCard(DOOM, ai);
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        manaForTheLine();
+        assertEquals(ids(t.deckLines()), List.of("x-1", "742-1295"));
+        assertEquals(ids(t.live()), List.of("x-1", "742-1295"));
+
+        addCard("Linvala, Keeper of Silence", opp);
+        assertTrue(ComboSignals.denied(ai, t.deckLines().get(0), t));
+        assertFalse(ComboSignals.denied(ai, t.deckLines().get(1), t));
+        assertEquals(ids(t.live()), List.of("742-1295"), "Doom's line is denied, Oracle's is not");
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+    }
+
+    @Test
+    public void surerKillByBurnWithExactlyTheMana() {
+        // a burn spell whose mana value is exactly the mana we can make now: Lightning Bolt and one Mountain
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Mountain");
+        final ComboLines.Line l = t.deckLines().get(0);
+        opp.setLife(3, null);
+        assertNull(abandon(l), "Consultation's 1 against one Mountain, and nothing threatens");
+
+        addCardToZone("Lightning Bolt", ai, ZoneType.Hand);
+        assertEquals(abandon(l), Signal.SURER_KILL, "Bolt's 1 against the one Mountain");
+    }
+
+    /** A three-player game whose AI (player 1, in its own MAIN1) holds the default board: line 742-1295, Oracle in
+     *  hand, Consultation in the library, and the line's mana. */
+    private ComboLines.Line threeSeatOracleLine() {
+        game = initAndCreateThreePlayerGame();
+        ai = game.getPlayers().get(1);
+        opp = null;
+        t = aiOf(ai).getComboTracker();
+        t.useLines(lines(ORACLE_CONSULTATION));
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        manaForTheLine();
+        assertEquals(ids(t.deckLines()), List.of("742-1295"));
+        return t.deckLines().get(0);
+    }
+
     /** {@code c} enters the battlefield and its entering trigger goes on the stack (the move holds the trigger as
      *  waiting; the state check runs it): the stack's top, that trigger. */
     private SpellAbilityStackInstance enters(final Card c) {
