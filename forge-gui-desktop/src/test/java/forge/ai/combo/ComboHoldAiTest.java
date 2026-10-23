@@ -29,6 +29,7 @@ import forge.game.Game;
 import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
+import forge.game.cost.Cost;
 import forge.game.cost.CostExile;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -507,5 +508,184 @@ public class ComboHoldAiTest extends AITest {
         }
         assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
         assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
+    }
+
+    // ---- review round 1 ----
+
+    /** {@code getCardsToDiscard(min, max, cards, null)}'s names (a fresh list each call). */
+    private List<String> discard(final int min, final int max, final Card... cards) {
+        return names(aiOf(ai).getCardsToDiscard(min, max, new CardCollection(Arrays.asList(cards)), null));
+    }
+
+    /** ComputerUtil.chooseExileFromList's names for Force of Will's pitch of one card among {@code cards}. */
+    private List<String> pitchOne(final Card force, final SpellAbility fowAltSa, final Card... cards) {
+        return names(ComputerUtil.chooseExileFromList(ai, new CardCollection(Arrays.asList(cards)), force, 1,
+                fowAltSa, false));
+    }
+
+    @Test
+    public void otherSpellsOfOursAreNotHeld() {
+        // the hold is for Thassa's Oracle alone: no other spell of ours in hand waits for the go-off
+        final Card oracle = heldBoard();
+        final Card brainstorm = hand(BRAINSTORM);
+        final Card wurm = hand(WURM);
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+        assertFalse(ComboHold.vetoesCast(ai, castOf(brainstorm)), "Brainstorm held");
+        assertFalse(ComboHold.vetoesCast(ai, castOf(wurm)), "Craw Wurm held");
+    }
+
+    @Test
+    public void theHeldOracleLeavesTheOtherPlays() {
+        // the decision passes over the held Oracle to the next play: a one-drop, which stock casts after the Oracle
+        // (the higher mana value first)
+        final Card oracle = heldBoard();
+        final Card merfolk = hand("Merfolk of the Pearl Trident");
+        t.useLines(List.of());
+        assertSame(decision(), oracle);
+
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+        assertSame(decision(), merfolk, "the hold stopped the other plays too");
+        assertFalse(ComboHold.vetoesCast(ai, castOf(merfolk)));
+    }
+
+    @Test
+    public void aCopiedCastIsNotHeld() {
+        final Card oracle = heldBoard();
+        final SpellAbility cast = castOf(oracle);
+        assertTrue(ComboHold.vetoesCast(ai, cast));
+        cast.setCopied(true);
+        assertFalse(ComboHold.vetoesCast(ai, cast));
+        cast.setCopied(false);
+        assertTrue(ComboHold.vetoesCast(ai, cast));
+    }
+
+    @Test
+    public void aPlayEffectCastIsNotHeld() {
+        final Card oracle = heldBoard();
+        final SpellAbility cast = castOf(oracle);
+        assertTrue(ComboHold.vetoesCast(ai, cast));
+        cast.setCastFromPlayEffect(true);
+        assertFalse(ComboHold.vetoesCast(ai, cast));
+        cast.setCastFromPlayEffect(false);
+        assertTrue(ComboHold.vetoesCast(ai, cast));
+    }
+
+    @Test
+    public void goOffNowReadsOnlyTheLinesOracleWins() {
+        // Laboratory Maniac's line has its emptier, Consultation, in hand with the mana; the Oracle's own line has its
+        // emptier, Tainted Pact, in the library: no go-off, and the Oracle waits for Pact's line
+        start(PACT_ORACLE, LAB_CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        hand(CONSULTATION);
+        library(PACT, LAB, "Island");
+        lands("Island", "Island", "Swamp");
+        assertEquals(ids(t.live()), List.of("1295-3093", "742-2836"));
+        assertEquals(ids(t.executable()), List.of("1295-3093", "742-2836"));
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)), "went off on a Laboratory Maniac line's emptier");
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+    }
+
+    @Test
+    public void goOffNowIgnoresTheAbandonSignals() {
+        // a win now beats surviving: the danger that ends the hold does not stop the go-off
+        final Card oracle = goOffBoard("Island", "Island", "Swamp");
+        assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)));
+        for (int i = 0; i < 4; i++) {
+            addCard("Colossal Dreadmaw", opp).setSickness(false);
+        }
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEquals(t.live(), List.of());
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)), "danger stopped the go-off");
+        assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
+    }
+
+    @Test
+    public void thePitchsHostIsNoFodder() {
+        // an exile from hand of any card, "Other" not in its type: the spell paying it is no fodder for its own cost,
+        // so the Oracle is the only card left to pay with
+        start(ORACLE_CONSULTATION);
+        hand(ORACLE);
+        library(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        final SpellAbility sa = castOf(hand(BRAINSTORM));
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        final Cost anyCard = new Cost("ExileFromHand<1/Card>", false);
+        assertTrue(ComboHold.vetoesPitch(ai, sa, anyCard));
+        // a second card to pay with lifts the veto
+        hand(WURM);
+        assertFalse(ComboHold.vetoesPitch(ai, sa, anyCard));
+    }
+
+    @Test
+    public void thePitchCountsTheCostsAmount() {
+        start(ORACLE_CONSULTATION);
+        hand(ORACLE);
+        library(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        final SpellAbility sa = castOf(hand(BRAINSTORM));
+        hand(WURM);
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        // one card: Craw Wurm pays it; two: the Oracle would be the second
+        assertFalse(ComboHold.vetoesPitch(ai, sa, new Cost("ExileFromHand<1/Card.Other>", false)));
+        assertTrue(ComboHold.vetoesPitch(ai, sa, new Cost("ExileFromHand<2/Card.Other>", false)));
+        // three: too few cards at all, which the stock checks answer, not the hold
+        assertFalse(ComboHold.vetoesPitch(ai, sa, new Cost("ExileFromHand<3/Card.Other>", false)));
+    }
+
+    @Test
+    public void aForcedDiscardOfTwoPiecesTakesOne() {
+        // both cards are the line's pieces and one must go: the spare stops at the one card the discard needs,
+        // dropping the first piece in the list's order
+        start(ORACLE_CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertEquals(discard(1, 1, oracle, consultation), List.of(CONSULTATION));
+        assertEquals(discard(1, 1, consultation, oracle), List.of(ORACLE));
+    }
+
+    @Test
+    public void aDiscardOfOneOrTwoSparesEveryPiece() {
+        // min 1, max 2: the spare keeps min cards, not max, so both pieces leave the choice
+        start(ORACLE_CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        final Card consultation = hand(CONSULTATION);
+        final Card wurm = hand(WURM);
+        lands("Island", "Island", "Swamp", "Swamp", "Swamp", "Swamp");
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertEquals(discard(1, 2, oracle, consultation, wurm), List.of(WURM));
+        assertEquals(discard(1, 2, wurm, consultation, oracle), List.of(WURM));
+    }
+
+    @Test
+    public void anExileOfTheOnlyPieceStillPays() {
+        // the piece is all the cost can take: the spare stops at the amount, so the payment still finds a card (an
+        // empty list would throw in chooseExileFromList's subList, mid-game)
+        start(ORACLE_CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        final Card force = hand(FORCE);
+        library(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        final SpellAbility fowAltSa = forceAlt(force);
+        assertTrue(t.protects(oracle));
+        assertEquals(pitchOne(force, fowAltSa, oracle), List.of(ORACLE));
+    }
+
+    @Test
+    public void anExileOfTwoPiecesTakesOne() {
+        start(ORACLE_CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        final Card consultation = hand(CONSULTATION);
+        final Card force = hand(FORCE);
+        lands("Island", "Island", "Swamp");
+        final SpellAbility fowAltSa = forceAlt(force);
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertEquals(pitchOne(force, fowAltSa, oracle, consultation), List.of(CONSULTATION));
+        assertEquals(pitchOne(force, fowAltSa, consultation, oracle), List.of(ORACLE));
     }
 }
