@@ -136,6 +136,73 @@ public final class ComboTracker {
         return true;
     }
 
+    /** The deck's lines the AI chases now (section 6.2): every piece reachable, a singleton library where the emptier
+     *  is Tainted Pact, and no abandon signal ({@link ComboSignals#abandon}); in {@link #deckLines} order. */
+    public List<ComboLines.Line> live() {
+        final List<ComboLines.Line> out = new ArrayList<>();
+        for (final ComboLines.Line l : deckLines()) {
+            if (ready(l) && ComboSignals.abandon(ai, l, this) == null) {
+                out.add(l);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /** The deck's lines that may be executed now: every piece reachable, Pact's singleton library, and not
+     *  {@link ComboSignals#denied}. No mana, danger and a surer kill never stop a win now. In deckLines order. */
+    public List<ComboLines.Line> executable() {
+        final List<ComboLines.Line> out = new ArrayList<>();
+        for (final ComboLines.Line l : deckLines()) {
+            if (ready(l) && !ComboSignals.denied(ai, l, this)) {
+                out.add(l);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /** The live lines exactly one piece short ({@link #missing} names one), the ones a fetch may complete (section
+     *  6.3), ranked: the table's mana value ascending, a negative one last, then the variant id. */
+    public List<ComboLines.Line> oneShort() {
+        final List<ComboLines.Line> out = new ArrayList<>();
+        for (final ComboLines.Line l : live()) {
+            if (missing(l).size() == 1) {
+                out.add(l);
+            }
+        }
+        out.sort(ComboTracker::byCost);
+        return List.copyOf(out);
+    }
+
+    /** Whether {@code c} is a piece of a live line (by {@link #nameOf}): held, never spent for value. */
+    public boolean protects(final Card c) {
+        final String name = nameOf(c);
+        if (!isPiece(name)) {
+            return false;
+        }
+        for (final ComboLines.Line l : live()) {
+            if (l.names().contains(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // a line's standing prerequisites: no piece gone, and Tainted Pact empties only a library with no two cards of
+    // one name (Spellbook's stated prerequisite: basics break it)
+    private boolean ready(final ComboLines.Line l) {
+        return reachable(l) && (l.emptier() != ComboLines.Emptier.PACT || singletonLibrary());
+    }
+
+    // the table's mana value ascending, a negative one (none known) last, then the variant id
+    private static int byCost(final ComboLines.Line a, final ComboLines.Line b) {
+        final int ma = a.variant().manaValue() < 0 ? Integer.MAX_VALUE : a.variant().manaValue();
+        final int mb = b.variant().manaValue() < 0 ? Integer.MAX_VALUE : b.variant().manaValue();
+        if (ma != mb) {
+            return Integer.compare(ma, mb);
+        }
+        return a.variant().id().compareTo(b.variant().id());
+    }
+
     /** Our first card named {@code name} in {@code zone} (by {@link #nameOf}, in the zone's order), or null. */
     public Card find(final String name, final ZoneType zone) {
         for (final Card c : ai.getCardsIn(zone)) {
