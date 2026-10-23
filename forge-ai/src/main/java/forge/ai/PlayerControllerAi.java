@@ -5,6 +5,7 @@ import forge.LobbyPlayer;
 import forge.StaticData;
 import forge.ai.ability.ProtectAi;
 import forge.ai.ability.PutStickerAi;
+import forge.ai.combo.ComboFetch;
 import forge.card.CardStateName;
 import forge.card.ColorSet;
 import forge.card.ICardFace;
@@ -569,6 +570,9 @@ public class PlayerControllerAi extends PlayerController {
 
         // put the rest on top in random order
         CardLists.shuffle(toTop);
+        // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a live combo line's
+        // piece kept on top goes first, so it is the top card; after the shuffle, whose draws stay the stock path's.
+        ComboFetch.pieceFirst(player, toTop);
         return ImmutablePair.of(toTop, toBottom);
     }
 
@@ -595,6 +599,9 @@ public class PlayerControllerAi extends PlayerController {
         }
 
         CardLists.shuffle(toTop);
+        // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a live combo line's
+        // piece kept on top goes first, so it is the top card; after the shuffle, whose draws stay the stock path's.
+        ComboFetch.pieceFirst(player, toTop);
         return ImmutablePair.of(toTop, toGraveyard);
     }
 
@@ -693,6 +700,9 @@ public class PlayerControllerAi extends PlayerController {
                 }
             }
 
+            // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a live combo line's
+            // piece in our own library goes first, the place meant for the top, before the list is turned for the move.
+            ComboFetch.pieceFirst(player, reordered);
             if (orderedMoveToTopOfLibrary(destinationZone, source)) {
                 //Cards going to the top of a deck are returned in reverse order.
                 Collections.reverse(reordered);

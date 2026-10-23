@@ -25,6 +25,7 @@ import forge.ai.ability.CannotPlayAi;
 import forge.ai.ability.FightAi;
 import forge.ai.ability.ProtectAi;
 import forge.ai.ability.TokenAi;
+import forge.ai.combo.ComboFetch;
 import forge.card.CardFacePredicates;
 import forge.card.CardType;
 import forge.card.ColorSet;
@@ -35189,6 +35190,12 @@ public class SpecialCardAi {
                 if (!ComputerUtil.scryWillMoveCardToBottomOfLibrary(payer, c) || landLightKeep(payer, c)) {
                     keeps++;
                 }
+            }
+            // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a one-short combo
+            // line's missing piece among these five keeps them, one still below them digs on; null = the keeps rule.
+            final Boolean comboDig = ComboFetch.vaultDig(payer, new CardCollection(payer.getCardsIn(ZoneType.Library, LOOK)));
+            if (comboDig != null) {
+                keeps = comboDig ? 0 : KEEP_MIN;
             }
             if (keeps >= KEEP_MIN) {
                 return false;

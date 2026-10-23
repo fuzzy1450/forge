@@ -2,6 +2,7 @@ package forge.ai.ability;
 
 import com.google.common.collect.Iterables;
 import forge.ai.*;
+import forge.ai.combo.ComboFetch;
 import forge.game.Game;
 import forge.game.GameEntity;
 import forge.game.ability.AbilityUtils;
@@ -187,6 +188,12 @@ public class DigAi extends SpellAbilityAi {
             // Cream of the Crop (dead-card batch 2, row 92): keep one card of our own library's dig on top.
             // A dig of anyone else's library falls through to the stock branches below, unchanged.
             return SpecialCardAi.CreamOfTheCrop.chooseCardToKeepOnTop(ai, valid);
+        }
+        // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): our own dig takes the
+        // missing piece of a combo line one piece short; null leaves the stock picks below.
+        final Card comboPick = ComboFetch.digPick(ai, sa, valid, relatedPlayer);
+        if (comboPick != null) {
+            return comboPick;
         }
 
         if (sa.getActivatingPlayer().isOpponentOf(ai) && relatedPlayer.isOpponentOf(ai) && !"ChooseBestForOpponent".equals(logic)) {

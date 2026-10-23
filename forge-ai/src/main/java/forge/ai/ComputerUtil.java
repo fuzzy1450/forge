@@ -22,6 +22,7 @@ import com.google.common.collect.*;
 import forge.ai.AiCardMemory.MemorySet;
 import forge.ai.ability.ProtectAi;
 import forge.ai.ability.TokenAi;
+import forge.ai.combo.ComboFetch;
 import forge.card.CardStateName;
 import forge.card.CardType;
 import forge.card.ColorSet;
@@ -2428,6 +2429,11 @@ public class ComputerUtil {
     }
 
     public static boolean scryWillMoveCardToBottomOfLibrary(Player player, Card c) {
+        // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a piece of a live combo
+        // line in the player's own library is never scried, surveiled or ordered away.
+        if (ComboFetch.keepsOnTop(player, c)) {
+            return false;
+        }
         boolean bottom = false;
 
         // AI profile-based toggles

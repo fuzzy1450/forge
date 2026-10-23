@@ -6,6 +6,7 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Multiset;
 
 import forge.ai.*;
+import forge.ai.combo.ComboFetch;
 import forge.card.CardType;
 import forge.card.MagicColor;
 import forge.card.mana.ManaCostShard;
@@ -2140,6 +2141,12 @@ public class ChangeZoneAi extends SpellAbilityAi {
         }
         if (fetchList.isEmpty()) {
             return null;
+        }
+        // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): our own search takes the
+        // missing piece of a combo line one piece short, ahead of KeyCards; null leaves every stock pick below.
+        final Card comboPick = ComboFetch.searchPick(sa, destination, fetchList, player, decider);
+        if (comboPick != null) {
+            return comboPick;
         }
         List<String> keyCards = player.getRegisteredPlayer().getDeck().getKeyCards();
         String position = sa.getParamOrDefault("LibraryPosition", null);
