@@ -1,0 +1,646 @@
+package forge.ai.combo;
+
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertTrue;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Random;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
+
+import org.testng.annotations.Test;
+
+import forge.ai.AITest;
+import forge.ai.AiController;
+import forge.ai.AiPlayDecision;
+import forge.ai.LobbyPlayerAi;
+import forge.ai.PlayerControllerAi;
+import forge.ai.SpecialCardAi;
+import forge.game.Game;
+import forge.game.GameEndReason;
+import forge.game.ability.AbilityKey;
+import forge.game.ability.ApiType;
+import forge.game.card.Card;
+import forge.game.phase.PhaseHandler;
+import forge.game.phase.PhaseType;
+import forge.game.player.Player;
+import forge.game.spellability.AbilitySub;
+import forge.game.spellability.SpellAbility;
+import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.trigger.Trigger;
+import forge.game.trigger.TriggerType;
+import forge.game.zone.ZoneType;
+import forge.util.MyRandom;
+
+/**
+ * Executing the empty-library family (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.4 and 6.5): Thassa's
+ * Oracle goes off with Demonic Consultation or Tainted Pact cast in response to its trigger; Tainted Pact empties only
+ * inside a window of its line and declines every card there, and stays the stock cantrip outside its lines; Demonic
+ * Consultation empties for Laboratory Maniac and Jace when a draw we control follows, for Doctor Doom when its {T} can
+ * be used right after, and for Fblthp in response to Fblthp's own trigger; the draw that finishes a line is played on
+ * the emptied library; and the own-library floor exempts an emptier cast inside a window. None of it while we cannot
+ * win. Unless a test says otherwise the AI plays the Default profile in its own MAIN1, with no land in hand.
+ */
+public class ComboExecuteAiTest extends AITest {
+    private static final String WIN = "F|2|S|Win the game";
+    private static final String EXILE = "F|88|H|Exile your library";
+    private static final String ORACLE_CONSULTATION = "V|742-1295|3|{U}{U}{B}|2,88|H:Demonic Consultation|H:Thassa's Oracle";
+    private static final String ORACLE_PACT = "V|1295-3093|4|{1}{U}{U}{B}|2|H:Tainted Pact|H:Thassa's Oracle";
+    private static final String LAB_PACT = "V|2836-3093|2|{1}{B}|2|H:Tainted Pact|B:Laboratory Maniac";
+    private static final String LAB_CONSULTATION = "V|742-2836|1|{B}|2,88|H:Demonic Consultation|B:Laboratory Maniac";
+    private static final String JACE_CONSULTATION = "V|742-3096|1|{B}|2,88|H:Demonic Consultation|B:Jace, Wielder of Mysteries";
+    private static final String FBLTHP_CONSULTATION = "V|742-8266|1|{B}|2,88|B:Fblthp, Impossibly Lost|H:Demonic Consultation";
+    private static final String DOOM_CONSULTATION = "V|x-1|1|{B}|2,88|H:Demonic Consultation|B:Doctor Doom, Unrivaled";
+
+    private static final String ORACLE = "Thassa's Oracle";
+    private static final String CONSULTATION = "Demonic Consultation";
+    private static final String PACT = "Tainted Pact";
+    private static final String LAB = "Laboratory Maniac";
+    private static final String JACE = "Jace, Wielder of Mysteries";
+    private static final String DOOM = "Doctor Doom, Unrivaled";
+    private static final String FBLTHP = "Fblthp, Impossibly Lost";
+    private static final String OPT = "Opt";
+    private static final String EMERITUS = "Archmage Emeritus";
+    private static final String ANGEL = "Platinum Angel";
+    private static final String LINVALA = "Linvala, Keeper of Silence";
+
+    /** Fifteen distinct names, none a land and none a piece of piece 1's lines: a library Tainted Pact can empty. */
+    private static final List<String> SINGLETON = List.of("Runeclaw Bear", "Grizzly Bears", "Hill Giant", "Craw Wurm",
+            "Serra Angel", "Shivan Dragon", "Llanowar Elves", "Counterspell", "Divination", "Coral Merfolk", "Gray Ogre",
+            "Wind Drake", "Air Elemental", "Giant Spider", "Merfolk of the Pearl Trident");
+
+    /** The main-loop steps a bounded play may take (LoopProgressTest's playOut: bounded, no timeOut). */
+    private static final int MAX_STEPS = 2_000;
+
+    private Game game;
+    private Player ai;
+    private Player opp;
+    private ComboTracker t;
+
+    private static AiController aiOf(final Player p) {
+        return ((PlayerControllerAi) p.getController()).getAi();
+    }
+
+    private static List<ComboLines.Line> lines(final String... rows) {
+        final List<String> all = new ArrayList<>(List.of(WIN, EXILE));
+        all.addAll(Arrays.asList(rows));
+        return ComboLines.claimed(ComboTable.parse(all));
+    }
+
+    private static List<String> ids(final List<ComboLines.Line> lines) {
+        return lines.stream().map(l -> l.variant().id()).collect(Collectors.toList());
+    }
+
+    /** A two-player game whose AI (player 1, on the Default profile, in its own MAIN1) tracks {@code rows}; no card
+     *  placed yet. */
+    private void start(final String... rows) {
+        game = initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        opp = game.getPlayers().get(0);
+        ((LobbyPlayerAi) ai.getLobbyPlayer()).setAiProfile("Default");
+        t = aiOf(ai).getComboTracker();
+        t.useLines(lines(rows));
+    }
+
+    private void lands(final String... names) {
+        for (final String name : names) {
+            addCard(name, ai);
+        }
+    }
+
+    private Card hand(final String name) {
+        return addCardToZone(name, ai, ZoneType.Hand);
+    }
+
+    private void library(final String... names) {
+        for (final String name : names) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+    }
+
+    private void singletonLibrary() {
+        library(SINGLETON.toArray(new String[0]));
+    }
+
+    /** Our card {@code name} on our battlefield, free of summoning sickness. */
+    private Card ready(final String name) {
+        final Card c = addCard(name, ai);
+        c.setSickness(false);
+        return c;
+    }
+
+    /** {@code c}'s first spell, with its owner as its activator. */
+    private static SpellAbility castOf(final Card c) {
+        final SpellAbility sa = c.getFirstSpellAbility();
+        sa.setActivatingPlayer(c.getOwner());
+        return sa;
+    }
+
+    /** Demonic Consultation's cast decision (SpecialCardAi.DemonicConsultation, ChooseCardNameAi's route). */
+    private AiPlayDecision consider(final Card consultation) {
+        return SpecialCardAi.DemonicConsultation.consider(ai, castOf(consultation)).decision();
+    }
+
+    /** {@code c} enters the battlefield and its entering trigger goes on the stack (the move holds the trigger as
+     *  waiting; the state check runs it): the stack's top, that trigger. */
+    private SpellAbilityStackInstance enters(final Card c) {
+        game.getAction().moveTo(ZoneType.Battlefield, c, null, AbilityKey.newMap());
+        game.getAction().checkStateEffects(true);
+        game.getStack().addAllTriggeredAbilitiesToStack();
+        final SpellAbilityStackInstance top = game.getStack().peek();
+        assertTrue(top.isTrigger());
+        assertEquals(ComboTracker.nameOf(top.getSourceCard()), ComboTracker.nameOf(c));
+        return top;
+    }
+
+    /** Our {@code name} cast: on our stack, nothing paid or resolved (ComboSignalsTest's castOnStack). */
+    private Card castOnStack(final String name) {
+        final Card card = createCard(name, ai);
+        card.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(card);
+        final SpellAbility sa = card.getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+        game.getStack().add(sa);
+        return card;
+    }
+
+    /** Tainted Pact's DBReturnToHand: the ChangeZone AbilitySub of its RepeatSubAbility chain. */
+    private static SpellAbility returnToHand(final Card pact) {
+        final SpellAbility spell = castOf(pact);
+        for (SpellAbility s = spell.getAdditionalAbility("RepeatSubAbility"); s != null; s = s.getSubAbility()) {
+            if (s.getApi() == ApiType.ChangeZone) {
+                return s;
+            }
+        }
+        throw new AssertionError("no ChangeZone in Tainted Pact's repeat");
+    }
+
+    /** Fblthp's combat-damage trigger as WeddingRingFloorAiTest builds an ETB: the ability copied for us, its trigger
+     *  set. */
+    private SpellAbility fblthpTrigger(final Card fblthp) {
+        for (final Trigger tr : fblthp.getTriggers()) {
+            if (tr.getMode() == TriggerType.DamageAll) {
+                final SpellAbility sa = tr.ensureAbility().copy(ai);
+                sa.setTrigger(tr);
+                return sa;
+            }
+        }
+        throw new AssertionError("no combat-damage trigger on " + fblthp);
+    }
+
+    /** Doctor Doom's {T}: draw, lose 1 life, win on an empty library; we activate it. */
+    private SpellAbility doomDraw(final Card doom) {
+        for (final SpellAbility sa : doom.getSpellAbilities()) {
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.Draw) {
+                sa.setActivatingPlayer(ai);
+                return sa;
+            }
+        }
+        throw new AssertionError("no draw ability on " + doom);
+    }
+
+    /** AITest's playUntilPhase, bounded: at most MAX_STEPS steps, stopping at the game's end or at {@code phase}. */
+    private void playUntilPhase(final PhaseType phase) {
+        int steps = 0;
+        do {
+            game.getPhaseHandler().mainLoopStep();
+        } while (!game.isGameOver() && !game.getPhaseHandler().is(phase) && ++steps < MAX_STEPS);
+    }
+
+    /** The AI won by its own spell or ability, in its own turn, before its end step. */
+    private void assertWonThisTurn() {
+        assertTrue(game.isGameOver(), "the game went on: " + gameStateToString(game));
+        assertTrue(ai.hasWon());
+        assertEquals(game.getOutcome().getWinCondition(), GameEndReason.WinsGameSpellEffect);
+        final PhaseHandler ph = game.getPhaseHandler();
+        assertEquals(ph.getPlayerTurn(), ai);
+        assertTrue(ph.getPhase().isBefore(PhaseType.END_OF_TURN), "won at " + ph.getPhase());
+    }
+
+    /** The opponent's end step, our turn next. */
+    private void opponentsEndStep() {
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertEquals(game.getPhaseHandler().getNextTurn(), ai);
+    }
+
+    /** Stock parity: {@code decision} reseeded alike, once with no line and once with {@code others}, gives the same
+     *  answer and makes the same number of draws; returns the stock answer. */
+    private <T> T assertStockParity(final Supplier<T> decision, final List<ComboLines.Line> others) {
+        t.useLines(List.of());
+        MyRandom.setRandom(new Random(7));
+        long before = MyRandom.callCount();
+        final T stock = decision.get();
+        final long stockDraws = MyRandom.callCount() - before;
+        t.useLines(others);
+        MyRandom.setRandom(new Random(7));
+        before = MyRandom.callCount();
+        final T ours = decision.get();
+        assertEquals(ours, stock, "the answer moved");
+        assertEquals(MyRandom.callCount() - before, stockDraws, "the draws moved");
+        return stock;
+    }
+
+    // ---- end to end ----
+
+    @Test
+    public void oracleThenConsultationWins() {
+        start(ORACLE_CONSULTATION);
+        hand(ORACLE);
+        hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.deckLines()), List.of("742-1295"));
+
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertWonThisTurn();
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+    }
+
+    @Test
+    public void oracleThenPactWins() {
+        start(ORACLE_PACT);
+        hand(ORACLE);
+        hand(PACT);
+        lands("Island", "Island", "Swamp", "Swamp");
+        singletonLibrary();
+        assertEquals(ids(t.live()), List.of("1295-3093"));
+
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertWonThisTurn();
+        // every card Pact exiled was declined: none came to our hand, and the library went to exile whole
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+        assertTrue(ai.getCardsIn(ZoneType.Hand).isEmpty(), "Pact kept a card: " + ai.getCardsIn(ZoneType.Hand));
+        assertEquals(ai.getCardsIn(ZoneType.Exile).size(), SINGLETON.size());
+    }
+
+    // ---- Tainted Pact ----
+
+    @Test
+    public void pactCantripsWithoutALine() {
+        // Review Focus 1. No Oracle in the deck: no Pact line, so Pact is the stock cantrip
+        start(ORACLE_PACT);
+        final Card pact = hand(PACT);
+        singletonLibrary();
+        lands("Island", "Island", "Swamp", "Swamp");
+        assertEquals(t.deckLines(), List.of());
+        assertNull(ComboExecute.pactCast(ai, castOf(pact)));
+        assertEquals(aiOf(ai).canPlaySa(castOf(pact)), AiPlayDecision.WillPlay);
+
+        // a singleton library and a live Pact line with no window: held
+        hand(ORACLE);
+        t.useLines(lines(ORACLE_PACT));
+        assertEquals(ids(t.live()), List.of("1295-3093"));
+        assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.FALSE);
+        assertEquals(aiOf(ai).canPlaySa(castOf(pact)), AiPlayDecision.CantPlayAi);
+
+        // two Islands in the library, line 1295-3093 only: no singleton library, so no live Pact line, and Pact is
+        // the stock cantrip again
+        library("Island", "Island");
+        assertFalse(t.singletonLibrary());
+        assertEquals(t.live(), List.of());
+        assertNull(ComboExecute.pactCast(ai, castOf(pact)));
+        assertEquals(aiOf(ai).canPlaySa(castOf(pact)), AiPlayDecision.WillPlay);
+    }
+
+    @Test
+    public void pactDeclinesInTheWindow() {
+        start(ORACLE_PACT);
+        final Card oracle = hand(ORACLE);
+        final Card pact = hand(PACT);
+        singletonLibrary();
+        lands("Island", "Island", "Swamp", "Swamp");
+        final SpellAbility back = returnToHand(pact);
+        assertTrue(back instanceof AbilitySub);
+        assertEquals(back.getParam("Origin"), "Exile");
+        assertEquals(back.getParam("Destination"), "Hand");
+        assertFalse(ComboExecute.pactDeclines(ai, back));
+
+        // our Oracle's trigger on the stack
+        enters(oracle);
+        assertEquals(ids(t.executable()), List.of("1295-3093"));
+        assertTrue(ComboExecute.pactDeclines(ai, back));
+        assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.TRUE);
+        // through the stock route: ChangeZoneAi.confirmAction
+        assertFalse(aiOf(ai).confirmAction(back, null, "", null));
+
+        // with the stack empty it is false
+        game.getStack().remove(game.getStack().peek());
+        assertTrue(game.getStack().isEmpty());
+        assertFalse(ComboExecute.pactDeclines(ai, back));
+        assertTrue(aiOf(ai).confirmAction(back, null, "", null));
+    }
+
+    // ---- Laboratory Maniac ----
+
+    @Test
+    public void labAtTheOpponentsEndStep() {
+        // Review Focus 4
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+
+        // our MAIN1, no draw spell: Consultation would leave the library empty for a whole opposing turn
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+
+        // the opponent's end step, our turn next: our draw step follows
+        opponentsEndStep();
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+
+        // our MAIN1 again, with Opt in hand: the Swamp alone pays one of the two
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        hand(OPT);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        // Island + Swamp pay both
+        lands("Island");
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    // ---- Doctor Doom ----
+
+    @Test
+    public void doomWindow() {
+        start(DOOM_CONSULTATION);
+        final Card doom = ready(DOOM);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("x-1"));
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+
+        doom.setSickness(true);
+        assertTrue(doom.isSick());
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        doom.setSickness(false);
+
+        doom.setTapped(true);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        doom.setTapped(false);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+
+        addCard(LINVALA, opp);
+        assertEquals(t.executable(), List.of());
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+    }
+
+    @Test
+    public void doomDrawsToWinOnAnEmptyLibrary() {
+        start(DOOM_CONSULTATION);
+        final Card doom = ready(DOOM);
+        // the spent emptier: the deck holds line x-1
+        addCardToZone(CONSULTATION, ai, ZoneType.Graveyard);
+        ai.setLife(1, null);
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+        assertEquals(ids(t.deckLines()), List.of("x-1"));
+
+        assertTrue(ComboExecute.finishesLine(ai, doomDraw(doom)));
+        assertEquals(aiOf(ai).canPlaySa(doomDraw(doom)), AiPlayDecision.WillPlay);
+
+        // without line x-1: stock parity
+        final AiPlayDecision stock = assertStockParity(() -> aiOf(ai).canPlaySa(doomDraw(doom)), lines(LAB_CONSULTATION));
+        assertEquals(stock, AiPlayDecision.CantPlayAi);
+    }
+
+    // ---- Jace, Wielder of Mysteries ----
+
+    @Test
+    public void jaceLetsADrawSpellWin() {
+        start(JACE_CONSULTATION);
+        addCard(JACE, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Graveyard);
+        final Card opt = hand(OPT);
+        lands("Island");
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+        assertEquals(ids(t.deckLines()), List.of("742-3096"));
+
+        assertEquals(aiOf(ai).canPlaySa(castOf(opt)), AiPlayDecision.WillPlay);
+
+        // without the line: stock parity
+        final AiPlayDecision stock = assertStockParity(() -> aiOf(ai).canPlaySa(castOf(opt)), lines(LAB_CONSULTATION));
+        assertEquals(stock, AiPlayDecision.CantPlayAi);
+    }
+
+    // ---- Fblthp, Impossibly Lost ----
+
+    @Test
+    public void fblthpTriggerWindow() {
+        start(FBLTHP_CONSULTATION);
+        final Card fblthp = ready(FBLTHP);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        game.getStack().add(fblthpTrigger(fblthp));
+        final SpellAbility top = game.getStack().peekAbility();
+        assertTrue(top.isTrigger());
+        assertEquals(ids(t.executable()), List.of("742-8266"));
+
+        assertTrue(ComboExecute.respondsToOwn(ai, top));
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    // ---- Platinum Angel ----
+
+    @Test
+    public void platinumAngelBlocksEveryWindow() {
+        // Review Focus 2
+        start(LAB_CONSULTATION, LAB_PACT);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        final Card pact = hand(PACT);
+        lands("Swamp", "Swamp");
+        singletonLibrary();
+        opponentsEndStep();
+        // the end-step Lab window, open for both emptiers
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+        assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.TRUE);
+
+        addCard(ANGEL, opp);
+        assertTrue(ai.cantWin());
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        assertNull(ComboExecute.pactCast(ai, castOf(pact)));
+    }
+
+    // ---- the own-library floor ----
+
+    @Test
+    public void floorExemptsAGoOffConsultation() {
+        start(DOOM_CONSULTATION);
+        addCard(EMERITUS, ai);
+        ready(DOOM);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 4);
+
+        t.useLines(List.of());
+        assertTrue(SpecialCardAi.OwnLibraryFloor.breachesCast(ai, castOf(consultation)));
+        t.useLines(lines(DOOM_CONSULTATION));
+        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo");
+        assertFalse(SpecialCardAi.OwnLibraryFloor.breachesCast(ai, castOf(consultation)));
+    }
+
+    // ---- beyond the plan's eleven ----
+
+    /** Tainted Pact resolving in a Laboratory Maniac window it was cast into: its own {1}{B} is paid, so the draw that
+     *  follows needs only Opt's {U}, and every card is declined while that {U} is there. A hand cast of Pact needs the
+     *  two together, black among it. */
+    @Test
+    public void pactDeclinesInTheLabWindowOnceItsOwnManaIsPaid() {
+        start(LAB_PACT);
+        addCard(LAB, ai);
+        hand(OPT);
+        final Card island = addCard("Island", ai);
+        singletonLibrary();
+        final Card pact = castOnStack(PACT);
+        assertEquals(t.where(PACT), ComboTracker.Where.STACK);
+        assertEquals(ids(t.executable()), List.of("2836-3093"));
+        assertTrue(ComboExecute.pactDeclines(ai, returnToHand(pact)));
+        // nothing left to cast Opt with: no draw follows, and Pact keeps the card
+        island.setTapped(true);
+        assertFalse(ComboExecute.pactDeclines(ai, returnToHand(pact)));
+        island.setTapped(false);
+
+        // a hand Pact: Island + Swamp pay Pact (the line is live) but not Pact and Opt together, so it is held
+        final Card handPact = hand(PACT);
+        lands("Swamp");
+        assertEquals(ids(t.live()), List.of("2836-3093"));
+        assertEquals(ComboExecute.pactCast(ai, castOf(handPact)), Boolean.FALSE);
+        // a second Island pays both: the window opens
+        lands("Island");
+        assertEquals(ComboExecute.pactCast(ai, castOf(handPact)), Boolean.TRUE);
+    }
+
+    /** Fblthp's trigger asks for a response only with its line executable, Consultation in our hand and black to cast
+     *  it; with no line the AI passes its own trigger, as stock does, and with one it answers it with Consultation. */
+    @Test
+    public void fblthpRespondsOnlyWithItsLineConsultationAndBlack() {
+        start(FBLTHP_CONSULTATION);
+        final Card fblthp = ready(FBLTHP);
+        final Card consultation = hand(CONSULTATION);
+        final Card swamp = addCard("Swamp", ai);
+        fillLibrary(ai, 20);
+        game.getStack().add(fblthpTrigger(fblthp));
+        final SpellAbility top = game.getStack().peekAbility();
+
+        t.useLines(List.of());
+        assertFalse(ComboExecute.respondsToOwn(ai, top));
+        assertNull(aiOf(ai).chooseSpellAbilityToPlay());
+
+        t.useLines(lines(FBLTHP_CONSULTATION));
+        final List<SpellAbility> choice = aiOf(ai).chooseSpellAbilityToPlay();
+        assertNotNull(choice);
+        assertEquals(ComboTracker.nameOf(choice.get(0).getHostCard()), CONSULTATION);
+
+        // no black
+        swamp.setTapped(true);
+        assertFalse(ComboExecute.respondsToOwn(ai, top));
+        swamp.setTapped(false);
+        assertTrue(ComboExecute.respondsToOwn(ai, top));
+
+        // Consultation back in the library: nothing in hand to respond with
+        game.getAction().moveTo(ZoneType.Library, consultation, null, AbilityKey.newMap());
+        assertFalse(ComboExecute.respondsToOwn(ai, top));
+    }
+
+    /** The finishing draw is the line's only on an empty library, while we can win; DrawAi.confirmAction then draws
+     *  from it too. */
+    @Test
+    public void theFinishingDrawNeedsAnEmptyLibraryAndAWin() {
+        start(JACE_CONSULTATION);
+        addCard(JACE, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Graveyard);
+        final Card opt = hand(OPT);
+        lands("Island");
+        final SpellAbility draw = castOf(opt).getSubAbility();
+        assertEquals(draw.getApi(), ApiType.Draw);
+        assertTrue(ComboExecute.finishesLine(ai, draw));
+        assertTrue(aiOf(ai).confirmAction(draw, null, "", null));
+
+        library("Grizzly Bears");
+        assertFalse(ComboExecute.finishesLine(ai, draw));
+        game.getAction().moveTo(ZoneType.Exile, t.find("Grizzly Bears", ZoneType.Library), null, AbilityKey.newMap());
+        assertTrue(ComboExecute.finishesLine(ai, draw));
+
+        addCard(ANGEL, opp);
+        assertFalse(ComboExecute.finishesLine(ai, draw));
+        assertFalse(aiOf(ai).confirmAction(draw, null, "", null));
+    }
+
+    /** With no line, Consultation and Pact keep their stock decisions and draws on a board where a line would open a
+     *  window. */
+    @Test
+    public void noLineIsStock() {
+        start(DOOM_CONSULTATION);
+        ready(DOOM);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(assertStockParity(() -> consider(consultation), lines(LAB_CONSULTATION)), AiPlayDecision.CantPlayAi);
+
+        start(LAB_PACT);
+        final Card pact = hand(PACT);
+        lands("Swamp", "Swamp");
+        singletonLibrary();
+        opponentsEndStep();
+        assertEquals(assertStockParity(() -> aiOf(ai).canPlaySa(castOf(pact)), lines(ORACLE_CONSULTATION)),
+                AiPlayDecision.WillPlay);
+    }
+
+    /** The Laboratory Maniac window's own rules: the end step is the opponent's with our turn next, never ours; the
+     *  spell that follows must draw; and the mana pays the emptier and that spell together, black among it. */
+    @Test
+    public void theLabWindowIsTheOpponentsEndStepOrADrawSpellWithTheManaForBoth() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        fillLibrary(ai, 20);
+        lands("Island", "Island");
+        final Card swamp = addCard("Swamp", ai);
+
+        // our own end step: the opponent's turn comes before our draw
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, ai);
+        assertEquals(game.getPhaseHandler().getNextTurn(), opp);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+
+        // our MAIN1: a spell that draws nothing is no follow-up, though the mana pays it and Consultation
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        hand("Grizzly Bears");
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        // Opt is one
+        hand(OPT);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+        // the Swamp tapped: two Islands pay Opt and one more, but not Consultation's black
+        swamp.setTapped(true);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+    }
+
+    /** The finishing draw is its own winner's: Doctor Doom's {T} on an empty library finishes nothing for a deck whose
+     *  line is Laboratory Maniac's, nor does a draw with Jace in play for a deck whose line is Doom's. */
+    @Test
+    public void theFinishingDrawNeedsItsOwnWinnersLine() {
+        start(LAB_CONSULTATION);
+        final Card doom = ready(DOOM);
+        addCardToZone(LAB, ai, ZoneType.Graveyard);
+        addCardToZone(CONSULTATION, ai, ZoneType.Graveyard);
+        assertEquals(ids(t.deckLines()), List.of("742-2836"));
+        assertFalse(ComboExecute.finishesLine(ai, doomDraw(doom)));
+        t.useLines(lines(DOOM_CONSULTATION));
+        assertTrue(ComboExecute.finishesLine(ai, doomDraw(doom)));
+
+        start(DOOM_CONSULTATION);
+        addCard(JACE, ai);
+        addCardToZone(DOOM, ai, ZoneType.Graveyard);
+        addCardToZone(CONSULTATION, ai, ZoneType.Graveyard);
+        final SpellAbility draw = castOf(hand(OPT)).getSubAbility();
+        assertEquals(ids(t.deckLines()), List.of("x-1"));
+        assertFalse(ComboExecute.finishesLine(ai, draw));
+        t.useLines(lines(JACE_CONSULTATION));
+        assertTrue(ComboExecute.finishesLine(ai, draw));
+    }
+}

@@ -1,6 +1,7 @@
 package forge.ai.ability;
 
 import forge.ai.*;
+import forge.ai.combo.ComboExecute;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardLists;
@@ -103,6 +104,12 @@ public class ScryAi extends SpellAbilityAi {
             return doBestOpportunityLogic(ai, sa, ph);
         }
 
+        // combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): a scry spell whose draw wins on
+        // our emptied library (Opt with Laboratory Maniac or Jace) is cast now
+        if (ComboExecute.finishesLine(ai, sa)) {
+            return true;
+        }
+
         // in the playerturn Scry should only be done in Main1 or in upkeep if able
         if (ph.isPlayerTurn(ai)) {
             if (isSorcerySpeed(sa, ai)) {
@@ -149,6 +156,10 @@ public class ScryAi extends SpellAbilityAi {
     
     @Override
     protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
+        // combo-aware AI (spec 2026-10-22 section 6.4): it does when its draw wins on our emptied library; no roll
+        if (ComboExecute.finishesLine(ai, sa)) {
+            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+        }
         // does Scry make sense with no Library cards?
         if (ai.getCardsIn(ZoneType.Library).isEmpty()) {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);

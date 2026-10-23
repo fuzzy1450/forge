@@ -21,6 +21,7 @@ package forge.ai.ability;
 import java.util.Map;
 
 import forge.ai.*;
+import forge.ai.combo.ComboExecute;
 import forge.game.Game;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
@@ -151,8 +152,9 @@ public class DrawAi extends SpellAbilityAi {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
 
-        // Don't tap creatures that may be able to block
-        if (ComputerUtil.waitForBlocking(sa)) {
+        // Don't tap creatures that may be able to block (combo-aware AI, spec 2026-10-22 section 6.4: unless the tap
+        // is Doctor Doom's draw that wins on our emptied library)
+        if (ComputerUtil.waitForBlocking(sa) && !ComboExecute.finishesLine(ai, sa)) {
             return new AiAbilityDecision(0, AiPlayDecision.WaitForCombat);
         }
 
@@ -280,6 +282,12 @@ public class DrawAi extends SpellAbilityAi {
         // checkApiLogic's playImmediately approval was unreachable. Its own {T} draw only; RNG-free; a false
         // keeps the stock refusal below.
         if (ph.getPhase().isBefore(PhaseType.MAIN2) && SpecialCardAi.ArcanisTheOmnipotent.drawsBeforeLeaving(ai, sa)) {
+            return super.checkPhaseRestrictions(ai, sa, ph);
+        }
+
+        // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): the draw that wins on our emptied
+        // library (Laboratory Maniac, Jace, Doctor Doom's {T}) is not held for Main 2.
+        if (ph.getPhase().isBefore(PhaseType.MAIN2) && ComboExecute.finishesLine(ai, sa)) {
             return super.checkPhaseRestrictions(ai, sa, ph);
         }
 
@@ -756,7 +764,8 @@ public class DrawAi extends SpellAbilityAi {
             }
 
             if (numCards >= computerLibrarySize - 3) {
-                if (ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin()) {
+                // combo-aware AI (spec 2026-10-22 section 6.4): or the draw that finishes a line on our emptied library
+                if ((ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin()) || ComboExecute.finishesLine(ai, sa)) {
                     return true;
                 }
                 // Don't deck yourself
@@ -898,8 +907,8 @@ public class DrawAi extends SpellAbilityAi {
         // AI shouldn't mill itself
         if (numCards < player.getZone(ZoneType.Library).size())
             return true;
-        // except it has Laboratory Maniac
-        return player.isCardInPlay("Laboratory Maniac");
+        // except it has Laboratory Maniac (or, combo-aware AI, spec 2026-10-22 section 6.4: the draw finishes a line)
+        return player.isCardInPlay("Laboratory Maniac") || ComboExecute.finishesLine(player, sa);
     }
 
     @Override

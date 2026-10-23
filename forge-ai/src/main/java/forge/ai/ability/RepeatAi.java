@@ -2,6 +2,7 @@ package forge.ai.ability;
 
 
 import forge.ai.*;
+import forge.ai.combo.ComboExecute;
 import forge.game.card.Card;
 import forge.game.card.CardPredicates;
 import forge.game.phase.PhaseType;
@@ -18,6 +19,12 @@ public class RepeatAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision canPlay(Player ai, SpellAbility sa) {
+        // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): our own hand cast of Tainted
+        // Pact is the emptier inside a window of its line and held while that line is live; null keeps the cantrip.
+        final Boolean pact = ComboExecute.pactCast(ai, sa);
+        if (pact != null) {
+            return new AiAbilityDecision(pact ? 100 : 0, pact ? AiPlayDecision.WillPlay : AiPlayDecision.CantPlayAi);
+        }
         final Player opp = AiAttackController.choosePreferredDefenderPlayer(ai);
         String logic = sa.getParamOrDefault("AILogic", "");
 

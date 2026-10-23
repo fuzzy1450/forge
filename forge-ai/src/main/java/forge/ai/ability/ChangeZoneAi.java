@@ -6,6 +6,7 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Multiset;
 
 import forge.ai.*;
+import forge.ai.combo.ComboExecute;
 import forge.ai.combo.ComboFetch;
 import forge.card.CardType;
 import forge.card.MagicColor;
@@ -2455,6 +2456,11 @@ public class ChangeZoneAi extends SpellAbilityAi {
      */
     @Override
     public boolean confirmAction(Player player, SpellAbility sa, PlayerActionConfirmMode mode, String message, Map<String, Object> params) {
+        // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): Tainted Pact emptying our
+        // library inside a window of its line declines every card it exiles.
+        if (ComboExecute.pactDeclines(player, sa)) {
+            return false;
+        }
         // AI was never asked
         return true;
     }

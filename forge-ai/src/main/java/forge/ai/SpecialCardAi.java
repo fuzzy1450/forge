@@ -25,6 +25,7 @@ import forge.ai.ability.CannotPlayAi;
 import forge.ai.ability.FightAi;
 import forge.ai.ability.ProtectAi;
 import forge.ai.ability.TokenAi;
+import forge.ai.combo.ComboExecute;
 import forge.ai.combo.ComboFetch;
 import forge.card.CardFacePredicates;
 import forge.card.CardType;
@@ -14694,6 +14695,12 @@ public class SpecialCardAi {
                         && "Thassa's Oracle".equals(stackSa.getHostCard().getName())) {
                     return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
                 }
+            }
+            // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): the windows of the other
+            // library-out winners (Laboratory Maniac, Jace, Doctor Doom, Fblthp), each gated by an executable line.
+            final AiAbilityDecision combo = ComboExecute.consultation(ai, sa);
+            if (combo != null) {
+                return combo;
             }
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
@@ -44595,6 +44602,12 @@ public class SpecialCardAi {
             }
             if (oracleOnStack(ai)) {
                 return "oracle";
+            }
+            // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): an emptier cast inside a
+            // window of its line (Doctor Doom's and Fblthp's included, which the clauses above do not name)
+            final String combo = ComboExecute.floorExemption(ai, sa);
+            if (combo != null) {
+                return combo;
             }
             if (hard) {
                 return null; // D1: a draw trigger meets an empty library before any burn or ping resolves

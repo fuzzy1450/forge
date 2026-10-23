@@ -24,6 +24,7 @@ import forge.ai.AiCardMemory.MemorySet;
 import forge.ai.ability.ChangeZoneAi;
 import forge.ai.ability.ConniveAi;
 import forge.ai.ability.LearnAi;
+import forge.ai.combo.ComboExecute;
 import forge.ai.combo.ComboHold;
 import forge.ai.combo.ComboLines;
 import forge.ai.combo.ComboTracker;
@@ -1955,6 +1956,9 @@ public class AiController {
         if (top != null) {
             mustRespond = top.hasParam("AIRespondsToOwnAbility"); // Forced combos (currently defined for Sensei's Divining Top)
             mustRespond |= top.isTrigger() && top.getTrigger().isKeyword(Keyword.EVOKE); // Evoke sacrifice trigger
+            // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): our Fblthp trigger, answered
+            // with Demonic Consultation (its script carries no AIRespondsToOwnAbility)
+            mustRespond |= ComboExecute.respondsToOwn(player, top);
         }
 
         if (topOwnedByAI) {

@@ -5,6 +5,7 @@ import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtil;
 import forge.ai.ComputerUtilCost;
 import forge.ai.SpellAbilityAi;
+import forge.ai.combo.ComboExecute;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
 import forge.game.cost.Cost;
@@ -43,7 +44,10 @@ public class LifeLoseAi extends SpellAbilityAi {
             amount = AbilityUtils.calculateAmount(source, amountStr, sa);
         }
 
-        if (tgtPlayers.contains(ai) && amount > 0 && amount + 3 > ai.getLife()) {
+        // combo-aware AI (spec 2026-10-22 section 6.4): not for Doctor Doom's 1 life on the draw that wins on our
+        // emptied library (its WinsGame sub wins at 0 life too)
+        if (tgtPlayers.contains(ai) && amount > 0 && amount + 3 > ai.getLife()
+                && !ComboExecute.finishesLine(ai, sa.getRootAbility())) {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
         if (sa.usesTargeting()) {
