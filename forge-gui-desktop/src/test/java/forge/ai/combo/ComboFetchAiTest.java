@@ -633,6 +633,71 @@ public class ComboFetchAiTest extends AITest {
         assertFalse(willDig(floored));
     }
 
+    // review round 2
+
+    @Test
+    public void aComboDigStaysBehindTheDigCapAloneInALongLibrary() {
+        // 40 cards leave the library margin far behind (LOOK x (digs + 2) + 3, 28 once three fives are bottomed), so
+        // only MAX_DIGS stops a dig here; the 25-card capped board above is stopped by the margin as well
+        final List<String> forty = longLibrary(vaultLibrary(25, 8));   // two Islands in the five, Consultation ninth
+        assertTrue(willDig(vaultLook(forty)));
+        final SpellAbility twoDug = vaultLook(forty);
+        rememberBottomed(2);
+        assertTrue(willDig(twoDug));
+        // three fives already bottomed: the cap, though the piece is still below the five
+        final SpellAbility capped = vaultLook(forty);
+        rememberBottomed(3);
+        assertFalse(willDig(capped));
+    }
+
+    @Test
+    public void aSecondLookIsServedByTheSameRule() {
+        // one five already bottomed (digsSoFar 1): the combo rule reads the new five as it read the first. Each board
+        // asks first the question whose answer is false, which writes no memory, so both are asked at the second look
+        // two Islands in the five, Consultation ninth: the stock rule keeps the five, the line digs on
+        final SpellAbility digsOn = vaultLook(longLibrary(vaultLibrary(25, 8)));
+        rememberBottomed(1);
+        t.useLines(List.of());
+        assertFalse(willDig(digsOn));
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertEquals(ids(t.oneShort()), List.of("742-1295"));
+        assertTrue(willDig(digsOn));
+
+        // nothing in the five the stock rule keeps, Consultation fourth: the line keeps the five, the stock rule digs
+        final SpellAbility stops = vaultLook(longLibrary(Arrays.asList("Grizzly Bears", "Hill Giant", "Serra Angel",
+                CONSULTATION, "Shivan Dragon")));
+        rememberBottomed(1);
+        assertFalse(willDig(stops));
+        t.useLines(List.of());
+        assertTrue(willDig(stops));
+    }
+
+    @Test
+    public void aPieceFifthFromTheTopIsKeptNotDugPast() {
+        // the fifth card is the last of the five in view: Consultation there keeps them
+        final SpellAbility look = vaultLook(Arrays.asList("Grizzly Bears", "Hill Giant", "Serra Angel", "Shivan Dragon",
+                CONSULTATION, WURM, "Runeclaw Bear", "Llanowar Elves", "Counterspell", "Divination", "Opt", "Cancel",
+                "Mulldrifter", "Air Elemental"));
+        t.useLines(List.of());
+        assertTrue(willDig(look));    // the stock rule: nothing in the five is a keep
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertEquals(ids(t.oneShort()), List.of("742-1295"));
+        assertFalse(willDig(look));
+    }
+
+    @Test
+    public void aTwoShortLineIsNotDugForByTheVault() {
+        // two Islands in the five, Consultation eighth: the stock rule keeps the five, the one-short line digs on
+        assertTrue(willDig(vaultLook(vaultLibrary(14, 7))));
+        final SpellAbility look = vaultLook(vaultLibrary(14, 7));
+        // Oracle leaves the hand for the library's bottom, the five in view untouched: 742-1295 is live, two short
+        game.getAction().moveToBottomOfLibrary(t.find(ORACLE, ZoneType.Hand), null, AbilityKey.newMap());
+        assertEquals(t.oneShort(), List.of());
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        // the stock rule's answer and draws: the Vault digs only for a line exactly one piece short
+        assertFalse(assertStockParity(() -> willDig(look), lines(ORACLE_CONSULTATION)));
+    }
+
     // Lim-Dul's Vault's last move: the remembered five put back on top, in the order the AI gives
     private SpellAbility vaultReorder() {
         final Card vault = addCardToZone(SpecialCardAi.LimDulsVault.NAME, ai, ZoneType.Hand);
@@ -681,5 +746,24 @@ public class ComboFetchAiTest extends AITest {
         final List<String> lib = new ArrayList<>(filler.subList(0, size - 1));
         lib.add(pieceAt, CONSULTATION);
         return lib;
+    }
+
+    /** {@code top}, top first, over Mountains to 40 cards: long enough that the library margin never stops a dig
+     *  (LOOK x (digs + 2) + 3 is 28 once three fives are bottomed), so that only MAX_DIGS does. */
+    private static List<String> longLibrary(final List<String> top) {
+        final List<String> lib = new ArrayList<>(top);
+        while (lib.size() < 40) {
+            lib.add("Mountain");
+        }
+        return lib;
+    }
+
+    /** Records our library's bottom {@code fives} fives as the ones this resolution bottomed (LIM_DULS_VAULT_DUG), so
+     *  that the Vault's digsSoFar reads {@code fives}. */
+    private void rememberBottomed(final int fives) {
+        final List<Card> lib = list(ai.getCardsIn(ZoneType.Library));
+        for (int i = lib.size() - 5 * fives; i < lib.size(); i++) {
+            AiCardMemory.rememberCard(ai, lib.get(i), AiCardMemory.MemorySet.LIM_DULS_VAULT_DUG);
+        }
     }
 }
