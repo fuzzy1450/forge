@@ -698,6 +698,24 @@ public class ComboFetchAiTest extends AITest {
         assertFalse(assertStockParity(() -> willDig(look), lines(ORACLE_CONSULTATION)));
     }
 
+    // review round 3
+
+    @Test
+    public void aTwoShortLineWithItsPieceInTheFiveIsNotKeptByTheVault() {
+        // Consultation fifth from the top and nothing else in the five worth keeping. For a line one piece short the
+        // Vault keeps the five (aPieceFifthFromTheTopIsKeptNotDugPast). Oracle moved to the library's bottom makes the
+        // line two short: the Vault then makes the stock rule's decision, which digs on, with the stock draws.
+        final SpellAbility look = vaultLook(Arrays.asList("Grizzly Bears", "Hill Giant", "Serra Angel", "Shivan Dragon",
+                CONSULTATION, WURM, "Runeclaw Bear", "Llanowar Elves", "Counterspell", "Divination", "Opt", "Cancel",
+                "Mulldrifter", "Air Elemental"));
+        assertEquals(ids(t.oneShort()), List.of("742-1295"));
+        assertFalse(willDig(look));    // one short, the same five: kept (an answer that writes no memory)
+        game.getAction().moveToBottomOfLibrary(t.find(ORACLE, ZoneType.Hand), null, AbilityKey.newMap());
+        assertEquals(t.oneShort(), List.of());
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertTrue(assertStockParity(() -> willDig(look), lines(ORACLE_CONSULTATION)));
+    }
+
     // Lim-Dul's Vault's last move: the remembered five put back on top, in the order the AI gives
     private SpellAbility vaultReorder() {
         final Card vault = addCardToZone(SpecialCardAi.LimDulsVault.NAME, ai, ZoneType.Hand);
