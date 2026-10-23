@@ -121,12 +121,8 @@ public final class ComboSignals {
     private static boolean oracleTriggerDisabled(final Player ai, final ComboTracker t) {
         final String name = ComboLines.Winner.ORACLE.card;
         final Game game = ai.getGame();
-        for (final SpellAbilityStackInstance si : game.getStack()) {
-            final Card host = si.getSourceCard();
-            if (si.isTrigger() && host != null && ai.equals(si.getActivatingPlayer())
-                    && ComboTracker.nameOf(host).equals(name)) {
-                return false;
-            }
+        if (t.triggerOnOurStack(name)) {
+            return false;
         }
         final Card oracle = ours(ai, t, name);
         if (oracle == null) {

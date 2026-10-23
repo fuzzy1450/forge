@@ -22,6 +22,7 @@ import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.zone.ZoneType;
 import forge.util.MyRandom;
@@ -608,6 +609,260 @@ public class ComboSignalsTest extends AITest {
         assertEquals(ids(t.live()), List.of("b", "c", "2836-3093", "a", "d"));
         assertEquals(t.missing(twoShort), List.of(PACT, LAB));
         assertEquals(ids(t.oneShort()), List.of("d", "a", "b", "c"));
+    }
+
+    // ---- review round 1 ----
+
+    @Test
+    public void aSpentOracleInPlayIsNoLine() {
+        // our Oracle in play with no entering trigger of its own on the stack (it resolved, was countered, or never
+        // fired) wins nothing: its line is neither chased nor executed, and Consultation is an ordinary card again
+        start(ORACLE_CONSULTATION);
+        final Card oracle = addCard(ORACLE, ai);
+        final Card consultation = addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        manaForTheLine();
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertTrue(game.getStack().isEmpty());
+        assertEquals(t.where(ORACLE), ComboTracker.Where.BATTLEFIELD);
+        assertTrue(t.reachable(l));
+        assertNull(abandon(l), "no signal holds: the line is dead for want of the trigger alone");
+        assertEquals(t.live(), List.of());
+        assertEquals(t.executable(), List.of());
+        assertEquals(t.oneShort(), List.of());
+        assertFalse(t.protects(consultation));
+        assertFalse(t.protects(oracle));
+
+        // an opponent's Oracle trigger on the stack is not ours
+        final SpellAbilityStackInstance theirs = enters(addCardToZone(ORACLE, opp, ZoneType.Hand));
+        assertSame(theirs.getActivatingPlayer(), opp);
+        assertEquals(t.live(), List.of());
+        assertEquals(t.executable(), List.of());
+        assertFalse(t.protects(consultation));
+    }
+
+    @Test
+    public void anOracleInPlayIsALineWhileItsTriggerIsOnOurStack() {
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        final SpellAbilityStackInstance trigger = enters(t.find(ORACLE, ZoneType.Hand));
+        assertSame(trigger.getActivatingPlayer(), ai);
+        assertEquals(t.where(ORACLE), ComboTracker.Where.BATTLEFIELD);
+        assertNull(abandon(l));
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertEquals(ids(t.oneShort()), List.of("742-1295"));
+        assertTrue(t.protects(consultation));
+
+        // the trigger gone, resolved or countered: the Oracle in play is spent
+        game.getStack().clear();
+        assertEquals(t.live(), List.of());
+        assertEquals(t.executable(), List.of());
+        assertEquals(t.oneShort(), List.of());
+        assertFalse(t.protects(consultation));
+    }
+
+    @Test
+    public void anOracleSpellOnOurStackIsNotItsTrigger() {
+        // Oracle cast into a Torpor Orb will enter with no trigger: our spell on the stack is not a fired trigger
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ai.getZone(ZoneType.Hand).remove(t.find(ORACLE, ZoneType.Hand));
+        castOnStack(ORACLE);
+        assertEquals(t.where(ORACLE), ComboTracker.Where.STACK);
+        assertFalse(game.getStack().peek().isTrigger());
+        assertNull(abandon(l));
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+
+        addCard("Torpor Orb", opp);
+        assertTrue(ComboSignals.denied(ai, l, t));
+        assertEquals(t.executable(), List.of());
+    }
+
+    @Test
+    public void deniedWhenOnlyWeCannotWin() {
+        // three seats: one opponent's Platinum Angel stops our winning while the other opponent can still lose, so
+        // the cannot-win clause denies alone
+        game = initAndCreateThreePlayerGame();
+        ai = game.getPlayers().get(1);
+        t = aiOf(ai).getComboTracker();
+        t.useLines(lines(ORACLE_CONSULTATION));
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        manaForTheLine();
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertNull(abandon(l));
+
+        addCard("Platinum Angel", game.getPlayers().get(0));
+        assertTrue(ai.cantWin());
+        assertFalse(game.getPlayers().get(2).cantLose());
+        assertEquals(abandon(l), Signal.DENIED);
+        assertEquals(t.live(), List.of());
+        assertEquals(t.executable(), List.of());
+    }
+
+    @Test
+    public void abandonReadsTheSignalsInEnumOrder() {
+        // DENIED before NO_MANA: one Island, then an opposing Platinum Angel
+        ComboLines.Line l = oracleLine();
+        lands("Island");
+        assertEquals(abandon(l), Signal.NO_MANA);
+        addCard("Platinum Angel", opp);
+        assertEquals(abandon(l), Signal.DENIED);
+
+        // NO_MANA before DANGER: one Island, 5 life, an opposing Dreadmaw
+        l = oracleLine();
+        lands("Island");
+        ai.setLife(5, null);
+        ready(DREADMAW, 1, opp);
+        assertEquals(abandon(l), Signal.NO_MANA);
+
+        // DANGER before SURER_KILL: a Bolt and the opponent at 3, but our 5 life against a Dreadmaw
+        l = oracleLine();
+        manaForTheLine();
+        lands("Mountain");
+        ai.setLife(5, null);
+        ready(DREADMAW, 1, opp);
+        opp.setLife(3, null);
+        addCardToZone("Lightning Bolt", ai, ZoneType.Hand);
+        assertEquals(abandon(l), Signal.DANGER);
+        ai.setLife(20, null);
+        assertEquals(abandon(l), Signal.SURER_KILL);
+    }
+
+    @Test
+    public void castBarReadsLibraryCommandAndNotTheBattlefield() {
+        // Oracle (an even mana value) in the library, Consultation in hand
+        start(ORACLE_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        addCardToZone(ORACLE, ai, ZoneType.Library);
+        manaForTheLine();
+        ComboLines.Line l = t.deckLines().get(0);
+        assertNull(abandon(l));
+        addCard("Void Winnower", opp);
+        assertEquals(abandon(l), Signal.DENIED);
+
+        // Oracle in the command zone
+        start(ORACLE_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        addCardToZone(ORACLE, ai, ZoneType.Command);
+        manaForTheLine();
+        l = t.deckLines().get(0);
+        assertNull(abandon(l));
+        addCard("Void Winnower", opp);
+        assertEquals(abandon(l), Signal.DENIED);
+
+        // Oracle already in play with its trigger on our stack: cast already, so never barred, and Consultation (odd)
+        // in response still wins
+        start(ORACLE_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        enters(addCardToZone(ORACLE, ai, ZoneType.Hand));
+        manaForTheLine();
+        l = t.deckLines().get(0);
+        addCard("Void Winnower", opp);
+        assertFalse(ComboSignals.denied(ai, l, t));
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+    }
+
+    @Test
+    public void castBarReadsTheFirstPieceToo() {
+        // Tainted Pact (2, even) is the line's first piece, Laboratory Maniac (3, odd) its second
+        start(LAB_PACT);
+        addCardToZone(PACT, ai, ZoneType.Hand);
+        addCardToZone(LAB, ai, ZoneType.Library);
+        lands("Island", "Island", "Island", "Swamp", "Swamp");
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertEquals(l.names(), List.of(PACT, LAB));
+        assertNull(abandon(l));
+        addCard("Void Winnower", opp);
+        assertEquals(abandon(l), Signal.DENIED);
+    }
+
+    @Test
+    public void dangerIgnoresCreaturesThatCannotAttack() {
+        // a defender's 10 power never reaches us
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ai.setLife(5, null);
+        ready("Colossus of Akros", 1, opp);
+        assertNull(abandon(l));
+    }
+
+    @Test
+    public void surerKillIgnoresAttackersThatCannotAttack() {
+        // nor does our own defender's reach the opponent
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        opp.setLife(5, null);
+        ready("Colossus of Akros", 1, ai);
+        assertNull(abandon(l));
+    }
+
+    @Test
+    public void surerKillCountsAFlyerNoGroundBlockerCanBlock() {
+        // an untapped Wall of Wood (no reach) cannot block a Serra Angel
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        opp.setLife(4, null);
+        ready("Serra Angel", 1, ai);
+        addCard("Wall of Wood", opp);
+        assertEquals(abandon(l), Signal.SURER_KILL);
+    }
+
+    @Test
+    public void surerKillByBurnInASubAbility() {
+        // Call In a Professional: an Effect root whose sub-ability deals the 3 damage
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        lands("Mountain");
+        opp.setLife(3, null);
+        assertNull(abandon(l));
+        addCardToZone("Call In a Professional", ai, ZoneType.Hand);
+        assertEquals(abandon(l), Signal.SURER_KILL);
+    }
+
+    @Test
+    public void surerKillByBurnThatTargetsAPlayerOrAnOpponent() {
+        // Flame Jet's ValidTgts names Player (and Planeswalker), never Any
+        ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        lands("Mountain");
+        opp.setLife(3, null);
+        assertNull(abandon(l));
+        addCardToZone("Flame Jet", ai, ZoneType.Hand);
+        assertEquals(abandon(l), Signal.SURER_KILL);
+
+        // Stinging Vitriol's names Opponent
+        l = oracleLine();
+        manaForTheLine();
+        lands("Mountain");
+        opp.setLife(2, null);
+        assertNull(abandon(l));
+        addCardToZone("Stinging Vitriol", ai, ZoneType.Hand);
+        assertEquals(abandon(l), Signal.SURER_KILL);
+    }
+
+    /** {@code c} enters the battlefield and its entering trigger goes on the stack (the move holds the trigger as
+     *  waiting; the state check runs it): the stack's top, that trigger. */
+    private SpellAbilityStackInstance enters(final Card c) {
+        game.getAction().moveTo(ZoneType.Battlefield, c, null, AbilityKey.newMap());
+        game.getAction().checkStateEffects(true);
+        game.getStack().addAllTriggeredAbilitiesToStack();
+        final SpellAbilityStackInstance top = game.getStack().peek();
+        assertTrue(top.isTrigger());
+        assertEquals(ComboTracker.nameOf(top.getSourceCard()), ComboTracker.nameOf(c));
+        return top;
+    }
+
+    /** Our {@code name} cast: on our stack, nothing paid or resolved (ComboTrackerTest's castOnStack). */
+    private Card castOnStack(final String name) {
+        final Card card = createCard(name, ai);
+        card.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(card);
+        final SpellAbility sa = card.getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+        game.getStack().add(sa);
+        return card;
     }
 
     /** An Oracle + Consultation line with this id and mana value, built in code: the table's parser refuses a

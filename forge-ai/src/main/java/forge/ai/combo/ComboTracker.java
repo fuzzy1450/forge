@@ -136,8 +136,9 @@ public final class ComboTracker {
         return true;
     }
 
-    /** The deck's lines the AI chases now (section 6.2): every piece reachable, a singleton library where the emptier
-     *  is Tainted Pact, and no abandon signal ({@link ComboSignals#abandon}); in {@link #deckLines} order. */
+    /** The deck's lines the AI chases now (section 6.2): every piece reachable, a Thassa's Oracle in play only while
+     *  its entering trigger is on our stack, a singleton library where the emptier is Tainted Pact, and no abandon
+     *  signal ({@link ComboSignals#abandon}); in {@link #deckLines} order. */
     public List<ComboLines.Line> live() {
         final List<ComboLines.Line> out = new ArrayList<>();
         for (final ComboLines.Line l : deckLines()) {
@@ -148,8 +149,9 @@ public final class ComboTracker {
         return List.copyOf(out);
     }
 
-    /** The deck's lines that may be executed now: every piece reachable, Pact's singleton library, and not
-     *  {@link ComboSignals#denied}. No mana, danger and a surer kill never stop a win now. In deckLines order. */
+    /** The deck's lines that may be executed now: every piece reachable, an Oracle in play only with its trigger on
+     *  our stack, Pact's singleton library, and not {@link ComboSignals#denied}. No mana, danger and a surer kill never
+     *  stop a win now. In deckLines order. */
     public List<ComboLines.Line> executable() {
         final List<ComboLines.Line> out = new ArrayList<>();
         for (final ComboLines.Line l : deckLines()) {
@@ -187,10 +189,32 @@ public final class ComboTracker {
         return false;
     }
 
-    // a line's standing prerequisites: no piece gone, and Tainted Pact empties only a library with no two cards of
-    // one name (Spellbook's stated prerequisite: basics break it)
+    /** Whether a triggered ability we control whose host is named {@code name} is on the stack: a fired trigger,
+     *  which nothing that arrives after it can stop from triggering (Thassa's Oracle's, waiting for its emptier). */
+    boolean triggerOnOurStack(final String name) {
+        for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+            final Card host = si.getSourceCard();
+            if (si.isTrigger() && host != null && ai.equals(si.getActivatingPlayer()) && nameOf(host).equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // a line's standing prerequisites: no piece gone; Thassa's Oracle in play wins only through its entering trigger,
+    // so a spent one (that trigger resolved, countered or never fired) is no line until such a trigger of ours is on
+    // the stack; and Tainted Pact empties only a library with no two cards of one name (Spellbook's stated
+    // prerequisite: basics break it)
     private boolean ready(final ComboLines.Line l) {
-        return reachable(l) && (l.emptier() != ComboLines.Emptier.PACT || singletonLibrary());
+        if (!reachable(l)) {
+            return false;
+        }
+        final String oracle = ComboLines.Winner.ORACLE.card;
+        if (l.winner() == ComboLines.Winner.ORACLE && where(oracle) == Where.BATTLEFIELD
+                && !triggerOnOurStack(oracle)) {
+            return false;
+        }
+        return l.emptier() != ComboLines.Emptier.PACT || singletonLibrary();
     }
 
     // the table's mana value ascending, a negative one (none known) last, then the variant id
