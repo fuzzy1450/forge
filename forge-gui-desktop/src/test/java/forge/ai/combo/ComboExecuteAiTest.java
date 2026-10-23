@@ -2,6 +2,7 @@ package forge.ai.combo;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
@@ -989,6 +990,14 @@ public class ComboExecuteAiTest extends AITest {
         opponentsEndStep();
         assertEquals(consider(consultation), AiPlayDecision.WillPlay);
 
+        // review round 3: the window holds against Visions' own cast on the library Consultation emptied, in our Main 1
+        // and our Main 2
+        emptied(consultation);
+        for (final PhaseType phase : List.of(PhaseType.MAIN1, PhaseType.MAIN2)) {
+            ph.devModeSet(phase, ai);
+            assertEquals(aiOf(ai).canPlaySa(castOf(visions)), AiPlayDecision.WillPlay, "Serum Visions at " + phase);
+        }
+
         // Tainted Pact resolving, its own mana paid: Visions follows in our Main 1, never in the opponent's
         start(LAB_PACT);
         addCard(LAB, ai);
@@ -1031,17 +1040,25 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
 
         game.getAction().moveTo(ZoneType.Graveyard, visions, null, AbilityKey.newMap());
-        hand(OPT);
+        final Card opt = hand(OPT);
         for (final PhaseType phase : elsewhere) {
             ph.devModeSet(phase, phase == PhaseType.MAIN1 ? opp : ai);
             assertEquals(consider(consultation), AiPlayDecision.WillPlay, "Opt at " + phase);
+        }
+
+        // review round 3: the window holds against Opt's own cast on the library Consultation emptied, in each phase
+        emptied(consultation);
+        for (final PhaseType phase : elsewhere) {
+            ph.devModeSet(phase, phase == PhaseType.MAIN1 ? opp : ai);
+            assertEquals(aiOf(ai).canPlaySa(castOf(opt)), AiPlayDecision.WillPlay, "Opt at " + phase);
         }
     }
 
     /** A draw spell the AI is never offered is no follow-up: Gitaxian Probe carries AI:RemoveDeck:All and no readmit
      *  row, so getSpellAbilityToPlay drops it and the emptied library would wait for our draw step. Two Swamps make the
      *  two mana Consultation and Probe cost together, and Probe's {U/P} is no blue pip, yet Consultation waits, with an
-     *  Island beside them too; Opt, which the AI casts, opens the window. */
+     *  Island beside them too; Opt, which the AI casts, opens the window. (Since review round 3 Probe's targeted
+     *  RevealHand root is no follow-up shape either; See Beyond, of that shape, pins the hint alone below.) */
     @Test
     public void aDrawSpellTheAiNeverCastsIsNoFollowUp() {
         start(LAB_CONSULTATION);
@@ -1063,12 +1080,13 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(consider(consultation), AiPlayDecision.WillPlay);
     }
 
-    /** A hinted draw spell follows when its own readmit row admits it, as getSpellAbilityToPlay asks the row: Faithless
-     *  Looting (AI:RemoveDeck:All) is readmitted in our Main 2 with two cards worth looting away and its red, so
-     *  Consultation goes; with one such card, or in our Main 1, the row keeps Looting off and Consultation waits. The
-     *  decision draws no random number. */
+    /** A looter is no follow-up, even on its readmit row (review round 3; round 2 had Faithless Looting follow there):
+     *  a Discard part is no follow-up shape, since a loot with no hand left to discard is never cast (Careful Study
+     *  below). Faithless Looting (AI:RemoveDeck:All) is readmitted in our Main 2 with two cards worth looting away and
+     *  its red, yet Consultation waits, as it does with one such card or in our Main 1. The decision draws no random
+     *  number. */
     @Test
-    public void aHintedDrawSpellFollowsOnItsReadmitRow() {
+    public void aLooterIsNoFollowUpEvenOnItsReadmitRow() {
         start(LAB_CONSULTATION);
         addCard(LAB, ai);
         final Card consultation = hand(CONSULTATION);
@@ -1077,6 +1095,7 @@ public class ComboExecuteAiTest extends AITest {
         lands("Swamp", "Mountain");
         fillLibrary(ai, 20);
         assertTrue(ComputerUtilCard.isCardRemAIDeck(looting));
+        assertNotNull(castOf(looting).findSubAbilityByType(ApiType.Discard));
         final PhaseHandler ph = game.getPhaseHandler();
         ph.devModeSet(PhaseType.MAIN2, ai);
         assertFalse(SpecialCardAi.RemoveDeckFilter.readmit(ai, castOf(looting)));
@@ -1085,7 +1104,7 @@ public class ComboExecuteAiTest extends AITest {
         hand("Craw Wurm");
         assertTrue(SpecialCardAi.RemoveDeckFilter.readmit(ai, castOf(looting)));
         final long before = MyRandom.callCount();
-        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
         assertEquals(MyRandom.callCount(), before, "the decision drew");
 
         ph.devModeSet(PhaseType.MAIN1, ai);
@@ -1113,11 +1132,11 @@ public class ComboExecuteAiTest extends AITest {
     }
 
     /** Every colour of the draw spell is checked, not only blue and black: Swamps that pay Consultation and the draw
-     *  spell in mana value wait for Desperate Ravings' red, Revitalize's white and both of Harmonize's green. */
+     *  spell in mana value wait for both of Harmonize's green. (Round 2 had Desperate Ravings' red and Revitalize's
+     *  white too; since review round 3 neither is a follow-up shape, a Discard part and a GainLife root, and no front
+     *  face of that shape in the cardsfolder carries a red or a white pip, a hybrid one aside.) */
     @Test
     public void everyColourOfTheDrawSpellIsChecked() {
-        assertTheDrawSpellWaitsForItsColour("Desperate Ravings", 3, "Mountain", 1);
-        assertTheDrawSpellWaitsForItsColour("Revitalize", 3, "Plains", 1);
         assertTheDrawSpellWaitsForItsColour("Harmonize", 5, "Forest", 2);
     }
 
@@ -1140,5 +1159,194 @@ public class ComboExecuteAiTest extends AITest {
             lands(land);
         }
         assertEquals(consider(consultation), AiPlayDecision.WillPlay, drawSpell + " with " + pips + " " + land);
+    }
+
+    // ---- review round 3 ----
+
+    /** Review Focus 4 with the finding's Consider, end to end: Laboratory Maniac in play, Consultation and Consider in
+     *  hand, Island + Swamp, a 20-card library, our Main 1. Consider is no follow-up (on the emptied library SurveilAi
+     *  refuses it), so Consultation is not cast this turn and our end step finds the library whole. */
+    @Test
+    public void considerLeavesTheLibraryWholeThroughOurTurn() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        hand(CONSULTATION);
+        hand("Consider");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertFalse(game.isGameOver());
+        assertEquals(game.getPhaseHandler().getPlayerTurn(), ai);
+        assertNotNull(t.find(CONSULTATION, ZoneType.Hand), "Consultation was cast");
+        assertFalse(ai.getCardsIn(ZoneType.Library).isEmpty());
+    }
+
+    /** End to end, a follow-up wins: Laboratory Maniac in play, Consultation and Brainstorm in hand, Island + Swamp, a
+     *  20-card library, our Main 1. Consultation empties the library and Brainstorm's draw wins the same turn. */
+    @Test
+    public void labThenConsultationThenBrainstormWins() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        hand(CONSULTATION);
+        hand("Brainstorm");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertWonThisTurn();
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+    }
+
+    /** The finding's Consider: a Surveil root is no follow-up. Island + Swamp pay Consultation and Consider together,
+     *  yet Consultation waits in our Main 1, since on the emptied library the AI does not cast Consider (SurveilAi:
+     *  an instant only at the opponent's end step, and nothing to surveil). */
+    @Test
+    public void considerIsNoFollowUp() {
+        final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, "Consider", "Island", "Swamp");
+        final Card surveil = t.find("Consider", ZoneType.Hand);
+        assertEquals(castOf(surveil).getApi(), ApiType.Surveil);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        emptied(consultation);
+        assertNotEquals(aiOf(ai).canPlaySa(castOf(surveil)), AiPlayDecision.WillPlay);
+    }
+
+    /** The finding's Thrill of Possibility: a cost with a part other than mana is no follow-up. Thrill the only card
+     *  beside Consultation, Swamp + Mountain + Mountain paying both, Consultation waits: once it is cast nothing is
+     *  left to discard, and the AI does not cast Thrill. */
+    @Test
+    public void aDrawSpellWithADiscardCostIsNoFollowUp() {
+        final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, "Thrill of Possibility", "Swamp", "Mountain",
+                "Mountain");
+        final Card thrill = t.find("Thrill of Possibility", ZoneType.Hand);
+        assertFalse(castOf(thrill).getPayCosts().isOnlyManaCost());
+        assertEquals(ai.getCardsIn(ZoneType.Hand).size(), 2);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        emptied(consultation);
+        assertEquals(ai.getCardsIn(ZoneType.Hand).size(), 1);
+        assertNotEquals(aiOf(ai).canPlaySa(castOf(thrill)), AiPlayDecision.WillPlay);
+    }
+
+    /** Every other way out of the follow-up shape, one spell each, the only one its board's spell takes (followsUp's
+     *  list): Consultation waits in our Main 1 on a board whose lands pay it and the spell together, in mana value and
+     *  in each colour's pips. Where the AI's own cast on the emptied library is why, it is shown: the AI does not cast
+     *  that spell there. Abandon Attachments and Index would be cast and draw nothing; Demand Answers' costs and
+     *  Inspiring Refrain's suspend come with the cast. */
+    @Test
+    public void aSpellOfAnotherShapeIsNoFollowUp() {
+        Card s = assertNoFollowUp(LAB_CONSULTATION, LAB, "Crushing Disappointment", true, "Swamp", "Swamp", "Island",
+                "Island", "Island");
+        assertEquals(castOf(s).getApi(), ApiType.LoseLife); // a root that waits for Main 2
+        s = assertNoFollowUp(LAB_CONSULTATION, LAB, "Careful Study", true, "Island", "Swamp");
+        assertNotNull(castOf(s).findSubAbilityByType(ApiType.Discard)); // a loot with no hand left
+        s = assertNoFollowUp(LAB_CONSULTATION, LAB, "Whispers of the Muse", true, "Island", "Swamp");
+        assertEquals(castOf(s).getParam("AILogic"), "AtOppEOT"); // the card's own timing
+        s = assertNoFollowUp(JACE_CONSULTATION, JACE, "Vision Skeins", true, "Island", "Island", "Swamp");
+        assertEquals(castOf(s).getParam("Defined"), "Player"); // each player draws: not lifted with Jace
+        s = assertNoFollowUp(JACE_CONSULTATION, JACE, "Collective Unconscious", true, "Swamp", "Forest", "Forest",
+                "Forest", "Forest", "Forest", "Forest");
+        assertEquals(castOf(s).getParam("NumCards"), "X"); // a creature count, none with Jace alone
+        s = assertNoFollowUp(LAB_CONSULTATION, LAB, "Abandon Attachments", false, "Island", "Island", "Swamp");
+        assertTrue(castOf(s).hasParam("UnlessCost")); // draws only off a discard
+        s = assertNoFollowUp(LAB_CONSULTATION, LAB, "Demand Answers", false, "Swamp", "Mountain", "Mountain");
+        assertTrue(castOf(s).getPayCosts().isOnlyManaCost()); // the keyword's costs come with the cast
+        assertTrue(s.hasStartOfKeyword("AlternateAdditionalCost"));
+        s = assertNoFollowUp(LAB_CONSULTATION, LAB, "Inspiring Refrain", false, "Swamp", "Island", "Island", "Island",
+                "Island", "Island", "Island");
+        assertEquals(castOf(s).getSubAbility().getParam("Origin"), "Stack"); // a ChangeZone not from our hand
+        s = assertNoFollowUp(LAB_CONSULTATION, LAB, "Index", false, "Island", "Swamp");
+        assertEquals(castOf(s).getApi(), ApiType.RearrangeTopOfLibrary); // no draw at all
+        assertNull(castOf(s).getSubAbility());
+    }
+
+    /** Every follow-up shape is cast on the emptied library: Laboratory Maniac, Consultation and the spell, lands
+     *  paying both; the window opens in our Main 1, and once Consultation has resolved off a Swamp the AI casts the
+     *  spell. Opt (a Scry root), Serum Visions (a Draw root, a Scry part), Ponder (a RearrangeTopOfLibrary root),
+     *  Brainstorm (a ChangeZone from our hand), Divination (a Draw alone) and Night's Whisper at 4 life (a LoseLife
+     *  part, whose drawback floor refuses 2 + 3 > 4 but on the finishing draw). */
+    @Test
+    public void everyFollowUpShapeIsCastOnTheEmptiedLibrary() {
+        assertFollowsUp("Opt", 20, "Island", "Swamp");
+        assertFollowsUp("Serum Visions", 20, "Island", "Swamp");
+        assertFollowsUp("Ponder", 20, "Island", "Swamp");
+        assertFollowsUp("Brainstorm", 20, "Island", "Swamp");
+        assertFollowsUp("Divination", 20, "Island", "Island", "Island", "Swamp");
+        assertFollowsUp("Night's Whisper", 4, "Swamp", "Swamp", "Island");
+    }
+
+    /** A hinted spell of the follow-up shape is no follow-up without its readmit row: See Beyond (AI:RemoveDeck:All,
+     *  no row), a Draw with a ChangeZone from our hand, with Island + Swamp + Island paying it and Consultation, is
+     *  never offered to the AI, so Consultation waits; Opt opens the window on the same board. */
+    @Test
+    public void aHintedSpellOfTheFollowUpShapeIsNoFollowUp() {
+        final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, "See Beyond", "Island", "Swamp", "Island");
+        final Card seeBeyond = t.find("See Beyond", ZoneType.Hand);
+        assertTrue(ComputerUtilCard.isCardRemAIDeck(seeBeyond));
+        assertFalse(SpecialCardAi.RemoveDeckFilter.readmit(ai, castOf(seeBeyond)));
+        assertEquals(castOf(seeBeyond).getSubAbility().getParam("Origin"), "Hand");
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        hand(OPT);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    /** {@code winner} (line {@code row}) on our battlefield, Consultation and {@code spell} in our hand, {@code lands},
+     *  a 20-card library, our Main 1: the line executable, and the lands paying Consultation and the spell together in
+     *  mana value and in each colour's pips, as the window's own mana rule reads them. Returns Consultation. */
+    private Card followUpBoard(final String row, final String winner, final String spell, final String... lands) {
+        start(row);
+        addCard(winner, ai);
+        final Card consultation = hand(CONSULTATION);
+        final Card s = hand(spell);
+        lands(lands);
+        fillLibrary(ai, 20);
+        assertEquals(t.executable().size(), 1, spell);
+        final SpecialCardAi.HonestMana mana = SpecialCardAi.HonestMana.of(ai, castOf(consultation), true);
+        assertTrue(mana.total() >= consultation.getCMC() + s.getCMC(), spell + ": " + mana.total() + " mana");
+        for (final byte colour : MagicColor.WUBRG) {
+            final ManaCostShard pip = ManaCostShard.valueOf(colour);
+            assertTrue(mana.colour(colour) >= consultation.getManaCost().getShardCount(pip)
+                    + s.getManaCost().getShardCount(pip), spell + ": colour " + colour);
+        }
+        return consultation;
+    }
+
+    /** Consultation resolved off a Swamp: every card of our library exiled, Consultation in our graveyard, one
+     *  untapped Swamp tapped for its {B}; the phase and the rest of the hand stay. */
+    private void emptied(final Card consultation) {
+        while (!ai.getCardsIn(ZoneType.Library).isEmpty()) {
+            game.getAction().moveTo(ZoneType.Exile, ai.getCardsIn(ZoneType.Library).getFirst(), null,
+                    AbilityKey.newMap());
+        }
+        game.getAction().moveTo(ZoneType.Graveyard, consultation, null, AbilityKey.newMap());
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            if ("Swamp".equals(c.getName()) && c.isUntapped()) {
+                c.setTapped(true);
+                return;
+            }
+        }
+        throw new AssertionError("no untapped Swamp paid Consultation");
+    }
+
+    // followUpBoard with spell, then Consultation waits in our Main 1; with uncast, the AI does not cast the spell on
+    // the library Consultation emptied either. Returns the spell's card.
+    private Card assertNoFollowUp(final String row, final String winner, final String spell, final boolean uncast,
+            final String... lands) {
+        final Card consultation = followUpBoard(row, winner, spell, lands);
+        final Card s = t.find(spell, ZoneType.Hand);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, spell);
+        if (uncast) {
+            emptied(consultation);
+            assertNotEquals(aiOf(ai).canPlaySa(castOf(s)), AiPlayDecision.WillPlay, spell + " on the emptied library");
+        }
+        return s;
+    }
+
+    // followUpBoard with spell at life, then the window opens in our Main 1 and, on the library Consultation emptied,
+    // the AI casts the spell
+    private void assertFollowsUp(final String spell, final int life, final String... lands) {
+        final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, spell, lands);
+        ai.setLife(life, null);
+        final Card s = t.find(spell, ZoneType.Hand);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, spell);
+        emptied(consultation);
+        assertEquals(aiOf(ai).canPlaySa(castOf(s)), AiPlayDecision.WillPlay, spell + " on the emptied library");
     }
 }

@@ -12,6 +12,7 @@ import forge.card.mana.ManaCost;
 import forge.card.mana.ManaCostShard;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
+import forge.game.cost.Cost;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -30,9 +31,11 @@ import forge.game.zone.ZoneType;
  * <li>DOOM: our Doctor Doom, Unrivaled on the battlefield, untapped and free of summoning sickness, its {T} not barred
  * (executable's denial reads Linvala; Consultation only);
  * <li>LAB, JACE: that winner on our battlefield, and a draw of ours follows: the opponent's end step with our turn
- * next, or a spell in our hand with an untargeted Draw part for us (the finishing draw's own rule) that the AI casts
- * right after the emptier (a sorcery-speed one only in our own main phase; a RemoveDeck-hinted card only on its own
- * readmit row) and the mana for the emptier and that spell together, each one's coloured pips among it.
+ * next, or a spell in our hand that the AI casts right after the emptier on the emptied library, read from its shape
+ * (a Draw, Scry or RearrangeTopOfLibrary root, every part one whose AI approves it there, an untargeted Draw of ours
+ * of a fixed number of cards among them, a cost of mana alone; a sorcery-speed one only in our own main phase; a
+ * RemoveDeck-hinted card only on its own readmit row) and the mana for the emptier and that spell together, each
+ * one's coloured pips among it.
  * </ul>
  * Pact's own singleton-library condition is executable's. None of it while we cannot win or every opponent cannot lose
  * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
@@ -258,9 +261,8 @@ public final class ComboExecute {
     }
 
     // a draw of ours follows the emptier: the opponent's end step with our turn next (our draw step), or a spell in our
-    // hand with an untargeted Draw part for us that the AI casts right after the emptier (castsOwnDrawAfter) and that
-    // the mana pays together with the emptier still to be cast: their mana values together, and each colour's pips of
-    // the two
+    // hand that the AI casts right after the emptier on the emptied library (castsOwnDrawAfter) and that the mana pays
+    // together with the emptier still to be cast: their mana values together, and each colour's pips of the two
     private static boolean drawFollows(final Player ai, final SpellAbility sa, final boolean unpaid) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         if (ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn())) {
@@ -296,20 +298,19 @@ public final class ComboExecute {
         return true;
     }
 
-    // a spell of the card with an untargeted Draw part, the root or a sub, whose Defined is absent or You (drawsForUs's
-    // rule, since finishesLine lifts only such a draw: stock DrawAi aims a targeted one at our emptied library only
-    // with Laboratory Maniac, never with Jace), that the AI casts right after the emptier (Review Focus 4):
+    // a spell of the card that the AI casts right after the emptier on the emptied library (Review Focus 4):
+    // - of the follow-up shape (followsUp), whose every part the AI approves on the emptied library;
     // - a sorcery-speed spell (SpellAbilityAi.isSorcerySpeed: no flash of its own or from a static) only in our own
     //   main phase; elsewhere it waits past our draw step, which the emptied library loses (Serum Visions in the
     //   opponent's Main 1, in our combat or at our own end step);
     // - a card the AI is never offered, never: getSpellAbilityToPlay drops a RemoveDeck-hinted card's spell unless its
-    //   own row readmits it (SpecialCardAi.RemoveDeckFilter.readmit, asked as that filter asks it: Faithless Looting's
-    //   row; Gitaxian Probe has none)
+    //   own row readmits it (SpecialCardAi.RemoveDeckFilter.readmit, asked as that filter asks it; See Beyond and
+    //   Gitaxian Probe have none)
     private static boolean castsOwnDrawAfter(final Player ai, final PhaseHandler ph, final Card c) {
         final boolean ourMain = ph.isPlayerTurn(ai) && ph.getPhase() != null && ph.getPhase().isMain();
         final boolean hinted = ComputerUtilCard.isCardRemAIDeck(c);
         for (final SpellAbility spell : c.getSpells()) {
-            if (!ownDraw(spell) || (!ourMain && SpellAbilityAi.isSorcerySpeed(spell, ai))) {
+            if (!followsUp(c, spell) || (!ourMain && SpellAbilityAi.isSorcerySpeed(spell, ai))) {
                 continue;
             }
             if (!hinted || SpecialCardAi.RemoveDeckFilter.readmit(ai, spell)) {
@@ -317,6 +318,68 @@ public final class ComboExecute {
             }
         }
         return false;
+    }
+
+    // the follow-up shape, read from the spell, never its name: what the AI casts on our emptied library, each part's
+    // own AI approving it there
+    // - the root a Draw or a Scry, whose refusals of an emptied library finishesLine lifts (DrawAi's deck guard and its
+    //   Main 1 hold, ScryAi's phase and empty-library ones), or a RearrangeTopOfLibrary, whose AI approves a spell
+    //   outright (Ponder); never a LoseLife (Crushing Disappointment waits for Main 2) nor a Surveil (Consider, Notion
+    //   Rain: SurveilAi refuses an empty library);
+    // - every part untargeted (finishesLine lifts only an untargeted draw), with no AILogic of its own (the card's own
+    //   timing: Whispers of the Muse waits for the opponent's end step) and no UnlessCost (Abandon Attachments draws
+    //   only off a discard);
+    // - every part a Draw of ours (Defined absent or You: Vision Skeins draws for each player, which finishesLine does
+    //   not lift with Jace) of a fixed number of cards (Collective Unconscious draws none with no creature), a Scry, a
+    //   RearrangeTopOfLibrary, a ChangeZone from our hand (Brainstorm's put-back, which the hidden-origin drawback
+    //   approves; not Inspiring Refrain's suspend from the stack) or a LoseLife (Night's Whisper: LifeLoseAi's drawback
+    //   floor is lifted on the finishing draw); not a Discard (Careful Study's looting needs a hand left to discard);
+    // - at least one of them that Draw (Index draws nothing);
+    // - a cost of mana alone (Thrill of Possibility's discard needs a card left in hand) and no AlternateAdditionalCost
+    //   keyword, whose costs only the cast adds (Demand Answers: an artifact to sacrifice or a card to discard)
+    private static boolean followsUp(final Card c, final SpellAbility spell) {
+        final ApiType root = spell.getApi();
+        if (root != ApiType.Draw && root != ApiType.Scry && root != ApiType.RearrangeTopOfLibrary) {
+            return false;
+        }
+        final Cost cost = spell.getPayCosts();
+        if (cost == null || !cost.isOnlyManaCost() || c.hasStartOfKeyword("AlternateAdditionalCost")) {
+            return false;
+        }
+        boolean draws = false;
+        for (SpellAbility s = spell; s != null; s = s.getSubAbility()) {
+            if (s.usesTargeting() || s.hasParam("AILogic") || s.hasParam("UnlessCost")) {
+                return false;
+            }
+            final ApiType api = s.getApi();
+            if (api == ApiType.Draw) {
+                if (!"You".equals(s.getParamOrDefault("Defined", "You"))
+                        || !fixedCount(s.getParamOrDefault("NumCards", "1"))) {
+                    return false;
+                }
+                draws = true;
+            } else if (api == ApiType.ChangeZone) {
+                if (!"Hand".equals(s.getParam("Origin"))) {
+                    return false;
+                }
+            } else if (api != ApiType.Scry && api != ApiType.RearrangeTopOfLibrary && api != ApiType.LoseLife) {
+                return false;
+            }
+        }
+        return draws;
+    }
+
+    // a positive whole number written out (NumCards$ 2), not X nor another count
+    private static boolean fixedCount(final String n) {
+        if (n.isEmpty() || n.charAt(0) == '0') {
+            return false;
+        }
+        for (int i = 0; i < n.length(); i++) {
+            if (n.charAt(i) < '0' || n.charAt(i) > '9') {
+                return false;
+            }
+        }
+        return true;
     }
 
     // the spell, or a sub of it, is an untargeted Draw whose Defined is absent or You
