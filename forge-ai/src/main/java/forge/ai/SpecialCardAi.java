@@ -31558,6 +31558,15 @@ public class SpecialCardAi {
             // figure out how many of each card we have in deck
             Map<String, Long> cardAmount = lib.stream().collect(Collectors.groupingBy(Card::getName, Collectors.counting()));
 
+            // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): Intuition's three cards
+            // hand us a one-short combo line's missing piece, whichever the opponent picks; null = the stock pile below.
+            if (IntuitionPile.handles(sa)) {
+                final CardCollection comboPile = ComboFetch.intuitionPile(ai);
+                if (comboPile != null) {
+                    return comboPile;
+                }
+            }
+
             // Trix: see if we can complete the combo (if it looks like we might win shortly or if we need to get a Donate stat)
             boolean donateComboMightWin = false;
             int numIllusionsOTB = CardLists.filter(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.nameEquals("Illusions of Grandeur")).size();
@@ -31859,6 +31868,11 @@ public class SpecialCardAi {
             // Aven Mindcensor: the search sees only the top four
             if (ai.hasKeyword("LimitSearchLibrary")) {
                 return false;
+            }
+            // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): three or more completers
+            // make a pile any two of which still hand us a missing piece, so the softer refusals below yield to it.
+            if (ComboFetch.giftsReady(ai)) {
+                return true;
             }
             // F4: DrawAi's hand rule for the two cards to hand -- no cleanup discard on our own turn; on
             // an opponent's turn, never above the maximum already

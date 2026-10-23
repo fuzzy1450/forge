@@ -1,0 +1,437 @@
+package forge.ai.combo;
+
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertSame;
+import static org.testng.Assert.assertTrue;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Random;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
+
+import org.testng.annotations.Test;
+
+import forge.ai.AITest;
+import forge.ai.AiController;
+import forge.ai.LobbyPlayerAi;
+import forge.ai.PlayerControllerAi;
+import forge.ai.SpecialCardAi;
+import forge.ai.ability.ChangeZoneAi;
+import forge.game.Game;
+import forge.game.card.Card;
+import forge.game.card.CardCollection;
+import forge.game.card.CardLists;
+import forge.game.card.CardPredicates;
+import forge.game.player.Player;
+import forge.game.spellability.SpellAbility;
+import forge.game.zone.ZoneType;
+import forge.util.MyRandom;
+
+/**
+ * Intuition's and Gifts Ungiven's piles (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): the cards they
+ * search for are chosen so that the AI ends up with a one-short combo line's missing piece. Intuition reveals three
+ * completers (any card the opponent hands over completes a line), else the creature piece and the two cheapest spells
+ * that are no piece, since the opponent's stock pick prefers a creature; Gifts Ungiven takes the completers first, but
+ * only with three or more, so any two left after the opponent bins two still hold one. A deck holding no line keeps
+ * the stock pile, picks and draws. Unless a test says otherwise the AI plays the Default profile (whose
+ * INTUITION_ALTERNATIVE_LOGIC is on) in its own MAIN1, with five lands in play.
+ */
+public class ComboPilesAiTest extends AITest {
+    private static final String WIN = "F|2|S|Win the game";
+    private static final String EXILE = "F|88|H|Exile your library";
+    private static final String ORACLE_CONSULTATION = "V|742-1295|3|{U}{U}{B}|2,88|H:Demonic Consultation|H:Thassa's Oracle";
+    private static final String LAB_CONSULTATION = "V|742-2836|1|{B}|2,88|H:Demonic Consultation|B:Laboratory Maniac";
+    private static final String JACE_CONSULTATION =
+            "V|742-3096|1|{B}|2,88|H:Demonic Consultation|B:Jace, Wielder of Mysteries";
+    private static final String DOOM_CONSULTATION = "V|x-1|1|{B}|2,88|H:Demonic Consultation|B:Doctor Doom, Unrivaled";
+    private static final String PACT_ORACLE = "V|1295-3093|4|{1}{U}{U}{B}|2|H:Tainted Pact|H:Thassa's Oracle";
+
+    private static final String ORACLE = "Thassa's Oracle";
+    private static final String LAB = "Laboratory Maniac";
+    private static final String DOOM = "Doctor Doom, Unrivaled";
+    private static final String JACE = "Jace, Wielder of Mysteries";
+    private static final String CONSULTATION = "Demonic Consultation";
+    private static final String PACT = "Tainted Pact";
+    private static final String INTUITION = SpecialCardAi.IntuitionPile.NAME;
+    private static final String GIFTS = SpecialCardAi.GiftsUngiven.NAME;
+
+    // seven distinct names, none a piece: five creatures and two spells (Counterspell at two, Divination at three)
+    private static final List<String> OTHERS = List.of("Craw Wurm", "Runeclaw Bear", "Grizzly Bears", "Hill Giant",
+            "Serra Angel", "Counterspell", "Divination");
+    // big creatures, for the singleton libraries beside Tainted Pact
+    private static final List<String> BIG = List.of("Craw Wurm", "Shivan Dragon", "Serra Angel", "Hill Giant",
+            "Air Elemental");
+
+    // two seeds, two shuffles of the pile the opponent's stock pick shuffles
+    private static final List<Long> SHUFFLE_SEEDS = List.of(1L, 12345L);
+
+    private Game game;
+    private Player ai;
+    private Player opp;
+    private ComboTracker t;
+
+    private static AiController aiOf(final Player p) {
+        return ((PlayerControllerAi) p.getController()).getAi();
+    }
+
+    private static List<ComboLines.Line> lines(final String... rows) {
+        final List<String> all = new ArrayList<>(List.of(WIN, EXILE));
+        all.addAll(Arrays.asList(rows));
+        return ComboLines.claimed(ComboTable.parse(all));
+    }
+
+    private static List<String> ids(final List<ComboLines.Line> lines) {
+        return lines.stream().map(l -> l.variant().id()).collect(Collectors.toList());
+    }
+
+    private static List<String> names(final List<Card> cards) {
+        return cards.stream().map(ComboTracker::nameOf).collect(Collectors.toList());
+    }
+
+    /** A two-player game whose AI (player 1, on the Default profile, in its own MAIN1) tracks {@code rows}, with
+     *  Island, Island, Swamp, Swamp and Swamp in play: the whole cost of every line here (Consultation and Doctor
+     *  Doom's five the dearest), so NO_MANA is quiet; nothing in hand or library yet. */
+    private void start(final String... rows) {
+        game = initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        opp = game.getPlayers().get(0);
+        ((LobbyPlayerAi) ai.getLobbyPlayer()).setAiProfile("Default");
+        t = aiOf(ai).getComboTracker();
+        t.useLines(lines(rows));
+        for (final String land : List.of("Island", "Island", "Swamp", "Swamp", "Swamp")) {
+            addCard(land, ai);
+        }
+    }
+
+    private void library(final List<String> names) {
+        for (final String name : names) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+    }
+
+    private void library(final String... names) {
+        library(Arrays.asList(names));
+    }
+
+    /** Lines 742-1295, 742-2836 and x-1, Demonic Consultation in hand; in the library Thassa's Oracle, Laboratory
+     *  Maniac, Doctor Doom with {@code doom}, then the first {@code others} of OTHERS. With {@code doom} the three lines
+     *  are one short; without it the deck holds no Doctor Doom, so x-1 is no deck line. */
+    private void completerBoard(final boolean doom, final int others) {
+        start(ORACLE_CONSULTATION, LAB_CONSULTATION, DOOM_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        library(ORACLE, LAB);
+        if (doom) {
+            library(DOOM);
+        }
+        library(OTHERS.subList(0, others));
+    }
+
+    /** Five Islands in hand beside Consultation: six cards besides Gifts Ungiven, so the two it brings would take the
+     *  hand over seven before cleanup, and the stock floor (GiftsUngiven.worthSearching's F4) refuses. */
+    private void fullHand() {
+        for (int i = 0; i < 5; i++) {
+            addCardToZone("Island", ai, ZoneType.Hand);
+        }
+    }
+
+    /** Line 1295-3093, Tainted Pact in hand, over a singleton library: Thassa's Oracle, Ponder, Brainstorm and BIG.
+     *  Returns the library's Oracle. */
+    private Card pactBoard() {
+        start(PACT_ORACLE);
+        addCardToZone(PACT, ai, ZoneType.Hand);
+        library(ORACLE, "Ponder", "Brainstorm");
+        library(BIG);
+        assertTrue(t.singletonLibrary());
+        assertEquals(ids(t.oneShort()), List.of("1295-3093"));
+        return t.find(ORACLE, ZoneType.Library);
+    }
+
+    /** {@code name}'s first spell, the card put in our hand, with us as its activator (its sub-abilities too). */
+    private SpellAbility spell(final String name) {
+        final SpellAbility sa = addCardToZone(name, ai, ZoneType.Hand).getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+        return sa;
+    }
+
+    /** The stock evaluator's list for {@code sa}, Intuition.considerMultiple, the hooked one. */
+    private List<Card> pile(final SpellAbility sa) {
+        return new ArrayList<>(SpecialCardAi.Intuition.considerMultiple(ai, sa));
+    }
+
+    /** The chooser as IntuitionPickAiTest's pick calls it: our own search of our library, decided by us. */
+    private Card pick(final SpellAbility sa, final CardCollection fetchList) {
+        return ChangeZoneAi.chooseCardToHiddenOriginChangeZone(ZoneType.Library, Arrays.asList(ZoneType.Library), sa,
+                fetchList, ai, ai);
+    }
+
+    /** Gifts Ungiven's four picks as ChangeZoneEffect's one-at-a-time loop makes them: DifferentNames drops every name
+     *  chosen so far from the list, and each pick leaves the list (the cards stay in the library until the search
+     *  ends). */
+    private List<Card> giftsPicks(final SpellAbility gifts) {
+        CardCollection fetchList = new CardCollection(ai.getCardsIn(ZoneType.Library));
+        final List<Card> chosen = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            for (final Card c : chosen) {
+                fetchList = CardLists.filter(fetchList, CardPredicates.sharesNameWith(c).negate());
+            }
+            final Card c = pick(gifts, fetchList);
+            assertNotNull(c, "pick " + (i + 1));
+            fetchList.remove(c);
+            chosen.add(c);
+        }
+        return chosen;
+    }
+
+    /** Stock parity: {@code decision} reseeded alike, once with no line and once with {@code others}, gives the same
+     *  answer and makes the same number of draws; returns the stock answer. */
+    private <T> T assertStockParity(final Supplier<T> decision, final List<ComboLines.Line> others) {
+        t.useLines(List.of());
+        MyRandom.setRandom(new Random(7));
+        long before = MyRandom.callCount();
+        final T stock = decision.get();
+        final long stockDraws = MyRandom.callCount() - before;
+        t.useLines(others);
+        MyRandom.setRandom(new Random(7));
+        before = MyRandom.callCount();
+        final T ours = decision.get();
+        assertEquals(ours, stock, "the answer moved");
+        assertEquals(MyRandom.callCount() - before, stockDraws, "the draws moved");
+        return stock;
+    }
+
+    @Test
+    public void intuitionAllCompleters() {
+        completerBoard(true, OTHERS.size());
+        assertEquals(ids(t.oneShort()), List.of("742-2836", "x-1", "742-1295"));
+        final SpellAbility intuition = spell(INTUITION);
+
+        final List<Card> pile = pile(intuition);
+        assertEquals(names(pile), List.of(LAB, DOOM, ORACLE));
+        for (final Card c : pile) {
+            assertTrue(c.isInZone(ZoneType.Library), c + " is in the library");
+            assertEquals(c.getOwner(), ai);
+        }
+        assertEquals(ComboFetch.completers(ai), List.of(LAB, DOOM, ORACLE));
+    }
+
+    @Test
+    public void intuitionCreaturePiece() {
+        final Card oracle = pactBoard();
+
+        final List<Card> pile = pile(spell(INTUITION));
+        assertEquals(pile.size(), 3);
+        assertSame(pile.get(0), oracle);
+        // the library's only noncreature nonland cards, both at one: ties go by name
+        assertEquals(names(pile.subList(1, 3)), List.of("Brainstorm", "Ponder"));
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE));
+    }
+
+    @Test
+    public void intuitionOpponentHandsUsTheCreature() {
+        final Card oracle = pactBoard();
+        // four lands in play: with no land in hand, fewer than four in play and nothing castable, the opponent's stock
+        // pick fixes basics instead (ChangeZoneAi.basicManaFixing, which takes the shuffled pile's first card)
+        for (int i = 0; i < 4; i++) {
+            addCard("Plains", opp);
+        }
+        final SpellAbility intuition = spell(INTUITION);
+        final List<Card> pile = pile(intuition);
+        assertSame(pile.get(0), oracle);
+        final SpellAbility sub = intuition.getSubAbility();
+        assertEquals(sub.getParam("Destination"), "Hand");
+
+        for (final long seed : SHUFFLE_SEEDS) {
+            MyRandom.setRandom(new Random(seed));
+            assertSame(ChangeZoneAi.chooseCardToHiddenOriginChangeZone(ZoneType.Hand, Arrays.asList(ZoneType.Library),
+                    sub, new CardCollection(pile), ai, opp), oracle, "seed " + seed);
+        }
+    }
+
+    @Test
+    public void giftsNeedsThreeCompleters() {
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION, LAB_CONSULTATION, DOOM_CONSULTATION);
+
+        // two completers: no Doctor Doom in the deck
+        completerBoard(false, OTHERS.size());
+        fullHand();
+        final SpellAbility gifts = spell(GIFTS);
+        assertEquals(ids(t.oneShort()), List.of("742-2836", "742-1295"));
+        // the stock floor refuses (no room in hand), and so does the combo
+        assertFalse(assertStockParity(() -> SpecialCardAi.GiftsUngiven.worthSearching(ai, gifts), held));
+        assertStockParity(() -> pick(gifts, new CardCollection(ai.getCardsIn(ZoneType.Library))), held);
+        assertEquals(ComboFetch.completers(ai), List.of(LAB, ORACLE));
+        assertFalse(ComboFetch.giftsReady(ai));
+
+        // three: Doctor Doom in the library too
+        completerBoard(true, OTHERS.size());
+        fullHand();
+        final SpellAbility gifts3 = spell(GIFTS);
+        assertEquals(ids(t.oneShort()), List.of("742-2836", "x-1", "742-1295"));
+        t.useLines(List.of());
+        assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, gifts3), "the stock floor");
+        t.useLines(held);
+        assertTrue(SpecialCardAi.GiftsUngiven.worthSearching(ai, gifts3));
+        final List<Card> picks = giftsPicks(gifts3);
+        assertEquals(names(picks.subList(0, 3)), List.of(LAB, DOOM, ORACLE));
+        assertFalse(List.of(LAB, DOOM, ORACLE).contains(ComboTracker.nameOf(picks.get(3))));
+        assertEquals(ComboFetch.completers(ai), List.of(LAB, DOOM, ORACLE));
+        assertTrue(ComboFetch.giftsReady(ai));
+    }
+
+    @Test
+    public void noLineKeepsTheStockPile() {
+        start(ORACLE_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        library(ORACLE);
+        library(OTHERS);
+        final SpellAbility intuition = spell(INTUITION);
+
+        // 742-2836 needs a Laboratory Maniac the deck lacks
+        final List<Card> stock = assertStockParity(() -> pile(intuition), lines(LAB_CONSULTATION));
+        assertEquals(t.deckLines(), List.of());
+        assertFalse(stock.isEmpty());
+    }
+
+    // ---- beyond the plan's five ----
+
+    @Test
+    public void intuitionCasterPicksThePile() {
+        // the 9C route (IntuitionPile.choosePick: the evaluator's first card still in the search) takes the pile, in
+        // its order, over ChangeZoneEffect's three asks
+        completerBoard(true, OTHERS.size());
+        final SpellAbility intuition = spell(INTUITION);
+        final CardCollection fetchList = new CardCollection(ai.getCardsIn(ZoneType.Library));
+        final List<Card> picks = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            final Card c = pick(intuition, fetchList);
+            picks.add(c);
+            fetchList.remove(c);
+        }
+        assertEquals(names(picks), List.of(LAB, DOOM, ORACLE));
+    }
+
+    @Test
+    public void intuitionFillersAreTheCheapestSpellsThatAreNoPiece() {
+        // a land, a creature and the deck's other piece are never fillers; the cheapest spells are, ties by name,
+        // never by the library's order (Ponder lies above Brainstorm)
+        start(PACT_ORACLE, ORACLE_CONSULTATION);
+        addCardToZone(PACT, ai, ZoneType.Hand);
+        library(ORACLE, CONSULTATION, "Island", "Memnite", "Ponder", "Divination", "Counterspell", "Brainstorm",
+                "Craw Wurm");
+        assertTrue(t.singletonLibrary());
+        // 742-1295 is two short (Consultation and Oracle both in the library): Consultation is a piece, no completer
+        assertEquals(ids(t.oneShort()), List.of("1295-3093"));
+        assertTrue(t.isPiece(CONSULTATION));
+
+        assertEquals(names(pile(spell(INTUITION))), List.of(ORACLE, "Brainstorm", "Ponder"));
+    }
+
+    @Test
+    public void intuitionKeepsTheStockPileWithoutACreaturePieceOrTwoFillers() {
+        // Jace, Wielder of Mysteries is a planeswalker, which the opponent's creature pick would pass over
+        start(JACE_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        library(JACE);
+        library(OTHERS);
+        final SpellAbility jaceIntuition = spell(INTUITION);
+        assertEquals(ComboFetch.completers(ai), List.of(JACE));
+        assertNull(ComboFetch.intuitionPile(ai));
+        assertStockParity(() -> pile(jaceIntuition), lines(JACE_CONSULTATION));
+
+        // one spell beside the creatures: no second filler
+        start(PACT_ORACLE);
+        addCardToZone(PACT, ai, ZoneType.Hand);
+        library(ORACLE, "Brainstorm");
+        library(BIG);
+        final SpellAbility pactIntuition = spell(INTUITION);
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE));
+        assertNull(ComboFetch.intuitionPile(ai));
+        assertStockParity(() -> pile(pactIntuition), lines(PACT_ORACLE));
+    }
+
+    @Test
+    public void burningRuneDemonKeepsItsStockList() {
+        // the pile is three cards, Intuition's: the other AILogic$ Intuition card searches for exactly two
+        final Card oracle = pactBoard();
+        assertSame(pile(spell(INTUITION)).get(0), oracle);
+        final Card demon = addCard("Burning-Rune Demon", ai);
+        final SpellAbility trig = demon.getTriggers().get(0).ensureAbility();
+        trig.setActivatingPlayer(ai);
+        assertEquals(trig.getParam("AILogic"), "Intuition");
+
+        assertStockParity(() -> pile(trig), lines(PACT_ORACLE));
+    }
+
+    @Test
+    public void completersAreDistinctMissingNamesInRankOrder() {
+        // two lines missing Thassa's Oracle give one completer; ranks 742-2836 (1), 742-1295 (3), 1295-3093 (4)
+        start(PACT_ORACLE, ORACLE_CONSULTATION, LAB_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        addCardToZone(PACT, ai, ZoneType.Hand);
+        library(ORACLE, LAB);
+        library(OTHERS);
+        assertEquals(ids(t.oneShort()), List.of("742-2836", "742-1295", "1295-3093"));
+
+        assertEquals(ComboFetch.completers(ai), List.of(LAB, ORACLE));
+        assertFalse(ComboFetch.giftsReady(ai));
+    }
+
+    @Test
+    public void giftsTakesOnlyOurCompleters() {
+        completerBoard(true, OTHERS.size());
+        final SpellAbility gifts = spell(GIFTS);
+        // an opposing Laboratory Maniac first in the list is not ours to take
+        final CardCollection fetchList = new CardCollection();
+        fetchList.add(addCardToZone(LAB, opp, ZoneType.Library));
+        fetchList.addAll(ai.getCardsIn(ZoneType.Library));
+
+        assertSame(pick(gifts, fetchList), t.find(LAB, ZoneType.Library));
+    }
+
+    @Test
+    public void giftsKeepsTheRefusalsThatEndTheSearch() {
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION, LAB_CONSULTATION, DOOM_CONSULTATION);
+
+        // a punished search (an opposing Archivist of Oghma) is a soft refusal: the combo lifts it
+        completerBoard(true, OTHERS.size());
+        addCard("Archivist of Oghma", opp).setSickness(false);
+        final SpellAbility punished = spell(GIFTS);
+        t.useLines(List.of());
+        assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, punished), "the stock floor");
+        t.useLines(held);
+        assertTrue(SpecialCardAi.GiftsUngiven.worthSearching(ai, punished));
+
+        // seven cards: four leave, and three would stay
+        completerBoard(true, 4);
+        assertEquals(ai.getCardsIn(ZoneType.Library).size(), 7);
+        assertTrue(ComboFetch.giftsReady(ai));
+        assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, spell(GIFTS)));
+
+        // an opponent controls the search (Opposition Agent's record on us)
+        completerBoard(true, OTHERS.size());
+        ai.addControlledWhileSearching(game.getNextTimestamp(), opp);
+        assertTrue(ComboFetch.giftsReady(ai));
+        assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, spell(GIFTS)));
+
+        // an Opposition Agent in play: its static writes that record at every state check, so F3 refuses ahead of the
+        // combo, although the floor's later check of an opposing ControlOpponentsSearchingLibrary static is skipped
+        completerBoard(true, OTHERS.size());
+        addCard("Opposition Agent", opp).setSickness(false);
+        game.getAction().checkStateEffects(true);
+        assertTrue(ComboFetch.giftsReady(ai));
+        assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, spell(GIFTS)));
+
+        // Aven Mindcensor: the search sees only the top four, and which four is the library's order
+        completerBoard(true, OTHERS.size());
+        addCard("Aven Mindcensor", opp).setSickness(false);
+        game.getAction().checkStateEffects(true);
+        assertTrue(ai.hasKeyword("LimitSearchLibrary"));
+        assertTrue(ComboFetch.giftsReady(ai));
+        assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, spell(GIFTS)));
+    }
+}

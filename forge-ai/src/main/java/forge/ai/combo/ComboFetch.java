@@ -1,10 +1,12 @@
 package forge.ai.combo;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import forge.ai.SpecialCardAi;
 import forge.game.card.Card;
+import forge.game.card.CardCollection;
 import forge.game.card.CardCollectionView;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -14,17 +16,25 @@ import forge.game.zone.ZoneType;
 /**
  * The fetch rules (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a decision that picks cards from our
  * library, or orders its top, takes the missing piece of a combo line exactly one piece short when that is a legal
- * choice, and keeps every piece of a live line on top; otherwise it is today's decision, unchanged.
+ * choice, and keeps every piece of a live line on top; otherwise it is today's decision, unchanged. Intuition's and
+ * Gifts Ungiven's piles are built from the completers, the missing pieces of the lines one piece short.
  *
- * <p>Each method answers for one hook beside the stock code, and answers "the stock decision" (null, false, or a list
- * left as it was) at once for a deck holding none of piece 1's lines. Nothing here draws a random number, keeps any
- * state or reads the library's order: a piece is fetched for by name, from the cards the decision is already allowed
- * to choose among (the search's list, the dig's or the Vault's cards in view), and the tracker reads our library as
- * contents only.
+ * <p>Each method answers for one hook beside the stock code, and answers "the stock decision" (null, false, an empty
+ * list, or a list left as it was) at once for a deck holding none of piece 1's lines. Nothing here draws a random
+ * number, keeps any state or reads the library's order: a piece is fetched for by name, from the cards the decision is
+ * already allowed to choose among (the search's list or library, the dig's or the Vault's cards in view), and the
+ * tracker reads our library as contents only.
  */
 public final class ComboFetch {
     /** Which pieces a fetch to a destination may take: any, or only a piece that may start on the battlefield. */
     private enum Fit { ANY, BATTLEFIELD }
+
+    /** Intuition's three cards ("search your library for three cards"): the piece and two fillers, or three
+     *  completers. */
+    private static final int INTUITION_PILE = 3;
+    /** Gifts Ungiven reveals four and the opponent bins two: with three completers among them, two left still hold
+     *  one. */
+    private static final int GIFTS_COMPLETERS = 3;
 
     private ComboFetch() {
     }
@@ -126,6 +136,88 @@ public final class ComboFetch {
         for (final ComboLines.Line l : oneShort) {
             if (t.where(t.missing(l).get(0)) == ComboTracker.Where.LIBRARY) {
                 return Boolean.TRUE;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The completers the piles are built from (section 6.3): the distinct missing pieces of the
+     * {@link ComboTracker#oneShort} lines, in their rank order. Each is in our library, a missing piece's only place,
+     * so a search can take it. Empty for a deck holding none of piece 1's lines.
+     */
+    public static List<String> completers(final Player ai) {
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null || t.deckLines().isEmpty()) {
+            return List.of();
+        }
+        final List<String> out = new ArrayList<>();
+        for (final ComboLines.Line l : t.oneShort()) {
+            final String name = t.missing(l).get(0);
+            if (!out.contains(name)) {
+                out.add(name);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * Intuition's pile (Intuition.considerMultiple, ahead of its Trix branch), or null for the stock pile. With three
+     * or more completers, the first three's library cards: whichever the opponent hands us completes a line. With
+     * fewer, when the first is a creature, that creature and the two cheapest ({@code getCMC}, ties by name) of our
+     * library's noncreature, nonland cards that are no piece of the deck's lines: the opponent's stock pick prefers a
+     * creature (ChangeZoneAi.chooseCardToHiddenOriginChangeZone, "Prefer to pull a creature"), so it hands over the
+     * piece and the two spells go to the graveyard. Otherwise null.
+     */
+    public static CardCollection intuitionPile(final Player ai) {
+        final List<String> names = completers(ai);
+        if (names.isEmpty()) {
+            return null;
+        }
+        final ComboTracker t = ComboTracker.of(ai);
+        final CardCollection pile = new CardCollection();
+        if (names.size() >= INTUITION_PILE) {
+            for (final String name : names.subList(0, INTUITION_PILE)) {
+                pile.add(t.find(name, ZoneType.Library));
+            }
+            return pile;
+        }
+        final Card piece = t.find(names.get(0), ZoneType.Library);
+        if (!piece.isCreature()) {
+            return null;
+        }
+        final List<Card> fillers = new ArrayList<>();
+        for (final Card c : ai.getCardsIn(ZoneType.Library)) {
+            if (!c.isCreature() && !c.isLand() && !t.isPiece(ComboTracker.nameOf(c))) {
+                fillers.add(c);
+            }
+        }
+        if (fillers.size() < INTUITION_PILE - 1) {
+            return null;
+        }
+        fillers.sort(Comparator.comparingInt((Card c) -> c.getCMC()).thenComparing(ComboTracker::nameOf));
+        pile.add(piece);
+        pile.addAll(fillers.subList(0, INTUITION_PILE - 1));
+        return pile;
+    }
+
+    /** Whether Gifts Ungiven goes for the combo (its worthSearching floor and its four picks): three or more
+     *  completers, so whichever two of them the opponent bins, one still reaches our hand. */
+    public static boolean giftsReady(final Player ai) {
+        return completers(ai).size() >= GIFTS_COMPLETERS;
+    }
+
+    /** Gifts Ungiven's own pick (ChangeZoneAi's chooser, ahead of KeyCards), or null for the stock pick: while
+     *  {@link #giftsReady}, our card of the first completer, in rank order, that {@code fetchList} still holds. */
+    public static Card giftsPick(final Player decider, final CardCollectionView fetchList) {
+        final List<String> names = completers(decider);
+        if (names.size() < GIFTS_COMPLETERS) {
+            return null;
+        }
+        for (final String name : names) {
+            final Card c = ours(decider, fetchList, name);
+            if (c != null) {
+                return c;
             }
         }
         return null;

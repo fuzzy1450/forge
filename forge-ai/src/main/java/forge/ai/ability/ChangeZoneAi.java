@@ -2148,6 +2148,14 @@ public class ChangeZoneAi extends SpellAbilityAi {
         if (comboPick != null) {
             return comboPick;
         }
+        // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): Gifts Ungiven's own four
+        // picks take the completers first while three or more are in our library; null leaves every stock pick below.
+        if (SpecialCardAi.GiftsUngiven.handles(sa)) {
+            final Card giftsPick = ComboFetch.giftsPick(decider, fetchList);
+            if (giftsPick != null) {
+                return giftsPick;
+            }
+        }
         List<String> keyCards = player.getRegisteredPlayer().getDeck().getKeyCards();
         String position = sa.getParamOrDefault("LibraryPosition", null);
         // Focus on the keycards I don't already have access to
