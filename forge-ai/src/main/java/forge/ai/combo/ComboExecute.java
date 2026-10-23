@@ -2,7 +2,9 @@ package forge.ai.combo;
 
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
+import forge.ai.ComputerUtilCard;
 import forge.ai.SpecialCardAi;
+import forge.ai.SpellAbilityAi;
 import forge.ai.combo.ComboLines.Emptier;
 import forge.ai.combo.ComboLines.Winner;
 import forge.card.MagicColor;
@@ -28,8 +30,9 @@ import forge.game.zone.ZoneType;
  * <li>DOOM: our Doctor Doom, Unrivaled on the battlefield, untapped and free of summoning sickness, its {T} not barred
  * (executable's denial reads Linvala; Consultation only);
  * <li>LAB, JACE: that winner on our battlefield, and a draw of ours follows: the opponent's end step with our turn
- * next, or a spell in our hand with an untargeted Draw part for us (the finishing draw's own rule) and the mana for the
- * emptier and that spell together, each one's coloured pips among it.
+ * next, or a spell in our hand with an untargeted Draw part for us (the finishing draw's own rule) that the AI casts
+ * right after the emptier (a sorcery-speed one only in our own main phase; a RemoveDeck-hinted card only on its own
+ * readmit row) and the mana for the emptier and that spell together, each one's coloured pips among it.
  * </ul>
  * Pact's own singleton-library condition is executable's. None of it while we cannot win or every opponent cannot lose
  * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
@@ -255,8 +258,9 @@ public final class ComboExecute {
     }
 
     // a draw of ours follows the emptier: the opponent's end step with our turn next (our draw step), or a spell in our
-    // hand with an untargeted Draw part for us that the mana pays together with the emptier still to be cast: their
-    // mana values together, and each colour's pips of the two
+    // hand with an untargeted Draw part for us that the AI casts right after the emptier (castsOwnDrawAfter) and that
+    // the mana pays together with the emptier still to be cast: their mana values together, and each colour's pips of
+    // the two
     private static boolean drawFollows(final Player ai, final SpellAbility sa, final boolean unpaid) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         if (ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn())) {
@@ -266,7 +270,7 @@ public final class ComboExecute {
         final ManaCost emptierPips = unpaid ? sa.getHostCard().getManaCost() : ManaCost.ZERO;
         SpecialCardAi.HonestMana mana = null;
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
-            if (c.isLand() || !hasOwnDraw(c)) {
+            if (c.isLand() || !castsOwnDrawAfter(ai, ph, c)) {
                 continue;
             }
             if (mana == null) {
@@ -292,16 +296,35 @@ public final class ComboExecute {
         return true;
     }
 
-    // a spell of the card with an untargeted Draw part, the root or a sub, whose Defined is absent or You: drawsForUs's
-    // rule, since finishesLine lifts only such a draw (stock DrawAi aims a targeted one at our emptied library only
-    // with Laboratory Maniac, never with Jace)
-    private static boolean hasOwnDraw(final Card c) {
+    // a spell of the card with an untargeted Draw part, the root or a sub, whose Defined is absent or You (drawsForUs's
+    // rule, since finishesLine lifts only such a draw: stock DrawAi aims a targeted one at our emptied library only
+    // with Laboratory Maniac, never with Jace), that the AI casts right after the emptier (Review Focus 4):
+    // - a sorcery-speed spell (SpellAbilityAi.isSorcerySpeed: no flash of its own or from a static) only in our own
+    //   main phase; elsewhere it waits past our draw step, which the emptied library loses (Serum Visions in the
+    //   opponent's Main 1, in our combat or at our own end step);
+    // - a card the AI is never offered, never: getSpellAbilityToPlay drops a RemoveDeck-hinted card's spell unless its
+    //   own row readmits it (SpecialCardAi.RemoveDeckFilter.readmit, asked as that filter asks it: Faithless Looting's
+    //   row; Gitaxian Probe has none)
+    private static boolean castsOwnDrawAfter(final Player ai, final PhaseHandler ph, final Card c) {
+        final boolean ourMain = ph.isPlayerTurn(ai) && ph.getPhase() != null && ph.getPhase().isMain();
+        final boolean hinted = ComputerUtilCard.isCardRemAIDeck(c);
         for (final SpellAbility spell : c.getSpells()) {
-            for (SpellAbility s = spell; s != null; s = s.getSubAbility()) {
-                if (s.getApi() == ApiType.Draw && !s.usesTargeting()
-                        && "You".equals(s.getParamOrDefault("Defined", "You"))) {
-                    return true;
-                }
+            if (!ownDraw(spell) || (!ourMain && SpellAbilityAi.isSorcerySpeed(spell, ai))) {
+                continue;
+            }
+            if (!hinted || SpecialCardAi.RemoveDeckFilter.readmit(ai, spell)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // the spell, or a sub of it, is an untargeted Draw whose Defined is absent or You
+    private static boolean ownDraw(final SpellAbility spell) {
+        for (SpellAbility s = spell; s != null; s = s.getSubAbility()) {
+            if (s.getApi() == ApiType.Draw && !s.usesTargeting()
+                    && "You".equals(s.getParamOrDefault("Defined", "You"))) {
+                return true;
             }
         }
         return false;
@@ -310,16 +333,7 @@ public final class ComboExecute {
     // sa, or a sub of it, draws for its activator, who is us: an untargeted Draw whose Defined is absent or You
     private static boolean drawsForUs(final Player ai, final SpellAbility sa) {
         final Player activator = sa.getActivatingPlayer();
-        if (activator != null && !ai.equals(activator)) {
-            return false;
-        }
-        for (SpellAbility s = sa; s != null; s = s.getSubAbility()) {
-            if (s.getApi() == ApiType.Draw && !s.usesTargeting()
-                    && "You".equals(s.getParamOrDefault("Defined", "You"))) {
-                return true;
-            }
-        }
-        return false;
+        return (activator == null || ai.equals(activator)) && ownDraw(sa);
     }
 
     // sa is the {T} draw of a Doctor Doom, Unrivaled we control

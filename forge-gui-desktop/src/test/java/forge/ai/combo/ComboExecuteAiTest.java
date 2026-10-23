@@ -18,10 +18,13 @@ import org.testng.annotations.Test;
 import forge.ai.AITest;
 import forge.ai.AiController;
 import forge.ai.AiPlayDecision;
+import forge.ai.ComputerUtilCard;
 import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
 import forge.ai.SpecialCardAi;
+import forge.ai.SpellAbilityAi;
 import forge.card.MagicColor;
+import forge.card.mana.ManaCostShard;
 import forge.game.Game;
 import forge.game.GameEndReason;
 import forge.game.ability.AbilityFactory;
@@ -949,5 +952,193 @@ public class ComboExecuteAiTest extends AITest {
         }
         assertTrue(ComboExecute.finishesLine(ai, castOf(opt).getSubAbility()));
         assertFalse(ComboExecute.finishesLine(ai, castOf(recall)));
+    }
+
+    // ---- review round 2 ----
+
+    /** Review Focus 4, the timing: a sorcery-speed draw spell follows the emptier only in our own main phase. With
+     *  Serum Visions beside Consultation and Laboratory Maniac, Island + Swamp paying both, the window opens in our
+     *  Main 1 and Main 2; in the opponent's Main 1, in our combat and at our own end step Visions cannot be cast before
+     *  our draw step, where the emptied library would deck us, so Consultation waits (the opponent's end step with our
+     *  turn next stays the window it is). Tainted Pact resolving declines alike: in our Main 1, not in the
+     *  opponent's. */
+    @Test
+    public void aSorceryDrawFollowsOnlyInOurOwnMainPhase() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        final Card visions = hand("Serum Visions");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        assertTrue(SpellAbilityAi.isSorcerySpeed(castOf(visions), ai));
+        final PhaseHandler ph = game.getPhaseHandler();
+
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+        ph.devModeSet(PhaseType.MAIN2, ai);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+
+        ph.devModeSet(PhaseType.MAIN1, opp);
+        assertEquals(ph.getNextTurn(), ai);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        ph.devModeSet(PhaseType.COMBAT_DECLARE_ATTACKERS, ai);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        ph.devModeSet(PhaseType.END_OF_TURN, ai);
+        assertEquals(ph.getNextTurn(), opp);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        opponentsEndStep();
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+
+        // Tainted Pact resolving, its own mana paid: Visions follows in our Main 1, never in the opponent's
+        start(LAB_PACT);
+        addCard(LAB, ai);
+        hand("Serum Visions");
+        lands("Island");
+        singletonLibrary();
+        final Card resolving = castOnStack(PACT);
+        assertEquals(ids(t.executable()), List.of("2836-3093"));
+        assertTrue(ComboExecute.pactDeclines(ai, returnToHand(resolving)));
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        assertFalse(ComboExecute.pactDeclines(ai, returnToHand(resolving)));
+    }
+
+    /** An instant, or a sorcery with flash, follows the emptier in any phase: Opt beside Consultation and Laboratory
+     *  Maniac opens the window in the opponent's Main 1, in our combat and at our own end step, and so does Serum
+     *  Visions while Leyline of Anticipation lets us cast it as though it had flash. */
+    @Test
+    public void anInstantOrAFlashedSorceryFollowsInAnyPhase() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        final Card visions = hand("Serum Visions");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        final PhaseHandler ph = game.getPhaseHandler();
+        // the opponent's Main 1, then our combat and our own end step
+        final List<PhaseType> elsewhere = List.of(PhaseType.MAIN1, PhaseType.COMBAT_DECLARE_ATTACKERS,
+                PhaseType.END_OF_TURN);
+        ph.devModeSet(PhaseType.MAIN1, opp);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+
+        final Card leyline = addCard("Leyline of Anticipation", ai);
+        assertFalse(SpellAbilityAi.isSorcerySpeed(castOf(visions), ai));
+        for (final PhaseType phase : elsewhere) {
+            ph.devModeSet(phase, phase == PhaseType.MAIN1 ? opp : ai);
+            assertEquals(consider(consultation), AiPlayDecision.WillPlay, "Serum Visions with flash at " + phase);
+        }
+        game.getAction().moveTo(ZoneType.Graveyard, leyline, null, AbilityKey.newMap());
+        assertTrue(SpellAbilityAi.isSorcerySpeed(castOf(visions), ai));
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+
+        game.getAction().moveTo(ZoneType.Graveyard, visions, null, AbilityKey.newMap());
+        hand(OPT);
+        for (final PhaseType phase : elsewhere) {
+            ph.devModeSet(phase, phase == PhaseType.MAIN1 ? opp : ai);
+            assertEquals(consider(consultation), AiPlayDecision.WillPlay, "Opt at " + phase);
+        }
+    }
+
+    /** A draw spell the AI is never offered is no follow-up: Gitaxian Probe carries AI:RemoveDeck:All and no readmit
+     *  row, so getSpellAbilityToPlay drops it and the emptied library would wait for our draw step. Two Swamps make the
+     *  two mana Consultation and Probe cost together, and Probe's {U/P} is no blue pip, yet Consultation waits, with an
+     *  Island beside them too; Opt, which the AI casts, opens the window. */
+    @Test
+    public void aDrawSpellTheAiNeverCastsIsNoFollowUp() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        final Card probe = hand("Gitaxian Probe");
+        lands("Swamp", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        assertTrue(ComputerUtilCard.isCardRemAIDeck(probe));
+        assertFalse(SpecialCardAi.RemoveDeckFilter.readmit(ai, castOf(probe)));
+        assertEquals(probe.getManaCost().getShardCount(ManaCostShard.BLUE), 0);
+        assertEquals(probe.getCMC(), 1);
+        assertEquals(SpecialCardAi.HonestMana.of(ai, castOf(consultation), true).total(), 2);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        lands("Island");
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        hand(OPT);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    /** A hinted draw spell follows when its own readmit row admits it, as getSpellAbilityToPlay asks the row: Faithless
+     *  Looting (AI:RemoveDeck:All) is readmitted in our Main 2 with two cards worth looting away and its red, so
+     *  Consultation goes; with one such card, or in our Main 1, the row keeps Looting off and Consultation waits. The
+     *  decision draws no random number. */
+    @Test
+    public void aHintedDrawSpellFollowsOnItsReadmitRow() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        final Card looting = hand("Faithless Looting");
+        hand("Craw Wurm");
+        lands("Swamp", "Mountain");
+        fillLibrary(ai, 20);
+        assertTrue(ComputerUtilCard.isCardRemAIDeck(looting));
+        final PhaseHandler ph = game.getPhaseHandler();
+        ph.devModeSet(PhaseType.MAIN2, ai);
+        assertFalse(SpecialCardAi.RemoveDeckFilter.readmit(ai, castOf(looting)));
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+
+        hand("Craw Wurm");
+        assertTrue(SpecialCardAi.RemoveDeckFilter.readmit(ai, castOf(looting)));
+        final long before = MyRandom.callCount();
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+        assertEquals(MyRandom.callCount(), before, "the decision drew");
+
+        ph.devModeSet(PhaseType.MAIN1, ai);
+        assertFalse(SpecialCardAi.RemoveDeckFilter.readmit(ai, castOf(looting)));
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+    }
+
+    /** The colours add per colour over the two costs: Consultation's {B} and Night's Whisper's {1}{B} need two black.
+     *  Swamp + Island + Island make the three mana they cost together with one black among it, so Night's Whisper
+     *  could not follow and Consultation waits; a second Swamp opens the window. */
+    @Test
+    public void sameColourPipsOfTheTwoCostsAdd() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        hand("Night's Whisper");
+        lands("Swamp", "Island", "Island");
+        fillLibrary(ai, 20);
+        final SpecialCardAi.HonestMana mana = SpecialCardAi.HonestMana.of(ai, castOf(consultation), true);
+        assertEquals(mana.total(), 3);
+        assertEquals(mana.colour(MagicColor.BLACK), 1);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        lands("Swamp");
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    /** Every colour of the draw spell is checked, not only blue and black: Swamps that pay Consultation and the draw
+     *  spell in mana value wait for Desperate Ravings' red, Revitalize's white and both of Harmonize's green. */
+    @Test
+    public void everyColourOfTheDrawSpellIsChecked() {
+        assertTheDrawSpellWaitsForItsColour("Desperate Ravings", 3, "Mountain", 1);
+        assertTheDrawSpellWaitsForItsColour("Revitalize", 3, "Plains", 1);
+        assertTheDrawSpellWaitsForItsColour("Harmonize", 5, "Forest", 2);
+    }
+
+    // Laboratory Maniac, Consultation and drawSpell in hand, our Main 1, a 20-card library: swamps Swamps pay the two
+    // in mana value, black among it, and Consultation waits until the pips-th land of the draw spell's colour
+    private void assertTheDrawSpellWaitsForItsColour(final String drawSpell, final int swamps, final String land,
+            final int pips) {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        final Card spell = hand(drawSpell);
+        fillLibrary(ai, 20);
+        for (int i = 0; i < swamps; i++) {
+            lands("Swamp");
+        }
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        assertEquals(consultation.getCMC() + spell.getCMC(), swamps, drawSpell);
+        for (int i = 0; i < pips; i++) {
+            assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, drawSpell + " with " + i + " " + land);
+            lands(land);
+        }
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, drawSpell + " with " + pips + " " + land);
     }
 }
