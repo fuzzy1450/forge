@@ -24,6 +24,7 @@ import forge.ai.AiCardMemory.MemorySet;
 import forge.ai.ability.ChangeZoneAi;
 import forge.ai.ability.ConniveAi;
 import forge.ai.ability.LearnAi;
+import forge.ai.combo.ComboHold;
 import forge.ai.combo.ComboLines;
 import forge.ai.combo.ComboTracker;
 import forge.ai.simulation.GameStateEvaluator;
@@ -1126,6 +1127,14 @@ public class AiController {
             return AiPlayDecision.CantPlayAi;
         }
 
+        // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.2 and 6.4): our own
+        // hand cast of Thassa's Oracle waits while a live line needs it and the go-off is not ready
+        // (ComboHold.vetoesCast). canPlaySa and canPayCost above ran A's path, draws included, so this veto changes
+        // only the cast A was about to make. Inert for a deck holding none of piece 1's lines. Draws nothing.
+        if (ComboHold.vetoesCast(player, sa)) {
+            return AiPlayDecision.AnotherTime;
+        }
+
         return AiPlayDecision.WillPlay;
     }
 
@@ -1338,10 +1347,15 @@ public class AiController {
         return getCardsToDiscard(numDiscard, numDiscard, hand, sa);
     }
 
-    public CardCollection getCardsToDiscard(int min, final int max, final CardCollection validCards, final SpellAbility sa) {
+    public CardCollection getCardsToDiscard(int min, final int max, CardCollection validCards, final SpellAbility sa) {
         if (validCards.size() <= min) {
             return validCards; //return all valid cards since they will be discarded without filtering needed
         }
+        // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.2 and 6.4): a live
+        // combo line's pieces leave the choice while more than min cards stay (ComboHold.spare: a new list when it
+        // drops any, so the caller's is never changed). Inert for a deck holding none of piece 1's lines. Draws
+        // nothing.
+        validCards = ComboHold.spare(player, validCards, min);
 
         Card sourceCard = null;
         final CardCollection discardList = new CardCollection();

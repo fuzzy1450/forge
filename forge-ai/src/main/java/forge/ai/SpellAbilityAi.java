@@ -8,6 +8,7 @@ import java.util.function.Predicate;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 
+import forge.ai.combo.ComboHold;
 import forge.card.ICardFace;
 import forge.card.mana.ManaCost;
 import forge.game.GameEntity;
@@ -398,6 +399,13 @@ public abstract class SpellAbilityAi extends SpellAbilityEffect {
             return false;
         }
         if (!ComputerUtilCost.checkRemoveCounterCost(cost, source, sa)) {
+            return false;
+        }
+        // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.2 and 6.4): an exile
+        // from our hand whose only fodder is a live combo line's piece is refused (ComboHold.vetoesPitch); otherwise
+        // the payment's chooser, ComputerUtil.chooseExileFromList, spares the pieces. Inert for a deck holding none
+        // of piece 1's lines. Draws nothing.
+        if (ComboHold.vetoesPitch(payer, sa, cost)) {
             return false;
         }
         return true;

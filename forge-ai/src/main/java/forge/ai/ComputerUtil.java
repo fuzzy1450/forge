@@ -23,6 +23,7 @@ import forge.ai.AiCardMemory.MemorySet;
 import forge.ai.ability.ProtectAi;
 import forge.ai.ability.TokenAi;
 import forge.ai.combo.ComboFetch;
+import forge.ai.combo.ComboHold;
 import forge.card.CardStateName;
 import forge.card.CardType;
 import forge.card.ColorSet;
@@ -821,6 +822,11 @@ public class ComputerUtil {
         if (typeList.size() < amount) {
             return null;
         }
+        // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.2 and 6.4): a live
+        // combo line's pieces leave the choice while more than amount cards stay (ComboHold.spare);
+        // SpellAbilityAi.willPayCosts refused the cost whose only fodder is a piece. Inert for a deck holding none of
+        // piece 1's lines. Draws nothing.
+        typeList = ComboHold.spare(ai, typeList, amount);
 
         if (SpecialCardAi.SkeletalScrying.handles(activate) && ai.equals(activate.getOwner())) {
             // the draw decision capped X at this fodder; pay with it, protected cards last
