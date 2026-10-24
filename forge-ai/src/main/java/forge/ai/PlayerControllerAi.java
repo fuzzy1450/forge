@@ -656,7 +656,7 @@ public class PlayerControllerAi extends PlayerController {
             // Try to use the Scry logic to figure out what should be closer to the top and what should be closer to the bottom
             CardCollection topLands = new CardCollection(), topNonLands = new CardCollection(), bottom = new CardCollection();
             for (Card c : cards) {
-                if (ComputerUtil.scryWillMoveCardToBottomOfLibrary(p, c)) {
+                if (ComputerUtil.scryWillMoveCardToBottomOfLibrary(p, c, player)) {
                     bottom.add(c);
                 } else {
                     if (c.isLand()) {

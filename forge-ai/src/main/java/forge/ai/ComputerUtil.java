@@ -2435,9 +2435,15 @@ public class ComputerUtil {
     }
 
     public static boolean scryWillMoveCardToBottomOfLibrary(Player player, Card c) {
-        // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a piece of a live combo
-        // line in the player's own library is never scried, surveiled or ordered away.
-        if (ComboFetch.keepsOnTop(player, c)) {
+        return scryWillMoveCardToBottomOfLibrary(player, c, player);
+    }
+
+    // decider: the AI making the choice. Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md
+    // section 6.3): a piece of a live combo line in the deciding AI's own library is never scried, surveiled or ordered
+    // away. Another player's library (orderMoveToZoneList ordering an opponent's top cards) never reads that player's
+    // combo tracker, its hidden state: the stock rule alone.
+    public static boolean scryWillMoveCardToBottomOfLibrary(Player player, Card c, Player decider) {
+        if (decider.equals(player) && ComboFetch.keepsOnTop(player, c)) {
             return false;
         }
         boolean bottom = false;

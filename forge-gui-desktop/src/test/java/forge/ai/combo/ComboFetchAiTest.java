@@ -29,6 +29,7 @@ import forge.ai.ability.ChangeZoneAi;
 import forge.ai.ability.DigAi;
 import forge.game.Game;
 import forge.game.ability.AbilityKey;
+import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.cost.Cost;
@@ -309,6 +310,48 @@ public class ComboFetchAiTest extends AITest {
         t.useLines(List.of());
         assertEquals(list(pc.orderMoveToZoneList(new CardCollection(List.of(wurm, consultation, island)),
                 ZoneType.Library, reorder)), List.of(consultation, wurm, island));
+    }
+
+    @Test
+    public void orderingAnOpponentsLibraryReadsNoTrackerOfTheirs() {
+        // final review, round 1: Portent cast by an AI holding no line at an opponent whose live line 742-1295 has
+        // Demonic Consultation among the top three. The order and its draws are the stock ones, as with the opponent's
+        // tracker emptied: a deck holding none of piece 1's lines plays as today, and no decision reads another
+        // player's hidden combo state (spec sections 4, 6.2 and 6.3)
+        start();
+        assertEquals(t.deckLines(), List.of());
+        final ComboTracker theirs = aiOf(opp).getComboTracker();
+        theirs.useLines(lines(ORACLE_CONSULTATION));
+        ((LobbyPlayerAi) opp.getLobbyPlayer()).setAiProfile("Default");
+        for (final String land : List.of("Island", "Island", "Swamp")) {
+            addCard(land, opp);
+        }
+        addCardToZone(ORACLE, opp, ZoneType.Hand);
+        final Card consultation = addCardToZone(CONSULTATION, opp, ZoneType.Library);
+        final Card wurm = addCardToZone(WURM, opp, ZoneType.Library);
+        final Card island = addCardToZone("Island", opp, ZoneType.Library);
+        assertEquals(ids(theirs.live()), List.of("742-1295"));
+        assertTrue(ComboFetch.keepsOnTop(opp, consultation), "their own scry keeps it");
+
+        final SpellAbility portent = spell("Portent");
+        assertEquals(portent.getApi(), ApiType.RearrangeTopOfLibrary);
+        final PlayerControllerAi pc = (PlayerControllerAi) ai.getController();
+        final Supplier<List<Card>> order = () -> list(pc.orderMoveToZoneList(
+                new CardCollection(List.of(consultation, wurm, island)), ZoneType.Library, portent));
+
+        MyRandom.setRandom(new Random(7));
+        long before = MyRandom.callCount();
+        final List<Card> withTheirLine = order.get();
+        final long draws = MyRandom.callCount() - before;
+        theirs.useLines(List.of());
+        MyRandom.setRandom(new Random(7));
+        before = MyRandom.callCount();
+        final List<Card> stock = order.get();
+        assertEquals(withTheirLine, stock, "the order moved");
+        assertEquals(draws, MyRandom.callCount() - before, "the draws moved");
+        // the stock rule bottoms a three-land opponent's nonlands and puts them first ("screw the opponent up"); the
+        // list is moved to the top one card at a time, so Consultation, moved last, ends on top
+        assertEquals(stock, List.of(island, wurm, consultation));
     }
 
     @Test
