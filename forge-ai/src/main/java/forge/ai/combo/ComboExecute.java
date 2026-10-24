@@ -1,5 +1,7 @@
 package forge.ai.combo;
 
+import java.util.List;
+
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtilCard;
@@ -21,7 +23,8 @@ import forge.game.zone.ZoneType;
 
 /**
  * Executing the empty-library family (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): Thassa's Oracle goes
- * off ({@link #goOffNow}, which releases its hold, {@link ComboHold#vetoesCast}), and an emptier, Demonic Consultation
+ * off ({@link #goOffNow}, which releases its hold, {@link ComboHold#vetoesCast}, and puts its cast ahead of every other
+ * spell at that priority pass, {@link #goOffFirst}), and an emptier, Demonic Consultation
  * or Tainted Pact, is our own cast only inside a window of one of its lines, each gated by a line executable now (the
  * view's executableNow: denied as read now, the window's own moment) pairing that emptier with that winner:
  * <ul>
@@ -65,6 +68,38 @@ public final class ComboExecute {
             return false;
         }
         return goOffNow(ai, oracleCast, t.view());
+    }
+
+    /**
+     * The go-off goes first (follow-up F5; AiController.getSpellAbilityToPlay, ahead of its walk): among
+     * {@code spells}, what the AI may play now, our own hand cast of Thassa's Oracle (not a copy, not a Play-effect
+     * cast) when {@link #goOffNow} holds for it, on an empty stack; else null. The caller plays it when
+     * canPlayAndPayFor approves it, so no spell that the walk sorts ahead of it (Divination beside Oracle's two mana
+     * and a creature's one; a Wind Drake the creature sort prefers), nor a pre-cast after the walk, spends the
+     * go-off's mana first and holds the Oracle again. A go-off starts on an empty stack; with our Oracle's trigger on
+     * the stack it is under way, and the emptier's window casts the emptier. The cast returned has us as its
+     * activator, the walk's own first step for every spell it reads. Null at once for a deck holding no line that
+     * Thassa's Oracle wins.
+     */
+    public static SpellAbility goOffFirst(final Player ai, final List<SpellAbility> spells) {
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null || !names(t, Winner.ORACLE) || !ai.getGame().getStack().isEmpty()) {
+            return null;
+        }
+        ComboTracker.View v = null;
+        for (final SpellAbility sa : spells) {
+            if (!ownHandCast(ai, sa, Winner.ORACLE.card)) {
+                continue;
+            }
+            if (v == null) {
+                v = t.view();
+            }
+            if (goOffNow(ai, sa, v)) {
+                sa.setActivatingPlayer(ai);
+                return sa;
+            }
+        }
+        return null;
     }
 
     /** {@link #goOffNow}, read through the decision's view (ComboHold.vetoesCast's, which read its live lines). */
@@ -227,14 +262,27 @@ public final class ComboExecute {
         return window(ai, t.view(), e, sa, true) ? "combo" : null;
     }
 
+    /** Whether our next draw wins now, the go-off's last step (ComboHold's wheel, follow-up F5): our library is empty,
+     *  we can win, and a Laboratory Maniac or Jace, Wielder of Mysteries of ours holds its win in play for a deck line,
+     *  as {@link #finishesLine} reads them for a draw of ours. */
+    static boolean nextDrawWins(final Player ai, final ComboTracker t) {
+        return ai.getCardsIn(ZoneType.Library).isEmpty() && !ai.cantWin()
+                && (inPlay(t, Winner.LAB) || inPlay(t, Winner.JACE));
+    }
+
     // our own spell from our hand, not a copy and not a Play-effect cast, whose host is that emptier (ComboFetch's
     // Consultation tutor asks it too)
     static boolean ownHandCast(final Player ai, final SpellAbility sa, final Emptier e) {
+        return ownHandCast(ai, sa, e.card);
+    }
+
+    // our own spell from our hand, not a copy and not a Play-effect cast, whose host is the card of that name
+    private static boolean ownHandCast(final Player ai, final SpellAbility sa, final String card) {
         if (sa == null || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()) {
             return false;
         }
         final Card host = sa.getHostCard();
-        if (host == null || !e.card.equals(ComboTracker.nameOf(host)) || !host.isInZone(ZoneType.Hand)
+        if (host == null || !card.equals(ComboTracker.nameOf(host)) || !host.isInZone(ZoneType.Hand)
                 || !ai.equals(host.getOwner())) {
             return false;
         }

@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -28,7 +29,9 @@ import forge.ai.SpellApiToAi;
 import forge.ai.combo.ComboTracker.Where;
 import forge.card.MagicColor;
 import forge.game.Game;
+import forge.game.ability.AbilityFactory;
 import forge.game.ability.AbilityKey;
+import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CounterEnumType;
@@ -760,5 +763,207 @@ public class ComboHoldAiTest extends AITest {
         assertEquals(ids(t.live()), List.of("742-1295"));
         assertTrue(ComboHold.vetoesCast(ai, castOf(held)));
         assertNull(aiOf(ai).chooseSpellAbilityToPlay());
+    }
+
+    // ---- follow-up F5: protect the hand; a stacked piece stays on top ----
+
+    private static final String WHEEL = "Wheel of Fortune";
+    private static final String LAB_PACT = "V|2836-3093|2|{1}{B}|2|H:Tainted Pact|B:Laboratory Maniac";
+    /** Fifteen distinct names, none a land and none a piece: a library Tainted Pact can empty, too deep for a wheel. */
+    private static final List<String> SINGLETON = List.of("Runeclaw Bear", "Grizzly Bears", "Hill Giant", "Craw Wurm",
+            "Serra Angel", "Shivan Dragon", "Llanowar Elves", "Counterspell", "Divination", "Coral Merfolk",
+            "Gray Ogre", "Wind Drake", "Air Elemental", "Giant Spider", "Merfolk of the Pearl Trident");
+
+    /** heldBoard (line 742-1295: Thassa's Oracle held while Demonic Consultation is in the library) with {@code spells}
+     *  in hand after the Oracle, a Mountain beside the Island, Island and Swamp, and twenty more cards to draw. Returns
+     *  the Oracle. */
+    private Card wheelBoard(final String... spells) {
+        final Card oracle = heldBoard();
+        for (final String spell : spells) {
+            hand(spell);
+        }
+        lands("Mountain");
+        fillLibrary(ai, 20);
+        return oracle;
+    }
+
+    /** Review Focus 4: Terra's own Wheel of Fortune with a held Oracle. The decision passes over the held Oracle, and
+     *  the wheel would discard it with the rest of our hand; the wheel waits, so nothing is cast. With no line nothing
+     *  is held, and the Oracle's 1/3, which sorts with the wheel and is first in hand, is the stock cast. */
+    @Test
+    public void wheelOfFortuneWaitsWhileOracleIsProtected() {
+        final Card oracle = wheelBoard(WHEEL);
+        final Card wheel = t.find(WHEEL, ZoneType.Hand);
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertTrue(t.protects(oracle));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+        assertNull(decision(), "a spell took the held Oracle's hand");
+        assertTrue(ComboHold.vetoesCast(ai, castOf(wheel)), "the wheel would discard the held Oracle");
+
+        t.useLines(List.of());
+        assertFalse(ComboHold.vetoesCast(ai, castOf(wheel)));
+        assertSame(decision(), oracle);
+    }
+
+    /** A spell that puts our hand into our library leaves the piece reachable (section 6.2): Timetwister is never held
+     *  for it, while Wheel of Fortune beside it is. */
+    @Test
+    public void timetwisterStillCastable() {
+        final Card oracle = wheelBoard("Timetwister", WHEEL);
+        assertTrue(t.protects(oracle));
+        assertFalse(ComboHold.vetoesCast(ai, castOf(t.find("Timetwister", ZoneType.Hand))));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(t.find(WHEEL, ZoneType.Hand))));
+    }
+
+    /** A dead line protects nothing (Review Focus 5): once Demonic Consultation is exiled, the wheel is an ordinary
+     *  spell again, and the decision is the stock one, with the stock draws. */
+    @Test
+    public void wheelCastableWhenTheLineIsDead() {
+        final Card oracle = wheelBoard(WHEEL);
+        final Card wheel = t.find(WHEEL, ZoneType.Hand);
+        assertTrue(ComboHold.vetoesCast(ai, castOf(wheel)));
+
+        game.getAction().moveTo(ZoneType.Exile, t.find(CONSULTATION, ZoneType.Library), null, AbilityKey.newMap());
+        assertEquals(t.live(), List.of());
+        assertFalse(t.protects(oracle));
+        assertFalse(ComboHold.vetoesCast(ai, castOf(wheel)));
+        assertEquals(assertStockParity(() -> {
+            final Card host = decision();
+            return host == null ? null : ComboTracker.nameOf(host);
+        }, lines(ORACLE_CONSULTATION)), ORACLE);
+    }
+
+    /** Every spell of ours one of whose parts puts our hand into the graveyard or exile waits, read from its parts:
+     *  Windfall's discard of each player's hand, One with Nothing's of ours (no Defined: you), Hex Magic's exile of the
+     *  cards we own in hand (a ChangeZoneAll). Wheel and Deal discards only its target opponents' hands, and
+     *  Timetwister shuffles ours into the library: neither waits. */
+    @Test
+    public void everySpellThatTakesOurHandWaits() {
+        final Card oracle = wheelBoard("Windfall", "One with Nothing", "Hex Magic", "Wheel and Deal", "Timetwister");
+        assertTrue(t.protects(oracle));
+        for (final String name : List.of("Windfall", "One with Nothing", "Hex Magic")) {
+            assertTrue(ComboHold.vetoesCast(ai, castOf(t.find(name, ZoneType.Hand))), name);
+        }
+        for (final String name : List.of("Wheel and Deal", "Timetwister")) {
+            assertFalse(ComboHold.vetoesCast(ai, castOf(t.find(name, ZoneType.Hand))), name);
+        }
+    }
+
+    /** A ChangeZoneAll from the hand is read as ChangeZoneAllEffect reads it: only the cards its ChangeType fits go (an
+     *  exile of the lands in our hand leaves the Oracle; one of the creatures takes it), and one using all its origin
+     *  zones takes every player's cards, ours among them, whatever its Defined. Spells written for the test. */
+    @Test
+    public void aHandExileReadsItsChangeTypeAndItsPlayers() {
+        final Card oracle = wheelBoard();
+        final Card host = hand("Hex Magic");
+        assertTrue(t.protects(oracle));
+        assertFalse(ComboHold.vetoesCast(ai, spell(host, "Land.YouOwn", "")), "the Oracle is no land");
+        assertTrue(ComboHold.vetoesCast(ai, spell(host, "Creature.YouOwn", "")), "the Oracle is a creature");
+        assertFalse(ComboHold.vetoesCast(ai, spell(host, "Card", " | Defined$ Opponent")), "only the opponent's hand");
+        assertTrue(ComboHold.vetoesCast(ai, spell(host, "Card", " | Defined$ Opponent | UseAllOriginZones$ True")),
+                "every player's hand");
+    }
+
+    // a spell of host's exiling the cards of the ChangeType from the hand, with the extra parameters, cast by us
+    private SpellAbility spell(final Card host, final String changeType, final String extra) {
+        final SpellAbility sa = AbilityFactory.getAbility("SP$ ChangeZoneAll | Origin$ Hand | Destination$ Exile"
+                + " | ChangeType$ " + changeType + extra, host);
+        sa.setActivatingPlayer(ai);
+        assertTrue(sa.isSpell());
+        return sa;
+    }
+
+    /** The go-off's own last draw: Laboratory Maniac in play and our library empty, a wheel's draw wins, so it is cast
+     *  though Tainted Pact, the piece of the Pact line still live on the empty library, goes with our hand. With a
+     *  library too deep for its seven draws it waits. */
+    @Test
+    public void aWheelWhoseDrawWinsIsCastInTheGoOff() {
+        start(LAB_PACT);
+        addCard(LAB, ai);
+        final Card pact = hand(PACT);
+        final Card wheel = hand(WHEEL);
+        lands("Swamp", "Swamp", "Mountain");
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+        assertEquals(ids(t.live()), List.of("2836-3093"));
+        assertTrue(t.protects(pact));
+        assertFalse(ComboHold.vetoesCast(ai, castOf(wheel)), "the wheel's winning draw waited");
+        // a spell that takes our hand and draws nothing does not win: One with Nothing waits
+        assertTrue(ComboHold.vetoesCast(ai, castOf(hand("One with Nothing"))), "One with Nothing discarded the Pact");
+
+        library(SINGLETON.toArray(new String[0]));
+        assertEquals(ids(t.live()), List.of("2836-3093"));
+        assertTrue(t.protects(pact));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(wheel)), "the wheel discarded the live Pact");
+    }
+
+    /** Ponder's "you may shuffle" after our ordering stacked a live piece (spec section 6.3, the known tops).
+     *  Laboratory Maniac in play, Demonic Consultation second of our library's top three and no land in play: the line
+     *  is live on next turn's land, and the stock confirm shuffles away a top card it cannot cast yet. Ponder puts
+     *  Consultation on top, keeps it there, and draws it. */
+    @Test
+    public void ponderKeepsThePieceOnTop() {
+        final SpellAbility ponder = ponderBoard();
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        assertSame(ai.getCardsIn(ZoneType.Library).get(1), consultation);
+        assertTrue(t.protects(consultation));
+
+        MyRandom.setRandom(new Random(7));
+        AbilityUtils.resolve(ponder);
+        assertNotNull(t.find(CONSULTATION, ZoneType.Hand), "Ponder shuffled the stacked Consultation away: drew "
+                + names(ai.getCardsIn(ZoneType.Hand)));
+        assertEquals(t.where(CONSULTATION), Where.HAND);
+        assertEquals(t.knownTops(), Set.of());
+    }
+
+    /** The confirm itself, asked as RearrangeTopOfLibraryEffect asks it after its moves: no shuffle once our ordering
+     *  has stacked the live piece, a known top. A piece that is on top though no hook of ours put it there (nothing the
+     *  AI knows), a deck holding no line, and another player's library all get the stock answer: shuffle the card it
+     *  cannot cast yet. */
+    @Test
+    public void ponderDeclinesTheShuffleOnlyOverAKnownTop() {
+        final SpellAbility ponder = ponderBoard();
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        // on top before any ordering of ours: no known top, the stock shuffle
+        game.getAction().moveToLibrary(consultation, 0, ponder);
+        assertSame(ai.getCardsIn(ZoneType.Library).get(0), consultation);
+        assertEquals(t.knownTops(), Set.of());
+        assertTrue(ai.getController().confirmAction(ponder, null, "", null),
+                "a top card no hook of ours put there was kept");
+
+        final SpellAbility stacked = ponderBoard();
+        final PlayerControllerAi pc = (PlayerControllerAi) ai.getController();
+        for (final Card c : pc.orderMoveToZoneList(ai.getTopXCardsFromLibrary(3), ZoneType.Library, stacked)) {
+            game.getAction().moveToLibrary(c, 0, stacked);
+        }
+        final Card top = ai.getCardsIn(ZoneType.Library).get(0);
+        assertEquals(ComboTracker.nameOf(top), CONSULTATION);
+        assertEquals(t.knownTops(), Set.of(top.getId()));
+        assertTrue(ComboHold.keepsTheStackedTop(ai, ai));
+        assertFalse(pc.confirmAction(stacked, null, "", null), "the stacked Consultation was shuffled away");
+        assertFalse(ComboHold.keepsTheStackedTop(ai, opp), "another player's library");
+        assertFalse(ComboHold.keepsTheStackedTop(null, ai));
+        // a known top whose line is dead (an opposing Platinum Angel: we cannot win) protects nothing: stock shuffles
+        final Card angel = addCard("Platinum Angel", opp);
+        assertEquals(t.live(), List.of());
+        assertEquals(t.knownTops(), Set.of(top.getId()));
+        assertFalse(ComboHold.keepsTheStackedTop(ai, ai), "a dead line's piece was kept on top");
+        assertTrue(pc.confirmAction(stacked, null, "", null));
+        game.getAction().moveTo(ZoneType.Graveyard, angel, null, AbilityKey.newMap());
+        assertTrue(ComboHold.keepsTheStackedTop(ai, ai));
+        // the same top with no line is the stock confirm's
+        t.useLines(List.of());
+        assertFalse(ComboHold.keepsTheStackedTop(ai, ai));
+        assertTrue(pc.confirmAction(stacked, null, "", null));
+    }
+
+    /** Laboratory Maniac in play, no land in play, line 742-2836 live on next turn's land; Grizzly Bears, Demonic
+     *  Consultation and an Island our library's top three, twenty cards below. Returns Ponder's spell, ours. */
+    private SpellAbility ponderBoard() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        library("Grizzly Bears", CONSULTATION, "Island");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.live()), List.of("742-2836"));
+        return castOf(hand("Ponder"));
     }
 }

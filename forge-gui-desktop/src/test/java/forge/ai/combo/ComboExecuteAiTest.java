@@ -1526,4 +1526,91 @@ public class ComboExecuteAiTest extends AITest {
         c.setCounters(CounterEnumType.LOYALTY, 4);
         return c;
     }
+
+    // ---- follow-up F5: the go-off goes first ----
+
+    /** Line 742-1295: {@code other} in hand ahead of Thassa's Oracle and Demonic Consultation, Island, Island and Swamp
+     *  (the go-off's whole mana), a 20-card library; our Main 1, or our Main 2 when {@code main2}. */
+    private void sequencerBoard(final String other, final boolean main2) {
+        start(ORACLE_CONSULTATION);
+        if (main2) {
+            moveToMain2(game, ai);
+        }
+        hand(other);
+        hand(ORACLE);
+        hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+    }
+
+    /** The name of the host of the spell the AI chooses to play now, or null when it plays nothing. */
+    private String decision() {
+        final List<SpellAbility> choice = aiOf(ai).chooseSpellAbilityToPlay();
+        return choice == null || choice.isEmpty() ? null : ComboTracker.nameOf(choice.get(0).getHostCard());
+    }
+
+    /** Our Main 2, the go-off ready: Divination ({2}{U}) sorts with Thassa's Oracle ({U}{U}, and a creature's one) and
+     *  comes first in hand, and the creature sort puts Wind Drake ahead of the Oracle whatever the hand's order. Stock
+     *  casts either, spending the go-off's mana, and the Oracle is held again; the go-off goes first. End to end from
+     *  our Main 1, Oracle and Consultation then win the turn past the Divination. */
+    @Test
+    public void goOffCastsOracleBeforeAnotherSpell() {
+        for (final String other : List.of("Divination", "Wind Drake")) {
+            sequencerBoard(other, true);
+            assertEquals(ids(t.executable()), List.of("742-1295"), other);
+            assertTrue(ComboExecute.goOffNow(ai, castOf(t.find(ORACLE, ZoneType.Hand))), other);
+            t.useLines(List.of());
+            assertEquals(decision(), other, "with no line the other spell is not first");
+            t.useLines(lines(ORACLE_CONSULTATION));
+            assertEquals(decision(), ORACLE, other + " took the go-off's mana");
+        }
+
+        // our Main 1: the go-off is ready, but canPlayAndPayFor holds the creature for Main 2 (the stock rule), so the
+        // Oracle is not chosen there, and nothing else is either
+        sequencerBoard("Divination", false);
+        assertTrue(ComboExecute.goOffNow(ai, castOf(t.find(ORACLE, ZoneType.Hand))));
+        assertNull(decision(), "the go-off was cast unapproved in Main 1");
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertWonThisTurn();
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+        assertNotNull(t.find("Divination", ZoneType.Hand), "Divination was cast");
+    }
+
+    /** While the go-off is not ready (Consultation still in the library), the sequencer asks nothing that draws: the
+     *  held Oracle's decision makes the stock decision's draws, those of the walk's one canPlayAndPayFor of the Oracle
+     *  (the hold vetoes it after canPayCost), with no second evaluation of it ahead of the walk. */
+    @Test
+    public void aGoOffNotReadyCostsNoExtraDraws() {
+        start(ORACLE_CONSULTATION);
+        moveToMain2(game, ai);
+        hand(ORACLE);
+        library(CONSULTATION, "Island");
+        lands("Island", "Island", "Swamp");
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertFalse(ComboExecute.goOffNow(ai, castOf(t.find(ORACLE, ZoneType.Hand))));
+
+        t.useLines(List.of());
+        MyRandom.setRandom(new Random(7));
+        long before = MyRandom.callCount();
+        assertEquals(decision(), ORACLE);
+        final long stock = MyRandom.callCount() - before;
+        assertTrue(stock > 0, "the Oracle's evaluation draws nothing: no draw count to compare");
+        t.useLines(lines(ORACLE_CONSULTATION));
+        MyRandom.setRandom(new Random(7));
+        before = MyRandom.callCount();
+        assertNull(decision(), "the held Oracle was cast");
+        assertEquals(MyRandom.callCount() - before, stock, "the draws moved");
+    }
+
+    /** A deck holding no line (here, Laboratory Maniac's with no Laboratory Maniac) keeps the stock decision and its
+     *  draws: the other spell first. */
+    @Test
+    public void goOffSequencerIsStockWithoutALine() {
+        for (final String other : List.of("Divination", "Wind Drake")) {
+            sequencerBoard(other, true);
+            t.useLines(lines(LAB_CONSULTATION));
+            assertEquals(t.deckLines(), List.of(), other);
+            assertEquals(assertStockParity(this::decision, lines(LAB_CONSULTATION)), other);
+        }
+    }
 }

@@ -1,6 +1,7 @@
 package forge.ai.ability;
 
 import forge.ai.*;
+import forge.ai.combo.ComboHold;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
 import forge.game.card.CardLists;
@@ -97,6 +98,14 @@ public class RearrangeTopOfLibraryAi extends SpellAbilityAi {
         Player p = pc.getFirst(); // currently always a single target spell
         Card top = p.getCardsIn(ZoneType.Library).isEmpty() ? null : p.getCardsIn(ZoneType.Library).getFirst();
         if (top == null) {
+            return false;
+        }
+
+        // Combo-aware AI (follow-up F5, spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a live combo line's
+        // piece that our ordering has just put on top of our own library (a known top) stays there: no shuffle
+        // (ComboHold.keepsTheStackedTop). Inert for a deck holding none of piece 1's lines and for another player's
+        // library. Draws nothing.
+        if (ComboHold.keepsTheStackedTop(player, p)) {
             return false;
         }
 

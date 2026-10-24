@@ -1129,8 +1129,9 @@ public class AiController {
         }
 
         // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.2 and 6.4): our own
-        // hand cast of Thassa's Oracle waits while a live line needs it and the go-off is not ready
-        // (ComboHold.vetoesCast). canPlaySa and canPayCost above ran A's path, draws included, so this veto changes
+        // hand cast of Thassa's Oracle waits while a live line needs it and the go-off is not ready, and our own cast
+        // of a wheel waits while it would put a live line's piece from our hand into the graveyard or exile (follow-up
+        // F5) (ComboHold.vetoesCast). canPlaySa and canPayCost above ran A's path, draws included, so this veto changes
         // only the cast A was about to make. Inert for a deck holding none of piece 1's lines. Draws nothing.
         if (ComboHold.vetoesCast(player, sa)) {
             return AiPlayDecision.AnotherTime;
@@ -2004,6 +2005,17 @@ public class AiController {
             saList.removeAll(skipped);
         //update LivingEndPlayer
         useLivingEnd = IterableUtil.any(player.getZone(ZoneType.Library), CardPredicates.nameEquals("Living End"));
+
+        // Combo-aware AI (follow-up F5, spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): once Thassa's
+        // Oracle's go-off is ready on an empty stack (its emptier in hand and the mana for both:
+        // ComboExecute.goOffFirst), its cast is chosen at this pass when canPlayAndPayFor approves it, ahead of the
+        // walk below and the pre-casts after it, so no other spell spends the go-off's mana first. Inert (null once
+        // the tracker's match is read) for a deck holding no Oracle line; draws nothing but canPlayAndPayFor's own,
+        // the walk's own check of that cast.
+        final SpellAbility goOff = ComboExecute.goOffFirst(player, saList);
+        if (goOff != null && canPlayAndPayFor(goOff) == AiPlayDecision.WillPlay) {
+            return goOff;
+        }
 
         SpellAbility chosenSa = chooseSpellAbilityToPlayFromList(saList, true);
 
