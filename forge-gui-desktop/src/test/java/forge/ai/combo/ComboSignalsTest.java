@@ -1059,6 +1059,32 @@ public class ComboSignalsTest extends AITest {
     }
 
     @Test
+    public void aViewReadsEachLineListOnceAndAgreesWithTheTracker() {
+        // a decision reads through one view (spec 6.2 and 7: a decision costs O(1) amortised): its line lists are read
+        // once and kept, they are the tracker's own answers, and the view is one moment of the board
+        oracleLine();
+        manaForTheLine();
+        final ComboTracker.View v = t.view();
+        assertSame(v.live(), v.live());
+        assertSame(v.executable(), v.executable());
+        assertSame(v.oneShort(), v.oneShort());
+        assertEquals(v.live(), t.live());
+        assertEquals(v.executable(), t.executable());
+        assertEquals(v.oneShort(), t.oneShort());
+        for (final String name : List.of(ORACLE, CONSULTATION, LAB)) {
+            assertEquals(v.where(name), t.where(name), name);
+        }
+        assertSame(v.card(ORACLE), t.find(ORACLE, ZoneType.Hand));
+        assertSame(v.card(CONSULTATION), t.find(CONSULTATION, ZoneType.Library));
+
+        // Consultation exiled after the view was read: the view keeps its moment, a fresh one reads the move
+        game.getAction().moveTo(ZoneType.Exile, t.find(CONSULTATION, ZoneType.Library), null, AbilityKey.newMap());
+        assertEquals(ids(v.live()), List.of("742-1295"));
+        assertEquals(t.live(), List.of());
+        assertEquals(t.view().where(CONSULTATION), ComboTracker.Where.GONE);
+    }
+
+    @Test
     public void anImprisonedFblthpsFiredTriggerStillWins() {
         // Fblthp's trigger on our stack resolves whatever Fblthp has now: its line stays executable
         start(FBLTHP_CONSULTATION);

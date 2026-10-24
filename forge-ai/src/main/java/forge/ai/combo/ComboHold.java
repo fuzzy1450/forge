@@ -48,9 +48,10 @@ public final class ComboHold {
         if (t == null || t.deckLines().isEmpty()) {
             return false;
         }
-        for (final ComboLines.Line l : t.live()) {
+        final ComboTracker.View v = t.view();
+        for (final ComboLines.Line l : v.live()) {
             if (l.winner() == ComboLines.Winner.ORACLE) {
-                return !ComboExecute.goOffNow(ai, sa);
+                return !ComboExecute.goOffNow(ai, sa, v);
             }
         }
         return false;
@@ -70,13 +71,20 @@ public final class ComboHold {
         if (t == null || t.deckLines().isEmpty()) {
             return cards;
         }
+        ComboTracker.View v = null;
         CardCollection out = null;
         int left = cards.size();
         for (final Card c : cards) {
             if (left <= keep) {
                 break;
             }
-            if (ai.equals(c.getController()) && t.protects(c)) {
+            if (!ai.equals(c.getController()) || !t.isPiece(ComboTracker.nameOf(c))) {
+                continue;
+            }
+            if (v == null) {
+                v = t.view();
+            }
+            if (v.protects(c)) {
                 if (out == null) {
                     out = new CardCollection(cards);
                 }
@@ -99,6 +107,7 @@ public final class ComboHold {
             return false;
         }
         ComboTracker t = null;
+        ComboTracker.View v = null;
         final Card host = sa.getHostCard();
         for (final CostPart part : cost.getCostParts()) {
             if (!(part instanceof CostExile ex) || !paysFromHand(ex)) {
@@ -119,7 +128,14 @@ public final class ComboHold {
             }
             int unprotected = 0;
             for (final Card c : valid) {
-                if (!t.protects(c)) {
+                if (!t.isPiece(ComboTracker.nameOf(c))) {
+                    unprotected++;
+                    continue;
+                }
+                if (v == null) {
+                    v = t.view();
+                }
+                if (!v.protects(c)) {
                     unprotected++;
                 }
             }

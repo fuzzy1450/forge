@@ -24,7 +24,6 @@ import forge.game.player.Player;
 import forge.game.replacement.ReplacementEffect;
 import forge.game.replacement.ReplacementType;
 import forge.game.spellability.SpellAbility;
-import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityCantBeCast;
 import forge.game.staticability.StaticAbilityDisableTriggers;
@@ -37,10 +36,13 @@ import forge.game.zone.ZoneType;
  * Evan's four abandon signals (spec 2026-10-22-combo-aware-ai-core-design.md section 6.5): while one holds, a line is
  * not chased. Nothing is held, protected or fetched for it, and it is live again once the signal clears.
  *
- * <p>Each signal is read from what a player can see, at the moment it is asked; nothing is kept. Nothing here draws a
- * random number or reads the library's order: the stock danger and lethal readers both draw (aiLifeInDanger through
- * the blocker's lifeInDanger roll, doAssault and possibleNonCombatDamage through canPayCost's test payments), so
- * DANGER and SURER_KILL are private floors in the AdNauseam.floor idiom, damageIfUnblocked without abilities.
+ * <p>Each signal is read from what a player can see, at the moment it is asked, through the decision's
+ * {@link ComboTracker.View}: the inputs no line changes (whether we can win, whether every opponent cannot lose, the
+ * danger, the surer kill, next turn's mana, whether a CantBeCast static is in force) are read once for every line the
+ * decision asks about, and nothing outlives the decision. Nothing here draws a random number or reads the library's
+ * order: the stock danger and lethal readers both draw (aiLifeInDanger through the blocker's lifeInDanger roll,
+ * doAssault and possibleNonCombatDamage through canPayCost's test payments), so DANGER and SURER_KILL are private
+ * floors in the AdNauseam.floor idiom, damageIfUnblocked without abilities.
  */
 public final class ComboSignals {
     /** Why a line is not chased, in the order {@link #abandon} reads them. DENIED stops everything, execution
@@ -53,16 +55,21 @@ public final class ComboSignals {
 
     /** The first signal that holds for {@code l}, in {@link Signal} order, or null: chase it. */
     public static Signal abandon(final Player ai, final ComboLines.Line l, final ComboTracker t) {
-        if (denied(ai, l, t)) {
+        return abandon(t.view(), l);
+    }
+
+    /** {@link #abandon} read through the decision's view. */
+    static Signal abandon(final ComboTracker.View v, final ComboLines.Line l) {
+        if (v.denied(l)) {
             return Signal.DENIED;
         }
-        if (noMana(ai, l, t)) {
+        if (noMana(v, l)) {
             return Signal.NO_MANA;
         }
-        if (danger(ai)) {
+        if (v.danger()) {
             return Signal.DANGER;
         }
-        if (surerKill(ai)) {
+        if (v.surerKill()) {
             return Signal.SURER_KILL;
         }
         return null;
@@ -76,21 +83,26 @@ public final class ComboSignals {
      * face-down copy), or Doctor Doom's {T} draw cannot be activated (Linvala, Keeper of Silence).
      */
     public static boolean denied(final Player ai, final ComboLines.Line l, final ComboTracker t) {
-        if (ai.cantWin()) {
+        return t.view().denied(l);
+    }
+
+    /** {@link #denied}, read through the view (which keeps it for a deck line). */
+    static boolean deniedNow(final ComboTracker.View v, final ComboLines.Line l) {
+        if (v.cantWin()) {
             return true;
         }
-        if (everyOpponentCantLose(ai)) {
+        if (v.everyOpponentCantLose()) {
             return true;
         }
         for (final String name : l.names()) {
-            if (castBarred(ai, t, name)) {
+            if (v.castBarred(name)) {
                 return true;
             }
         }
-        if (l.winner() == ComboLines.Winner.ORACLE && oracleTriggerDisabled(ai, t)) {
+        if (l.winner() == ComboLines.Winner.ORACLE && v.oracleTriggerDisabled()) {
             return true;
         }
-        return disarmed(ai, t, l.winner());
+        return v.disarmed(l.winner());
     }
 
     // a winner of ours on the battlefield without its win right now, read from what it has, never its name (the
@@ -99,17 +111,17 @@ public final class ComboSignals {
     // draw barred (Linvala); Fblthp without its combat-damage trigger, unless one of its triggers is on our stack
     // already, which resolves whatever Fblthp has now. Thassa's Oracle's own reading is oracleTriggerDisabled and the
     // tracker's spent-Oracle rule. A winner in our hand or library is not read: it has its win when it enters.
-    private static boolean disarmed(final Player ai, final ComboTracker t, final ComboLines.Winner w) {
-        if (w == ComboLines.Winner.ORACLE || t.where(w.card) != Where.BATTLEFIELD) {
+    static boolean disarmedNow(final ComboTracker.View v, final ComboLines.Winner w) {
+        if (w == ComboLines.Winner.ORACLE || v.where(w.card) != Where.BATTLEFIELD) {
             return false;
         }
-        final Card c = t.find(w.card, ZoneType.Battlefield);
+        final Card c = v.card(w.card);
         if (w == ComboLines.Winner.DOOM) {
             final SpellAbility draw = doomsDraw(c);
-            return draw == null || StaticAbilityCantBeCast.cantBeActivatedAbility(draw, c, ai);
+            return draw == null || StaticAbilityCantBeCast.cantBeActivatedAbility(draw, c, v.ai());
         }
         if (w == ComboLines.Winner.FBLTHP) {
-            return !t.triggerOnOurStack(w.card) && !hasCombatDamageTrigger(c);
+            return !v.triggerOnOurStack(w.card) && !hasCombatDamageTrigger(c);
         }
         return !winsOnDraw(c);
     }
@@ -161,7 +173,7 @@ public final class ComboSignals {
         return false;
     }
 
-    private static boolean everyOpponentCantLose(final Player ai) {
+    static boolean everyOpponentCantLose(final Player ai) {
         for (final Player opp : ai.getOpponents()) {
             if (!opp.cantLose()) {
                 return false;
@@ -176,17 +188,19 @@ public final class ComboSignals {
     // hand first) and the command zone for one there. Read on the card itself, an uncast card has no castFrom, so
     // Drannith Magistrate's "Card.!wasCastFromTheirHand" would bar every piece. One on our battlefield or our stack has
     // been cast already. The copy is made only while some CantBeCast static is in force (cantBeCastAbility's own
-    // scan), and takes the castSA cantBeCastAbility writes: the card itself is never written.
-    private static boolean castBarred(final Player ai, final ComboTracker t, final String name) {
-        final Where w = t.where(name);
-        final Card c = unplayed(t, name);
+    // scan, read once a decision: the view's castBarsInForce, then the card's own), and takes the castSA
+    // cantBeCastAbility writes: the card itself is never written.
+    static boolean castBarredNow(final ComboTracker.View v, final String name) {
+        final Where w = v.where(name);
+        final Card c = unplayed(v, name);
         if (c == null) {
             return false;
         }
         final SpellAbility spell = Iterables.getFirst(c.getSpells(), null);
-        if (spell == null || !anyCastBar(ai.getGame(), c)) {
+        if (spell == null || (!v.castBarsInForce() && !barsCasts(c))) {
             return false;
         }
+        final Player ai = v.ai();
         final Card cast = CardCopyService.getLKICopy(c);
         cast.setLKICMC(-1);
         cast.setLastKnownZone(ai.getGame().getStackZone());
@@ -194,15 +208,14 @@ public final class ComboSignals {
         return StaticAbilityCantBeCast.cantBeCastAbility(spell, cast, ai);
     }
 
-    // whether a CantBeCast static is in force now, among the cards cantBeCastAbility reads (every static-ability source
-    // zone, and the card itself)
-    private static boolean anyCastBar(final Game game, final Card c) {
+    // whether a CantBeCast static is in force now on a card in a static-ability source zone (cantBeCastAbility's scan)
+    static boolean castBarsInForceNow(final Game game) {
         for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
             if (barsCasts(ca)) {
                 return true;
             }
         }
-        return barsCasts(c);
+        return false;
     }
 
     private static boolean barsCasts(final Card ca) {
@@ -216,13 +229,13 @@ public final class ComboSignals {
 
     // Oracle's entering trigger, read as AiController.checkETBEffectsPreparedCard reads an ETB hoser (a private copy).
     // A trigger of our Oracle already on the stack has fired: nothing can disable it now.
-    private static boolean oracleTriggerDisabled(final Player ai, final ComboTracker t) {
+    static boolean oracleTriggerDisabledNow(final ComboTracker.View v) {
         final String name = ComboLines.Winner.ORACLE.card;
-        final Game game = ai.getGame();
-        if (t.triggerOnOurStack(name)) {
+        final Game game = v.ai().getGame();
+        if (v.triggerOnOurStack(name)) {
             return false;
         }
-        final Card oracle = ours(ai, t, name);
+        final Card oracle = v.card(name);
         if (oracle == null) {
             return false;
         }
@@ -241,21 +254,18 @@ public final class ComboSignals {
     }
 
     /**
-     * Signal 1, no mana for the whole line: the mana values of its pieces in our hand, library or command zone come to
-     * more than next turn's mana, every mana source we control whether tapped or not
-     * ({@code getAvailableManaEstimate(ai, false)}), plus one when a land is left in our hand or library to play.
+     * Signal 1, no mana for the whole line: the mana values of its pieces in our hand, library or command zone
+     * ({@link ComboTracker#costNow}) come to more than next turn's mana ({@link #nextTurnManaNow}).
      */
-    private static boolean noMana(final Player ai, final ComboLines.Line l, final ComboTracker t) {
-        int cost = 0;
-        for (final String name : l.names()) {
-            final Card c = unplayed(t, name);
-            if (c != null) {
-                cost += c.getCMC();
-            }
-        }
-        final int next = ComputerUtilMana.getAvailableManaEstimate(ai, false)
+    private static boolean noMana(final ComboTracker.View v, final ComboLines.Line l) {
+        return v.costNow(l) > v.nextTurnMana();
+    }
+
+    /** Next turn's mana: every mana source we control whether tapped or not ({@code getAvailableManaEstimate(ai,
+     *  false)}), plus one when a land is left in our hand or library to play. */
+    static int nextTurnManaNow(final Player ai) {
+        return ComputerUtilMana.getAvailableManaEstimate(ai, false)
                 + (hasLand(ai, ZoneType.Hand) || hasLand(ai, ZoneType.Library) ? 1 : 0);
-        return cost > next;
     }
 
     private static boolean hasLand(final Player ai, final ZoneType zone) {
@@ -271,7 +281,7 @@ public final class ComboSignals {
      * Signal 3, about to die: what the opponents' creatures that can attack next turn would deal us unblocked, after
      * each creature of ours chumps one of the largest, reaches our life. Never while we cannot lose.
      */
-    private static boolean danger(final Player ai) {
+    static boolean dangerNow(final Player ai) {
         if (ai.cantLose()) {
             return false;
         }
@@ -296,7 +306,7 @@ public final class ComboSignals {
      * Signal 4, a surer kill: in our own turn, before attackers are declared, every opponent still in the game is
      * killable, by combat or by one burn spell.
      */
-    private static boolean surerKill(final Player ai) {
+    static boolean surerKillNow(final Player ai) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         if (!ph.isPlayerTurn(ai) || ph.getPhase() == null
                 || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)) {
@@ -372,38 +382,10 @@ public final class ComboSignals {
         return false;
     }
 
-    // our card of that name in our hand, library or command zone, where the tracker places it; null on our
-    // battlefield, on our stack, or gone
-    private static Card unplayed(final ComboTracker t, final String name) {
-        final Where w = t.where(name);
-        if (w == Where.HAND) {
-            return t.find(name, ZoneType.Hand);
-        }
-        if (w == Where.COMMAND) {
-            return t.find(name, ZoneType.Command);
-        }
-        if (w == Where.LIBRARY) {
-            return t.find(name, ZoneType.Library);
-        }
-        return null;
-    }
-
-    // our card of that name wherever the tracker places it: the zone's first, or the host of our first stack item of
-    // that name; null when gone
-    private static Card ours(final Player ai, final ComboTracker t, final String name) {
-        final Where w = t.where(name);
-        if (w == Where.BATTLEFIELD) {
-            return t.find(name, ZoneType.Battlefield);
-        }
-        if (w == Where.STACK) {
-            for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
-                final Card host = si.getSourceCard();
-                if (host != null && ai.equals(si.getActivatingPlayer()) && ComboTracker.nameOf(host).equals(name)) {
-                    return host;
-                }
-            }
-            return null;
-        }
-        return unplayed(t, name);
+    // our card of that name in our hand, library or command zone, where the view places it; null on our battlefield,
+    // on our stack, or gone
+    private static Card unplayed(final ComboTracker.View v, final String name) {
+        final Where w = v.where(name);
+        return w == Where.HAND || w == Where.COMMAND || w == Where.LIBRARY ? v.card(name) : null;
     }
 }

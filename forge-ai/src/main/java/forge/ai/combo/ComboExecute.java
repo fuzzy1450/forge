@@ -62,12 +62,18 @@ public final class ComboExecute {
         if (t == null || t.deckLines().isEmpty()) {
             return false;
         }
+        return goOffNow(ai, oracleCast, t.view());
+    }
+
+    /** {@link #goOffNow}, read through the decision's view (ComboHold.vetoesCast's, which read its live lines). */
+    static boolean goOffNow(final Player ai, final SpellAbility oracleCast, final ComboTracker.View v) {
         ComboMana mana = null;
-        for (final ComboLines.Line l : t.executable()) {
+        for (final ComboLines.Line l : v.executable()) {
             if (l.winner() != ComboLines.Winner.ORACLE) {
                 continue;
             }
-            final Card emptier = t.find(l.emptier().card, ZoneType.Hand);
+            final Card emptier = v.where(l.emptier().card) == ComboTracker.Where.HAND ? v.card(l.emptier().card)
+                    : null;
             if (emptier == null) {
                 continue;
             }
@@ -94,10 +100,11 @@ public final class ComboExecute {
         if (t == null || !holds(t, Emptier.PACT)) {
             return null;
         }
-        if (window(ai, t, Emptier.PACT, sa, true)) {
+        final ComboTracker.View v = t.view();
+        if (window(ai, v, Emptier.PACT, sa, true)) {
             return Boolean.TRUE;
         }
-        for (final ComboLines.Line l : t.live()) {
+        for (final ComboLines.Line l : v.live()) {
             if (l.emptier() == Emptier.PACT) {
                 return Boolean.FALSE;
             }
@@ -123,7 +130,7 @@ public final class ComboExecute {
         if (t == null || !holds(t, Emptier.PACT)) {
             return false;
         }
-        return window(ai, t, Emptier.PACT, sa, false);
+        return window(ai, t.view(), Emptier.PACT, sa, false);
     }
 
     /**
@@ -142,10 +149,11 @@ public final class ComboExecute {
             return null;
         }
         t.takeConsultIntent(sa.getHostCard().getId());
-        if (window(ai, t, Emptier.CONSULTATION, sa, true)) {
+        final ComboTracker.View v = t.view();
+        if (window(ai, v, Emptier.CONSULTATION, sa, true)) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
-        return ComboFetch.consultTutor(ai, sa);
+        return ComboFetch.consultTutor(ai, sa, v);
     }
 
     /**
@@ -169,7 +177,7 @@ public final class ComboExecute {
         if (consultation == null) {
             return false;
         }
-        for (final ComboLines.Line l : t.executable()) {
+        for (final ComboLines.Line l : t.view().executable()) {
             if (l.winner() == Winner.FBLTHP && l.emptier() == Emptier.CONSULTATION) {
                 return SpecialCardAi.HonestMana.of(ai, consultation.getFirstSpellAbility(), true)
                         .colour(MagicColor.BLACK) >= 1;
@@ -214,7 +222,7 @@ public final class ComboExecute {
         if (t == null || !holds(t, e)) {
             return null;
         }
-        return window(ai, t, e, sa, true) ? "combo" : null;
+        return window(ai, t.view(), e, sa, true) ? "combo" : null;
     }
 
     // our own spell from our hand, not a copy and not a Play-effect cast, whose host is that emptier (ComboFetch's
@@ -243,28 +251,51 @@ public final class ComboExecute {
     }
 
     // whether a window of an executable line of emptier e is open now. unpaid: the emptier is still to be cast, so a
-    // following draw spell's mana comes on top of its own, its pips among it; false while it resolves (paid already)
-    private static boolean window(final Player ai, final ComboTracker t, final Emptier e, final SpellAbility sa,
+    // following draw spell's mana comes on top of its own, its pips among it; false while it resolves (paid already).
+    // The board's own part of a window is read first, over the deck's lines, before any line's denial and signals: at
+    // most priority passes no winner of ours is in play and no trigger of ours is on the stack, and no window opens
+    private static boolean window(final Player ai, final ComboTracker.View v, final Emptier e, final SpellAbility sa,
             final boolean unpaid) {
-        for (final ComboLines.Line l : t.executable()) {
-            if (l.emptier() == e && open(ai, t, l.winner(), sa, unpaid)) {
+        boolean staged = false;
+        for (final ComboLines.Line l : v.lines()) {
+            if (l.emptier() == e && staged(v, l.winner())) {
+                staged = true;
+                break;
+            }
+        }
+        if (!staged) {
+            return false;
+        }
+        for (final ComboLines.Line l : v.executable()) {
+            if (l.emptier() == e && staged(v, l.winner())
+                    && (!drawsAfter(l.winner()) || drawFollows(ai, sa, unpaid))) {
                 return true;
             }
         }
         return false;
     }
 
-    // the winner's own window (an if chain, not an enum switch: javac would add a synthetic switch-map class)
-    private static boolean open(final Player ai, final ComboTracker t, final Winner w, final SpellAbility sa,
-            final boolean unpaid) {
+    // the winner's own part of its window, read from the board (an if chain, not an enum switch: javac would add a
+    // synthetic switch-map class): Oracle's or Fblthp's trigger of ours on the stack; our Doctor Doom untapped and
+    // free of summoning sickness; Laboratory Maniac or Jace on our battlefield, whose window also needs a draw of ours
+    // to follow (drawsAfter, drawFollows)
+    private static boolean staged(final ComboTracker.View v, final Winner w) {
         if (w == Winner.ORACLE || w == Winner.FBLTHP) {
-            return t.triggerOnOurStack(w.card);
+            return v.triggerOnOurStack(w.card);
+        }
+        if (v.where(w.card) != ComboTracker.Where.BATTLEFIELD) {
+            return false;
         }
         if (w == Winner.DOOM) {
-            final Card doom = t.find(w.card, ZoneType.Battlefield);
-            return doom != null && !doom.isTapped() && !doom.isSick();
+            final Card doom = v.card(w.card);
+            return !doom.isTapped() && !doom.isSick();
         }
-        return t.find(w.card, ZoneType.Battlefield) != null && drawFollows(ai, sa, unpaid);
+        return true;
+    }
+
+    // whether the winner wins off a draw of ours after the emptier: Laboratory Maniac and Jace
+    private static boolean drawsAfter(final Winner w) {
+        return w == Winner.LAB || w == Winner.JACE;
     }
 
     // a draw of ours follows the emptier: the opponent's end step with our turn next (our draw step), or a spell in our

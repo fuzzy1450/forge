@@ -66,7 +66,7 @@ public final class ComboFetch {
             return null;
         }
         final Fit fit = fit(destination, sa.getParam("LibraryPosition"));
-        return fit == null ? null : pick(t, decider, fetchList, fit);
+        return fit == null ? null : pick(t.view(), decider, fetchList, fit);
     }
 
     /**
@@ -87,7 +87,7 @@ public final class ComboFetch {
         final String zone = sa.getParam("DestinationZone");
         final ZoneType destination = zone == null ? ZoneType.Hand : ZoneType.smartValueOf(zone);
         final Fit fit = fit(destination, sa.getParam("LibraryPosition"));
-        return fit == null ? null : pick(t, ai, valid, fit);
+        return fit == null ? null : pick(t.view(), ai, valid, fit);
     }
 
     /**
@@ -97,11 +97,16 @@ public final class ComboFetch {
      */
     public static boolean keepsOnTop(final Player p, final Card c) {
         final ComboTracker t = ComboTracker.of(p);
-        if (t == null || t.deckLines().isEmpty()) {
+        if (t == null || t.deckLines().isEmpty() || !inOwnLibrary(p, c) || !t.isPiece(ComboTracker.nameOf(c))) {
             return false;
         }
+        return t.view().protects(c);
+    }
+
+    // c is in p's library and p owns it
+    private static boolean inOwnLibrary(final Player p, final Card c) {
         final Zone zone = c.getZone();
-        return zone != null && zone.is(ZoneType.Library, p) && p.equals(c.getOwner()) && t.protects(c);
+        return zone != null && zone.is(ZoneType.Library, p) && p.equals(c.getOwner());
     }
 
     /** Moves the cards {@link #keepsOnTop} keeps for {@code p} to the front of {@code cards}, in place and stable:
@@ -111,10 +116,18 @@ public final class ComboFetch {
         if (t == null || t.deckLines().isEmpty()) {
             return;
         }
+        ComboTracker.View v = null;
         final List<Card> pieces = new ArrayList<>();
         final List<Card> rest = new ArrayList<>();
         for (final Card c : cards) {
-            (keepsOnTop(p, c) ? pieces : rest).add(c);
+            boolean keep = false;
+            if (inOwnLibrary(p, c) && t.isPiece(ComboTracker.nameOf(c))) {
+                if (v == null) {
+                    v = t.view();
+                }
+                keep = v.protects(c);
+            }
+            (keep ? pieces : rest).add(c);
         }
         if (pieces.isEmpty()) {
             return;
@@ -134,14 +147,15 @@ public final class ComboFetch {
         if (t == null || t.deckLines().isEmpty()) {
             return null;
         }
-        final List<ComboLines.Line> oneShort = t.oneShort();
+        final ComboTracker.View v = t.view();
+        final List<ComboLines.Line> oneShort = v.oneShort();
         for (final ComboLines.Line l : oneShort) {
-            if (ours(ai, shown, t.missing(l).get(0)) != null) {
+            if (ours(ai, shown, v.missing(l).get(0)) != null) {
                 return Boolean.FALSE;
             }
         }
         for (final ComboLines.Line l : oneShort) {
-            if (t.where(t.missing(l).get(0)) == ComboTracker.Where.LIBRARY) {
+            if (v.where(v.missing(l).get(0)) == ComboTracker.Where.LIBRARY) {
                 return Boolean.TRUE;
             }
         }
@@ -158,9 +172,14 @@ public final class ComboFetch {
         if (t == null || t.deckLines().isEmpty()) {
             return List.of();
         }
+        return completers(t.view());
+    }
+
+    // completers, read through the decision's view
+    private static List<String> completers(final ComboTracker.View v) {
         final List<String> out = new ArrayList<>();
-        for (final ComboLines.Line l : t.oneShort()) {
-            final String name = t.missing(l).get(0);
+        for (final ComboLines.Line l : v.oneShort()) {
+            final String name = v.missing(l).get(0);
             if (!out.contains(name)) {
                 out.add(name);
             }
@@ -177,19 +196,23 @@ public final class ComboFetch {
      * piece and the two spells go to the graveyard. Otherwise null.
      */
     public static CardCollection intuitionPile(final Player ai) {
-        final List<String> names = completers(ai);
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null || t.deckLines().isEmpty()) {
+            return null;
+        }
+        final ComboTracker.View v = t.view();
+        final List<String> names = completers(v);
         if (names.isEmpty()) {
             return null;
         }
-        final ComboTracker t = ComboTracker.of(ai);
         final CardCollection pile = new CardCollection();
         if (names.size() >= INTUITION_PILE) {
             for (final String name : names.subList(0, INTUITION_PILE)) {
-                pile.add(t.find(name, ZoneType.Library));
+                pile.add(v.card(name));
             }
             return pile;
         }
-        final Card piece = t.find(names.get(0), ZoneType.Library);
+        final Card piece = v.card(names.get(0));
         if (!piece.isCreature()) {
             return null;
         }
@@ -243,25 +266,30 @@ public final class ComboFetch {
      * WillPlay(100), with that piece recorded as the cast's intent for its resolution's namer ({@link #consultNamed}).
      */
     public static AiAbilityDecision consultTutor(final Player ai, final SpellAbility sa) {
-        if (!ComboExecute.ownHandCast(ai, sa, ComboLines.Emptier.CONSULTATION)) {
-            return null;
-        }
         final ComboTracker t = ComboTracker.of(ai);
-        if (t == null || t.deckLines().isEmpty()
-                || ai.getCardsIn(ZoneType.Library).size() < CONSULT_TUTOR_MIN_LIBRARY) {
+        return t == null ? null : consultTutor(ai, sa, t.view());
+    }
+
+    /** {@link #consultTutor}, read through the decision's view (ComboExecute.consultation's, which read its
+     *  executable lines). The board's gates come first: our own hand cast, the library's size, and a deck line that
+     *  does not name Consultation (Sauron's three all do), before any line's signals. */
+    static AiAbilityDecision consultTutor(final Player ai, final SpellAbility sa, final ComboTracker.View v) {
+        if (!ComboExecute.ownHandCast(ai, sa, ComboLines.Emptier.CONSULTATION) || v.lines().isEmpty()
+                || ai.getCardsIn(ZoneType.Library).size() < CONSULT_TUTOR_MIN_LIBRARY || !tutorsFor(v)) {
             return null;
         }
-        for (final ComboLines.Line l : t.live()) {
-            if (t.missing(l).isEmpty()) {
+        final ComboTracker t = v.tracker();
+        for (final ComboLines.Line l : v.live()) {
+            if (v.missing(l).isEmpty()) {
                 return null;
             }
         }
-        for (final ComboLines.Line l : t.oneShort()) {
+        for (final ComboLines.Line l : v.oneShort()) {
             if (l.names().contains(ComboLines.Emptier.CONSULTATION.card)) {
                 continue;
             }
-            final String name = t.missing(l).get(0);
-            if (t.find(name, ZoneType.Library) != null) {
+            final String name = v.missing(l).get(0);
+            if (v.where(name) == ComboTracker.Where.LIBRARY) {
                 if (!SpecialCardAi.CommanderCastCeiling.affordable(ai, sa)) {
                     return null;
                 }
@@ -270,6 +298,16 @@ public final class ComboFetch {
             }
         }
         return null;
+    }
+
+    // whether a deck line does not name Demonic Consultation: one Consultation can tutor for
+    private static boolean tutorsFor(final ComboTracker.View v) {
+        for (final ComboLines.Line l : v.lines()) {
+            if (!l.names().contains(ComboLines.Emptier.CONSULTATION.card)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -304,9 +342,10 @@ public final class ComboFetch {
 
     // the missing piece of the first one-short line, by the tracker's rank, that the fetch may take and that the
     // cards hold one of ours of: the first such card in their order
-    private static Card pick(final ComboTracker t, final Player owner, final Iterable<Card> cards, final Fit fit) {
-        for (final ComboLines.Line l : t.oneShort()) {
-            final String name = t.missing(l).get(0);
+    private static Card pick(final ComboTracker.View v, final Player owner, final Iterable<Card> cards,
+            final Fit fit) {
+        for (final ComboLines.Line l : v.oneShort()) {
+            final String name = v.missing(l).get(0);
             if (fit == Fit.BATTLEFIELD && !startsOnBattlefield(l, name)) {
                 continue;
             }

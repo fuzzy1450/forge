@@ -35,11 +35,12 @@ public final class ComboLines {
         }
     }
 
-    /** One line: the table's row, and which emptier and which winner its two pieces are. */
-    public record Line(ComboTable.Variant variant, Emptier emptier, Winner winner) {
-        /** The line's two card names: the emptier's, then the winner's (whatever order the row writes them in). */
-        public List<String> names() {
-            return List.of(emptier.card, winner.card);
+    /** One line: the table's row, which emptier and which winner its two pieces are, and their two card names, the
+     *  emptier's then the winner's (whatever order the row writes them in), made once with the line. */
+    public record Line(ComboTable.Variant variant, Emptier emptier, Winner winner, List<String> names) {
+        /** The line of the row {@code variant} whose pieces are {@code emptier} and {@code winner}. */
+        public Line(final ComboTable.Variant variant, final Emptier emptier, final Winner winner) {
+            this(variant, emptier, winner, List.of(emptier.card, winner.card));
         }
     }
 
