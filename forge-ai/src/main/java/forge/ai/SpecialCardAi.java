@@ -31877,8 +31877,10 @@ public class SpecialCardAi {
                 return false;
             }
             // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): three or more completers
-            // make a pile any two of which still hand us a missing piece, so the softer refusals below yield to it.
-            if (ComboFetch.giftsReady(ai)) {
+            // make a pile any two of which still hand us a missing piece, so the softer refusals below yield to it; but
+            // never a punished search (follow-up F4: searchPunished is read first, so Ob Nixilis, Unshackled, River
+            // Song or Psychogenic Probe still refuses).
+            if (ComboFetch.giftsReady(ai) && !searchPunished(ai)) {
                 return true;
             }
             // F4: DrawAi's hand rule for the two cards to hand -- no cleanup discard on our own turn; on

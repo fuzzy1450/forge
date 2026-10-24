@@ -701,8 +701,9 @@ public class PlayerControllerAi extends PlayerController {
             }
 
             // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a live combo line's
-            // piece in our own library goes first, the place meant for the top, before the list is turned for the move.
-            ComboFetch.pieceFirst(player, reordered);
+            // piece in our own library goes first, the place meant for the top, before the list is turned for the move;
+            // on a move to the top it is a known top (follow-up F4), the destination read only if a piece moved first.
+            ComboFetch.pieceFirst(player, reordered, () -> orderedMoveToTopOfLibrary(destinationZone, source));
             if (orderedMoveToTopOfLibrary(destinationZone, source)) {
                 //Cards going to the top of a deck are returned in reverse order.
                 Collections.reverse(reordered);

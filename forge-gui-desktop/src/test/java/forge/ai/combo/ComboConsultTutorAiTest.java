@@ -3,7 +3,9 @@ package forge.ai.combo;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNotSame;
 import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 
 import java.lang.reflect.Method;
@@ -28,6 +30,7 @@ import forge.ai.SpecialCardAi;
 import forge.game.Game;
 import forge.game.GameEndReason;
 import forge.game.ability.AbilityKey;
+import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
@@ -720,5 +723,98 @@ public class ComboConsultTutorAiTest extends AITest {
         assertEquals(consider(sa), AiPlayDecision.WillPlay);
         assertEquals(named(sa), ORACLE);
         assertEquals(canPlayAndPayFor(castOf(consultation)), AiPlayDecision.WillPlay);
+    }
+
+    // ---- follow-up F4: known tops ----
+
+    /** Vampiric Tutor resolved from our hand (AbilityUtils.resolve, its {B} unpaid): our own search of our library,
+     *  decided by us, the shuffle, the card on top, and 2 life. */
+    private void vampiricTutor() {
+        AbilityUtils.resolve(castOf(hand("Vampiric Tutor")));
+    }
+
+    @Test
+    public void knownTopBlocksTheConsultationTutor() {
+        // the plan's Pact board, from which Consultation tutors Oracle (tutorsOracleForAPactLine). Vampiric Tutor's
+        // resolution takes Oracle and puts it on top (spec section 6.3, known tops: Evan, 2026-10-24), where
+        // Consultation's first six would exile it, and the whole library with it
+        final Card consultation = board(FILLERS, ORACLE_PACT);
+        vampiricTutor();
+        final Card oracle = t.find(ORACLE, ZoneType.Library);
+        assertSame(ai.getZone(ZoneType.Library).get(0), oracle);
+        assertEquals(ids(t.oneShort()), List.of("1295-3093"));
+
+        final SpellAbility sa = castOf(consultation);
+        assertEquals(consider(sa), AiPlayDecision.CantPlayAi);
+        assertEquals(t.knownTops(), Set.of(oracle.getId()));
+        assertEquals(named(sa), stockName(), "an intent was recorded");
+    }
+
+    @Test
+    public void knownTopEndsWhenTheCardLeavesTheLibrary() {
+        board(FILLERS, ORACLE_PACT);
+        vampiricTutor();
+        final Card oracle = t.find(ORACLE, ZoneType.Library);
+        assertEquals(t.knownTops(), Set.of(oracle.getId()));
+
+        // Oracle drawn: it is no longer in our library, so no longer a known top
+        ai.drawCard();
+        assertEquals(t.where(ORACLE), ComboTracker.Where.HAND);
+        assertEquals(t.knownTops(), Set.of());
+    }
+
+    // ---- beyond the plan's tests ----
+
+    @Test
+    public void aKnownTopThatLeftAndCameBackIsForgotten() {
+        // the memory ends when the card leaves the library, even when it is back before anything reads the memory:
+        // the card that comes back is a new object of the same id (GameAction.changeZone's copy), here on the bottom
+        final Card consultation = board(FILLERS, ORACLE_PACT);
+        vampiricTutor();
+        final Card oracle = t.find(ORACLE, ZoneType.Library);
+        final Card drawn = game.getAction().moveTo(ZoneType.Hand, oracle, null, AbilityKey.newMap());
+        game.getAction().moveToBottomOfLibrary(drawn, null);
+        final Card back = t.find(ORACLE, ZoneType.Library);
+        assertEquals(back.getId(), oracle.getId());
+        assertNotSame(back, oracle);
+
+        // the tutor's own read is the first to see it gone, and tutors Oracle again
+        final SpellAbility sa = castOf(consultation);
+        assertEquals(consider(sa), AiPlayDecision.WillPlay);
+        assertEquals(named(sa), ORACLE);
+        assertEquals(t.knownTops(), Set.of());
+    }
+
+    @Test
+    public void aShuffleKeepsTheKnownTop() {
+        // a shuffle is not tracked (Evan, 2026-10-24): the memory outlives it, and a rare missed tutor is the cost
+        final Card consultation = board(FILLERS, ORACLE_PACT);
+        vampiricTutor();
+        final Card oracle = t.find(ORACLE, ZoneType.Library);
+        ai.getZone(ZoneType.Library).shuffle();
+        assertSame(t.find(ORACLE, ZoneType.Library), oracle);
+        assertEquals(t.knownTops(), Set.of(oracle.getId()));
+        assertEquals(consider(castOf(consultation)), AiPlayDecision.CantPlayAi);
+    }
+
+    @Test
+    public void theTutorPassesOverAKnownTopForTheNextLine() {
+        // theTutorTakesTheFirstLineByRank's board: two Pact lines one short, Oracle's ranked first. Vampiric Tutor
+        // puts Oracle on top, so Consultation names the next line's piece, Laboratory Maniac (the 75-card floor is the
+        // whole threshold: no condition on the other live pieces, Evan, 2026-10-24)
+        start(LAB_PACT, ORACLE_PACT);
+        hand(PACT);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp", "Swamp", "Swamp");
+        library(FILLERS, ORACLE);
+        addCardToZone(LAB, ai, ZoneType.Library);
+        assertEquals(ids(t.oneShort()), List.of("1295-3093", "2836-3093"));
+        vampiricTutor();
+        assertSame(ai.getZone(ZoneType.Library).get(0), t.find(ORACLE, ZoneType.Library));
+        assertEquals(ids(t.oneShort()), List.of("1295-3093", "2836-3093"));
+
+        final SpellAbility sa = castOf(consultation);
+        assertEquals(consider(sa), AiPlayDecision.WillPlay);
+        assertEquals(named(sa), LAB);
     }
 }

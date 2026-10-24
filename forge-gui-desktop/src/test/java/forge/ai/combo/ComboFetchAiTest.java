@@ -3,6 +3,8 @@ package forge.ai.combo;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotEquals;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNotSame;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
@@ -12,6 +14,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -29,10 +32,12 @@ import forge.ai.ability.ChangeZoneAi;
 import forge.ai.ability.DigAi;
 import forge.game.Game;
 import forge.game.ability.AbilityKey;
+import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.cost.Cost;
+import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
@@ -757,6 +762,325 @@ public class ComboFetchAiTest extends AITest {
         assertEquals(t.oneShort(), List.of());
         assertEquals(ids(t.live()), List.of("742-1295"));
         assertTrue(assertStockParity(() -> willDig(look), lines(ORACLE_CONSULTATION)));
+    }
+
+    // ---- follow-up F4: a win this turn beats danger; known tops ----
+
+    /** The danger board: the default board with a second Swamp, so that Island, Island, Swamp and Swamp are open in
+     *  our Main 1, at 3 life against an opposing Colossal Dreadmaw that nothing of ours can block. DANGER is line
+     *  742-1295's only signal, so no line is one short. Returns the library's Consultation. */
+    private Card dangerBoard() {
+        final Card consultation = oracleBoard();
+        addCard("Swamp", ai);
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertFalse(ComboSignals.surerKillNow(ai));
+        assertEquals(t.oneShort(), List.of());
+        return consultation;
+    }
+
+    private PlayerControllerAi pc() {
+        return (PlayerControllerAi) ai.getController();
+    }
+
+    @Test
+    public void dangerStillFetchesAWinThisTurn() {
+        // spec section 6.5.3: a combo that wins this turn beats surviving. Oracle's {U}{U} and the fetched
+        // Consultation's {B} are paid by the four lands open now, in our Main 1
+        final Card consultation = dangerBoard();
+        final SpellAbility tutor = spell("Demonic Tutor");
+        // with no line the stock pick is another card
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Hand, tutor), consultation);
+
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertSame(pick(ZoneType.Hand, tutor), consultation);
+        // and Demonic Tutor resolving (its {1}{B} unpaid: the four lands stay open) puts it in our hand
+        AbilityUtils.resolve(tutor);
+        assertEquals(t.where(CONSULTATION), ComboTracker.Where.HAND);
+    }
+
+    @Test
+    public void dangerWithoutTheManaToWinTakesTheStockPick() {
+        // the danger board on one land: Oracle's two and Consultation's one outrun next turn's one, so NO_MANA holds
+        // too, and DANGER is not the line's only signal
+        dangerBoard();
+        final List<Card> lands = new ArrayList<>(ai.getLandsInPlay());
+        for (final Card land : lands.subList(1, lands.size())) {
+            game.getAction().moveTo(ZoneType.Graveyard, land, null, AbilityKey.newMap());
+        }
+        assertEquals(ai.getLandsInPlay().size(), 1);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.NO_MANA);
+        assertNotNull(t.find(CONSULTATION, ZoneType.Library));
+        final SpellAbility tutor = spell("Demonic Tutor");
+
+        assertStockParity(() -> pick(ZoneType.Hand, tutor), lines(ORACLE_CONSULTATION));
+    }
+
+    /** {@link #assertStockParity} after one stock call with no line: on some boards the stock pick's first call makes
+     *  draws its later calls do not (a throwaway probe of the tapped-Swamps board below: 22 draws, then 12 at every
+     *  later call, with no line at all), so the parity compares two warm calls. */
+    private <T> T assertWarmStockParity(final Supplier<T> decision, final List<ComboLines.Line> others) {
+        t.useLines(List.of());
+        decision.get();
+        return assertStockParity(decision, others);
+    }
+
+    @Test
+    public void dangerYieldsOutsideOurMainPhaseWithoutTheManaNowAndToTheOtherSignals() {
+        // beyond the plan's tests: the win this turn needs DANGER as the line's only signal, our main phase and the
+        // mana open now; each board below takes the stock pick with the stock draws
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
+
+        // the Swamps tapped: next turn's mana counts them (no NO_MANA), but nothing open now makes Consultation's {B}
+        dangerBoard();
+        for (final Card land : ai.getLandsInPlay()) {
+            if ("Swamp".equals(land.getName())) {
+                land.setTapped(true);
+            }
+        }
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility tapped = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, tapped), held);
+
+        // one Island tapped: Consultation's {B} is open now, Oracle's {U}{U} is not
+        dangerBoard();
+        final Card island = ai.getLandsInPlay().get(0);
+        assertEquals(island.getName(), "Island");
+        island.setTapped(true);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility oneIsland = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, oneIsland), held);
+
+        // both Swamps held for the AI's next spell (AiCardMemory's HELD_MANA_SOURCES_FOR_NEXT_SPELL, which
+        // isManaSourceReserved keeps from other payments): next turn's mana counts them, but Consultation's {B} is not
+        // open to the win now
+        dangerBoard();
+        for (final Card land : ai.getLandsInPlay()) {
+            if ("Swamp".equals(land.getName())) {
+                AiCardMemory.rememberCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+            }
+        }
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility reserved = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, reserved), held);
+
+        // Oracle exiled: the line is dead (a piece gone), though DANGER is its only signal, Consultation is its one
+        // piece in the library and its {B} is open
+        dangerBoard();
+        game.getAction().moveTo(ZoneType.Exile, t.find(ORACLE, ZoneType.Hand), null, AbilityKey.newMap());
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(CONSULTATION));
+        final SpellAbility gone = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, gone), held);
+
+        // Oracle in the library: two short, though the four lands pay both
+        dangerBoard();
+        game.getAction().moveTo(ZoneType.Library, t.find(ORACLE, ZoneType.Hand), null, AbilityKey.newMap());
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(CONSULTATION, ORACLE));
+        final SpellAbility twoShort = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, twoShort), held);
+
+        // our upkeep, and the opponent's Main 1: no main phase of ours
+        dangerBoard();
+        game.getPhaseHandler().devModeSet(PhaseType.UPKEEP, ai);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility upkeep = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, upkeep), held);
+        dangerBoard();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility theirs = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, theirs), held);
+
+        // a surer kill too: our Serra Angel flies over the Dreadmaw into the opponent's 4 life, and at our 2 life it
+        // chumps the Dreadmaw, whose trample still puts 2 through
+        dangerBoard();
+        ai.setLife(2, null);
+        opp.setLife(4, null);
+        addCard("Serra Angel", ai).setSickness(false);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertTrue(ComboSignals.surerKillNow(ai));
+        final SpellAbility surer = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, surer), held);
+
+        // denied: an opposing Platinum Angel, so we cannot win
+        dangerBoard();
+        addCard("Platinum Angel", opp);
+        game.getAction().checkStateEffects(true);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DENIED);
+        final SpellAbility denied = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, denied), held);
+    }
+
+    @Test
+    public void dangerTakesTheNearestWinFirst() {
+        // beyond the plan's tests: two lines one short whose only signal is DANGER, each won this turn on Island,
+        // Island, Swamp and Swamp, rank as the one-short lines do (theCheapestOneShortLineThatTheListHoldsIsServed):
+        // Oracle's (3 still to cast) before Laboratory Maniac's (4), though the deck lists Lab's first
+        start(LAB_CONSULTATION, ORACLE_CONSULTATION);
+        addCard("Swamp", ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Library);
+        final Card lab = addCardToZone(LAB, ai, ZoneType.Library);
+        final Card wurm = addCardToZone(WURM, ai, ZoneType.Library);
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "742-2836"));
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(ids(t.deckLines()), List.of("742-2836", "742-1295"));
+        for (final ComboLines.Line l : t.deckLines()) {
+            assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER, l.variant().id());
+        }
+        assertEquals(t.oneShort(), List.of());
+        final SpellAbility tutor = spell("Demonic Tutor");
+
+        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(lab, oracle, wurm)), ai, ai),
+                oracle);
+        // the first line's piece not offered: the next line is served
+        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(wurm, lab)), ai, ai), lab);
+    }
+
+    @Test
+    public void dangerReadsTheCommanderTax() {
+        // beyond the plan's tests: our commander Thassa's Oracle in the command zone, cast once before from there (2
+        // more, Forge's tax), so the win this turn costs Oracle's {U}{U} and 2 and Consultation's {B}: five lands pay
+        // it
+        start(ORACLE_CONSULTATION);
+        addCard("Swamp", ai);
+        final Card swamp = addCard("Swamp", ai);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Command);
+        oracle.setCommander(true);
+        ai.incCommanderCast(oracle);
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(t.where(ORACLE), ComboTracker.Where.COMMAND);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        final SpellAbility tutor = spell("Demonic Tutor");
+        assertSame(pick(ZoneType.Hand, tutor), consultation);
+
+        // one Swamp tapped: next turn's five still cover the 5 (no NO_MANA), but the four open now pay Oracle and
+        // Consultation only without the tax
+        swamp.setTapped(true);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lines(ORACLE_CONSULTATION));
+    }
+
+    @Test
+    public void dangerStillDigsForAWinThisTurn() {
+        // the win this turn holds for the digs and the Vault as for the searches
+        final Card consultation = dangerBoard();
+        final SpellAbility impulse = spell("Impulse");
+        final List<Card> shown = List.of(t.find(WURM, ZoneType.Library), consultation);
+        assertSame(ComboFetch.digPick(ai, impulse, shown, ai), consultation);
+        assertSame(new DigAi().chooseSingleCard(ai, impulse, shown, false, null, Map.of()), consultation);
+        // the Vault: Consultation on top among the five shown keeps them; five that miss it, with it still in our
+        // library, dig on
+        final List<Card> lib = list(ai.getCardsIn(ZoneType.Library));
+        assertSame(lib.get(0), consultation);
+        assertEquals(ComboFetch.vaultDig(ai, lib.subList(0, 5)), Boolean.FALSE);
+        assertEquals(ComboFetch.vaultDig(ai, lib.subList(1, 6)), Boolean.TRUE);
+
+        // with no line, each is the stock rule
+        t.useLines(List.of());
+        assertNull(ComboFetch.digPick(ai, impulse, shown, ai));
+        assertNull(ComboFetch.vaultDig(ai, lib.subList(0, 5)));
+    }
+
+    @Test
+    public void aSearchToTheTopMakesAKnownTop() {
+        // spec section 6.3, known tops (Evan, 2026-10-24): a piece of ours that a combo hook puts on top of our
+        // library is remembered by the tracker; a search to the hand puts nothing there
+        final Card consultation = oracleBoard();
+        assertEquals(t.knownTops(), Set.of());
+        assertSame(pick(ZoneType.Hand, spell("Demonic Tutor")), consultation);
+        assertEquals(t.knownTops(), Set.of());
+
+        final SpellAbility vampiric = spell("Vampiric Tutor");
+        assertSame(pick(ZoneType.Library, vampiric), consultation);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()));
+        // Vampiric Tutor resolving: our search, the shuffle, then Consultation on top, the same card, still known
+        AbilityUtils.resolve(vampiric);
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()));
+
+        // with no line the stock pick is no combo hook's: nothing is remembered
+        oracleBoard();
+        t.useLines(List.of());
+        assertNotNull(pick(ZoneType.Library, spell("Vampiric Tutor")));
+        assertEquals(t.knownTops(), Set.of());
+    }
+
+    @Test
+    public void aScrySurveilOrDigToTheTopMakesAKnownTop() {
+        Card consultation = oracleBoard();
+        Card island = addCardToZone("Island", ai, ZoneType.Library);
+        assertSame(pc().arrangeForScry(new CardCollection(List.of(island, consultation))).getLeft().get(0),
+                consultation);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()));
+
+        consultation = oracleBoard();
+        island = addCardToZone("Island", ai, ZoneType.Library);
+        assertSame(pc().arrangeForSurveil(new CardCollection(List.of(island, consultation))).getLeft().get(0),
+                consultation);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()));
+
+        // Impulse puts its card in our hand; Thassa's Oracle's own look puts one on top (LibraryPosition$ 0)
+        consultation = oracleBoard();
+        final List<Card> shown = List.of(t.find(WURM, ZoneType.Library), consultation);
+        assertSame(ComboFetch.digPick(ai, spell("Impulse"), shown, ai), consultation);
+        assertEquals(t.knownTops(), Set.of());
+        final SpellAbility look = addCardToZone(ORACLE, ai, ZoneType.Hand).getTriggers().get(0).ensureAbility();
+        look.setActivatingPlayer(ai);
+        assertEquals(look.getParam("LibraryPosition"), "0");
+        assertSame(ComboFetch.digPick(ai, look, shown, ai), consultation);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()));
+
+        // with no line nothing is kept on top, and nothing remembered
+        consultation = oracleBoard();
+        t.useLines(List.of());
+        island = addCardToZone("Island", ai, ZoneType.Library);
+        pc().arrangeForScry(new CardCollection(List.of(island, consultation)));
+        assertEquals(t.knownTops(), Set.of());
+    }
+
+    @Test
+    public void anOrderingToTheTopMakesAKnownTopAndOneToTheBottomNone() {
+        // the Vault's stack (its last move, LibraryPosition$ 0): moved last, Consultation ends on top
+        Card consultation = oracleBoard();
+        Card wurm = t.find(WURM, ZoneType.Library);
+        Card island = addCardToZone("Island", ai, ZoneType.Library);
+        final List<Card> top = list(pc().orderMoveToZoneList(new CardCollection(List.of(wurm, consultation, island)),
+                ZoneType.Library, vaultReorder()));
+        assertSame(top.get(2), consultation);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()));
+
+        // the Vault's GoToBottom (LibraryPosition$ -1): the piece still comes first, but the five go to the bottom
+        consultation = oracleBoard();
+        wurm = t.find(WURM, ZoneType.Library);
+        island = addCardToZone("Island", ai, ZoneType.Library);
+        final SpellAbility bottom = vaultGoToBottom();
+        final List<Card> order = list(pc().orderMoveToZoneList(new CardCollection(List.of(wurm, consultation, island)),
+                ZoneType.Library, bottom));
+        assertSame(order.get(0), consultation);
+        assertEquals(t.knownTops(), Set.of());
+    }
+
+    // Lim-Dul's Vault's dig past the five: the five put on the bottom of our library
+    private SpellAbility vaultGoToBottom() {
+        final Card vault = addCardToZone(SpecialCardAi.LimDulsVault.NAME, ai, ZoneType.Hand);
+        final SpellAbility spell = vault.getFirstSpellAbility();
+        spell.setActivatingPlayer(ai);
+        final SpellAbility bottom = spell.getSubAbility().getAdditionalAbility("RepeatSubAbility").getSubAbility()
+                .getSubAbility();
+        assertEquals(bottom.getApi(), ApiType.Dig);
+        assertEquals(bottom.getParam("LibraryPosition"), "-1");
+        return bottom;
     }
 
     // Lim-Dul's Vault's last move: the remembered five put back on top, in the order the AI gives

@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -35,8 +36,10 @@ import forge.item.PaperCard;
  * the lines and keeps the result, published as one immutable object; every other query reads our zones at that
  * moment, since tests' {@code addCardToZone} and the engine's moves change zones without any event this could follow.
  * A decision reads through one {@link View}, which reads each thing once for all its questions and is dropped with the
- * decision. The one other state kept is Demonic Consultation's tutor intent, from its cast decision to its
- * resolution's namer (section 6.3). Nothing here draws a random number or reads the library's order.
+ * decision. The two other states kept are Demonic Consultation's tutor intent, from its cast decision to its
+ * resolution's namer, and the known tops, the cards of ours one of our combo hooks put on top of our library, until
+ * each leaves it (section 6.3). Nothing here draws a random number or reads the library's order: a known top is only
+ * where we put a card ourselves.
  */
 public final class ComboTracker {
     /** Where a piece is, read in this order: the first place that holds it wins. GONE is anywhere else, the graveyard
@@ -52,6 +55,12 @@ public final class ComboTracker {
     // Demonic Consultation's tutor intents (section 6.3), by the id of the Consultation card cast: the piece its cast
     // was approved to fetch, recorded at the cast decision and taken by its resolution's namer; read by lookups only
     private final Map<Integer, String> consultIntents = new HashMap<>();
+    // the known tops (section 6.3, Evan, 2026-10-24; follow-up F4): the cards of ours that one of our combo hooks put
+    // on top of our library, by id, each with the card object it was then. A card that leaves the library and comes
+    // back is a new object of the same id (GameAction.changeZone copies it; a move within the library and a shuffle
+    // keep it), so the memory ends when the card leaves, whatever comes back. In the order they were put there, and
+    // pruned at each read (knownTops, knownTop)
+    private final Map<Integer, Card> knownTops = new LinkedHashMap<>();
 
     /** The tracker of {@code ai}'s lines among {@code source}; nothing is read until a query. */
     public ComboTracker(final Player ai, final List<ComboLines.Line> source) {
@@ -190,6 +199,53 @@ public final class ComboTracker {
      */
     public ComboLines.Line nearest() {
         return view().nearest();
+    }
+
+    /** Records that one of our combo hooks put our card {@code c}, a card of our library, on top of it (ComboFetch: a
+     *  search or a dig to the top, a scry, surveil or ordering that keeps the piece first, the Vault's stack): a known
+     *  top (section 6.3, Evan, 2026-10-24) until that card leaves our library. */
+    void placedOnTop(final Card c) {
+        knownTops.put(c.getId(), c);
+    }
+
+    /** The ids of our cards that one of our combo hooks put on top of our library and that are still in it (the very
+     *  card: not one that left and came back), in the order they were put there. A shuffle is not followed, so a
+     *  known top outlives one. */
+    public Set<Integer> knownTops() {
+        prune();
+        return ImmutableSet.copyOf(knownTops.keySet());
+    }
+
+    /** Whether a card of ours named {@code name} (by {@link #nameOf}) is a known top ({@link #knownTops}): Demonic
+     *  Consultation never tutors for it ({@link ComboFetch#consultTutor}), since the six cards it exiles first would
+     *  take it, and the whole library with it. The memory only ever refuses a tutor, never chooses one. */
+    public boolean knownTop(final String name) {
+        prune();
+        for (final Card c : knownTops.values()) {
+            if (nameOf(c).equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // drops each known top that is no longer in our library: no card of our library is that very object
+    private void prune() {
+        if (knownTops.isEmpty()) {
+            return;
+        }
+        final List<Card> library = new ArrayList<>(ai.getCardsIn(ZoneType.Library));
+        knownTops.values().removeIf(c -> !holdsItself(library, c));
+    }
+
+    // whether the cards hold that very object (not a card of the same id: Card.equals compares ids)
+    private static boolean holdsItself(final List<Card> cards, final Card c) {
+        for (final Card in : cards) {
+            if (in == c) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** A reading of this tracker for one decision ({@link View}). */
@@ -552,16 +608,23 @@ public final class ComboTracker {
                         out.add(l);
                     }
                 }
-                if (out.size() > 1) {
-                    final Map<ComboLines.Line, Integer> cost = new IdentityHashMap<>();
-                    for (final ComboLines.Line l : out) {
-                        cost.put(l, costNow(l));
-                    }
-                    out.sort((a, b) -> rank(a, cost.get(a), b, cost.get(b)));
-                }
-                oneShort = List.copyOf(out);
+                oneShort = ranked(out);
             }
             return oneShort;
+        }
+
+        /** {@code unranked} in {@link #oneShort}'s rank order (the mana still to cast now, a Thassa's Oracle line, the
+         *  table's mana value, the variant id; a stable sort), as an immutable list. */
+        List<ComboLines.Line> ranked(final List<ComboLines.Line> unranked) {
+            final List<ComboLines.Line> out = new ArrayList<>(unranked);
+            if (out.size() > 1) {
+                final Map<ComboLines.Line, Integer> cost = new IdentityHashMap<>();
+                for (final ComboLines.Line l : out) {
+                    cost.put(l, costNow(l));
+                }
+                out.sort((a, b) -> rank(a, cost.get(a), b, cost.get(b)));
+            }
+            return List.copyOf(out);
         }
 
         /** {@link ComboTracker#nearest}: the first live line with the fewest missing pieces, ties by

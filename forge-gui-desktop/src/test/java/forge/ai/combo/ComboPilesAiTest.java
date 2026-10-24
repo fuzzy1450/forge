@@ -404,14 +404,16 @@ public class ComboPilesAiTest extends AITest {
     public void giftsKeepsTheRefusalsThatEndTheSearch() {
         final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION, LAB_CONSULTATION, DOOM_CONSULTATION);
 
-        // a punished search (an opposing Archivist of Oghma) is a soft refusal: the combo lifts it
+        // a punished search (an opposing Archivist of Oghma) is never forced by the combo floor (follow-up F4; it
+        // was lifted before, a soft refusal): the stock floor and the combo refuse alike
         completerBoard(true, OTHERS.size());
         addCard("Archivist of Oghma", opp).setSickness(false);
         final SpellAbility punished = spell(GIFTS);
         t.useLines(List.of());
         assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, punished), "the stock floor");
         t.useLines(held);
-        assertTrue(SpecialCardAi.GiftsUngiven.worthSearching(ai, punished));
+        assertTrue(ComboFetch.giftsReady(ai));
+        assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, punished));
 
         // seven cards: four leave, and three would stay
         completerBoard(true, 4);
@@ -634,5 +636,70 @@ public class ComboPilesAiTest extends AITest {
         game.getAction().checkStateEffects(true);
         assertFalse(ai.cantWin());
         assertPiledAgain(l);
+    }
+
+    // ---- follow-up F4: fillers spare mana sources; Gifts respects punishers ----
+
+    /** Line 1295-3093, Tainted Pact in hand, over a singleton library of {@code names} and Thassa's Oracle, one short
+     *  with Oracle its completer, a creature: Intuition piles Oracle and two fillers. */
+    private void pactLibrary(final String... names) {
+        start(PACT_ORACLE);
+        addCardToZone(PACT, ai, ZoneType.Hand);
+        library(names);
+        library(ORACLE);
+        assertTrue(t.singletonLibrary());
+        assertEquals(ids(t.oneShort()), List.of("1295-3093"));
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE));
+    }
+
+    @Test
+    public void fillersSpareFastMana() {
+        // Evan, 2026-10-24: the two cards the opponent bins are the cheapest noncreature, nonland non-pieces that are
+        // no mana source. Chrome Mox and Lotus Petal (0, mana abilities) and Dark Ritual (1, a Mana spell) are passed
+        // over for Brainstorm and Ponder (1 each, ties by name); the old rule piled Chrome Mox and Lotus Petal
+        pactLibrary("Chrome Mox", "Lotus Petal", "Dark Ritual", "Brainstorm", "Ponder");
+
+        final List<Card> pile = pile(spell(INTUITION));
+        assertEquals(names(pile), List.of(ORACLE, "Brainstorm", "Ponder"));
+        assertSame(pile.get(0), t.find(ORACLE, ZoneType.Library));
+    }
+
+    @Test
+    public void fillersFallBackWhenOnlyManaRemains() {
+        // fewer than two that are no mana source: the old rule, the two cheapest noncreature, nonland non-pieces,
+        // mana sources included (Chrome Mox and Lotus Petal, 0 each)
+        pactLibrary("Chrome Mox", "Lotus Petal", "Dark Ritual");
+        assertEquals(names(pile(spell(INTUITION))), List.of(ORACLE, "Chrome Mox", "Lotus Petal"));
+
+        // one that is no mana source is still fewer than two: the old rule whole, not Brainstorm and a mana source
+        pactLibrary("Chrome Mox", "Lotus Petal", "Dark Ritual", "Brainstorm");
+        assertEquals(names(pile(spell(INTUITION))), List.of(ORACLE, "Chrome Mox", "Lotus Petal"));
+    }
+
+    @Test
+    public void fillersSpareEveryNamedKindOfManaSource() {
+        // beyond the plan's tests: Lion's Eye Diamond (0) and Mana Vault (1) have mana abilities, Cabal Ritual (2) is
+        // a Mana spell, and Energy Tap (1) a Tap spell whose sub-ability adds the mana; the old rule piled Lion's Eye
+        // Diamond and Brainstorm
+        pactLibrary("Lion's Eye Diamond", "Mana Vault", "Cabal Ritual", "Energy Tap", "Ponder", "Brainstorm");
+        assertEquals(names(pile(spell(INTUITION))), List.of(ORACLE, "Brainstorm", "Ponder"));
+    }
+
+    @Test
+    public void giftsFloorRespectsSearchPunishers() {
+        // follow-up F4: three completers no longer force Gifts Ungiven into a punished search. Ob Nixilis, Unshackled
+        // (a creature and 10 life), River Song (damage for each search) and Psychogenic Probe (2 at the shuffle) each
+        // make the stock floor refuse (searchPunished), and the combo floor now yields to it
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION, LAB_CONSULTATION, DOOM_CONSULTATION);
+        for (final String punisher : List.of("Ob Nixilis, Unshackled", "River Song", "Psychogenic Probe")) {
+            completerBoard(true, OTHERS.size());
+            final SpellAbility gifts = spell(GIFTS);
+            assertTrue(SpecialCardAi.GiftsUngiven.worthSearching(ai, gifts), "before " + punisher);
+            addCard(punisher, opp).setSickness(false);
+            assertTrue(ComboFetch.giftsReady(ai), punisher);
+            assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, gifts), punisher);
+            assertFalse(assertStockParity(() -> SpecialCardAi.GiftsUngiven.worthSearching(ai, gifts), held),
+                    punisher);
+        }
     }
 }
