@@ -18,6 +18,7 @@ import forge.deck.DeckSection;
 import forge.game.card.Card;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.staticability.StaticAbility;
 import forge.game.zone.Zone;
 import forge.game.zone.ZoneType;
 import forge.item.IPaperCard;
@@ -143,9 +144,10 @@ public final class ComboTracker {
         return view().live();
     }
 
-    /** The deck's lines that may be executed now: every piece reachable, an Oracle in play only with its trigger on
-     *  our stack, Pact's singleton library, and not {@link ComboSignals#denied}. No mana, danger and a surer kill never
-     *  stop a win now. In deckLines order. */
+    /** The deck's lines that may be executed: every piece reachable, an Oracle in play only with its trigger on our
+     *  stack, Pact's singleton library, and not {@link ComboSignals#denied}, now or at the moment its window needs its
+     *  emptier (Oracle's go-off, still to come when Oracle's cast is decided, reads its trigger's moment). No mana,
+     *  danger and a surer kill never stop a win now. In deckLines order. */
     public List<ComboLines.Line> executable() {
         return view().executable();
     }
@@ -345,13 +347,13 @@ public final class ComboTracker {
      * One reading of this tracker, for one decision (spec sections 6.2 and 7: a decision's cost stays O(1) amortised;
      * final review, round 1). It reads what the tracker's own queries read, at the moment of each first use, and keeps
      * it for the decision's later questions: where each piece is (one pass over each of our zones and our stack, for
-     * every piece name at once), whether our library is singleton, each deck line's standing prerequisites and denial,
-     * the live, executable and one-short lines, and the abandon signals' inputs that no line changes (whether we can
-     * win, whether every opponent cannot lose, the danger, the surer kill, next turn's mana, whether a CantBeCast
-     * static is in force) with the cast bar by piece and each winner's own reading. So a decision asking for the
-     * executable lines, then the live ones, then the one-short ones reads the board once, where each query alone
-     * read it again for every line. A view is the local of the decision that makes it and is dropped with it, never
-     * kept across a game action; nothing in it is static.
+     * every piece name at once), whether our library is singleton, each deck line's standing prerequisites and its
+     * denial now and at its window, the live, executable, executable-now and one-short lines, and the abandon signals'
+     * inputs that no line changes (whether we can win, whether every opponent cannot lose, the danger, the surer kill,
+     * next turn's mana, the CantBeCast statics on the board and whether one is in force) with the cast bar by piece and
+     * each winner's own reading. So a decision asking for the executable lines, then the live ones, then the one-short
+     * ones reads the board once, where each query alone read it again for every line. A view is the local of the
+     * decision that makes it and is dropped with it, never kept across a game action; nothing in it is static.
      */
     public final class View {
         // the match, read once: this view's lines and piece names come from the one published object
@@ -370,15 +372,18 @@ public final class ComboTracker {
         private Boolean singleton;
         // per deck line, by its index in lines: 0 unread, 1 no, 2 yes
         private final byte[] ready = new byte[lines.size()];
+        private final byte[] deniedNow = new byte[lines.size()];
         private final byte[] denied = new byte[lines.size()];
         private List<ComboLines.Line> live;
         private List<ComboLines.Line> executable;
+        private List<ComboLines.Line> executableNow;
         private List<ComboLines.Line> oneShort;
         // the abandon signals' inputs (ComboSignals reads them through the accessors below)
         private Boolean cantWin;
         private Boolean everyOpponentCantLose;
         private Boolean danger;
         private Boolean surerKill;
+        private List<StaticAbility> castBarStatics;
         private Boolean castBarsInForce;
         private Boolean oracleTriggerDisabled;
         private int nextTurnMana = -1;
@@ -520,6 +525,24 @@ public final class ComboTracker {
             return executable;
         }
 
+        /** The deck's lines that may be executed at a window open now, read once: as {@link #executable}, but denied
+         *  as read now ({@link ComboSignals#deniedNow}), the moment of every window ComboExecute opens. So the window
+         *  of a draw spell after the emptier in our main phase, Laboratory Maniac's or Jace's, reads its own moment:
+         *  under Teferi, Time Raveler it is open, though the line, whose own window is the opponent's end step, is
+         *  denied. In deckLines order. */
+        List<ComboLines.Line> executableNow() {
+            if (executableNow == null) {
+                final List<ComboLines.Line> out = new ArrayList<>();
+                for (final ComboLines.Line l : lines) {
+                    if (ready(l) && !deniedNow(l)) {
+                        out.add(l);
+                    }
+                }
+                executableNow = List.copyOf(out);
+            }
+            return executableNow;
+        }
+
         /** {@link ComboTracker#oneShort}, read once. */
         public List<ComboLines.Line> oneShort() {
             if (oneShort == null) {
@@ -597,16 +620,29 @@ public final class ComboTracker {
             return ready[i] == 2;
         }
 
-        /** {@link ComboSignals#denied} (kept for a deck line). */
+        /** {@link ComboSignals#denied} (kept for a deck line): denied now, or its emptier barred at its window
+         *  ({@link ComboSignals#barredAtWindowNow}). */
         boolean denied(final ComboLines.Line l) {
+            final int i = indexOf(l);
+            if (i < 0) {
+                return deniedNow(l) || ComboSignals.barredAtWindowNow(this, l);
+            }
+            if (denied[i] == 0) {
+                denied[i] = (byte) ((deniedNow(l) || ComboSignals.barredAtWindowNow(this, l)) ? 2 : 1);
+            }
+            return denied[i] == 2;
+        }
+
+        /** {@link ComboSignals#deniedNow} (kept for a deck line): the denial at a window open now. */
+        boolean deniedNow(final ComboLines.Line l) {
             final int i = indexOf(l);
             if (i < 0) {
                 return ComboSignals.deniedNow(this, l);
             }
-            if (denied[i] == 0) {
-                denied[i] = (byte) (ComboSignals.deniedNow(this, l) ? 2 : 1);
+            if (deniedNow[i] == 0) {
+                deniedNow[i] = (byte) (ComboSignals.deniedNow(this, l) ? 2 : 1);
             }
-            return denied[i] == 2;
+            return deniedNow[i] == 2;
         }
 
         // ---- the abandon signals' inputs, each read at its first use ----
@@ -646,9 +682,17 @@ public final class ComboTracker {
             return nextTurnMana;
         }
 
+        // the CantBeCast statics of the cards in a static-ability source zone, whatever their conditions now
+        List<StaticAbility> castBarStatics() {
+            if (castBarStatics == null) {
+                castBarStatics = ComboSignals.castBarStaticsNow(ai.getGame());
+            }
+            return castBarStatics;
+        }
+
         boolean castBarsInForce() {
             if (castBarsInForce == null) {
-                castBarsInForce = ComboSignals.castBarsInForceNow(ai.getGame());
+                castBarsInForce = ComboSignals.castBarsInForceNow(castBarStatics());
             }
             return castBarsInForce;
         }

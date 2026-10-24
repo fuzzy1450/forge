@@ -20,6 +20,7 @@ import forge.ai.combo.ComboSignals.Signal;
 import forge.game.Game;
 import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
+import forge.game.card.CounterEnumType;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -53,6 +54,7 @@ public class ComboSignalsTest extends AITest {
     private static final String BEARS = "Grizzly Bears";
     private static final String DREADMAW = "Colossal Dreadmaw";
     private static final String GIANT = "Hill Giant";
+    private static final String TEFERI = "Teferi, Time Raveler";
 
     // ten distinct nonland names (GiftsUngivenAiTest's): fillLibrary makes ten of one name
     private static final List<String> NAMES = Arrays.asList("Runeclaw Bear", "Grizzly Bears", "Hill Giant",
@@ -1358,6 +1360,404 @@ public class ComboSignalsTest extends AITest {
         final long draws = MyRandom.callCount();
         assertNull(abandon(l));
         assertEquals(MyRandom.callCount(), draws, "the burn reader drew");
+    }
+
+    // ---- follow-up F3: denial at the moment the line needs it ----
+
+    @Test
+    public void teferiDeniesTheOracleLine() {
+        // an opposing Teferi, Time Raveler: we cast spells only when we could cast a sorcery. In our MAIN1, the stack
+        // empty, Consultation could be cast now, but the go-off casts it with Oracle's trigger on the stack: the
+        // Oracle line is denied, so Oracle is not held or protected and nothing is fetched for it (Consultation is in
+        // the library: the line is one short)
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        assertEquals(ids(t.oneShort()), List.of("742-1295"));
+        teferi(opp);
+        assertTrue(ai.canCastSorcery());
+        assertFalse(ComboSignals.deniedNow(t.view(), l), "read now, nothing bars Consultation");
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "at the go-off Teferi bars it");
+        assertEquals(abandon(l), Signal.DENIED);
+        assertTrue(ComboSignals.denied(ai, line(ORACLE_CONSULTATION), t), "a line read outside the deck's");
+        assertEquals(t.live(), List.of());
+        assertEquals(t.executable(), List.of());
+        assertEquals(t.oneShort(), List.of());
+        assertNull(t.nearest());
+        assertFalse(t.protects(t.find(ORACLE, ZoneType.Hand)));
+
+        // Oracle's trigger already on our stack: that window is now, which the reading now covers, and Teferi bars
+        // Consultation now as well
+        start(ORACLE_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        manaForTheLine();
+        enters(addCardToZone(ORACLE, ai, ZoneType.Hand));
+        final ComboLines.Line fired = t.deckLines().get(0);
+        teferi(opp);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), fired));
+        assertTrue(ComboSignals.deniedNow(t.view(), fired));
+        assertEquals(abandon(fired), Signal.DENIED);
+        assertEquals(t.executable(), List.of());
+    }
+
+    @Test
+    public void teferiDeniesTheEndStepWindowButNotDoomsWindow() {
+        // with no draw spell, Laboratory Maniac's and Jace's window is the opponent's end step, where no sorcery can be
+        // cast: under an opposing Teferi, Time Raveler their lines are denied in our MAIN1 too, with Consultation or
+        // Tainted Pact as the emptier
+        final String[][] rows = {{LAB_CONSULTATION, LAB, CONSULTATION}, {JACE_CONSULTATION, JACE, CONSULTATION},
+                {LAB_PACT, LAB, PACT}};
+        for (final String[] row : rows) {
+            start(row[0]);
+            ready(row[1], 1, ai);
+            addCardToZone(row[2], ai, ZoneType.Hand);
+            lands("Swamp", "Swamp");
+            final ComboLines.Line l = t.deckLines().get(0);
+            assertNull(abandon(l), row[0]);
+            teferi(opp);
+            assertFalse(ComboSignals.deniedNow(t.view(), l), row[0]);
+            assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), row[0]);
+            assertEquals(abandon(l), Signal.DENIED, row[0]);
+        }
+
+        // Doctor Doom's window is now: in our MAIN1 Consultation, then Doom's {T}, both while we could cast a sorcery
+        start(DOOM_CONSULTATION);
+        ready(DOOM, 1, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        final ComboLines.Line doom = t.deckLines().get(0);
+        teferi(opp);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), doom));
+        assertNull(abandon(doom));
+        assertEquals(ids(t.executable()), List.of("x-1"));
+        // in the opponent's turn it is read now, as at the base: denied
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        assertEquals(abandon(doom), Signal.DENIED);
+    }
+
+    @Test
+    public void ruleOfLawDeniesTheOracleLine() {
+        // "Each player can't cast more than one spell each turn": the go-off casts Oracle, then Consultation in
+        // response to its trigger, two spells in one turn. Nothing is cast this turn yet, so Consultation alone could
+        // be cast now. The Laboratory Maniac line's window is the opponent's end step, in a turn of its own, where
+        // Consultation is the first spell
+        for (final String hoser : List.of("Rule of Law", "Archon of Emeria")) {
+            final ComboLines.Line l = oracleLine();
+            manaForTheLine();
+            addCard(hoser, opp);
+            assertTrue(game.getStack().getSpellsCastThisTurn().isEmpty(), hoser);
+            assertFalse(ComboSignals.deniedNow(t.view(), l), hoser);
+            assertEquals(abandon(l), Signal.DENIED, hoser);
+            assertEquals(t.live(), List.of(), hoser);
+
+            final ComboLines.Line lab = labLine();
+            addCard(hoser, opp);
+            assertFalse(ComboSignals.barredAtWindowNow(t.view(), lab), hoser);
+            assertNull(abandon(lab), hoser);
+            // a spell of ours this turn: read now Consultation would be this turn's second, but the end step is in a
+            // turn of its own
+            castThisTurn("Opt", ai);
+            assertTrue(ComboSignals.deniedNow(t.view(), lab), hoser);
+            assertFalse(ComboSignals.barredAtWindowNow(t.view(), lab), hoser);
+        }
+    }
+
+    @Test
+    public void canonistDeniesTheOracleLine() {
+        // Ethersworn Canonist: a player who has cast a nonartifact spell this turn can't cast another. Oracle and
+        // Consultation are both nonartifact, so the go-off's second spell is barred; the Laboratory Maniac line's
+        // end-step Consultation is that turn's first
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        addCard("Ethersworn Canonist", opp);
+        assertFalse(ComboSignals.deniedNow(t.view(), l));
+        assertEquals(abandon(l), Signal.DENIED);
+        assertEquals(t.live(), List.of());
+
+        final ComboLines.Line lab = labLine();
+        addCard("Ethersworn Canonist", opp);
+        assertNull(abandon(lab));
+    }
+
+    @Test
+    public void deafeningSilenceAllowsTheOracleLine() {
+        // "Each player can't cast more than one noncreature spell each turn": Oracle is a creature, so Consultation is
+        // the go-off's first noncreature spell; a creature spell cast this turn counts for nothing either
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        addCard("Deafening Silence", opp);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertNull(abandon(l));
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        castThisTurn(BEARS, ai);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertNull(abandon(l));
+        assertEquals(ids(t.live()), List.of("742-1295"));
+    }
+
+    @Test
+    public void deafeningSilenceDeniesAfterANoncreatureSpell() {
+        // once we cast Opt this turn, Consultation would be the turn's second noncreature spell: the go-off is barred
+        // while it can still come this turn, in our MAIN2 as well
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        addCard("Deafening Silence", opp);
+        castThisTurn("Opt", ai);
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertEquals(abandon(l), Signal.DENIED);
+        assertEquals(t.live(), List.of());
+        moveToMain2(game, ai);
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "our MAIN2");
+
+        // from our end step on, the go-off comes in a later turn of ours, where Consultation is the first noncreature
+        // spell: the window bars nothing (read now, Consultation would still be this turn's second)
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, ai);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "our end step");
+        assertTrue(ComboSignals.deniedNow(t.view(), l), "our end step, read now");
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "the opponent's turn");
+
+        // the opponent's noncreature spell this turn is theirs: it counts for nothing against ours
+        final ComboLines.Line fresh = oracleLine();
+        manaForTheLine();
+        addCard("Deafening Silence", opp);
+        castThisTurn("Opt", opp);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), fresh));
+        assertNull(abandon(fresh));
+    }
+
+    @Test
+    public void grandAbolisherDeniesOnlyItsOwnersTurn() {
+        // the opponent's Grand Abolisher: during its controller's turn we cast no spells. The Oracle line goes off in
+        // our own turn: not denied
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        addCard("Grand Abolisher", opp);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertNull(abandon(l));
+        assertEquals(ids(t.live()), List.of("742-1295"));
+
+        // the Laboratory Maniac line's window is the opponent's end step, in their turn: denied in our MAIN1, though
+        // nothing bars Consultation now; in their own turn it is barred read now and at the window alike
+        ComboLines.Line lab = labLine();
+        addCard("Grand Abolisher", opp);
+        assertFalse(ComboSignals.deniedNow(t.view(), lab));
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), lab));
+        assertEquals(abandon(lab), Signal.DENIED);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        assertTrue(ComboSignals.deniedNow(t.view(), lab));
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), lab));
+
+        // our own Abolisher bars only our opponents, and one in its owner's graveyard bars nothing
+        lab = labLine();
+        addCard("Grand Abolisher", ai);
+        assertNull(abandon(lab));
+        lab = labLine();
+        addCardToZone("Grand Abolisher", opp, ZoneType.Graveyard);
+        assertNull(abandon(lab));
+
+        // three seats: our end-step window is in the turn of the player right before ours, never another opponent's
+        game = initAndCreateThreePlayerGame();
+        ai = game.getPlayers().get(1);
+        final Player before = game.getPlayers().get(0);
+        final Player after = game.getPlayers().get(2);
+        assertSame(game.getNextPlayerAfter(before), ai);
+        assertSame(game.getNextPlayerAfter(ai), after);
+        t = aiOf(ai).getComboTracker();
+        t.useLines(lines(LAB_CONSULTATION));
+        ready(LAB, 1, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        lab = t.deckLines().get(0);
+        addCard("Grand Abolisher", after);
+        assertNull(abandon(lab), "the player after us");
+        addCard("Grand Abolisher", before);
+        assertEquals(abandon(lab), Signal.DENIED, "the player before us");
+    }
+
+    @Test
+    public void noHoserNotDenied() {
+        // with no CantBeCast static, nothing is barred at any window, whatever the moment: the Oracle line, with a
+        // spell of ours cast this turn and another on the stack (no sorcery could be cast now) as well; the Laboratory
+        // Maniac line; and the reading draws nothing
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        long draws = MyRandom.callCount();
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertNull(abandon(l));
+        assertEquals(MyRandom.callCount(), draws, "the window's reading drew");
+        castThisTurn("Opt", ai);
+        castOnStack("Divination");
+        assertFalse(ai.canCastSorcery());
+        draws = MyRandom.callCount();
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertFalse(ComboSignals.denied(ai, l, t));
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertEquals(MyRandom.callCount(), draws, "the window's reading drew");
+        final ComboLines.Line lab = labLine();
+        draws = MyRandom.callCount();
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), lab));
+        assertNull(abandon(lab));
+        assertEquals(MyRandom.callCount(), draws, "the window's reading drew");
+
+        // a CantBeCast static that bars nothing of ours (Grafdigger's Cage: casts from graveyards and libraries) is
+        // read to its end and denies nothing, drawing nothing
+        final ComboLines.Line caged = oracleLine();
+        manaForTheLine();
+        addCard("Grafdigger's Cage", opp);
+        draws = MyRandom.callCount();
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), caged));
+        assertNull(abandon(caged));
+        assertEquals(MyRandom.callCount(), draws, "the window's reading drew");
+        final ComboLines.Line cagedLab = labLine();
+        addCard("Grafdigger's Cage", opp);
+        draws = MyRandom.callCount();
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), cagedLab));
+        assertNull(abandon(cagedLab));
+        assertEquals(MyRandom.callCount(), draws, "the window's reading drew");
+    }
+
+    @Test
+    public void atItsMomentTheWindowReadsAsForgeDoes() {
+        // at the opponent's end step, our turn next, the Laboratory Maniac lines' window is now: its reading of each
+        // CantBeCast static agrees with Forge's own cast check (StaticAbilityCantBeCast.cantBeCastAbility, through
+        // castBarredNow) for Consultation and for Tainted Pact, parameter by parameter
+        endStepLabBoard();
+        assertReadsAsForge("no static", false, false);
+
+        endStepLabBoard();
+        teferi(opp);
+        assertReadsAsForge("Teferi: OnlySorcerySpeed", true, true);
+        endStepLabBoard();
+        teferi(ai);
+        assertReadsAsForge("our Teferi: Caster", false, false);
+
+        endStepLabBoard();
+        addCard("Rule of Law", opp);
+        assertReadsAsForge("Rule of Law, nothing cast", false, false);
+        castThisTurn("Opt", opp);
+        assertReadsAsForge("Rule of Law, the opponent's spell", false, false);
+        castThisTurn("Opt", ai);
+        assertReadsAsForge("Rule of Law, our spell", true, true);
+
+        endStepLabBoard();
+        addCard("Ethersworn Canonist", opp);
+        castThisTurn("Sol Ring", ai);
+        assertReadsAsForge("Canonist, an artifact cast", false, false);
+        castThisTurn("Opt", ai);
+        assertReadsAsForge("Canonist, a nonartifact cast", true, true);
+
+        endStepLabBoard();
+        addCard("Deafening Silence", opp);
+        castThisTurn(BEARS, ai);
+        assertReadsAsForge("Deafening Silence, a creature cast", false, false);
+        castThisTurn("Opt", ai);
+        assertReadsAsForge("Deafening Silence, a noncreature cast", true, true);
+
+        endStepLabBoard();
+        addCard("Grand Abolisher", opp);
+        assertReadsAsForge("the opponent's Abolisher, in its turn", true, true);
+        endStepLabBoard();
+        addCard("Grand Abolisher", ai);
+        assertReadsAsForge("our Abolisher", false, false);
+
+        endStepLabBoard();
+        final Card flail = addCard("Conqueror's Flail", opp);
+        assertReadsAsForge("Conqueror's Flail, unattached", false, false);
+        flail.attachToEntity(addCard(GIANT, opp), null);
+        assertReadsAsForge("Conqueror's Flail, attached", true, true);
+
+        endStepLabBoard();
+        addCard("Grafdigger's Cage", opp);
+        assertReadsAsForge("Grafdigger's Cage: Origin", false, false);
+
+        endStepLabBoard();
+        addCard("Drannith Magistrate", opp);
+        assertReadsAsForge("Drannith Magistrate: cast from the hand", false, false);
+
+        endStepLabBoard();
+        addCard("Lavinia, Azorius Renegade", opp);
+        assertReadsAsForge("Lavinia, one land", false, true);
+        lands("Swamp");
+        assertReadsAsForge("Lavinia, two lands", false, false);
+
+        endStepLabBoard();
+        addCard("Angel of Eternal Dawn", opp);
+        assertEquals(ai.getTurn(), 0);
+        assertReadsAsForge("Angel of Eternal Dawn, no turn begun", true, true);
+        ai.getStats().nextTurn();
+        assertReadsAsForge("Angel of Eternal Dawn, one turn", false, true);
+        ai.getStats().nextTurn();
+        assertReadsAsForge("Angel of Eternal Dawn, two turns", false, false);
+
+        endStepLabBoard();
+        addCard("Void Winnower", opp);
+        assertReadsAsForge("Void Winnower", false, true);
+
+        endStepLabBoard();
+        addCard("Fires of Invention", ai);
+        assertReadsAsForge("our Fires of Invention, not our turn", true, true);
+    }
+
+    /** Line 742-2836 in a fresh two-player game in our MAIN1: Laboratory Maniac ready in play, Consultation in hand,
+     *  a Swamp. */
+    private ComboLines.Line labLine() {
+        start(LAB_CONSULTATION);
+        ready(LAB, 1, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        assertEquals(ids(t.deckLines()), List.of("742-2836"));
+        return t.deckLines().get(0);
+    }
+
+    /** Lines 742-2836 and 2836-3093 at the opponent's end step, our turn next, so now is their window's moment:
+     *  Laboratory Maniac ready in play, Consultation and Tainted Pact in hand, a Swamp. */
+    private void endStepLabBoard() {
+        start(LAB_CONSULTATION, LAB_PACT);
+        ready(LAB, 1, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        addCardToZone(PACT, ai, ZoneType.Hand);
+        lands("Swamp");
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertSame(game.getPhaseHandler().getNextTurn(), ai);
+        assertEquals(ids(t.deckLines()), List.of("742-2836", "2836-3093"));
+    }
+
+    /** At the opponent's end step each Laboratory Maniac line's window reads as Forge's own cast check reads its
+     *  emptier now ({@link ComboSignals#castBarredNow}): Consultation's line barred as {@code consultation}, Tainted
+     *  Pact's as {@code pact}. */
+    private void assertReadsAsForge(final String why, final boolean consultation, final boolean pact) {
+        final ComboTracker.View v = t.view();
+        final List<ComboLines.Line> both = t.deckLines();
+        final boolean[] barred = {consultation, pact};
+        for (int i = 0; i < both.size(); i++) {
+            final ComboLines.Line l = both.get(i);
+            final String what = why + ", " + l.emptier().card;
+            assertEquals(ComboSignals.castBarredNow(v, l.emptier().card), barred[i], what + ", Forge's own reading");
+            assertEquals(ComboSignals.barredAtWindowNow(v, l), barred[i], what);
+        }
+    }
+
+    /** {@code p}'s Teferi, Time Raveler with its four loyalty: "Each opponent can cast spells only any time they could
+     *  cast a sorcery." */
+    private Card teferi(final Player p) {
+        final Card c = addCard(TEFERI, p);
+        c.setCounters(CounterEnumType.LOYALTY, 4);
+        return c;
+    }
+
+    /** {@code p}'s {@code name} cast this turn and gone from the stack: the turn's record of its casts holds it, the
+     *  stack is empty again, and the card is in its owner's graveyard. */
+    private void castThisTurn(final String name, final Player p) {
+        final Card card = createCard(name, p);
+        card.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(card);
+        final SpellAbility sa = card.getFirstSpellAbility();
+        sa.setActivatingPlayer(p);
+        game.getStack().add(sa);
+        game.getStack().clear();
+        game.getStackZone().remove(card);
+        p.getZone(ZoneType.Graveyard).add(card);
+        assertTrue(game.getStack().isEmpty());
     }
 
     /** A three-player game whose AI (player 1, in its own MAIN1) holds the default board: line 742-1295, Oracle in

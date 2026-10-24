@@ -32,6 +32,7 @@ import forge.game.ability.AbilityFactory;
 import forge.game.ability.AbilityKey;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
+import forge.game.card.CounterEnumType;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -74,6 +75,7 @@ public class ComboExecuteAiTest extends AITest {
     private static final String EMERITUS = "Archmage Emeritus";
     private static final String ANGEL = "Platinum Angel";
     private static final String LINVALA = "Linvala, Keeper of Silence";
+    private static final String TEFERI = "Teferi, Time Raveler";
 
     /** Fifteen distinct names, none a land and none a piece of piece 1's lines: a library Tainted Pact can empty. */
     private static final List<String> SINGLETON = List.of("Runeclaw Bear", "Grizzly Bears", "Hill Giant", "Craw Wurm",
@@ -1427,5 +1429,101 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(consider(consultation), AiPlayDecision.WillPlay, spell);
         emptied(consultation);
         assertEquals(aiOf(ai).canPlaySa(castOf(s)), AiPlayDecision.WillPlay, spell + " on the emptied library");
+    }
+
+    // ---- follow-up F3: denial at the moment the line needs it ----
+
+    /** Review Focus 2: under an opposing Teferi, Time Raveler, Oracle's trigger would sit on a stack where Consultation
+     *  cannot be cast, so the go-off is not ready, though Oracle, Consultation and their mana are all here. Rule of
+     *  Law, Archon of Emeria and Ethersworn Canonist bar the go-off's second spell; the opponent's Grand Abolisher bars
+     *  nothing in our turn, nor Deafening Silence a creature and one noncreature spell. */
+    @Test
+    public void teferiStopsTheGoOff() {
+        Card oracle = goOffBoard();
+        assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)));
+        teferi();
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertEquals(t.executable(), List.of());
+
+        for (final String hoser : List.of("Rule of Law", "Archon of Emeria", "Ethersworn Canonist")) {
+            oracle = goOffBoard();
+            addCard(hoser, opp);
+            assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)), hoser);
+        }
+        for (final String hoser : List.of("Grand Abolisher", "Deafening Silence")) {
+            oracle = goOffBoard();
+            addCard(hoser, opp);
+            assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)), hoser);
+        }
+    }
+
+    /** The Laboratory Maniac window of a draw spell is now. Under an opposing Teferi, Time Raveler, or the opponent's
+     *  Grand Abolisher, the line's own window, the opponent's end step, is barred, so the line is denied; yet in our
+     *  Main 1 Consultation and then Opt are cast while we could cast a sorcery, in our own turn, so Consultation goes,
+     *  and Tainted Pact alike, cast and resolving. At the opponent's end step neither goes. */
+    @Test
+    public void theDrawSpellWindowIsReadNow() {
+        for (final String hoser : List.of(TEFERI, "Grand Abolisher")) {
+            start(LAB_CONSULTATION, LAB_PACT);
+            addCard(LAB, ai);
+            final Card consultation = hand(CONSULTATION);
+            final Card pact = hand(PACT);
+            hand(OPT);
+            lands("Island", "Swamp", "Swamp");
+            singletonLibrary();
+            assertEquals(ids(t.executable()), List.of("742-2836", "2836-3093"), hoser);
+            if (TEFERI.equals(hoser)) {
+                teferi();
+            } else {
+                addCard(hoser, opp);
+            }
+            assertEquals(t.executable(), List.of(), hoser);
+            assertEquals(t.live(), List.of(), hoser);
+            assertEquals(consider(consultation), AiPlayDecision.WillPlay, hoser);
+            assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.TRUE, hoser);
+            assertTrue(ComboExecute.pactDeclines(ai, returnToHand(pact)), hoser);
+
+            opponentsEndStep();
+            assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, hoser);
+            assertNull(ComboExecute.pactCast(ai, castOf(pact)), hoser);
+        }
+    }
+
+    /** End to end under an opposing Teferi, Time Raveler: Laboratory Maniac in play, Consultation and Brainstorm in
+     *  hand, Island + Swamp, a 20-card library, our Main 1. Both are cast while we could cast a sorcery: Consultation
+     *  empties the library and Brainstorm's draw wins the same turn. */
+    @Test
+    public void labThenConsultationThenBrainstormWinsUnderTeferi() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        hand(CONSULTATION);
+        hand("Brainstorm");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        teferi();
+        assertEquals(t.live(), List.of());
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertWonThisTurn();
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+    }
+
+    /** Line 742-1295 in our Main 1: Oracle and Consultation in hand, Island, Island and Swamp, a 20-card library.
+     *  Returns the Oracle. */
+    private Card goOffBoard() {
+        start(ORACLE_CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        return oracle;
+    }
+
+    /** The opponent's Teferi, Time Raveler with its four loyalty: "Each opponent can cast spells only any time they
+     *  could cast a sorcery." */
+    private Card teferi() {
+        final Card c = addCard(TEFERI, opp);
+        c.setCounters(CounterEnumType.LOYALTY, 4);
+        return c;
     }
 }

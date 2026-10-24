@@ -31,6 +31,7 @@ import forge.game.Game;
 import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
+import forge.game.card.CounterEnumType;
 import forge.game.cost.Cost;
 import forge.game.cost.CostExile;
 import forge.game.player.Player;
@@ -60,6 +61,7 @@ public class ComboHoldAiTest extends AITest {
     private static final String WURM = "Craw Wurm";
     private static final String BRAINSTORM = "Brainstorm";
     private static final String FORCE = "Force of Will";
+    private static final String TEFERI = "Teferi, Time Raveler";
 
     private Game game;
     private Player ai;
@@ -735,5 +737,28 @@ public class ComboHoldAiTest extends AITest {
         lands("Swamp");
         assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)));
         assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
+    }
+
+    // ---- follow-up F3: denial at the moment the line needs it ----
+
+    @Test
+    public void teferiReleasesTheOracleHold() {
+        // an opposing Teferi, Time Raveler: we cast spells only when we could cast a sorcery, so Consultation can never
+        // answer Oracle's trigger. The Oracle line is denied, and Oracle is an ordinary creature again: the stock cast
+        // of the 1/3 in Main 2
+        final Card oracle = heldBoard();
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+        final Card teferi = addCard(TEFERI, opp);
+        teferi.setCounters(CounterEnumType.LOYALTY, 4);
+        assertEquals(t.live(), List.of());
+        assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
+        assertSame(decision(), oracle);
+
+        // the opponent's Grand Abolisher bars us only in its controller's turn, and our go-off is in ours: still held
+        final Card held = heldBoard();
+        addCard("Grand Abolisher", opp);
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(held)));
+        assertNull(aiOf(ai).chooseSpellAbilityToPlay());
     }
 }

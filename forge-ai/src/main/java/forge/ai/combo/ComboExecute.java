@@ -22,8 +22,8 @@ import forge.game.zone.ZoneType;
 /**
  * Executing the empty-library family (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): Thassa's Oracle goes
  * off ({@link #goOffNow}, which releases its hold, {@link ComboHold#vetoesCast}), and an emptier, Demonic Consultation
- * or Tainted Pact, is our own cast only inside a window of one of its lines, each gated by an
- * {@link ComboTracker#executable} line pairing that emptier with that winner:
+ * or Tainted Pact, is our own cast only inside a window of one of its lines, each gated by a line executable now (the
+ * view's executableNow: denied as read now, the window's own moment) pairing that emptier with that winner:
  * <ul>
  * <li>ORACLE: our Thassa's Oracle trigger is on the stack (Consultation's stock loop; Pact through {@link #pactCast});
  * <li>FBLTHP: our Fblthp, Impossibly Lost trigger is on the stack (Consultation only);
@@ -40,6 +40,8 @@ import forge.game.zone.ZoneType;
  * </ul>
  * Pact's own singleton-library condition is executable's. None of it while we cannot win or every opponent cannot lose
  * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
+ * The go-off reads {@link ComboTracker#executable}, whose denial also reads the emptier at the moment Oracle's trigger
+ * will be on the stack (follow-up F3): Oracle is cast before its window opens.
  *
  * <p>Nothing here draws a random number, keeps any state of its own (Consultation's tutor intent lives on the
  * tracker) or reads the library's order. The mana for two casts together, Oracle's and its emptier's or an emptier's and
@@ -250,10 +252,12 @@ public final class ComboExecute {
         return false;
     }
 
-    // whether a window of an executable line of emptier e is open now. unpaid: the emptier is still to be cast, so a
-    // following draw spell's mana comes on top of its own, its pips among it; false while it resolves (paid already).
-    // The board's own part of a window is read first, over the deck's lines, before any line's denial and signals: at
-    // most priority passes no winner of ours is in play and no trigger of ours is on the stack, and no window opens
+    // whether a window of a line of emptier e executable now (the view's executableNow) is open now. unpaid: the
+    // emptier is still to be cast, so a following draw spell's mana comes on top of its own, its pips among it; false
+    // while it resolves (paid already). The board's own part of a window is read first, over the deck's lines, before
+    // any line's denial and signals: at most priority passes no winner of ours is in play and no trigger of ours is on
+    // the stack, and no window opens. Each window opens now, so each reads the line's denial now: a Laboratory Maniac
+    // line denied at its own window, the opponent's end step, still opens the draw spell's window in our main phase
     private static boolean window(final Player ai, final ComboTracker.View v, final Emptier e, final SpellAbility sa,
             final boolean unpaid) {
         boolean staged = false;
@@ -266,7 +270,7 @@ public final class ComboExecute {
         if (!staged) {
             return false;
         }
-        for (final ComboLines.Line l : v.executable()) {
+        for (final ComboLines.Line l : v.executableNow()) {
             if (l.emptier() == e && staged(v, l.winner())
                     && (!drawsAfter(l.winner()) || drawFollows(ai, sa, unpaid))) {
                 return true;
