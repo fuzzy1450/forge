@@ -3,6 +3,7 @@ package forge.ai.combo;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -167,8 +168,20 @@ public final class ComboTracker {
         return List.copyOf(out);
     }
 
-    /** The live lines exactly one piece short ({@link #missing} names one), the ones a fetch may complete (section
-     *  6.3), ranked: the table's mana value ascending, a negative one last, then the variant id. */
+    /**
+     * The live lines exactly one piece short ({@link #missing} names one), the ones a fetch may complete (section
+     * 6.3), ranked nearest first:
+     * <ol>
+     * <li>the mana their pieces still to be cast cost now: the mana values of those in our hand, library or command
+     * zone (one on our battlefield or our stack is cast already). The table's mana value counts only the pieces
+     * Spellbook has cast in the combo, so it rates a line whose winner starts on the battlefield (Laboratory Maniac,
+     * Doctor Doom, Fblthp at one) as if that winner were in play already, below Thassa's Oracle's three;
+     * <li>a line Thassa's Oracle wins: it wins as its two casts resolve, where the others wait on a draw, an untapped
+     * turn or combat damage after them;
+     * <li>the table's mana value ascending, a negative one last;
+     * <li>the variant id.
+     * </ol>
+     */
     public List<ComboLines.Line> oneShort() {
         final List<ComboLines.Line> out = new ArrayList<>();
         for (final ComboLines.Line l : live()) {
@@ -176,8 +189,28 @@ public final class ComboTracker {
                 out.add(l);
             }
         }
-        out.sort(ComboTracker::byCost);
+        if (out.size() > 1) {
+            final Map<ComboLines.Line, Integer> cost = new IdentityHashMap<>();
+            for (final ComboLines.Line l : out) {
+                cost.put(l, costNow(l));
+            }
+            out.sort((a, b) -> rank(a, cost.get(a), b, cost.get(b)));
+        }
         return List.copyOf(out);
+    }
+
+    /** The mana the pieces of {@code l} still to be cast cost now: the mana values of those in our hand, library or
+     *  command zone. */
+    public int costNow(final ComboLines.Line l) {
+        int cost = 0;
+        for (final String name : l.names()) {
+            final Where w = where(name);
+            if (w == Where.HAND || w == Where.LIBRARY || w == Where.COMMAND) {
+                cost += find(name, w == Where.HAND ? ZoneType.Hand
+                        : w == Where.LIBRARY ? ZoneType.Library : ZoneType.Command).getCMC();
+            }
+        }
+        return cost;
     }
 
     /** Whether {@code c} is a piece of a live line (by {@link #nameOf}): held, never spent for value. */
@@ -234,8 +267,21 @@ public final class ComboTracker {
         return l.emptier() != ComboLines.Emptier.PACT || singletonLibrary();
     }
 
+    // oneShort's rank: the mana still to cast, then a Thassa's Oracle line first, then byTable
+    private static int rank(final ComboLines.Line a, final int costA, final ComboLines.Line b, final int costB) {
+        if (costA != costB) {
+            return Integer.compare(costA, costB);
+        }
+        final boolean oracleA = a.winner() == ComboLines.Winner.ORACLE;
+        final boolean oracleB = b.winner() == ComboLines.Winner.ORACLE;
+        if (oracleA != oracleB) {
+            return oracleA ? -1 : 1;
+        }
+        return byTable(a, b);
+    }
+
     // the table's mana value ascending, a negative one (none known) last, then the variant id
-    private static int byCost(final ComboLines.Line a, final ComboLines.Line b) {
+    private static int byTable(final ComboLines.Line a, final ComboLines.Line b) {
         final int ma = a.variant().manaValue() < 0 ? Integer.MAX_VALUE : a.variant().manaValue();
         final int mb = b.variant().manaValue() < 0 ? Integer.MAX_VALUE : b.variant().manaValue();
         if (ma != mb) {

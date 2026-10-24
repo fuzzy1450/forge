@@ -420,9 +420,10 @@ public class ComboConsultTutorAiTest extends AITest {
         lands("Island", "Island", "Swamp", "Swamp");
         library(FILLERS, ORACLE);
         final Card lab = addCardToZone(LAB, ai, ZoneType.Library);
-        assertEquals(ids(t.oneShort()), List.of("742-2836", "1295-3093"));
+        // both cost 4 still to cast (Pact 2 and Oracle 2, Consultation 1 and Lab 3): the Oracle line first
+        assertEquals(ids(t.oneShort()), List.of("1295-3093", "742-2836"));
 
-        // a tutor for the Pact line (the cheaper Lab line holds Consultation itself)
+        // a tutor for the Pact line (the Lab line holds Consultation itself)
         final SpellAbility sa = castOf(consultation);
         assertEquals(consider(sa), AiPlayDecision.WillPlay);
         assertEquals(t.takeConsultIntent(consultation.getId()), ORACLE);
@@ -458,20 +459,21 @@ public class ComboConsultTutorAiTest extends AITest {
 
     @Test
     public void theTutorTakesTheFirstLineByRank() {
-        // two Pact lines one short, Oracle's (mana value 4) listed first, Laboratory Maniac's (2) ranked first; a fifth
-        // land, so Lab's {2}{U} and Pact's {1}{B} leave its line no NO_MANA
-        start(ORACLE_PACT, LAB_PACT);
+        // two Pact lines one short, Laboratory Maniac's listed first (and first by the table's mana value, 2 against
+        // 4), Oracle's ranked first by the mana still to cast (Pact 2 and Oracle 2, against Pact 2 and Lab 3: final
+        // review, round 1); a fifth land, so Lab's {2}{U} and Pact's {1}{B} leave its line no NO_MANA
+        start(LAB_PACT, ORACLE_PACT);
         hand(PACT);
         final Card consultation = hand(CONSULTATION);
         lands("Island", "Island", "Swamp", "Swamp", "Swamp");
         library(FILLERS, ORACLE);
         addCardToZone(LAB, ai, ZoneType.Library);
-        assertEquals(ids(t.deckLines()), List.of("1295-3093", "2836-3093"));
-        assertEquals(ids(t.oneShort()), List.of("2836-3093", "1295-3093"));
+        assertEquals(ids(t.deckLines()), List.of("2836-3093", "1295-3093"));
+        assertEquals(ids(t.oneShort()), List.of("1295-3093", "2836-3093"));
 
         final SpellAbility sa = castOf(consultation);
         assertEquals(consider(sa), AiPlayDecision.WillPlay);
-        assertEquals(named(sa), LAB);
+        assertEquals(named(sa), ORACLE);
     }
 
     @Test

@@ -50,9 +50,6 @@ public class ComboFetchAiTest extends AITest {
     private static final String EXILE = "F|88|H|Exile your library";
     private static final String ORACLE_CONSULTATION = "V|742-1295|3|{U}{U}{B}|2,88|H:Demonic Consultation|H:Thassa's Oracle";
     private static final String LAB_CONSULTATION = "V|742-2836|1|{B}|2,88|H:Demonic Consultation|B:Laboratory Maniac";
-    // 742-1295 at mana value 1: it ties 742-2836 and ranks ahead of it on the lower id
-    private static final String CHEAP_ORACLE_CONSULTATION =
-            "V|742-1295|1|{U}{U}{B}|2,88|H:Demonic Consultation|H:Thassa's Oracle";
 
     private static final String ORACLE = "Thassa's Oracle";
     private static final String CONSULTATION = "Demonic Consultation";
@@ -533,29 +530,32 @@ public class ComboFetchAiTest extends AITest {
         final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Library);
         final Card lab = addCardToZone(LAB, ai, ZoneType.Library);
         final Card wurm = addCardToZone(WURM, ai, ZoneType.Library);
-        // two lines one piece short: Laboratory Maniac's (mana value 1) ranks ahead of Oracle's (3)
-        assertEquals(ids(t.oneShort()), List.of("742-2836", "742-1295"));
+        // two lines one piece short: Oracle's (Consultation's 1 and Oracle's 2 still to cast) ranks ahead of
+        // Laboratory Maniac's (1 and 3), whatever the table's mana values (final review, round 1)
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "742-2836"));
         final SpellAbility tutor = spell("Demonic Tutor");
         final SpellAbility impulse = spell("Impulse");
 
-        // both missing pieces offered, Oracle first: the first line's piece is the pick, not the first card
-        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(oracle, lab, wurm)), ai, ai),
-                lab);
-        assertSame(ComboFetch.digPick(ai, impulse, List.of(oracle, lab, wurm), ai), lab);
-        // the first line's piece not offered: the next line is served
-        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(wurm, oracle)), ai, ai),
+        // both missing pieces offered, Lab first: the first line's piece is the pick, not the first card
+        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(lab, oracle, wurm)), ai, ai),
                 oracle);
-        assertSame(ComboFetch.digPick(ai, impulse, List.of(wurm, oracle), ai), oracle);
+        assertSame(ComboFetch.digPick(ai, impulse, List.of(lab, oracle, wurm), ai), oracle);
+        // the first line's piece not offered: the next line is served
+        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(wurm, lab)), ai, ai),
+                lab);
+        assertSame(ComboFetch.digPick(ai, impulse, List.of(wurm, lab), ai), lab);
+        // the stock chooser itself, over the whole library, takes Thassa's Oracle
+        assertSame(pick(ZoneType.Hand, tutor), oracle);
     }
 
     @Test
     public void aBattlefieldFetchSkipsALineWhosePieceCannotStartThereForTheNextLine() {
-        start(CHEAP_ORACLE_CONSULTATION, LAB_CONSULTATION);
+        start(LAB_CONSULTATION, ORACLE_CONSULTATION);
         addCard("Swamp", ai);   // Laboratory Maniac (3) and Consultation (1) cost 4
         addCardToZone(CONSULTATION, ai, ZoneType.Hand);
         final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Library);
         final Card lab = addCardToZone(LAB, ai, ZoneType.Library);
-        // Oracle's line ranks first (both at 1, the lower id first), and its missing piece starts in hand only (H)
+        // Oracle's line ranks first (3 still to cast against Lab's 4), and its missing piece starts in hand only (H)
         assertEquals(ids(t.oneShort()), List.of("742-1295", "742-2836"));
         final List<Card> both = List.of(oracle, lab);
 

@@ -319,16 +319,53 @@ public class ComboSignalsTest extends AITest {
     }
 
     @Test
-    public void oneShortRanksByManaValue() {
-        start(ORACLE_CONSULTATION, LAB_CONSULTATION);
+    public void oneShortRanksByTheManaStillToCast() {
+        // final review, round 1: the table's mana values (742-2836 at 1, 742-1295 at 3) count Laboratory Maniac as in
+        // play already. From this board Oracle's line costs Consultation's 1 and Oracle's 2, Lab's Consultation's 1
+        // and Lab's 3: Oracle's is nearer
+        start(LAB_CONSULTATION, ORACLE_CONSULTATION);
         addCardToZone(CONSULTATION, ai, ZoneType.Hand);
         addCardToZone(ORACLE, ai, ZoneType.Library);
         addCardToZone(LAB, ai, ZoneType.Library);
         // Consultation's {B} and Laboratory Maniac's {2}{U}: the dearer line's 4
         lands("Island", "Island", "Swamp", "Island");
 
-        assertEquals(ids(t.deckLines()), List.of("742-1295", "742-2836"));
+        assertEquals(ids(t.deckLines()), List.of("742-2836", "742-1295"));
+        assertEquals(t.costNow(t.deckLines().get(0)), 4);
+        assertEquals(t.costNow(t.deckLines().get(1)), 3);
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "742-2836"));
+
+        // Laboratory Maniac in play instead, Oracle in hand and Consultation the missing piece of both: Lab's line costs
+        // only Consultation's 1 now, Oracle's 3, and the cheaper line leads whatever its winner
+        start(ORACLE_CONSULTATION, LAB_CONSULTATION);
+        addCard(LAB, ai);
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        manaForTheLine();
         assertEquals(ids(t.oneShort()), List.of("742-2836", "742-1295"));
+
+        // two battlefield winners, both at 1 in the table: Fblthp ({1}{U}) is cheaper to cast than Laboratory Maniac
+        // ({2}{U}), and leads although its id is the later
+        start(LAB_CONSULTATION, FBLTHP_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        addCardToZone(LAB, ai, ZoneType.Library);
+        addCardToZone(FBLTHP, ai, ZoneType.Library);
+        lands("Island", "Island", "Swamp", "Island");
+        assertEquals(ids(t.oneShort()), List.of("742-8266", "742-2836"));
+    }
+
+    @Test
+    public void anEqualCostGoesToTheOracleLine() {
+        // Yuriko's two lines: Fblthp, Impossibly Lost ({1}{U}) and Thassa's Oracle ({U}{U}) cost the same beside
+        // Consultation, and the table's mana value (742-8266 at 1) would put Fblthp first; but Oracle wins as its two
+        // casts resolve, where Fblthp's line waits on combat damage
+        start(FBLTHP_CONSULTATION, ORACLE_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        addCardToZone(ORACLE, ai, ZoneType.Library);
+        addCardToZone(FBLTHP, ai, ZoneType.Library);
+        manaForTheLine();
+        assertEquals(t.costNow(t.deckLines().get(0)), t.costNow(t.deckLines().get(1)));
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "742-8266"));
     }
 
     // ---- beyond the plan's thirteen ----

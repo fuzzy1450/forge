@@ -208,16 +208,17 @@ public class ComboPilesAiTest extends AITest {
     @Test
     public void intuitionAllCompleters() {
         completerBoard(true, OTHERS.size());
-        assertEquals(ids(t.oneShort()), List.of("742-2836", "x-1", "742-1295"));
+        // ranked by the mana still to cast beside Consultation's 1: Oracle 2, Laboratory Maniac 3, Doctor Doom 4
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "742-2836", "x-1"));
         final SpellAbility intuition = spell(INTUITION);
 
         final List<Card> pile = pile(intuition);
-        assertEquals(names(pile), List.of(LAB, DOOM, ORACLE));
+        assertEquals(names(pile), List.of(ORACLE, LAB, DOOM));
         for (final Card c : pile) {
             assertTrue(c.isInZone(ZoneType.Library), c + " is in the library");
             assertEquals(c.getOwner(), ai);
         }
-        assertEquals(ComboFetch.completers(ai), List.of(LAB, DOOM, ORACLE));
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE, LAB, DOOM));
     }
 
     @Test
@@ -261,26 +262,26 @@ public class ComboPilesAiTest extends AITest {
         completerBoard(false, OTHERS.size());
         fullHand();
         final SpellAbility gifts = spell(GIFTS);
-        assertEquals(ids(t.oneShort()), List.of("742-2836", "742-1295"));
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "742-2836"));
         // the stock floor refuses (no room in hand), and so does the combo
         assertFalse(assertStockParity(() -> SpecialCardAi.GiftsUngiven.worthSearching(ai, gifts), held));
         assertStockParity(() -> pick(gifts, new CardCollection(ai.getCardsIn(ZoneType.Library))), held);
-        assertEquals(ComboFetch.completers(ai), List.of(LAB, ORACLE));
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE, LAB));
         assertFalse(ComboFetch.giftsReady(ai));
 
         // three: Doctor Doom in the library too
         completerBoard(true, OTHERS.size());
         fullHand();
         final SpellAbility gifts3 = spell(GIFTS);
-        assertEquals(ids(t.oneShort()), List.of("742-2836", "x-1", "742-1295"));
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "742-2836", "x-1"));
         t.useLines(List.of());
         assertFalse(SpecialCardAi.GiftsUngiven.worthSearching(ai, gifts3), "the stock floor");
         t.useLines(held);
         assertTrue(SpecialCardAi.GiftsUngiven.worthSearching(ai, gifts3));
         final List<Card> picks = giftsPicks(gifts3);
-        assertEquals(names(picks.subList(0, 3)), List.of(LAB, DOOM, ORACLE));
+        assertEquals(names(picks.subList(0, 3)), List.of(ORACLE, LAB, DOOM));
         assertFalse(List.of(LAB, DOOM, ORACLE).contains(ComboTracker.nameOf(picks.get(3))));
-        assertEquals(ComboFetch.completers(ai), List.of(LAB, DOOM, ORACLE));
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE, LAB, DOOM));
         assertTrue(ComboFetch.giftsReady(ai));
     }
 
@@ -313,7 +314,7 @@ public class ComboPilesAiTest extends AITest {
             picks.add(c);
             fetchList.remove(c);
         }
-        assertEquals(names(picks), List.of(LAB, DOOM, ORACLE));
+        assertEquals(names(picks), List.of(ORACLE, LAB, DOOM));
     }
 
     @Test
@@ -374,15 +375,16 @@ public class ComboPilesAiTest extends AITest {
 
     @Test
     public void completersAreDistinctMissingNamesInRankOrder() {
-        // two lines missing Thassa's Oracle give one completer; ranks 742-2836 (1), 742-1295 (3), 1295-3093 (4)
+        // two lines missing Thassa's Oracle give one completer; ranked by the mana still to cast, 742-1295 (Consultation
+        // 1 and Oracle 2), then at 4 Pact's Oracle line ahead of Laboratory Maniac's (an Oracle line wins on its casts)
         start(PACT_ORACLE, ORACLE_CONSULTATION, LAB_CONSULTATION);
         addCardToZone(CONSULTATION, ai, ZoneType.Hand);
         addCardToZone(PACT, ai, ZoneType.Hand);
         library(ORACLE, LAB);
         library(OTHERS);
-        assertEquals(ids(t.oneShort()), List.of("742-2836", "742-1295", "1295-3093"));
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "1295-3093", "742-2836"));
 
-        assertEquals(ComboFetch.completers(ai), List.of(LAB, ORACLE));
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE, LAB));
         assertFalse(ComboFetch.giftsReady(ai));
     }
 
@@ -390,12 +392,12 @@ public class ComboPilesAiTest extends AITest {
     public void giftsTakesOnlyOurCompleters() {
         completerBoard(true, OTHERS.size());
         final SpellAbility gifts = spell(GIFTS);
-        // an opposing Laboratory Maniac first in the list is not ours to take
+        // an opposing Thassa's Oracle first in the list is not ours to take
         final CardCollection fetchList = new CardCollection();
-        fetchList.add(addCardToZone(LAB, opp, ZoneType.Library));
+        fetchList.add(addCardToZone(ORACLE, opp, ZoneType.Library));
         fetchList.addAll(ai.getCardsIn(ZoneType.Library));
 
-        assertSame(pick(gifts, fetchList), t.find(LAB, ZoneType.Library));
+        assertSame(pick(gifts, fetchList), t.find(ORACLE, ZoneType.Library));
     }
 
     @Test
@@ -447,26 +449,26 @@ public class ComboPilesAiTest extends AITest {
         // two completers make no all-completer pile, whose third card the opponent could hand back: the first is a
         // creature, so the pile is it and the two cheapest spells that are no piece
         completerBoard(false, OTHERS.size());
-        assertEquals(ids(t.oneShort()), List.of("742-2836", "742-1295"));
-        assertEquals(ComboFetch.completers(ai), List.of(LAB, ORACLE));
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "742-2836"));
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE, LAB));
 
         final List<Card> pile = pile(spell(INTUITION));
-        assertEquals(names(pile), List.of(LAB, "Counterspell", "Divination"));
-        assertSame(pile.get(0), t.find(LAB, ZoneType.Library));
+        assertEquals(names(pile), List.of(ORACLE, "Counterspell", "Divination"));
+        assertSame(pile.get(0), t.find(ORACLE, ZoneType.Library));
     }
 
     @Test
     public void intuitionWithFourCompletersTakesTheFirstThreeInRankOrder() {
-        // ranks 742-2836, 742-3096 and x-1 (all at one), then 742-1295 (three): Thassa's Oracle, the dearest line's
-        // piece, stays out of the pile
+        // ranked by the mana still to cast beside Consultation's 1: 742-1295 (Oracle 2), 742-2836 (Laboratory Maniac
+        // 3), then 742-3096 and x-1 by id (Jace and Doctor Doom, 4 each): Doctor Doom, the last, stays out of the pile
         start(ORACLE_CONSULTATION, LAB_CONSULTATION, JACE_CONSULTATION, DOOM_CONSULTATION);
         addCardToZone(CONSULTATION, ai, ZoneType.Hand);
         library(ORACLE, LAB, JACE, DOOM);
         library(OTHERS);
-        assertEquals(ids(t.oneShort()), List.of("742-2836", "742-3096", "x-1", "742-1295"));
-        assertEquals(ComboFetch.completers(ai), List.of(LAB, JACE, DOOM, ORACLE));
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "742-2836", "742-3096", "x-1"));
+        assertEquals(ComboFetch.completers(ai), List.of(ORACLE, LAB, JACE, DOOM));
 
-        assertEquals(names(pile(spell(INTUITION))), List.of(LAB, JACE, DOOM));
+        assertEquals(names(pile(spell(INTUITION))), List.of(ORACLE, LAB, JACE));
     }
 
     @Test
@@ -540,7 +542,7 @@ public class ComboPilesAiTest extends AITest {
         assertEquals(pick(gifts, new CardCollection(ai.getCardsIn(ZoneType.Library))).getName(), "Craw Wurm");
 
         t.useLines(held);
-        assertEquals(names(giftsPicks(gifts)), List.of(LAB, DOOM, ORACLE, "Craw Wurm"));
+        assertEquals(names(giftsPicks(gifts)), List.of(ORACLE, LAB, DOOM, "Craw Wurm"));
     }
 
     // ---- review round 2 ----
