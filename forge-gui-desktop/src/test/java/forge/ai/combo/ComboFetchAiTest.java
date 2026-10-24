@@ -799,6 +799,108 @@ public class ComboFetchAiTest extends AITest {
         // and Demonic Tutor resolving (its {1}{B} unpaid: the four lands stay open) puts it in our hand
         AbilityUtils.resolve(tutor);
         assertEquals(t.where(CONSULTATION), ComboTracker.Where.HAND);
+
+        // our Main 2 is our main phase too (F4 review): the same board after combat fetches the same way
+        final Card later = dangerBoard();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+        assertEquals(game.getPhaseHandler().getPhase(), PhaseType.MAIN2);
+        assertTrue(game.getPhaseHandler().isPlayerTurn(ai));
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility main2 = spell("Demonic Tutor");
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Hand, main2), later);
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertSame(pick(ZoneType.Hand, main2), later);
+    }
+
+    /** Line 742-2836 with Laboratory Maniac in play, the ten-name library, and Island, Island and Swamp open in our
+     *  Main 1, at 3 life against an opposing Colossal Dreadmaw (Lab chumps it, and its trample puts 4 through): DANGER
+     *  is the line's only signal and Consultation its one piece missing, so no line is one short. Returns the
+     *  library's Consultation. */
+    private Card labDangerBoard() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(t.where(LAB), ComboTracker.Where.BATTLEFIELD);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(CONSULTATION));
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEquals(t.oneShort(), List.of());
+        return t.find(CONSULTATION, ZoneType.Library);
+    }
+
+    @Test
+    public void dangerDoesNotRecountAPieceAlreadyInPlay() {
+        // beyond the plan's tests (F4 review): a piece on our battlefield is cast already, so the win this turn costs
+        // only Consultation's {B}, which Island, Island and Swamp pay; Laboratory Maniac's {2}{U} counted beside it
+        // would need four
+        final Card consultation = labDangerBoard();
+        final SpellAbility tutor = spell("Demonic Tutor");
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Hand, tutor), consultation);
+
+        t.useLines(lines(LAB_CONSULTATION));
+        assertSame(pick(ZoneType.Hand, tutor), consultation);
+    }
+
+    @Test
+    public void dangerSingleCostNeedsItsManaOpen() {
+        // beyond the plan's tests (F4 review): a line with one cost left still needs that cost's mana open now. The
+        // Swamp tapped: next turn's mana counts it (no NO_MANA), but nothing open now makes Consultation's {B}
+        labDangerBoard();
+        for (final Card land : ai.getLandsInPlay()) {
+            if ("Swamp".equals(land.getName())) {
+                land.setTapped(true);
+            }
+        }
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility tutor = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lines(LAB_CONSULTATION));
+    }
+
+    /** Our {@code name} cast: on our stack, nothing paid or resolved (ComboSignalsTest's castOnStack). */
+    private Card castOnStack(final String name) {
+        final Card card = createCard(name, ai);
+        card.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(card);
+        final SpellAbility sa = card.getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+        game.getStack().add(sa);
+        return card;
+    }
+
+    @Test
+    public void dangerDoesNotRecountAPieceOnOurStack() {
+        // beyond the plan's tests (F4 review): a piece on our stack is cast already too. Thassa's Oracle cast, its
+        // {U}{U} paid by the two Islands (tapped), and Consultation in the library at 3 life against the Dreadmaw: the
+        // win this turn costs only Consultation's {B}, which the Swamp pays; Oracle's {U}{U} counted beside it would
+        // not be open
+        start(ORACLE_CONSULTATION);
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        for (final Card land : ai.getLandsInPlay()) {
+            if ("Island".equals(land.getName())) {
+                land.setTapped(true);
+            }
+        }
+        castOnStack(ORACLE);
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(t.where(ORACLE), ComboTracker.Where.STACK);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(CONSULTATION));
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEquals(t.oneShort(), List.of());
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        final SpellAbility tutor = spell("Demonic Tutor");
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Hand, tutor), consultation);
+
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertSame(pick(ZoneType.Hand, tutor), consultation);
     }
 
     @Test
