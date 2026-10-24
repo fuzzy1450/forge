@@ -23,8 +23,10 @@ import forge.ai.ComputerUtil;
 import forge.ai.ComputerUtilAbility;
 import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
+import forge.ai.SpecialCardAi;
 import forge.ai.SpellApiToAi;
 import forge.ai.combo.ComboTracker.Where;
+import forge.card.MagicColor;
 import forge.game.Game;
 import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
@@ -687,5 +689,51 @@ public class ComboHoldAiTest extends AITest {
         assertEquals(ids(t.live()), List.of("742-1295"));
         assertEquals(pitchOne(force, fowAltSa, oracle, consultation), List.of(CONSULTATION));
         assertEquals(pitchOne(force, fowAltSa, consultation, oracle), List.of(ORACLE));
+    }
+
+    // ---- final review, round 1 ----
+
+    @Test
+    public void aDualLandPaysOnePipOfTheGoOff() {
+        // Island, Underground Sea and Sol Ring make four mana, two blue and one black when counted source by source
+        // (HonestMana); but Oracle's {U}{U} takes the Island and the Sea, and nothing is left for Consultation's {B}.
+        // Oracle waits, rather than come down into a trigger nothing answers
+        Card oracle = goOffBoard("Island", "Underground Sea", "Sol Ring");
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        final SpecialCardAi.HonestMana honest = SpecialCardAi.HonestMana.of(ai, castOf(oracle), true);
+        assertEquals(honest.total(), 4);
+        assertEquals(honest.colour(MagicColor.BLUE), 2);
+        assertEquals(honest.colour(MagicColor.BLACK), 1);
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+        assertNull(aiOf(ai).chooseSpellAbilityToPlay());
+
+        // Island, Underground Sea and Plains: the Sea is the second blue or the black, never both
+        oracle = goOffBoard("Island", "Underground Sea", "Plains");
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+
+        // two Islands and the Sea: the Islands pay the {U}{U}, the Sea the {B}
+        oracle = goOffBoard("Island", "Island", "Underground Sea");
+        assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
+    }
+
+    @Test
+    public void pactsGoOffNeedsItsBlackAfterOraclesBlue() {
+        // Oracle and Tainted Pact, {U}{U} and {1}{B}: Island, Underground Sea and Sol Ring make the four mana, with no
+        // black left once the Sea pays a {U}; a Swamp beside them pays the {B}, Sol Ring the {1}
+        start(PACT_ORACLE);
+        final Card oracle = hand(ORACLE);
+        hand(PACT);
+        library("Island");
+        lands("Island", "Underground Sea", "Sol Ring");
+        assertEquals(ids(t.live()), List.of("1295-3093"));
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+
+        lands("Swamp");
+        assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
     }
 }

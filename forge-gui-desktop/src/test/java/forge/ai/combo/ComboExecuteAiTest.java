@@ -1290,6 +1290,25 @@ public class ComboExecuteAiTest extends AITest {
     // ---- final review, round 1 ----
 
     @Test
+    public void theLabWindowsTwoCostsTakeOneSourceAPip() {
+        // Laboratory Maniac in play, Consultation and Opt in hand, our Main 1. Underground Sea and Sol Ring make three
+        // mana, a blue and a black among them when counted source by source, but the Sea pays Opt's {U} or
+        // Consultation's {B}, never both: no window, so Consultation does not exile the library with no draw to follow
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        hand(OPT);
+        lands("Underground Sea", "Sol Ring");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+
+        // an Island beside them pays Opt
+        lands("Island");
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    @Test
     public void imprisonedInTheMoonOnDoomClosesItsWindow() {
         // the opponent's Imprisoned in the Moon (Doom's mana value 4 meets its AttachAITgts cmcGE3) makes our untapped
         // Doctor Doom a colorless land with "{T}: Add {C}" alone, never summoning sick: no draw wins, so Consultation is

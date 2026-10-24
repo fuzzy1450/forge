@@ -9,7 +9,6 @@ import forge.ai.combo.ComboLines.Emptier;
 import forge.ai.combo.ComboLines.Winner;
 import forge.card.MagicColor;
 import forge.card.mana.ManaCost;
-import forge.card.mana.ManaCostShard;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.cost.Cost;
@@ -43,27 +42,27 @@ import forge.game.zone.ZoneType;
  * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
  *
  * <p>Nothing here draws a random number, keeps any state of its own (Consultation's tutor intent lives on the
- * tracker) or reads the library's order. Mana is read with
- * SpecialCardAi.HonestMana, whose known over-count is that one multicolour land counts toward each of its colours.
+ * tracker) or reads the library's order. The mana for two casts together, Oracle's and its emptier's or an emptier's and
+ * the draw spell after it, is read with {@link ComboMana}, which assigns each source to one pip: SpecialCardAi.HonestMana
+ * counts one multicolour source toward each of its colours, and would approve Oracle and Consultation on Island,
+ * Underground Sea and Sol Ring, where Oracle's {U}{U} takes the Sea and nothing is left for the {B}.
  */
 public final class ComboExecute {
-    /** Thassa's Oracle's mana value, {U}{U}: the first of the go-off's two casts. */
-    private static final int ORACLE_COST = 2;
-
     private ComboExecute() {
     }
 
     /**
      * Whether Thassa's Oracle goes off now (section 6.4): an {@link ComboTracker#executable} line whose winner is Oracle
-     * has its emptier in our hand, and the mana we can make now ({@code HonestMana.of(ai, oracleCast, true)}) pays for
-     * both, Oracle's two and the emptier's mana value, with two blue and one black among it.
+     * has its emptier in our hand, and the mana we can make now ({@code ComboMana.of(ai, oracleCast, true)}) pays
+     * Oracle's cost and the emptier's together, each source assigned to one pip: {U}{U} and Consultation's {B} or Pact's
+     * {1}{B}.
      */
     public static boolean goOffNow(final Player ai, final SpellAbility oracleCast) {
         final ComboTracker t = ComboTracker.of(ai);
         if (t == null || t.deckLines().isEmpty()) {
             return false;
         }
-        SpecialCardAi.HonestMana mana = null;
+        ComboMana mana = null;
         for (final ComboLines.Line l : t.executable()) {
             if (l.winner() != ComboLines.Winner.ORACLE) {
                 continue;
@@ -73,10 +72,9 @@ public final class ComboExecute {
                 continue;
             }
             if (mana == null) {
-                mana = SpecialCardAi.HonestMana.of(ai, oracleCast, true);
+                mana = ComboMana.of(ai, oracleCast, true);
             }
-            if (mana.total() >= ORACLE_COST + emptier.getCMC() && mana.colour(MagicColor.BLUE) >= 2
-                    && mana.colour(MagicColor.BLACK) >= 1) {
+            if (mana.pays(oracleCast.getHostCard().getManaCost(), emptier.getManaCost())) {
                 return true;
             }
         }
@@ -271,40 +269,28 @@ public final class ComboExecute {
 
     // a draw of ours follows the emptier: the opponent's end step with our turn next (our draw step), or a spell in our
     // hand that the AI casts right after the emptier on the emptied library (castsOwnDrawAfter) and that the mana pays
-    // together with the emptier still to be cast: their mana values together, and each colour's pips of the two
+    // together with the emptier still to be cast, each source assigned to one pip of the two costs (ComboMana):
+    // Consultation's or Pact's {B} beside Opt's {U} (Review Focus 4: two Swamps pay the two mana values, never Opt;
+    // Command Tower and Sol Ring make three mana, but one coloured)
     private static boolean drawFollows(final Player ai, final SpellAbility sa, final boolean unpaid) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         if (ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn())) {
             return true;
         }
-        final int emptierCost = unpaid ? sa.getHostCard().getCMC() : 0;
-        final ManaCost emptierPips = unpaid ? sa.getHostCard().getManaCost() : ManaCost.ZERO;
-        SpecialCardAi.HonestMana mana = null;
+        final ManaCost emptierCost = unpaid ? sa.getHostCard().getManaCost() : ManaCost.ZERO;
+        ComboMana mana = null;
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
             if (c.isLand() || !castsOwnDrawAfter(ai, ph, c)) {
                 continue;
             }
             if (mana == null) {
-                mana = SpecialCardAi.HonestMana.of(ai, sa, true);
+                mana = ComboMana.of(ai, sa, true);
             }
-            if (mana.total() >= emptierCost + c.getCMC() && coloursPay(mana, emptierPips, c.getManaCost())) {
+            if (mana.pays(emptierCost, c.getManaCost())) {
                 return true;
             }
         }
         return false;
-    }
-
-    // the mana holds each colour's pips of the two costs together: Consultation's or Pact's {B} beside Opt's {U}
-    // (Review Focus 4: two Swamps pay the two mana values, never Opt). A hybrid or Phyrexian pip counts toward the
-    // total only.
-    private static boolean coloursPay(final SpecialCardAi.HonestMana mana, final ManaCost a, final ManaCost b) {
-        for (final byte colour : MagicColor.WUBRG) {
-            final ManaCostShard pip = ManaCostShard.valueOf(colour);
-            if (mana.colour(colour) < a.getShardCount(pip) + b.getShardCount(pip)) {
-                return false;
-            }
-        }
-        return true;
     }
 
     // a spell of the card that the AI casts right after the emptier on the emptied library (Review Focus 4):
