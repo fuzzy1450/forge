@@ -587,6 +587,130 @@ public class ComboTrackerTest extends AITest {
         assertNull(t.nearest());
     }
 
+    @Test
+    public void nearestBreaksATieByTheOneShortRankInEitherSourceOrder() {
+        // both lines one short (Oracle in hand, Pact and Consultation in the library): Consultation's pieces still to
+        // cast cost 3 and Pact's 4, so Consultation's line is the nearest whether it comes first in the source or last
+        for (final boolean consultationFirst : new boolean[] {true, false}) {
+            final String order = "Consultation's line first in the source: " + consultationFirst;
+            final Game game = initAndCreateGame();
+            final Player ai = game.getPlayers().get(1);
+            final ComboTracker t = nearestBoard(ai, consultationFirst, ORACLE_CONSULTATION, List.of(ORACLE),
+                    List.of("Tainted Pact", CONSULTATION));
+            assertEquals(ids(t.live()), consultationFirst ? List.of("742-1295", "1295-3093")
+                    : List.of("1295-3093", "742-1295"), order);
+            assertEquals(t.missing(byId(t.live(), "742-1295")), List.of(CONSULTATION), order);
+            assertEquals(t.missing(byId(t.live(), "1295-3093")), List.of("Tainted Pact"), order);
+            assertEquals(ids(t.oneShort()), List.of("742-1295", "1295-3093"), order);
+            assertEquals(t.nearest().variant().id(), "742-1295", order);
+            assertSame(t.view().nearest(), t.nearest(), order);
+        }
+    }
+
+    @Test
+    public void nearestCountsTheMissingPiecesBeforeTheirCost() {
+        for (final boolean consultationFirst : new boolean[] {true, false}) {
+            final String order = "Consultation's line first in the source: " + consultationFirst;
+            // Oracle and Pact in hand, Consultation in the library: Pact's line misses nothing and costs 4 to cast,
+            // Consultation's misses one piece and costs 3; nothing missing is the nearer
+            Game game = initAndCreateGame();
+            Player ai = game.getPlayers().get(1);
+            ComboTracker t = nearestBoard(ai, consultationFirst, ORACLE_CONSULTATION, List.of(ORACLE, "Tainted Pact"),
+                    List.of(CONSULTATION));
+            assertEquals(t.missing(byId(t.live(), "1295-3093")), List.of(), order);
+            assertEquals(t.missing(byId(t.live(), "742-1295")), List.of(CONSULTATION), order);
+            assertEquals(t.costNow(byId(t.live(), "1295-3093")), 4, order);
+            assertEquals(t.costNow(byId(t.live(), "742-1295")), 3, order);
+            assertEquals(t.nearest().variant().id(), "1295-3093", "nothing missing beats one short; " + order);
+
+            // Pact in hand, Oracle and Consultation in the library: Consultation's line misses two pieces and costs 3,
+            // Pact's misses one and costs 4; one missing is the nearer
+            game = initAndCreateGame();
+            ai = game.getPlayers().get(1);
+            t = nearestBoard(ai, consultationFirst, ORACLE_CONSULTATION, List.of("Tainted Pact"),
+                    List.of(ORACLE, CONSULTATION));
+            assertEquals(t.missing(byId(t.live(), "742-1295")), List.of(CONSULTATION, ORACLE), order);
+            assertEquals(t.missing(byId(t.live(), "1295-3093")), List.of(ORACLE), order);
+            assertEquals(t.costNow(byId(t.live(), "742-1295")), 3, order);
+            assertEquals(t.costNow(byId(t.live(), "1295-3093")), 4, order);
+            assertEquals(t.nearest().variant().id(), "1295-3093", "one short beats two short; " + order);
+        }
+    }
+
+    @Test
+    public void nearestRanksATieByTheManaStillToCastNotTheTableValue() {
+        // the table rates Consultation's row 9, above Pact's 4; both lines one short (Oracle in hand, Pact and
+        // Consultation in the library), Consultation's pieces still to cast cost 3 and Pact's 4: the mana still to
+        // cast decides, so Consultation's line is the nearest in either source order
+        final String dearConsultation = "V|742-1295|9|{U}{U}{B}|2,88|H:Demonic Consultation|H:Thassa's Oracle";
+        for (final boolean consultationFirst : new boolean[] {true, false}) {
+            final String order = "Consultation's line first in the source: " + consultationFirst;
+            final Game game = initAndCreateGame();
+            final Player ai = game.getPlayers().get(1);
+            final ComboTracker t = nearestBoard(ai, consultationFirst, dearConsultation, List.of(ORACLE),
+                    List.of("Tainted Pact", CONSULTATION));
+            final ComboLines.Line consultationLine = byId(t.live(), "742-1295");
+            final ComboLines.Line pactLine = byId(t.live(), "1295-3093");
+            assertEquals(consultationLine.variant().manaValue(), 9, order);
+            assertEquals(pactLine.variant().manaValue(), 4, order);
+            assertEquals(t.costNow(consultationLine), 3, order);
+            assertEquals(t.costNow(pactLine), 4, order);
+            assertEquals(ids(t.oneShort()), List.of("742-1295", "1295-3093"), order);
+            assertSame(t.nearest(), consultationLine, order);
+        }
+    }
+
+    @Test
+    public void nearestReadsOnlyTheLiveLines() {
+        // no lands: the NO_MANA signal abandons Consultation's line, which may still be executed (no mana never stops
+        // a win now), so it is executable but not live, and no line is the nearest live combo
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        final ComboTracker t = aiOf(ai).getComboTracker();
+        t.useLines(lines(ORACLE_CONSULTATION));
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        for (final String name : NAMES) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.NO_MANA);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertEquals(t.live(), List.of());
+        assertNull(t.nearest());
+        assertNull(t.view().nearest());
+    }
+
+    /** {@code ai}'s tracker reading {@code consultationRow} and {@link #ORACLE_PACT}, Consultation's row first when
+     *  {@code consultationFirst}, with two Islands and two Swamps on our battlefield, {@code hand} in our hand and
+     *  {@code library} then the ten {@link #NAMES} in our library (a singleton library, as Pact's line needs). */
+    private ComboTracker nearestBoard(final Player ai, final boolean consultationFirst, final String consultationRow,
+            final List<String> hand, final List<String> library) {
+        final ComboTracker t = aiOf(ai).getComboTracker();
+        t.useLines(consultationFirst ? lines(consultationRow, ORACLE_PACT) : lines(ORACLE_PACT, consultationRow));
+        for (final String land : List.of("Island", "Island", "Swamp", "Swamp")) {
+            addCard(land, ai);
+        }
+        for (final String name : hand) {
+            addCardToZone(name, ai, ZoneType.Hand);
+        }
+        for (final String name : library) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        for (final String name : NAMES) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        return t;
+    }
+
+    private static ComboLines.Line byId(final List<ComboLines.Line> lines, final String id) {
+        for (final ComboLines.Line l : lines) {
+            if (l.variant().id().equals(id)) {
+                return l;
+            }
+        }
+        throw new AssertionError("no line " + id + " in " + ids(lines));
+    }
+
     private static CardCollection library(final Player p) {
         return new CardCollection(p.getCardsIn(ZoneType.Library));
     }
