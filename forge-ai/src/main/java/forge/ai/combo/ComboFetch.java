@@ -232,10 +232,15 @@ public final class ComboFetch {
 
     /**
      * Demonic Consultation as a tutor (section 6.3; ComboExecute.consultation, after every winner window), or null for
-     * the stock refusal: our own hand cast, a library of at least {@link #CONSULT_TUTOR_MIN_LIBRARY} cards, and a
-     * {@link ComboTracker#oneShort} line, by rank, that does not name Consultation (cast as a tutor, it is no emptier
-     * of that line) and whose missing piece is in our library. WillPlay(100), with that piece recorded as the cast's
-     * intent for its resolution's namer ({@link #consultNamed}).
+     * the stock refusal: our own hand cast, a library of at least {@link #CONSULT_TUTOR_MIN_LIBRARY} cards, no
+     * {@link ComboTracker#live} line already assembled (none of its pieces left in our library: holding and execution
+     * run it, and a tutor would spend a piece of it, Consultation itself, or the mana of its go-off, as in our upkeep
+     * ahead of a Main 1 Oracle), a {@link ComboTracker#oneShort} line, by rank, that does not name Consultation (cast
+     * as a tutor, it is no emptier of that line) and whose missing piece is in our library, and Consultation's own cast
+     * paid now (SpecialCardAi.CommanderCastCeiling.affordable, G1: the test-mode cost against HonestMana, in total and
+     * in each colour). An approval the mana cannot pay would go on to canPayCost's test payment, whose
+     * isManaSourceReserved rolls draw MyRandom at every priority with no cast, where the stock refusal draws nothing.
+     * WillPlay(100), with that piece recorded as the cast's intent for its resolution's namer ({@link #consultNamed}).
      */
     public static AiAbilityDecision consultTutor(final Player ai, final SpellAbility sa) {
         if (!ComboExecute.ownHandCast(ai, sa, ComboLines.Emptier.CONSULTATION)) {
@@ -246,12 +251,20 @@ public final class ComboFetch {
                 || ai.getCardsIn(ZoneType.Library).size() < CONSULT_TUTOR_MIN_LIBRARY) {
             return null;
         }
+        for (final ComboLines.Line l : t.live()) {
+            if (t.missing(l).isEmpty()) {
+                return null;
+            }
+        }
         for (final ComboLines.Line l : t.oneShort()) {
             if (l.names().contains(ComboLines.Emptier.CONSULTATION.card)) {
                 continue;
             }
             final String name = t.missing(l).get(0);
             if (t.find(name, ZoneType.Library) != null) {
+                if (!SpecialCardAi.CommanderCastCeiling.affordable(ai, sa)) {
+                    return null;
+                }
                 t.setConsultIntent(sa.getHostCard().getId(), name);
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
             }

@@ -6,6 +6,7 @@ import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -42,7 +43,8 @@ import forge.util.MyRandom;
 /**
  * Demonic Consultation as a tutor (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): cast from our hand for
  * a line one piece short that does not hold Consultation itself, whose missing piece is in a library of at least
- * {@link ComboFetch#CONSULT_TUTOR_MIN_LIBRARY} cards, its resolution names that piece; the namer re-checks the intent
+ * {@link ComboFetch#CONSULT_TUTOR_MIN_LIBRARY} cards, while no live line is assembled already and our mana pays
+ * Consultation now, its resolution names that piece; the namer re-checks the intent
  * there, and names a card absent from our library (the stock namer, the emptier's) once our Thassa's Oracle or Fblthp
  * trigger is on the stack or the piece has left the library. Unless a test says otherwise the AI plays the Default
  * profile in its own MAIN1, with Tainted Pact and Demonic Consultation in hand, Island, Island, Swamp and Swamp in
@@ -551,5 +553,170 @@ public class ComboConsultTutorAiTest extends AITest {
         assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
         assertTrue(ai.getCardsIn(ZoneType.Hand).isEmpty(), "a card was kept: " + ai.getCardsIn(ZoneType.Hand));
         assertEquals(ai.getCardsIn(ZoneType.Exile).size(), FILLERS);
+    }
+
+    // ---- review round 1 ----
+
+    /** The cast entry the playable list uses (AiController.canPlayAndPayFor, private): canPlayFromHost, then
+     *  canPlayAndPayForFace, whose canPayCost test payment draws MyRandom per source it tries. */
+    private AiPlayDecision canPlayAndPayFor(final SpellAbility sa) {
+        try {
+            final Method m = AiController.class.getDeclaredMethod("canPlayAndPayFor", SpellAbility.class);
+            m.setAccessible(true);
+            return (AiPlayDecision) m.invoke(aiOf(ai), sa);
+        } catch (final ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    /** Lines 1295-3093 and 742-1295, Thassa's Oracle and Demonic Consultation in hand, Island, Island and Swamp in
+     *  play, Tainted Pact among the 80 fillers and a Swamp below them (a land left to play, as a deck's library holds:
+     *  Oracle's two and Pact's two fit next turn's four); returns Consultation. */
+    private Card assembledBoard() {
+        start(ORACLE_PACT, ORACLE_CONSULTATION);
+        hand(ORACLE);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        library(FILLERS, PACT);
+        addCardToZone("Swamp", ai, ZoneType.Library);
+        assertTrue(t.singletonLibrary());
+        assertEquals(ids(t.live()), List.of("1295-3093", "742-1295"));
+        assertEquals(t.missing(t.live().get(1)), List.of(), "Oracle and Consultation are both in hand");
+        assertEquals(ids(t.oneShort()), List.of("1295-3093"));
+        assertEquals(t.missing(t.oneShort().get(0)), List.of(PACT));
+        return consultation;
+    }
+
+    @Test
+    public void anAssembledLineSpendsNoConsultation() {
+        // in our upkeep, long before the Main 1 go-off: Consultation tutoring Pact would spend 742-1295's emptier
+        final Card consultation = assembledBoard();
+        game.getPhaseHandler().devModeSet(PhaseType.UPKEEP, ai);
+        final SpellAbility sa = castOf(consultation);
+        assertEquals(consider(sa), AiPlayDecision.CantPlayAi);
+        assertEquals(named(sa), stockName(), "an intent was recorded");
+
+        // the same board without the assembled line: Consultation tutors Pact (theMissingEmptierIsNamedToo)
+        t.useLines(lines(ORACLE_PACT));
+        assertEquals(consider(sa), AiPlayDecision.WillPlay);
+        assertEquals(named(sa), PACT);
+    }
+
+    @Test
+    public void anAssembledLineOfTheOtherEmptierSpendsNoConsultation() {
+        // Oracle and Pact in hand (1295-3093 assembled, its four on four lands), Laboratory Maniac in the library
+        // (2836-3093 one short): the {B} a tutor spends in our upkeep is the Main 1 go-off's
+        start(ORACLE_PACT, LAB_PACT);
+        hand(ORACLE);
+        hand(PACT);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp", "Swamp");
+        library(FILLERS, LAB);
+        addCardToZone("Swamp", ai, ZoneType.Library);
+        assertTrue(t.singletonLibrary());
+        assertEquals(ids(t.live()), List.of("1295-3093", "2836-3093"));
+        assertEquals(t.missing(t.live().get(0)), List.of());
+        assertEquals(ids(t.oneShort()), List.of("2836-3093"));
+        assertEquals(t.missing(t.oneShort().get(0)), List.of(LAB));
+
+        game.getPhaseHandler().devModeSet(PhaseType.UPKEEP, ai);
+        final SpellAbility sa = castOf(consultation);
+        assertEquals(consider(sa), AiPlayDecision.CantPlayAi);
+        assertEquals(named(sa), stockName(), "an intent was recorded");
+
+        // without the assembled line: Consultation tutors Laboratory Maniac
+        t.useLines(lines(LAB_PACT));
+        assertEquals(consider(sa), AiPlayDecision.WillPlay);
+        assertEquals(named(sa), LAB);
+    }
+
+    @Test
+    public void aDeniedAssembledLineLeavesTheTutor() {
+        // the assembled line must be live: Torpor Orb stops Oracle's trigger, so 742-1295 is dead (section 6.5: its
+        // pieces are ordinary cards) and Consultation may tutor Laboratory Maniac for 2836-3093
+        start(ORACLE_CONSULTATION, LAB_PACT);
+        hand(ORACLE);
+        hand(PACT);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp", "Swamp", "Swamp");
+        library(FILLERS, LAB);
+        addCard("Torpor Orb", opp);
+        final ComboLines.Line assembled = t.deckLines().get(0);
+        assertEquals(assembled.variant().id(), "742-1295");
+        assertEquals(t.missing(assembled), List.of());
+        assertEquals(ComboSignals.abandon(ai, assembled, t), ComboSignals.Signal.DENIED);
+        assertEquals(ids(t.live()), List.of("2836-3093"));
+        assertEquals(ids(t.oneShort()), List.of("2836-3093"));
+
+        final SpellAbility sa = castOf(consultation);
+        assertEquals(consider(sa), AiPlayDecision.WillPlay);
+        assertEquals(named(sa), LAB);
+    }
+
+    @Test
+    public void anAssembledLineGoesOffFromUpkeep() {
+        // end to end from our upkeep: Consultation waits for Oracle's trigger, and Oracle and Consultation win on
+        // Island, Island and Swamp this turn (a tutor in the upkeep would leave two Islands for Oracle and Pact's four)
+        assembledBoard();
+        game.getPhaseHandler().devModeSet(PhaseType.UPKEEP, ai);
+        game.getPhaseHandler().onStackResolved();
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertTrue(game.isGameOver(), "the game went on: " + gameStateToString(game));
+        assertTrue(ai.hasWon());
+        assertEquals(game.getOutcome().getWinCondition(), GameEndReason.WinsGameSpellEffect);
+        final PhaseHandler ph = game.getPhaseHandler();
+        assertEquals(ph.getPlayerTurn(), ai);
+        assertTrue(ph.getPhase().isBefore(PhaseType.END_OF_TURN), "won at " + ph.getPhase());
+        // Consultation exiled the whole library for the trigger: Pact was never fetched
+        assertNotNull(t.find(ORACLE, ZoneType.Battlefield));
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+        assertEquals(ai.getCardsIn(ZoneType.Exile).size(), FILLERS + 2);
+        assertNotNull(t.find(PACT, ZoneType.Exile));
+    }
+
+    @Test
+    public void noBlackForConsultationIsNoTutor() {
+        // four Islands: the line is live (Oracle's two and Pact's two on four lands) but nothing makes Consultation's
+        // {B}, so no tutor is approved, and the cast's canPayCost test payment never runs
+        start(ORACLE_PACT);
+        hand(PACT);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Island", "Island");
+        library(FILLERS, ORACLE);
+        assertEquals(ids(t.oneShort()), List.of("1295-3093"));
+
+        final SpellAbility sa = castOf(consultation);
+        assertEquals(consider(sa), AiPlayDecision.CantPlayAi);
+        assertEquals(named(sa), stockName(), "an intent was recorded");
+        // the whole cast: the stock answer and the stock draws (none of canPayCost's isManaSourceReserved rolls)
+        assertEquals(assertStockParity(() -> canPlayAndPayFor(castOf(consultation)), lines(ORACLE_PACT)),
+                AiPlayDecision.CantPlayAi);
+    }
+
+    @Test
+    public void tappedSwampsAreNoBlack() {
+        // Island, Island, Swamp and Swamp, the Swamps tapped: next turn's mana counts them, so the line is live, but
+        // their black is spent now
+        start(ORACLE_PACT);
+        hand(PACT);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island");
+        final Card swamp = addCard("Swamp", ai);
+        addCard("Swamp", ai).setTapped(true);
+        swamp.setTapped(true);
+        library(FILLERS, ORACLE);
+        assertEquals(ids(t.oneShort()), List.of("1295-3093"));
+
+        final SpellAbility sa = castOf(consultation);
+        assertEquals(consider(sa), AiPlayDecision.CantPlayAi);
+        assertEquals(named(sa), stockName(), "an intent was recorded");
+        assertEquals(assertStockParity(() -> canPlayAndPayFor(castOf(consultation)), lines(ORACLE_PACT)),
+                AiPlayDecision.CantPlayAi);
+
+        // one Swamp untapped pays it: the tutor is approved, and the cast goes on to be paid
+        swamp.setTapped(false);
+        assertEquals(consider(sa), AiPlayDecision.WillPlay);
+        assertEquals(named(sa), ORACLE);
+        assertEquals(canPlayAndPayFor(castOf(consultation)), AiPlayDecision.WillPlay);
     }
 }
