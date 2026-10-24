@@ -4,9 +4,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import com.google.common.collect.ImmutableSet;
 
 import forge.ai.PlayerControllerAi;
 import forge.deck.CardPool;
@@ -15,6 +18,7 @@ import forge.deck.DeckSection;
 import forge.game.card.Card;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.zone.Zone;
 import forge.game.zone.ZoneType;
 import forge.item.IPaperCard;
 import forge.item.PaperCard;
@@ -25,12 +29,13 @@ import forge.item.PaperCard;
  * share nothing through it.
  *
  * <p>Lazy: the constructor reads nothing, because it runs before the player is registered with its game, and
- * GameCopier copies and mind-slave controllers get fresh trackers with no game-start hook. The first query matches the
- * deck against the lines and keeps the result; every other query reads our zones at that moment, since tests'
- * {@code addCardToZone} and the engine's moves change zones without any event this could follow. A decision reads
- * through one {@link View}, which reads each thing once for all its questions and is dropped with the decision. The
- * one other state kept is Demonic Consultation's tutor intent, from its cast decision to its resolution's namer
- * (section 6.3). Nothing here draws a random number or reads the library's order.
+ * GameCopier copies and mind-slave controllers get fresh trackers with no game-start hook (a mind-slave controller's is
+ * never asked: {@link #of} answers null while another player controls ours). The first query matches the deck against
+ * the lines and keeps the result, published as one immutable object; every other query reads our zones at that
+ * moment, since tests' {@code addCardToZone} and the engine's moves change zones without any event this could follow.
+ * A decision reads through one {@link View}, which reads each thing once for all its questions and is dropped with the
+ * decision. The one other state kept is Demonic Consultation's tutor intent, from its cast decision to its
+ * resolution's namer (section 6.3). Nothing here draws a random number or reads the library's order.
  */
 public final class ComboTracker {
     /** Where a piece is, read in this order: the first place that holds it wins. GONE is anywhere else, the graveyard
@@ -39,9 +44,10 @@ public final class ComboTracker {
 
     private final Player ai;
     private List<ComboLines.Line> source;
-    // the match, null until the first query: the lines the deck holds, and their names, the set read by lookups only
-    private List<ComboLines.Line> deckLines;
-    private Set<String> pieces;
+    // the match, null until the first query: the lines the deck holds and their names, made together and published
+    // in this one field as one immutable object, so no reader (an AI evaluation thread running on past its timeout
+    // included) sees the lines without their names; each reader reads the field once
+    private volatile Match match;
     // Demonic Consultation's tutor intents (section 6.3), by the id of the Consultation card cast: the piece its cast
     // was approved to fetch, recorded at the cast decision and taken by its resolution's namer; read by lookups only
     private final Map<Integer, String> consultIntents = new HashMap<>();
@@ -52,9 +58,12 @@ public final class ComboTracker {
         this.source = List.copyOf(source);
     }
 
-    /** The tracker of the AI deciding for {@code p}, or null when {@code p}'s controller is not a PlayerControllerAi. */
+    /** The tracker of the AI deciding for {@code p}, or null when {@code p}'s controller is not a PlayerControllerAi, or
+     *  while another player controls {@code p} ({@link Player#isControlled}: Opposition Agent while we search, a
+     *  mind-slave turn), whose controller is a fresh one made for that master: its tracker would read our deck's lines
+     *  and fetch our missing piece for the player who controls us. */
     public static ComboTracker of(final Player p) {
-        if (p == null || !(p.getController() instanceof PlayerControllerAi)) {
+        if (p == null || p.isControlled() || !(p.getController() instanceof PlayerControllerAi)) {
             return null;
         }
         return ((PlayerControllerAi) p.getController()).getAi().getComboTracker();
@@ -70,24 +79,19 @@ public final class ComboTracker {
     /** Tests only: these lines instead, matched afresh at the next query. */
     public void useLines(final List<ComboLines.Line> source) {
         this.source = List.copyOf(source);
-        deckLines = null;
-        pieces = null;
+        match = null;
     }
 
     /** The lines whose both names the deck holds, in the source's order: matched at the first query, then kept. The
      *  deck is the registered deck's main section plus its commander; when that is empty, or the player is not
      *  registered, the names of every card the player has (AiDeckStatistics.fromPlayer's fallback). */
     public List<ComboLines.Line> deckLines() {
-        if (deckLines == null) {
-            match();
-        }
-        return deckLines;
+        return matched().lines();
     }
 
     /** Whether {@code name} is a card of one of the deck's lines. */
     public boolean isPiece(final String name) {
-        deckLines();
-        return pieces.contains(name);
+        return matched().pieces().contains(name);
     }
 
     /** Where our card {@code name} is: our battlefield (what we control, whoever owns it), our hand, our command zone,
@@ -169,9 +173,21 @@ public final class ComboTracker {
         return view().costNow(l);
     }
 
-    /** Whether {@code c} is a piece of a live line (by {@link #nameOf}): held, never spent for value. */
+    /** Whether {@code c} is a card we own, in our hand, library or command zone or on our battlefield, that is a piece
+     *  of a live line (by {@link #nameOf}): held, never spent for value. An opponent's card of the same name, ours in
+     *  their control, and ours on the stack, in the graveyard or in exile are not. */
     public boolean protects(final Card c) {
         return view().protects(c);
+    }
+
+    /**
+     * The nearest live combo (spec section 6.2, the seam of section 6.6): the {@link #live} line with the fewest
+     * pieces {@link #missing}, ties going by {@link #oneShort}'s ranking (the mana its pieces still to be cast cost
+     * now, a Thassa's Oracle line, the table's mana value, the variant id), then the first in {@link #live} order;
+     * null when no line is live.
+     */
+    public ComboLines.Line nearest() {
+        return view().nearest();
     }
 
     /** A reading of this tracker for one decision ({@link View}). */
@@ -251,20 +267,35 @@ public final class ComboTracker {
         return null;
     }
 
-    private void match() {
+    // the match, made at the first query and kept: read into a local once, so a reader never mixes two matches
+    private Match matched() {
+        Match m = match;
+        if (m == null) {
+            m = matchNow();
+            match = m;
+        }
+        return m;
+    }
+
+    private Match matchNow() {
         final List<ComboLines.Line> held = new ArrayList<>();
-        final Set<String> names = new HashSet<>();
-        if (!source.isEmpty()) {
+        final Set<String> names = new LinkedHashSet<>();
+        final List<ComboLines.Line> from = source;
+        if (!from.isEmpty()) {
             final Set<String> deck = deckNames();
-            for (final ComboLines.Line l : source) {
+            for (final ComboLines.Line l : from) {
                 if (deck.containsAll(l.names())) {
                     held.add(l);
                     names.addAll(l.names());
                 }
             }
         }
-        deckLines = List.copyOf(held);
-        pieces = names;
+        return new Match(List.copyOf(held), ImmutableSet.copyOf(names));
+    }
+
+    /** The deck's match: the lines it holds ({@link #deckLines}) and their pieces' names (read by lookups only), made
+     *  together and immutable, so one reference publishes both. */
+    private record Match(List<ComboLines.Line> lines, Set<String> pieces) {
     }
 
     private Set<String> deckNames() {
@@ -323,7 +354,10 @@ public final class ComboTracker {
      * kept across a game action; nothing in it is static.
      */
     public final class View {
-        private final List<ComboLines.Line> lines = deckLines();
+        // the match, read once: this view's lines and piece names come from the one published object
+        private final Match deck = matched();
+        private final List<ComboLines.Line> lines = deck.lines();
+        private final Set<String> pieces = deck.pieces();
         // the first card of each piece name (by nameOf, in the zone's order) in each of our zones and among the hosts
         // of our stack items, and the piece names with a trigger of ours on the stack; read together, at the first
         // place lookup
@@ -507,10 +541,29 @@ public final class ComboTracker {
             return oneShort;
         }
 
+        /** {@link ComboTracker#nearest}: the first live line with the fewest missing pieces, ties by
+         *  {@link #oneShort}'s rank. */
+        public ComboLines.Line nearest() {
+            ComboLines.Line best = null;
+            int bestMissing = 0;
+            int bestCost = 0;
+            for (final ComboLines.Line l : live()) {
+                final int missing = missing(l).size();
+                final int cost = costNow(l);
+                if (best == null || missing < bestMissing
+                        || (missing == bestMissing && rank(l, cost, best, bestCost) < 0)) {
+                    best = l;
+                    bestMissing = missing;
+                    bestCost = cost;
+                }
+            }
+            return best;
+        }
+
         /** {@link ComboTracker#protects}. */
         public boolean protects(final Card c) {
             final String name = nameOf(c);
-            if (!pieces.contains(name)) {
+            if (!pieces.contains(name) || !ownedInOurZone(c)) {
                 return false;
             }
             for (final ComboLines.Line l : live()) {
@@ -519,6 +572,14 @@ public final class ComboTracker {
                 }
             }
             return false;
+        }
+
+        // c is a card we own, in our hand, library or command zone or on our battlefield (so one we control)
+        private boolean ownedInOurZone(final Card c) {
+            final Zone zone = c.getZone();
+            return ai.equals(c.getOwner()) && zone != null && (zone.is(ZoneType.Hand, ai)
+                    || zone.is(ZoneType.Library, ai) || zone.is(ZoneType.Command, ai)
+                    || zone.is(ZoneType.Battlefield, ai));
         }
 
         /** A line's standing prerequisites (kept for a deck line): no piece gone; Thassa's Oracle in play wins only

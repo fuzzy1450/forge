@@ -12,6 +12,7 @@ import static org.testng.Assert.expectThrows;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
 import java.util.stream.Collectors;
 
 import org.testng.annotations.Test;
@@ -20,6 +21,7 @@ import forge.ai.AITest;
 import forge.ai.AiController;
 import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
+import forge.ai.ability.ChangeZoneAi;
 import forge.ai.combo.ComboTracker.Where;
 import forge.card.CardStateName;
 import forge.deck.Deck;
@@ -27,6 +29,7 @@ import forge.deck.DeckSection;
 import forge.game.Game;
 import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
+import forge.game.card.CardCollection;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
@@ -436,6 +439,156 @@ public class ComboTrackerTest extends AITest {
         final Player bare = new Player("bare", game, 97);
         assertNull(bare.getController());
         assertNull(ComboTracker.of(bare));
+    }
+
+    // ---- follow-up F1 (tracker scope and safety) ----
+
+    @Test
+    public void ofIsNullForAControlledPlayer() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        final Player opp = game.getPlayers().get(0);
+        final ComboTracker ours = aiOf(ai).getComboTracker();
+        ours.useLines(lines(ORACLE_CONSULTATION));
+        for (final String land : List.of("Island", "Island", "Swamp")) {
+            addCard(land, ai);
+        }
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        final Card consultation = addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        for (final String name : NAMES) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        final SpellAbility tutor = addCardToZone("Demonic Tutor", ai, ZoneType.Hand).getFirstSpellAbility();
+        tutor.setActivatingPlayer(ai);
+        assertSame(ComboTracker.of(ai), ours);
+        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, library(ai), ai, ai), consultation);
+
+        // Opposition Agent's search as ChangeZoneEffect runs it (the searcher's addController, with the Agent's
+        // controller as the master), as a mind-slave turn does: a fresh PlayerControllerAi decides for us, whose own
+        // tracker reads our deck and would chase our line for the master, whose Agent exiles what we find
+        final long timestamp = game.getNextTimestamp();
+        ai.addController(timestamp, opp);
+        assertTrue(ai.isControlled());
+        assertSame(ai.getControllingPlayer(), opp);
+        assertTrue(ai.getController() instanceof PlayerControllerAi);
+        final ComboTracker fresh = aiOf(ai).getComboTracker();
+        assertNotSame(fresh, ours);
+
+        // the chooser makes the stock pick with the stock draws, whatever lines the master's fresh tracker holds
+        fresh.useLines(List.of());
+        MyRandom.setRandom(new Random(7));
+        long before = MyRandom.callCount();
+        final Card stock = ChangeZoneAi.chooseCardToHiddenOriginChangeZone(ZoneType.Hand,
+                List.of(ZoneType.Library), tutor, library(ai), ai, ai);
+        final long stockDraws = MyRandom.callCount() - before;
+        assertNotSame(stock, consultation, "the stock pick is the piece itself: this board tells nothing");
+        fresh.useLines(lines(ORACLE_CONSULTATION));
+        MyRandom.setRandom(new Random(7));
+        before = MyRandom.callCount();
+        assertSame(ChangeZoneAi.chooseCardToHiddenOriginChangeZone(ZoneType.Hand, List.of(ZoneType.Library), tutor,
+                library(ai), ai, ai), stock, "the answer moved");
+        assertEquals(MyRandom.callCount() - before, stockDraws, "the draws moved");
+
+        assertNull(ComboTracker.of(ai));
+        assertNull(ComboFetch.searchPick(tutor, ZoneType.Hand, library(ai), ai, ai));
+
+        // control ends: our own tracker answers again
+        ai.removeController(timestamp);
+        assertFalse(ai.isControlled());
+        assertSame(ComboTracker.of(ai), ours);
+        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, library(ai), ai, ai), consultation);
+    }
+
+    @Test
+    public void protectsOnlyOurOwnCards() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        final Player opp = game.getPlayers().get(0);
+        final ComboTracker t = aiOf(ai).getComboTracker();
+        t.useLines(lines(ORACLE_CONSULTATION, LAB_CONSULTATION));
+        for (final String land : List.of("Island", "Island", "Swamp", "Swamp")) {
+            addCard(land, ai);
+        }
+        final Card ours = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        final Card consultation = addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        final Card ownLab = addCard(LAB, ai);
+        final Card theirs = addCardToZone(ORACLE, opp, ZoneType.Hand);
+        // a Laboratory Maniac the opponent owns that we control (stolen), and a Thassa's Oracle we own that they
+        // control, each on its controller's battlefield
+        final Card stolen = createCard(LAB, opp);
+        stolen.setGameTimestamp(game.getNextTimestamp());
+        stolen.setController(ai, game.getNextTimestamp());
+        ai.getZone(ZoneType.Battlefield).add(stolen);
+        final Card lent = createCard(ORACLE, ai);
+        lent.setGameTimestamp(game.getNextTimestamp());
+        lent.setController(opp, game.getNextTimestamp());
+        opp.getZone(ZoneType.Battlefield).add(lent);
+        final Card buried = addCardToZone(ORACLE, ai, ZoneType.Graveyard);
+        final Card commanded = addCardToZone(ORACLE, ai, ZoneType.Command);
+        final Card cast = castOnStack(game, ai, ai, CONSULTATION);
+        // the stack's state check left each permanent on its controller's battlefield
+        assertSame(stolen.getZone(), ai.getZone(ZoneType.Battlefield));
+        assertSame(lent.getZone(), opp.getZone(ZoneType.Battlefield));
+        assertEquals(t.where(ORACLE), Where.HAND);
+        assertEquals(ids(t.live()), List.of("742-1295", "742-2836"));
+
+        assertTrue(t.protects(ours), "our Thassa's Oracle in our hand");
+        assertFalse(t.protects(theirs), "the opponent's Thassa's Oracle in the opponent's hand");
+        assertTrue(t.protects(consultation), "ours in our library");
+        assertTrue(t.protects(ownLab), "ours on our battlefield");
+        assertTrue(t.protects(commanded), "ours in our command zone");
+        assertFalse(t.protects(stolen), "the opponent's, on our battlefield");
+        assertFalse(t.protects(lent), "ours, on the opponent's battlefield");
+        assertFalse(t.protects(buried), "ours, in our graveyard");
+        assertFalse(t.protects(cast), "ours, on the stack");
+        assertFalse(t.view().protects(theirs), "the view reads the owner as the tracker does");
+    }
+
+    @Test
+    public void nearestPrefersTheFewestMissing() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        final ComboTracker t = aiOf(ai).getComboTracker();
+        // Consultation's line first in the source and first by the one-short rank (its pieces still to cast cost 3,
+        // Pact's 4): only the count of missing pieces puts Pact's line ahead of it
+        t.useLines(lines(ORACLE_CONSULTATION, ORACLE_PACT));
+        for (final String land : List.of("Island", "Island", "Swamp", "Swamp")) {
+            addCard(land, ai);
+        }
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        final Card pact = addCardToZone("Tainted Pact", ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        for (final String name : NAMES) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        assertEquals(ids(t.live()), List.of("742-1295", "1295-3093"));
+        final ComboLines.Line consultationLine = t.live().get(0);
+        final ComboLines.Line pactLine = t.live().get(1);
+        assertEquals(t.missing(consultationLine), List.of(CONSULTATION));
+        assertEquals(t.missing(pactLine), List.of());
+        assertEquals(t.costNow(consultationLine), 3);
+        assertEquals(t.costNow(pactLine), 4);
+        assertSame(t.nearest(), pactLine, "nothing missing beats one short");
+        assertSame(t.view().nearest(), pactLine);
+
+        // both one short, Pact's line first in the source now: the one-short ranking decides
+        t.useLines(lines(ORACLE_PACT, ORACLE_CONSULTATION));
+        game.getAction().moveTo(ZoneType.Library, pact, null, AbilityKey.newMap());
+        assertEquals(ids(t.live()), List.of("1295-3093", "742-1295"));
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "1295-3093"));
+        assertSame(t.nearest(), t.oneShort().get(0));
+        assertEquals(t.nearest().variant().id(), "742-1295");
+
+        // nothing live: Oracle gone to the graveyard; no line at all
+        game.getAction().moveTo(ZoneType.Graveyard, oracle, null, AbilityKey.newMap());
+        assertEquals(t.live(), List.of());
+        assertNull(t.nearest());
+        t.useLines(List.of());
+        assertNull(t.nearest());
+    }
+
+    private static CardCollection library(final Player p) {
+        return new CardCollection(p.getCardsIn(ZoneType.Library));
     }
 
     private static List<String> libraryNames(final Player p) {

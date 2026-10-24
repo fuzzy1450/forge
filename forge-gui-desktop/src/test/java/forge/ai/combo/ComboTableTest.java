@@ -2,11 +2,14 @@ package forge.ai.combo;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNotSame;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.expectThrows;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -211,5 +214,28 @@ public class ComboTableTest {
                 "\u00c9omer, Marshal of Rohan")) {
             assertTrue(names.contains(name), "the shipped table lacks a piece named " + name);
         }
+    }
+
+    @Test
+    public void shippedTableHasNoCarriageReturn() throws IOException {
+        // The table's bytes go into forge-ai's jar as the checkout holds them, so they must not depend on the
+        // checkout: the fork's .gitattributes pins the file to LF (eol=lf), where core.autocrlf=true and text=auto
+        // would write CRLF into a fresh Windows checkout, and so into the jar.
+        final byte[] bytes;
+        try (InputStream in = ComboTable.class.getResourceAsStream(ComboTable.RESOURCE)) {
+            assertNotNull(in, ComboTable.RESOURCE);
+            bytes = in.readAllBytes();
+        }
+        int lineFeeds = 0;
+        int carriageReturns = 0;
+        for (final byte b : bytes) {
+            if (b == 0x0A) {
+                lineFeeds++;
+            } else if (b == 0x0D) {
+                carriageReturns++;
+            }
+        }
+        assertTrue(lineFeeds > 1000, "the shipped table holds " + lineFeeds + " lines");
+        assertEquals(carriageReturns, 0, "carriage returns in the shipped table");
     }
 }
