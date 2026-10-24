@@ -1,15 +1,17 @@
 package forge.ai.combo;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.google.common.collect.Iterables;
 
 import forge.ai.ComputerUtilCombat;
 import forge.ai.ComputerUtilMana;
-import forge.ai.SpecialCardAi;
 import forge.ai.combo.ComboTracker.Where;
 import forge.game.Game;
 import forge.game.ability.AbilityKey;
@@ -18,6 +20,7 @@ import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCopyService;
 import forge.game.combat.CombatUtil;
+import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -255,10 +258,26 @@ public final class ComboSignals {
 
     /**
      * Signal 1, no mana for the whole line: the mana values of its pieces in our hand, library or command zone
-     * ({@link ComboTracker#costNow}) come to more than next turn's mana ({@link #nextTurnManaNow}).
+     * ({@link ComboTracker#costNow}), plus the commander tax on those in our command zone ({@link #commanderTax}),
+     * come to more than next turn's mana ({@link #nextTurnManaNow}).
      */
     private static boolean noMana(final ComboTracker.View v, final ComboLines.Line l) {
-        return v.costNow(l) > v.nextTurnMana();
+        return v.costNow(l) + commanderTax(v, l) > v.nextTurnMana();
+    }
+
+    // Forge's own commander tax (CostAdjustment.adjust) on the pieces of l in our command zone, each cast from there:
+    // 2 for each earlier cast of that commander from the command zone (Player.getCommanderCast), on a commander only
+    private static int commanderTax(final ComboTracker.View v, final ComboLines.Line l) {
+        int tax = 0;
+        for (final String name : l.names()) {
+            if (v.where(name) == Where.COMMAND) {
+                final Card c = v.card(name);
+                if (c.isCommander()) {
+                    tax += 2 * v.ai().getCommanderCast(c);
+                }
+            }
+        }
+        return tax;
     }
 
     /** Next turn's mana: every mana source we control whether tapped or not ({@code getAvailableManaEstimate(ai,
@@ -278,33 +297,109 @@ public final class ComboSignals {
     }
 
     /**
-     * Signal 3, about to die: what the opponents' creatures that can attack next turn would deal us unblocked, after
-     * each creature of ours chumps one of the largest, reaches our life. Never while we cannot lose.
+     * Signal 3, about to die: one opponent's own next-turn attack reaches our life after our creatures block it
+     * ({@link #lethal}). Each opponent is read alone: they attack in their own turns, so one's creatures never add to
+     * another's. Never while we cannot lose.
      */
     static boolean dangerNow(final Player ai) {
         if (ai.cantLose()) {
             return false;
         }
-        final List<Integer> hits = new ArrayList<>();
+        final List<Card> ours = ai.getCreaturesInPlay();
         for (final Player opp : ai.getOpponents()) {
-            for (final Card c : opp.getCreaturesInPlay()) {
-                if (ComputerUtilCombat.canAttackNextTurn(c, ai)) {
-                    hits.add(ComputerUtilCombat.damageIfUnblocked(c, ai, null, true));
+            if (lethal(ai, opp, ours)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // whether what opp's creatures that can attack us next turn would deal us (damageIfUnblocked) reaches our life
+    // after our creatures block them: the largest hits are blocked first, each by as many of our spare creatures able
+    // to block it (CombatUtil.canBlock) as it needs (CombatUtil.getMinNumBlockersForAttacker: two for menace), taking
+    // those able to block the fewest of the hits still to come first, then in battlefield order. An attacker without
+    // enough spare blockers comes through whole, a blocked one deals us nothing, and a blocked trampler puts through
+    // its hit less its blockers' toughness. A board whose whole unblocked attack falls short is never blocked.
+    private static boolean lethal(final Player ai, final Player opp, final List<Card> ours) {
+        final List<Card> attackers = new ArrayList<>();
+        final List<Integer> hits = new ArrayList<>();
+        int unblocked = 0;
+        for (final Card c : opp.getCreaturesInPlay()) {
+            if (ComputerUtilCombat.canAttackNextTurn(c, ai)) {
+                final int hit = ComputerUtilCombat.damageIfUnblocked(c, ai, null, true);
+                attackers.add(c);
+                hits.add(hit);
+                unblocked += hit;
+            }
+        }
+        final int life = ai.getLife();
+        if (unblocked < life) {
+            return false;
+        }
+        // the attackers' indexes, the largest hit first (a stable sort: equal hits in battlefield order)
+        final List<Integer> order = new ArrayList<>();
+        for (int i = 0; i < attackers.size(); i++) {
+            order.add(i);
+        }
+        order.sort((a, b) -> Integer.compare(hits.get(b), hits.get(a)));
+        final boolean[][] blocks = new boolean[attackers.size()][ours.size()];
+        for (int i = 0; i < attackers.size(); i++) {
+            for (int j = 0; j < ours.size(); j++) {
+                blocks[i][j] = CombatUtil.canBlock(attackers.get(i), ours.get(j));
+            }
+        }
+        final boolean[] spent = new boolean[ours.size()];
+        int through = 0;
+        for (int k = 0; k < order.size(); k++) {
+            final int i = order.get(k);
+            final Card attacker = attackers.get(i);
+            final List<Integer> blockers = blockers(blocks, spent, order, k,
+                    CombatUtil.getMinNumBlockersForAttacker(attacker, ai));
+            if (blockers == null) {
+                through += hits.get(i);
+                continue;
+            }
+            int toughness = 0;
+            for (final int j : blockers) {
+                spent[j] = true;
+                toughness += ours.get(j).getNetToughness();
+            }
+            if (attacker.hasKeyword(Keyword.TRAMPLE)) {
+                through += Math.max(0, hits.get(i) - toughness);
+            }
+        }
+        return through >= life;
+    }
+
+    // the need spare blockers of ours for the k-th attacker in order, those able to block the fewest of the attackers
+    // after it first, then in battlefield order; null when fewer than need are spare and able
+    private static List<Integer> blockers(final boolean[][] blocks, final boolean[] spent, final List<Integer> order,
+            final int k, final int need) {
+        final int i = order.get(k);
+        final List<Integer> able = new ArrayList<>();
+        final int[] later = new int[spent.length];
+        for (int j = 0; j < spent.length; j++) {
+            if (spent[j] || !blocks[i][j]) {
+                continue;
+            }
+            able.add(j);
+            for (int q = k + 1; q < order.size(); q++) {
+                if (blocks[order.get(q)][j]) {
+                    later[j]++;
                 }
             }
         }
-        hits.sort(Collections.reverseOrder());
-        final int chumps = Math.min(ai.getCreaturesInPlay().size(), hits.size());
-        int incoming = 0;
-        for (final int hit : hits.subList(chumps, hits.size())) {
-            incoming += hit;
+        if (able.size() < need) {
+            return null;
         }
-        return incoming >= ai.getLife();
+        able.sort((a, b) -> Integer.compare(later[a], later[b]));
+        return able.subList(0, need);
     }
 
     /**
-     * Signal 4, a surer kill: in our own turn, before attackers are declared, every opponent still in the game is
-     * killable, by combat or by one burn spell.
+     * Signal 4, a surer kill: in our own turn, before attackers are declared, with exactly one opponent left in the
+     * game, that opponent is killable, by combat or by one burn spell. One combat cannot spend the same attackers on
+     * two players, nor one burn spell kill two, so a pod never reads as a surer kill.
      */
     static boolean surerKillNow(final Player ai) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
@@ -312,15 +407,12 @@ public final class ComboSignals {
                 || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)) {
             return false;
         }
-        for (final Player opp : ai.getOpponents()) {
-            if (!killable(ai, opp)) {
-                return false;
-            }
-        }
-        return true;
+        final List<Player> opps = ai.getOpponents();
+        return opps.size() == 1 && killable(ai, opps.get(0));
     }
 
-    // an opponent who can lose, whose life our unblockable ready attackers or one burn spell in hand reach
+    // an opponent who can lose, whose life our unblockable ready attackers or one burn spell in hand reach, its mana
+    // cost paid colour by colour from the mana we can make now (ComboMana: a Swamp is no Lightning Bolt's {R})
     private static boolean killable(final Player ai, final Player opp) {
         if (opp.cantLose()) {
             return false;
@@ -341,7 +433,7 @@ public final class ComboSignals {
                 continue;
             }
             for (final SpellAbility spell : c.getSpells()) {
-                if (burns(spell, life) && c.getCMC() <= SpecialCardAi.HonestMana.of(ai, spell, true).total()) {
+                if (burns(spell, life) && ComboMana.of(ai, spell, true).pays(c.getManaCost())) {
                     return true;
                 }
             }
@@ -360,8 +452,9 @@ public final class ComboSignals {
     }
 
     // a DealDamage part (the root or a sub) able to aim at a player, whose damage reaches the life. A Count$Random
-    // amount draws when calculated (AbilityUtils' Count$Random.<Min>.<Max>), so one is never calculated: at
-    // a4d2a245fc4 the only instant or sorcery whose damage is one, Ashuza's Breath, has no ValidTgts at all.
+    // amount draws when calculated (AbilityUtils' Count$Random.<Min>.<Max>), so one is never calculated
+    // (drawsWhenCalculated): at a4d2a245fc4 the only instant or sorcery whose damage is one, Ashuza's Breath, has no
+    // ValidTgts at all.
     private static boolean burns(final SpellAbility root, final int life) {
         for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
             if (s.getApi() != ApiType.DealDamage || !s.hasParam("NumDmg")) {
@@ -372,7 +465,7 @@ public final class ComboSignals {
                 continue;
             }
             final String amount = s.getParam("NumDmg");
-            if (s.hasSVar(amount) && s.getSVar(amount).contains("Random")) {
+            if (drawsWhenCalculated(s, amount)) {
                 continue;
             }
             if (AbilityUtils.calculateAmount(s.getHostCard(), amount, s) >= life) {
@@ -380,6 +473,41 @@ public final class ComboSignals {
             }
         }
         return false;
+    }
+
+    // whether the amount, or an SVar of s it names at any depth, holds a Random count. calculateAmount follows an SVar
+    // named anywhere in an amount (SVar$Y/Plus.Z reads Y and Z), so every word of each text that names an SVar of s
+    // (its own, its card state's or its host's, as s.getSVar reads them) is followed, each SVar once: names that cycle
+    // end here, and a word that names no SVar is never read
+    private static boolean drawsWhenCalculated(final SpellAbility s, final String amount) {
+        final Deque<String> texts = new ArrayDeque<>();
+        final Set<String> read = new HashSet<>();
+        texts.push(amount);
+        while (!texts.isEmpty()) {
+            final String text = texts.pop();
+            if (text.contains("Random")) {
+                return true;
+            }
+            int start = -1;
+            for (int i = 0; i <= text.length(); i++) {
+                final boolean word = i < text.length() && isWordChar(text.charAt(i));
+                if (word && start < 0) {
+                    start = i;
+                } else if (!word && start >= 0) {
+                    final String name = text.substring(start, i);
+                    if (s.hasSVar(name) && read.add(name)) {
+                        texts.push(s.getSVar(name));
+                    }
+                    start = -1;
+                }
+            }
+        }
+        return false;
+    }
+
+    // a character of an SVar name: a letter, a digit or an underscore
+    private static boolean isWordChar(final char ch) {
+        return ch == '_' || Character.isLetterOrDigit(ch);
     }
 
     // our card of that name in our hand, library or command zone, where the view places it; null on our battlefield,

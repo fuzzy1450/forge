@@ -52,6 +52,7 @@ public class ComboSignalsTest extends AITest {
     private static final String FBLTHP = "Fblthp, Impossibly Lost";
     private static final String BEARS = "Grizzly Bears";
     private static final String DREADMAW = "Colossal Dreadmaw";
+    private static final String GIANT = "Hill Giant";
 
     // ten distinct nonland names (GiftsUngivenAiTest's): fillLibrary makes ten of one name
     private static final List<String> NAMES = Arrays.asList("Runeclaw Bear", "Grizzly Bears", "Hill Giant",
@@ -498,9 +499,10 @@ public class ComboSignalsTest extends AITest {
     public void dangerChumpsTheLargestHitsAndNeverFiresWhenWeCannotLose() {
         final ComboLines.Line l = oracleLine();
         manaForTheLine();
-        ready(DREADMAW, 1, opp);
+        ready("Craw Wurm", 1, opp);
         ready(BEARS, 1, opp);
-        // our one creature chumps the Dreadmaw's 6, leaving the Bears' 2
+        // our one creature chumps the Craw Wurm's 6 (no trample: follow-up F2 puts a trampler's excess through),
+        // leaving the Bears' 2
         addCard("Runeclaw Bear", ai);
         ai.setLife(3, null);
         assertNull(abandon(l));
@@ -545,29 +547,6 @@ public class ComboSignalsTest extends AITest {
         assertNull(abandon(l));
         opp.setLife(2, null);
         assertEquals(abandon(l), Signal.SURER_KILL);
-    }
-
-    @Test
-    public void surerKillNeedsEveryOpponent() {
-        game = initAndCreateThreePlayerGame();
-        ai = game.getPlayers().get(1);
-        t = aiOf(ai).getComboTracker();
-        t.useLines(lines(ORACLE_CONSULTATION));
-        addCardToZone(ORACLE, ai, ZoneType.Hand);
-        addCardToZone(CONSULTATION, ai, ZoneType.Library);
-        manaForTheLine();
-        final ComboLines.Line l = t.deckLines().get(0);
-        ready(BEARS, 3, ai);
-
-        game.getPlayers().get(0).setLife(5, null);
-        assertNull(abandon(l), "one opponent in reach and one not");
-        game.getPlayers().get(2).setLife(5, null);
-        assertEquals(abandon(l), Signal.SURER_KILL);
-
-        // an opponent who cannot lose is not killable, while the other can still lose (so the line is not denied)
-        addCard("Lich's Mastery", game.getPlayers().get(0));
-        assertFalse(ComboSignals.denied(ai, l, t));
-        assertNull(abandon(l));
     }
 
     @Test
@@ -925,26 +904,6 @@ public class ComboSignalsTest extends AITest {
     }
 
     @Test
-    public void dangerAddsUpEveryOpponentsHits() {
-        // three seats: one ready Grizzly Bears for each opponent, 2 + 2
-        ComboLines.Line l = threeSeatOracleLine();
-        ready(BEARS, 1, game.getPlayers().get(0));
-        ready(BEARS, 1, game.getPlayers().get(2));
-        ai.setLife(5, null);
-        assertNull(abandon(l), "2 + 2 against 5");
-        ai.setLife(4, null);
-        assertEquals(abandon(l), Signal.DANGER, "2 + 2 against 4: both opponents' hits count");
-
-        // a fresh three seats: a ready Colossal Dreadmaw held only by the opponent the reading meets second (turn
-        // order from us, seat 2 then seat 0)
-        l = threeSeatOracleLine();
-        final Player second = ai.getOpponents().get(1);
-        ready(DREADMAW, 1, second);
-        ai.setLife(5, null);
-        assertEquals(abandon(l), Signal.DANGER);
-    }
-
-    @Test
     public void aLineWithNothingMissingIsNotOneShort() {
         // every piece in hand: live, nothing to fetch, so not one short
         start(ORACLE_CONSULTATION);
@@ -1104,6 +1063,240 @@ public class ComboSignalsTest extends AITest {
         assertTrue(fblthp.getTriggers().isEmpty());
         assertFalse(ComboSignals.denied(ai, t.deckLines().get(0), t));
         assertEquals(ids(t.executable()), List.of("742-8266"));
+    }
+
+    // ---- follow-up F2: signals in pods and in combat ----
+
+    @Test
+    public void dangerReadsEachOpponentAlone() {
+        // three seats, a ready Hill Giant (3/3) for each opponent: each attacks in its own turn, so 3 and 3 come at
+        // our 5, never 6 at once
+        ComboLines.Line l = threeSeatOracleLine();
+        ready(GIANT, 1, game.getPlayers().get(0));
+        ready(GIANT, 1, game.getPlayers().get(2));
+        ai.setLife(5, null);
+        assertNull(abandon(l), "3 and 3 against 5: no one opponent reaches it");
+        // one opponent's own 3 reaches our 3
+        ai.setLife(3, null);
+        assertEquals(abandon(l), Signal.DANGER);
+
+        // one opponent with both 3/3s: 6 against 5
+        l = threeSeatOracleLine();
+        ready(GIANT, 2, game.getPlayers().get(0));
+        ai.setLife(5, null);
+        assertEquals(abandon(l), Signal.DANGER);
+
+        // every opponent is read: a ready Colossal Dreadmaw held only by the opponent the reading meets second (turn
+        // order from us, seat 2 then seat 0)
+        l = threeSeatOracleLine();
+        ready(DREADMAW, 1, ai.getOpponents().get(1));
+        ai.setLife(5, null);
+        assertEquals(abandon(l), Signal.DANGER);
+    }
+
+    @Test
+    public void aChumpCannotBlockAFlier() {
+        // our Grizzly Bears cannot block a Serra Angel (flying): its 4 comes through whole, at our 4
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        addCard(BEARS, ai);
+        ready("Serra Angel", 1, opp);
+        ai.setLife(4, null);
+        assertEquals(abandon(l), Signal.DANGER);
+
+        // a Suntail Hawk (flying) can chump it
+        addCard("Suntail Hawk", ai);
+        assertNull(abandon(l));
+    }
+
+    @Test
+    public void trampleGoesThroughAChump() {
+        // our 1/1 Fugitive Wizard chumps a Colossal Dreadmaw (6/6 trample): the 5 past its toughness reaches our 5
+        ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        addCard("Fugitive Wizard", ai);
+        ready(DREADMAW, 1, opp);
+        ai.setLife(5, null);
+        assertEquals(abandon(l), Signal.DANGER);
+        ai.setLife(6, null);
+        assertNull(abandon(l), "5 past the chump against 6");
+
+        // a blocker tougher than the trampler's power lets nothing through, never less than nothing: our Wall of Stone
+        // (0/8) blocks a War Mammoth (3/3 trample), and a Serra Angel the Wall cannot block brings 4 at our 4
+        l = oracleLine();
+        manaForTheLine();
+        addCard("Wall of Stone", ai);
+        ready("War Mammoth", 1, opp);
+        ready("Serra Angel", 1, opp);
+        ai.setLife(4, null);
+        assertEquals(abandon(l), Signal.DANGER);
+    }
+
+    @Test
+    public void aMenaceAttackerNeedsTwoBlockers() {
+        // a Boggart Brute (3/2 menace) at our 3, and one Grizzly Bears of ours: it cannot block the Brute alone
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        addCard(BEARS, ai);
+        ready("Boggart Brute", 1, opp);
+        ai.setLife(3, null);
+        assertEquals(abandon(l), Signal.DANGER);
+
+        // two spare blockers can
+        addCard("Runeclaw Bear", ai);
+        assertNull(abandon(l));
+    }
+
+    @Test
+    public void aChumpGoesWhereNoOtherCanBlock() {
+        // our Suntail Hawk (flying) and Grizzly Bears against a Craw Wurm (6/4) and a Serra Angel (4/4 flying), at our
+        // 4: the Wurm's larger hit is blocked first, by the Bears, which can block nothing after it, and the Hawk is
+        // left for the Angel. The Hawk, first on our battlefield, on the Wurm would let the Angel's 4 through
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        addCard("Suntail Hawk", ai);
+        addCard(BEARS, ai);
+        assertEquals(ai.getCreaturesInPlay().get(0).getName(), "Suntail Hawk");
+        ready("Craw Wurm", 1, opp);
+        ready("Serra Angel", 1, opp);
+        ai.setLife(4, null);
+        assertNull(abandon(l));
+    }
+
+    @Test
+    public void aTappedCreatureOfOursCannotChump() {
+        // CombatUtil.canBlock: our Grizzly Bears tapped in our turn stays tapped through the opponent's next attack (it
+        // untaps in our own untap step), so a Hill Giant's 3 reaches our 3
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        final Card bears = addCard(BEARS, ai);
+        ready(GIANT, 1, opp);
+        ai.setLife(3, null);
+        assertNull(abandon(l));
+        bears.setTapped(true);
+        assertEquals(abandon(l), Signal.DANGER);
+    }
+
+    @Test
+    public void surerKillNeedsASingleOpponent() {
+        // three seats, both opponents at 2 life, three ready Grizzly Bears of ours and nothing to block them: each
+        // opponent alone is in reach, but one combat cannot spend the same attackers on two players
+        final ComboLines.Line l = threeSeatOracleLine();
+        final Player first = game.getPlayers().get(0);
+        final Player third = game.getPlayers().get(2);
+        ready(BEARS, 3, ai);
+        first.setLife(2, null);
+        third.setLife(2, null);
+        assertNull(abandon(l));
+
+        // one opponent concedes: the one left in the game is in reach
+        third.concede();
+        game.getAction().checkGameOverCondition();
+        assertFalse(game.isGameOver());
+        assertEquals(ai.getOpponents().size(), 1);
+        assertSame(ai.getOpponents().get(0), first);
+        assertEquals(abandon(l), Signal.SURER_KILL);
+
+        // an opponent who cannot lose is not killable (read alone: the abandon order denies the line first)
+        addCard("Lich's Mastery", first);
+        assertEquals(abandon(l), Signal.DENIED);
+        assertFalse(ComboSignals.surerKillNow(ai));
+    }
+
+    @Test
+    public void burnPaysByColour() {
+        // Lightning Bolt ({R}) and one Swamp: a mana for Bolt's mana value, but not of its colour
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        final ComboLines.Line l = t.deckLines().get(0);
+        opp.setLife(3, null);
+        addCardToZone("Lightning Bolt", ai, ZoneType.Hand);
+        assertNull(abandon(l), "a Swamp cannot pay {R}");
+
+        // a Mountain can
+        lands("Mountain");
+        assertEquals(abandon(l), Signal.SURER_KILL);
+    }
+
+    @Test
+    public void noManaCountsCommanderTax() {
+        // our Fblthp, Impossibly Lost ({1}{U}) in the command zone and Consultation ({B}) in hand: 3 against three
+        // lands
+        start(FBLTHP_CONSULTATION);
+        final Card fblthp = addCardToZone(FBLTHP, ai, ZoneType.Command);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Island", "Island", "Swamp");
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertNull(abandon(l));
+
+        // cast twice before from the command zone: Forge's commander tax (CostAdjustment), 2 for each earlier cast, is
+        // 4 more, 7 against 3. Forge taxes only a commander
+        ai.incCommanderCast(fblthp);
+        ai.incCommanderCast(fblthp);
+        assertNull(abandon(l), "a card that is not a commander pays no tax");
+        fblthp.setCommander(true);
+        assertEquals(abandon(l), Signal.NO_MANA);
+        lands("Island", "Island", "Island");
+        assertEquals(abandon(l), Signal.NO_MANA, "7 against 6");
+        lands("Island");
+        assertNull(abandon(l), "7 against 7");
+
+        // the same commander in our hand is cast from there, untaxed
+        start(FBLTHP_CONSULTATION);
+        final Card inHand = addCardToZone(FBLTHP, ai, ZoneType.Hand);
+        inHand.setCommander(true);
+        ai.incCommanderCast(inHand);
+        ai.incCommanderCast(inHand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Island", "Island", "Swamp");
+        assertNull(abandon(t.deckLines().get(0)));
+    }
+
+    @Test
+    public void burnSkipsARandomAmountAtAnyDepth() {
+        // a damage amount that reaches a Count$Random draws when it is calculated, so it is never calculated, however
+        // deep the SVars that lead to it: Lightning Bolt made to deal X, X naming Y_2 (an SVar name may hold an
+        // underscore and a digit). A Y_2 of 3 reaches the 3 life
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        lands("Mountain");
+        opp.setLife(3, null);
+        final SpellAbility bolt = addCardToZone("Lightning Bolt", ai, ZoneType.Hand).getFirstSpellAbility();
+        bolt.putParam("NumDmg", "X");
+        bolt.setSVar("X", "SVar$Y_2/Plus.0");
+        bolt.setSVar("Y_2", "3");
+        assertEquals(abandon(l), Signal.SURER_KILL);
+
+        // a Y_2 that is a Random count (always 3), two SVars down
+        bolt.setSVar("Y_2", "Count$Random.3.3");
+        long draws = MyRandom.callCount();
+        assertNull(abandon(l));
+        assertEquals(MyRandom.callCount(), draws, "the burn reader drew");
+
+        // the amount itself a Random count
+        bolt.putParam("NumDmg", "Count$Random.3.3");
+        draws = MyRandom.callCount();
+        assertNull(abandon(l));
+        assertEquals(MyRandom.callCount(), draws, "the burn reader drew");
+    }
+
+    @Test(timeOut = 60_000)
+    public void burnRandomGuardReadsEachSVarOnce() {
+        // SVars that name each other (X names Y, then X again): each is read once, so the guard ends, and it finds Y's
+        // Random count. Calculated, X would recurse without end; the timeOut fails a guard that never ends
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        lands("Mountain");
+        opp.setLife(3, null);
+        final SpellAbility bolt = addCardToZone("Lightning Bolt", ai, ZoneType.Hand).getFirstSpellAbility();
+        bolt.putParam("NumDmg", "X");
+        bolt.setSVar("X", "SVar$Y/Plus.X");
+        bolt.setSVar("Y", "Count$Random.3.3");
+        final long draws = MyRandom.callCount();
+        assertNull(abandon(l));
+        assertEquals(MyRandom.callCount(), draws, "the burn reader drew");
     }
 
     /** A three-player game whose AI (player 1, in its own MAIN1) holds the default board: line 742-1295, Oracle in
