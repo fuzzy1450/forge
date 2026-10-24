@@ -1133,6 +1133,31 @@ public class ComboSignalsTest extends AITest {
     }
 
     @Test
+    public void trampleExcessReadsTheBlockersToughnessNotItsPower() {
+        // a blocked trampler puts through its hit less its blocker's toughness, never less its power: our Wall of Stone
+        // (0/8) stops all of a Colossal Dreadmaw's 6 (6/6 trample), so nothing reaches even our 1
+        ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        addCard("Wall of Stone", ai);
+        ready(DREADMAW, 1, opp);
+        ai.setLife(5, null);
+        assertNull(abandon(l), "an 0/8 stops all of a 6/6 trampler");
+        ai.setLife(1, null);
+        assertNull(abandon(l), "nothing comes through");
+
+        // our Craw Wurm (6/4) blocking the Dreadmaw lets the 2 past its toughness through, where its power would let
+        // none
+        l = oracleLine();
+        manaForTheLine();
+        addCard("Craw Wurm", ai);
+        ready(DREADMAW, 1, opp);
+        ai.setLife(3, null);
+        assertNull(abandon(l), "2 past the Wurm against 3");
+        ai.setLife(2, null);
+        assertEquals(abandon(l), Signal.DANGER, "2 past the Wurm's toughness of 4 reaches our 2");
+    }
+
+    @Test
     public void aMenaceAttackerNeedsTwoBlockers() {
         // a Boggart Brute (3/2 menace) at our 3, and one Grizzly Bears of ours: it cannot block the Brute alone
         final ComboLines.Line l = oracleLine();
@@ -1175,6 +1200,22 @@ public class ComboSignalsTest extends AITest {
         assertNull(abandon(l));
         bears.setTapped(true);
         assertEquals(abandon(l), Signal.DANGER);
+    }
+
+    @Test
+    public void dangerBlocksTheLargestHitFirstWhateverTheBattlefieldOrder() {
+        // the opponent's Grizzly Bears (2/2) first on its battlefield and its Craw Wurm (6/4) second, against our one
+        // Runeclaw Bear: the chump goes to the Wurm's larger hit, not to the attacker met first, leaving the Bears' 2
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ready(BEARS, 1, opp);
+        ready("Craw Wurm", 1, opp);
+        assertEquals(opp.getCreaturesInPlay().get(0).getName(), BEARS);
+        addCard("Runeclaw Bear", ai);
+        ai.setLife(3, null);
+        assertNull(abandon(l), "the one chump takes the Wurm's 6, and the Bears' 2 is short of 3");
+        ai.setLife(2, null);
+        assertEquals(abandon(l), Signal.DANGER, "the Bears' 2 reaches our 2");
     }
 
     @Test
@@ -1252,6 +1293,26 @@ public class ComboSignalsTest extends AITest {
         addCardToZone(CONSULTATION, ai, ZoneType.Hand);
         lands("Island", "Island", "Swamp");
         assertNull(abandon(t.deckLines().get(0)));
+    }
+
+    @Test
+    public void commanderTaxIsTwoForEachEarlierCast() {
+        // our commander Fblthp, Impossibly Lost ({1}{U}) in the command zone and Consultation ({B}) in hand, against
+        // three lands: never cast from the command zone, it pays no tax; cast once before, 2
+        start(FBLTHP_CONSULTATION);
+        final Card fblthp = addCardToZone(FBLTHP, ai, ZoneType.Command);
+        fblthp.setCommander(true);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Island", "Island", "Swamp");
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertEquals(ai.getCommanderCast(fblthp), 0);
+        assertNull(abandon(l), "never cast from the command zone: 3 against 3");
+        ai.incCommanderCast(fblthp);
+        assertEquals(abandon(l), Signal.NO_MANA, "cast once: 5 against 3");
+        lands("Island");
+        assertEquals(abandon(l), Signal.NO_MANA, "5 against 4");
+        lands("Island");
+        assertNull(abandon(l), "5 against 5");
     }
 
     @Test
