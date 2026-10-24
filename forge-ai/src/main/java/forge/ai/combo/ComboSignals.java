@@ -96,7 +96,7 @@ public final class ComboSignals {
         return true;
     }
 
-    // a piece in our hand, library or command zone whose first spell a CantBeCast static bars; one on our battlefield
+    // a piece in our hand, library or command zone whose first spell a CantBeCast static bars. One on our battlefield
     // or our stack has been cast already. cantBeCastAbility writes the card's castSA, so it is put back
     // (SpecialCardAi.castableNow's idiom).
     private static boolean castBarred(final Player ai, final ComboTracker t, final String name) {
