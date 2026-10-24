@@ -24,6 +24,8 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.trigger.Trigger;
+import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
 import forge.util.MyRandom;
 
@@ -38,12 +40,16 @@ public class ComboSignalsTest extends AITest {
     private static final String LAB_CONSULTATION = "V|742-2836|1|{B}|2,88|H:Demonic Consultation|B:Laboratory Maniac";
     private static final String LAB_PACT = "V|2836-3093|2|{1}{B}|2|H:Tainted Pact|B:Laboratory Maniac";
     private static final String DOOM_CONSULTATION = "V|x-1|1|{B}|2,88|H:Demonic Consultation|B:Doctor Doom, Unrivaled";
+    private static final String JACE_CONSULTATION = "V|742-3096|1|{B}|2,88|H:Demonic Consultation|B:Jace, Wielder of Mysteries";
+    private static final String FBLTHP_CONSULTATION = "V|742-8266|1|{B}|2,88|B:Fblthp, Impossibly Lost|H:Demonic Consultation";
 
     private static final String ORACLE = "Thassa's Oracle";
     private static final String CONSULTATION = "Demonic Consultation";
     private static final String PACT = "Tainted Pact";
     private static final String LAB = "Laboratory Maniac";
     private static final String DOOM = "Doctor Doom, Unrivaled";
+    private static final String JACE = "Jace, Wielder of Mysteries";
+    private static final String FBLTHP = "Fblthp, Impossibly Lost";
     private static final String BEARS = "Grizzly Bears";
     private static final String DREADMAW = "Colossal Dreadmaw";
 
@@ -982,6 +988,61 @@ public class ComboSignalsTest extends AITest {
         assertEquals(t.executable(), List.of());
     }
 
+    @Test
+    public void aWinnerInPlayThatLostItsWinIsDenied() {
+        // an opposing Imprisoned in the Moon on each battlefield winner leaves a colorless land with "{T}: Add {C}"
+        // alone, still named for its printed card: Laboratory Maniac and Jace lose the Draw replacement that wins,
+        // Doctor Doom its {T} draw, Fblthp its combat-damage trigger. Each line is denied, so it is neither chased nor
+        // executed
+        final String[][] rows = {{LAB_CONSULTATION, LAB}, {JACE_CONSULTATION, JACE}, {DOOM_CONSULTATION, DOOM},
+                {FBLTHP_CONSULTATION, FBLTHP}};
+        for (final String[] row : rows) {
+            start(row[0]);
+            final Card winner = ready(row[1], 1, ai).get(0);
+            addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+            lands("Swamp");
+            final ComboLines.Line l = t.deckLines().get(0);
+            assertNull(abandon(l), row[1]);
+
+            imprison(winner);
+            assertEquals(t.where(row[1]), ComboTracker.Where.BATTLEFIELD, row[1]);
+            assertEquals(abandon(l), Signal.DENIED, row[1]);
+            assertEquals(t.live(), List.of(), row[1]);
+            assertEquals(t.executable(), List.of(), row[1]);
+        }
+
+        // the same winner in our library is not read: it has its win when it enters
+        start(LAB_CONSULTATION);
+        final Card lab = addCardToZone(LAB, ai, ZoneType.Library);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp", "Island", "Island", "Island");
+        addCard("Imprisoned in the Moon", opp);
+        assertTrue(lab.isInZone(ZoneType.Library));
+        assertNull(abandon(t.deckLines().get(0)));
+    }
+
+    @Test
+    public void anImprisonedFblthpsFiredTriggerStillWins() {
+        // Fblthp's trigger on our stack resolves whatever Fblthp has now: its line stays executable
+        start(FBLTHP_CONSULTATION);
+        final Card fblthp = ready(FBLTHP, 1, ai).get(0);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        SpellAbility trigger = null;
+        for (final Trigger tr : fblthp.getTriggers()) {
+            if (tr.getMode() == TriggerType.DamageAll) {
+                trigger = tr.ensureAbility().copy(ai);
+                trigger.setTrigger(tr);
+            }
+        }
+        assertTrue(trigger != null);
+        game.getStack().add(trigger);
+        imprison(fblthp);
+        assertTrue(fblthp.getTriggers().isEmpty());
+        assertFalse(ComboSignals.denied(ai, t.deckLines().get(0), t));
+        assertEquals(ids(t.executable()), List.of("742-8266"));
+    }
+
     /** A three-player game whose AI (player 1, in its own MAIN1) holds the default board: line 742-1295, Oracle in
      *  hand, Consultation in the library, and the line's mana. */
     private ComboLines.Line threeSeatOracleLine() {
@@ -1007,6 +1068,13 @@ public class ComboSignalsTest extends AITest {
         assertTrue(top.isTrigger());
         assertEquals(ComboTracker.nameOf(top.getSourceCard()), ComboTracker.nameOf(c));
         return top;
+    }
+
+    /** The opponent's Imprisoned in the Moon on {@code c}: a colorless land whose one ability is "{T}: Add {C}". */
+    private void imprison(final Card c) {
+        addCard("Imprisoned in the Moon", opp).attachToEntity(c, null);
+        game.getAction().checkStateEffects(true);
+        assertTrue(c.isLand() && !c.isCreature() && !c.isPlaneswalker(), c + " imprisoned");
     }
 
     /** Our {@code name} cast: on our stack, nothing paid or resolved (ComboTrackerTest's castOnStack). */

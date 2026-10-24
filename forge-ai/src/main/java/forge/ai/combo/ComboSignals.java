@@ -21,6 +21,8 @@ import forge.game.combat.CombatUtil;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.replacement.ReplacementEffect;
+import forge.game.replacement.ReplacementType;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.staticability.StaticAbility;
@@ -69,8 +71,9 @@ public final class ComboSignals {
     /**
      * Signal 2, the opponents can deny the line, read from visible state: we cannot win; every opponent cannot lose; a
      * piece we have not yet put on the battlefield cannot be cast (a CantBeCast static covers its first spell, Void
-     * Winnower's even mana values); Thassa's Oracle's entering trigger is disabled (Torpor Orb, Hushbringer); Doctor
-     * Doom's {T} ability cannot be activated (Linvala, Keeper of Silence).
+     * Winnower's even mana values); Thassa's Oracle's entering trigger is disabled (Torpor Orb, Hushbringer); a winner
+     * of ours on the battlefield has lost its win ({@link #disarmed}: Imprisoned in the Moon, Lignify, Humility, a
+     * face-down copy), or Doctor Doom's {T} draw cannot be activated (Linvala, Keeper of Silence).
      */
     public static boolean denied(final Player ai, final ComboLines.Line l, final ComboTracker t) {
         if (ai.cantWin()) {
@@ -87,7 +90,75 @@ public final class ComboSignals {
         if (l.winner() == ComboLines.Winner.ORACLE && oracleTriggerDisabled(ai, t)) {
             return true;
         }
-        return l.winner() == ComboLines.Winner.DOOM && doomBarred(ai, t);
+        return disarmed(ai, t, l.winner());
+    }
+
+    // a winner of ours on the battlefield without its win right now, read from what it has, never its name (the
+    // tracker's name is the printed card's, which an ability-removing effect leaves as it is): Laboratory Maniac or
+    // Jace without the Draw replacement that wins instead; Doctor Doom without its {T} draw that wins, or with that
+    // draw barred (Linvala); Fblthp without its combat-damage trigger, unless one of its triggers is on our stack
+    // already, which resolves whatever Fblthp has now. Thassa's Oracle's own reading is oracleTriggerDisabled and the
+    // tracker's spent-Oracle rule. A winner in our hand or library is not read: it has its win when it enters.
+    private static boolean disarmed(final Player ai, final ComboTracker t, final ComboLines.Winner w) {
+        if (w == ComboLines.Winner.ORACLE || t.where(w.card) != Where.BATTLEFIELD) {
+            return false;
+        }
+        final Card c = t.find(w.card, ZoneType.Battlefield);
+        if (w == ComboLines.Winner.DOOM) {
+            final SpellAbility draw = doomsDraw(c);
+            return draw == null || StaticAbilityCantBeCast.cantBeActivatedAbility(draw, c, ai);
+        }
+        if (w == ComboLines.Winner.FBLTHP) {
+            return !t.triggerOnOurStack(w.card) && !hasCombatDamageTrigger(c);
+        }
+        return !winsOnDraw(c);
+    }
+
+    /** Whether {@code c} has a Draw replacement that wins the game instead (Laboratory Maniac's and Jace's). */
+    static boolean winsOnDraw(final Card c) {
+        for (final ReplacementEffect re : c.getReplacementEffects()) {
+            if (re.getMode() != ReplacementType.Draw) {
+                continue;
+            }
+            final SpellAbility with = re.getOverridingAbility();
+            if (with != null ? wins(with) : (re.hasParam("ReplaceWith")
+                    && c.getSVar(re.getParam("ReplaceWith")).contains("WinsGame"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Doctor Doom's own {T} draw: an activated, non-mana ability with a tap cost whose root draws and one of whose
+    // parts wins the game; null when it has none (an ability-removing effect)
+    private static SpellAbility doomsDraw(final Card doom) {
+        for (final SpellAbility ab : doom.getSpellAbilities()) {
+            if (ab.isActivatedAbility() && !ab.isManaAbility() && ab.getApi() == ApiType.Draw
+                    && ab.getPayCosts() != null && ab.getPayCosts().hasTapCost() && wins(ab)) {
+                return ab;
+            }
+        }
+        return null;
+    }
+
+    // Fblthp's "when one or more of your opponents are dealt combat damage during your turn" trigger
+    private static boolean hasCombatDamageTrigger(final Card c) {
+        for (final Trigger tr : c.getTriggers()) {
+            if (tr.getMode() == TriggerType.DamageAll && "True".equals(tr.getParam("CombatDamage"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // the ability or one of its sub-abilities wins the game
+    private static boolean wins(final SpellAbility sa) {
+        for (SpellAbility s = sa; s != null; s = s.getSubAbility()) {
+            if (s.getApi() == ApiType.WinsGame) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean everyOpponentCantLose(final Player ai) {
@@ -164,21 +235,6 @@ public final class ComboSignals {
             runParams.put(AbilityKey.Destination, ZoneType.Battlefield.name());
             if (StaticAbilityDisableTriggers.disabled(game, tr, runParams)) {
                 return true;
-            }
-        }
-        return false;
-    }
-
-    // our Doctor Doom on the battlefield whose {T} ability a CantBeActivated static bars
-    private static boolean doomBarred(final Player ai, final ComboTracker t) {
-        final Card doom = t.find(ComboLines.Winner.DOOM.card, ZoneType.Battlefield);
-        if (doom == null) {
-            return false;
-        }
-        for (final SpellAbility ab : doom.getSpellAbilities()) {
-            if (ab.isActivatedAbility() && !ab.isManaAbility() && ab.getPayCosts() != null
-                    && ab.getPayCosts().hasTapCost()) {
-                return StaticAbilityCantBeCast.cantBeActivatedAbility(ab, doom, ai);
             }
         }
         return false;

@@ -28,9 +28,11 @@ import forge.game.zone.ZoneType;
  * <ul>
  * <li>ORACLE: our Thassa's Oracle trigger is on the stack (Consultation's stock loop; Pact through {@link #pactCast});
  * <li>FBLTHP: our Fblthp, Impossibly Lost trigger is on the stack (Consultation only);
- * <li>DOOM: our Doctor Doom, Unrivaled on the battlefield, untapped and free of summoning sickness, its {T} not barred
- * (executable's denial reads Linvala; Consultation only);
- * <li>LAB, JACE: that winner on our battlefield, and a draw of ours follows: the opponent's end step with our turn
+ * <li>DOOM: our Doctor Doom, Unrivaled on the battlefield, untapped and free of summoning sickness, its {T} draw
+ * there and not barred (executable's denial reads Linvala, and an ability-removing effect such as Imprisoned in the
+ * Moon; Consultation only);
+ * <li>LAB, JACE: that winner on our battlefield, holding its Draw replacement that wins (executable's denial reads its
+ * loss: Lignify, Humility, a face-down copy), and a draw of ours follows: the opponent's end step with our turn
  * next, or a spell in our hand that the AI casts right after the emptier on the emptied library, read from its shape
  * (a Draw, Scry or RearrangeTopOfLibrary root, every part one whose AI approves it there, an untargeted Draw of ours
  * of a fixed number of cards among them, a cost of mana alone; a sorcery-speed one only in our own main phase; a
@@ -181,8 +183,9 @@ public final class ComboExecute {
     /**
      * Whether {@code sa} is the draw that finishes a line (DrawAi's deck guards and its Main 1 hold): our library is
      * empty, we can win, and either {@code sa} draws for us (itself or a sub: an untargeted Draw for the activator)
-     * with Laboratory Maniac or Jace, Wielder of Mysteries ours in play, or {@code sa} is our Doctor Doom's own {T}
-     * draw; and a deck line names that winner. Deck lines, not executable ones: the emptier is spent by now.
+     * with Laboratory Maniac or Jace, Wielder of Mysteries ours in play and holding its win (its Draw replacement:
+     * none under Lignify, Humility or face down), or {@code sa} is our Doctor Doom's own {T} draw; and a deck line
+     * names that winner. Deck lines, not executable ones: the emptier is spent by now.
      */
     public static boolean finishesLine(final Player ai, final SpellAbility sa) {
         if (sa == null || !ai.getCardsIn(ZoneType.Library).isEmpty()) {
@@ -413,9 +416,10 @@ public final class ComboExecute {
                 && sa.getPayCosts().hasTapCost();
     }
 
-    // that winner is ours on the battlefield and a deck line names it
+    // that winner is ours on the battlefield with its Draw replacement that wins, and a deck line names it
     private static boolean inPlay(final ComboTracker t, final Winner w) {
-        return t.find(w.card, ZoneType.Battlefield) != null && names(t, w);
+        final Card c = t.find(w.card, ZoneType.Battlefield);
+        return c != null && ComboSignals.winsOnDraw(c) && names(t, w);
     }
 
     // a deck line names that winner

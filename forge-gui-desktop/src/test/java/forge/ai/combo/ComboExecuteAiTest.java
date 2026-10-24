@@ -1287,6 +1287,66 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(consider(consultation), AiPlayDecision.WillPlay);
     }
 
+    // ---- final review, round 1 ----
+
+    @Test
+    public void imprisonedInTheMoonOnDoomClosesItsWindow() {
+        // the opponent's Imprisoned in the Moon (Doom's mana value 4 meets its AttachAITgts cmcGE3) makes our untapped
+        // Doctor Doom a colorless land with "{T}: Add {C}" alone, never summoning sick: no draw wins, so Consultation is
+        // not cast into a library it would only exile
+        start(DOOM_CONSULTATION);
+        final Card doom = ready(DOOM);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo");
+
+        addCard("Imprisoned in the Moon", opp).attachToEntity(doom, null);
+        game.getAction().checkStateEffects(true);
+        assertTrue(doom.isLand() && !doom.isCreature() && !doom.isTapped() && !doom.isSick());
+        assertEquals(ComboTracker.nameOf(doom), DOOM);
+        assertEquals(t.executable(), List.of());
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)));
+    }
+
+    @Test
+    public void lignifyOnLabClosesItsWindowsAndItsFinishingDraw() {
+        // Lignify: our Laboratory Maniac is a 0/4 Treefolk with no abilities. Neither the opponent's end step nor a
+        // draw spell in hand opens a window, and on an emptied library a draw is no finishing draw
+        start(LAB_CONSULTATION);
+        final Card lab = addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        hand(OPT);
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+        opponentsEndStep();
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+
+        addCard("Lignify", opp).attachToEntity(lab, null);
+        game.getAction().checkStateEffects(true);
+        assertTrue(lab.getReplacementEffects().isEmpty());
+        assertEquals(t.executable(), List.of());
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+
+        // the library emptied, Consultation spent: Opt draws into a loss, so the deck guard stands
+        start(LAB_CONSULTATION);
+        final Card spentLab = addCard(LAB, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Graveyard);
+        final Card opt = hand(OPT);
+        lands("Island");
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+        assertTrue(ComboExecute.finishesLine(ai, castOf(opt)));
+        addCard("Lignify", opp).attachToEntity(spentLab, null);
+        game.getAction().checkStateEffects(true);
+        assertFalse(ComboExecute.finishesLine(ai, castOf(opt)));
+        assertEquals(aiOf(ai).canPlaySa(castOf(opt)), AiPlayDecision.CantPlayAi);
+    }
+
     /** {@code winner} (line {@code row}) on our battlefield, Consultation and {@code spell} in our hand, {@code lands},
      *  a 20-card library, our Main 1: the line executable, and the lands paying Consultation and the spell together in
      *  mana value and in each colour's pips, as the window's own mana rule reads them. Returns Consultation. */
