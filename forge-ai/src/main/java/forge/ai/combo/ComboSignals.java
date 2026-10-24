@@ -16,14 +16,17 @@ import forge.game.ability.AbilityKey;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
+import forge.game.card.CardCopyService;
 import forge.game.combat.CombatUtil;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityCantBeCast;
 import forge.game.staticability.StaticAbilityDisableTriggers;
+import forge.game.staticability.StaticAbilityMode;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
@@ -96,24 +99,48 @@ public final class ComboSignals {
         return true;
     }
 
-    // a piece in our hand, library or command zone whose first spell a CantBeCast static bars. One on our battlefield
-    // or our stack has been cast already. cantBeCastAbility writes the card's castSA, so it is put back
-    // (SpecialCardAi.castableNow's idiom).
+    // a piece in our hand, library or command zone whose first spell a CantBeCast static bars, read as the cast reads
+    // it (AiController.canPlayAndPayForFace's idiom): on an LKI copy last known on the stack, its castFrom the zone the
+    // spell comes from, our hand for a piece in our hand or library (a tutor or a draw brings a library piece to the
+    // hand first) and the command zone for one there. Read on the card itself, an uncast card has no castFrom, so
+    // Drannith Magistrate's "Card.!wasCastFromTheirHand" would bar every piece. One on our battlefield or our stack has
+    // been cast already. The copy is made only while some CantBeCast static is in force (cantBeCastAbility's own
+    // scan), and takes the castSA cantBeCastAbility writes: the card itself is never written.
     private static boolean castBarred(final Player ai, final ComboTracker t, final String name) {
+        final Where w = t.where(name);
         final Card c = unplayed(t, name);
         if (c == null) {
             return false;
         }
         final SpellAbility spell = Iterables.getFirst(c.getSpells(), null);
-        if (spell == null) {
+        if (spell == null || !anyCastBar(ai.getGame(), c)) {
             return false;
         }
-        final SpellAbility prior = c.getCastSA();
-        try {
-            return StaticAbilityCantBeCast.cantBeCastAbility(spell, c, ai);
-        } finally {
-            c.setCastSA(prior);
+        final Card cast = CardCopyService.getLKICopy(c);
+        cast.setLKICMC(-1);
+        cast.setLastKnownZone(ai.getGame().getStackZone());
+        cast.setCastFrom(w == Where.COMMAND ? c.getZone() : ai.getZone(ZoneType.Hand));
+        return StaticAbilityCantBeCast.cantBeCastAbility(spell, cast, ai);
+    }
+
+    // whether a CantBeCast static is in force now, among the cards cantBeCastAbility reads (every static-ability source
+    // zone, and the card itself)
+    private static boolean anyCastBar(final Game game, final Card c) {
+        for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
+            if (barsCasts(ca)) {
+                return true;
+            }
         }
+        return barsCasts(c);
+    }
+
+    private static boolean barsCasts(final Card ca) {
+        for (final StaticAbility st : ca.getStaticAbilities()) {
+            if (st.checkConditions(StaticAbilityMode.CantBeCast)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Oracle's entering trigger, read as AiController.checkETBEffectsPreparedCard reads an ETB hoser (a private copy).

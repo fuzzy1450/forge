@@ -392,7 +392,8 @@ public class ComboSignalsTest extends AITest {
         assertNull(oracle.getCastSA());
         addCard("Void Winnower", opp);
         assertTrue(ComboSignals.denied(ai, l, t));
-        // StaticAbilityCantBeCast.cantBeCastAbility writes the card's castSA; the check restores it
+        // StaticAbilityCantBeCast.cantBeCastAbility writes the castSA of the card it reads: the check reads an LKI
+        // copy (final review, round 1), and the card itself keeps its own
         assertNull(oracle.getCastSA());
     }
 
@@ -950,6 +951,35 @@ public class ComboSignalsTest extends AITest {
 
         addCardToZone("Lightning Bolt", ai, ZoneType.Hand);
         assertEquals(abandon(l), Signal.SURER_KILL, "Bolt's 1 against the one Mountain");
+    }
+
+    // ---- final review, round 1 ----
+
+    @Test
+    public void drannithMagistrateBarsOnlyAPieceCastFromOutsideTheHand() {
+        // an opposing Drannith Magistrate: "Your opponents can't cast spells from anywhere other than their hands".
+        // Oracle in our hand and Consultation in our library (a tutor or a draw brings it to the hand first) are cast
+        // from the hand, so the line stays live and executable; the bar is read as the cast reads it
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        addCard("Drannith Magistrate", opp);
+        assertNull(abandon(l));
+        assertFalse(ComboSignals.denied(ai, l, t));
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        // the real card's castSA is never written by the check
+        assertNull(t.find(ORACLE, ZoneType.Hand).getCastSA());
+
+        // Oracle in the command zone is cast from there: barred
+        start(ORACLE_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        addCardToZone(ORACLE, ai, ZoneType.Command);
+        manaForTheLine();
+        final ComboLines.Line commander = t.deckLines().get(0);
+        assertNull(abandon(commander));
+        addCard("Drannith Magistrate", opp);
+        assertEquals(abandon(commander), Signal.DENIED);
+        assertEquals(t.executable(), List.of());
     }
 
     /** A three-player game whose AI (player 1, in its own MAIN1) holds the default board: line 742-1295, Oracle in
