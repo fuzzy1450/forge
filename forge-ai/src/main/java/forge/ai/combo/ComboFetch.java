@@ -24,9 +24,10 @@ import forge.game.zone.ZoneType;
 /**
  * The fetch rules (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a decision that picks cards from our
  * library, or orders its top, takes the missing piece of a combo line exactly one piece short when that is a legal
- * choice, and keeps every piece of a live line on top; otherwise it is today's decision, unchanged. A search, a dig and
- * the Vault also fetch for a line whose only signal is DANGER when its win comes this turn ({@link #fetchable}: section
- * 6.5.3, a combo that wins this turn beats surviving). Intuition's and Gifts Ungiven's piles are built from the
+ * choice, and keeps every piece of a live line on top; otherwise it is today's decision, unchanged. A search or a dig
+ * to our hand (or, for a piece that may start there, the battlefield) also fetches for a line whose only signal is
+ * DANGER when its win comes this turn, read from its winner's own window ({@link #fetchable}: section 6.5.3, a combo
+ * that wins this turn beats surviving). Intuition's and Gifts Ungiven's piles are built from the
  * completers, the missing pieces of the lines one piece short. Demonic Consultation is cast as a tutor from a deep
  * library, and its resolution names the piece it was cast for; it never tutors for a known top, a piece one of these
  * hooks put on top of our library (Evan, 2026-10-24).
@@ -39,8 +40,11 @@ import forge.game.zone.ZoneType;
  * and the known tops, the things carried from a decision to a later one, live on the AI's own tracker.
  */
 public final class ComboFetch {
-    /** Which pieces a fetch to a destination may take: any, or only a piece that may start on the battlefield. */
-    private enum Fit { ANY, BATTLEFIELD }
+    /** Where a fetch puts its card, and so which pieces it may take: our hand or the top of our library any piece,
+     *  the battlefield only a piece that may start there. A piece put on top of our library in our main phase is not
+     *  in our hand this turn, so only a fetch to our hand or the battlefield wins this turn under danger
+     *  ({@link #fetchable}). */
+    private enum Fit { HAND, TOP, BATTLEFIELD }
 
     /** Intuition's three cards ("search your library for three cards"): the piece and two fillers, or three
      *  completers. */
@@ -179,7 +183,8 @@ public final class ComboFetch {
     /**
      * Lim-Dul's Vault's dig (LimDulsVault.dig, behind its own MAX_DIGS, library, life-floor and look tests): FALSE
      * keeps these five when a {@link #fetchable} line's missing piece is among {@code shown}, TRUE digs again when one
-     * is still in our library below them, null leaves the stock rule.
+     * is still in our library below them, null leaves the stock rule. The Vault stacks the piece on top of our library,
+     * so its lines are the one-short ones: under danger no win this turn comes of it (follow-up final review, round 1).
      */
     public static Boolean vaultDig(final Player ai, final List<Card> shown) {
         final ComboTracker t = ComboTracker.of(ai);
@@ -187,7 +192,7 @@ public final class ComboFetch {
             return null;
         }
         final ComboTracker.View v = t.view();
-        final List<ComboLines.Line> fetchable = fetchable(v);
+        final List<ComboLines.Line> fetchable = fetchable(v, Fit.TOP);
         for (final ComboLines.Line l : fetchable) {
             if (ours(ai, shown, v.missing(l).get(0)) != null) {
                 return Boolean.FALSE;
@@ -402,30 +407,35 @@ public final class ComboFetch {
     // what a fetch to the destination may take: hand and the top of the library any piece, the battlefield a piece
     // that may start there; anything else (the graveyard, exile, the library's bottom or another position) none
     private static Fit fit(final ZoneType destination, final String libraryPosition) {
-        if (destination == ZoneType.Hand || (destination == ZoneType.Library && "0".equals(libraryPosition))) {
-            return Fit.ANY;
+        if (destination == ZoneType.Hand) {
+            return Fit.HAND;
+        }
+        if (destination == ZoneType.Library && "0".equals(libraryPosition)) {
+            return Fit.TOP;
         }
         return destination == ZoneType.Battlefield ? Fit.BATTLEFIELD : null;
     }
 
     /**
-     * The lines a search, a dig or the Vault fetches for, in {@link ComboTracker#oneShort}'s rank order: the one-short
-     * lines; and, while DANGER holds (follow-up F4, spec section 6.5.3: a combo that wins this turn beats surviving, so
-     * no line is one short), the deck's lines exactly one piece short whose only signal DANGER is (neither denied nor
-     * NO_MANA, and no surer kill) when the win comes this turn: our main phase, and the mana we can make now pays every
-     * piece still to be cast with the fetched one in our hand ({@link #winsThisTurn}). The piles, Gifts Ungiven and
-     * Consultation's tutor keep the one-short lines.
+     * The lines a fetch putting its card {@code fit} fetches for, in {@link ComboTracker#oneShort}'s rank order: the
+     * one-short lines; and, while DANGER holds (follow-up F4, spec section 6.5.3: a combo that wins this turn beats
+     * surviving, so no line is one short), for a search or a dig to our hand or the battlefield, the deck's lines
+     * exactly one piece short whose only signal DANGER is (neither denied nor NO_MANA, and no surer kill) when the win
+     * comes this turn ({@link #winsThisTurn}): our main phase, the winner's own window open this turn, and the mana we
+     * can make now paying the line with the fetched piece in our hand or on the battlefield. A fetch to the top of our
+     * library (Vampiric Tutor, Imperial Seal, the Vault's stack) puts nothing in our hand this turn and keeps the
+     * one-short lines, as the piles, Gifts Ungiven and Consultation's tutor do (follow-up final review, round 1).
      */
-    static List<ComboLines.Line> fetchable(final ComboTracker.View v) {
+    private static List<ComboLines.Line> fetchable(final ComboTracker.View v, final Fit fit) {
         final List<ComboLines.Line> oneShort = v.oneShort();
         // a one-short line has no signal, so DANGER does not hold: these are the lines
-        if (!oneShort.isEmpty() || !ourMainPhase(v.ai()) || !v.danger() || v.surerKill()) {
+        if (!oneShort.isEmpty() || fit == Fit.TOP || !ourMainPhase(v.ai()) || !v.danger() || v.surerKill()) {
             return oneShort;
         }
         final List<ComboLines.Line> out = new ArrayList<>();
         for (final ComboLines.Line l : v.lines()) {
             if (v.ready(l) && ComboSignals.abandon(v, l) == ComboSignals.Signal.DANGER && v.missing(l).size() == 1
-                    && winsThisTurn(v, l)) {
+                    && winsThisTurn(v, l, fit)) {
                 out.add(l);
             }
         }
@@ -438,17 +448,39 @@ public final class ComboFetch {
         return ph.isPlayerTurn(ai) && ph.getPhase() != null && ph.getPhase().isMain();
     }
 
-    // the mana we can make now (ComboMana, each source assigned to one pip, the sources isManaSourceReserved holds left
-    // out) pays together the mana costs of every piece of l still to be cast, ours in our hand, library or command
-    // zone (the fetched one is the library's, counted as in our hand), and the commander tax on one in our command zone
-    // (ComboSignals.commanderTax). The sources are read against the first such piece's first spell (in Line.names
-    // order, the emptier first). A piece on our battlefield or our stack is cast already
-    private static boolean winsThisTurn(final ComboTracker.View v, final ComboLines.Line l) {
-        final List<ManaCost> costs = new ArrayList<>(3);
+    // whether l, its one missing piece fetched now (to our hand, or onto our battlefield for fit BATTLEFIELD), wins
+    // this turn, read from its winner's own window as ComboExecute opens it (follow-up final review, round 1: the mana
+    // alone let a Laboratory Maniac line with no draw to follow, a Doctor Doom cast summoning sick and a Fblthp past
+    // combat take the fetch from the stock pick under danger, and the AI stopped playing to live):
+    // - Thassa's Oracle: its go-off (ComboExecute.goOffFirst, then the emptier at Oracle's trigger) needs the mana
+    //   alone;
+    // - Laboratory Maniac and Jace win off a draw of ours after the emptier, and this turn only a spell of our hand
+    //   that the AI casts right after it on the emptied library can be that draw (ComboExecute.followUpDraws, the draw
+    //   spell's window; the opponent's end step comes after their attack): one of them, its mana paid with the line's;
+    // - Doctor Doom wins off its own {T}: it is on our battlefield already, untapped and free of summoning sickness
+    //   (ComboExecute.staged), since one cast or put there now cannot tap this turn;
+    // - Fblthp, Impossibly Lost wins off its trigger on combat damage to an opponent, which no fetch in a main phase
+    //   can count on (none comes after combat; before it, an attack may not be made, or be blocked): never.
+    // The mana we can make now (ComboMana, each source assigned to one pip, the sources isManaSourceReserved holds left
+    // out) pays together the mana costs of every piece of l still to be cast, ours in our hand, library or command zone
+    // (the fetched one, the library's, counted as in our hand, unless the fetch puts it onto our battlefield), the
+    // commander tax on one in our command zone (ComboSignals.commanderTax) and, for Laboratory Maniac or Jace, the
+    // follow-up draw's. The sources are read against the first such piece's first spell (in Line.names order, the
+    // emptier first), else the draw's. A piece on our battlefield or our stack is cast already
+    private static boolean winsThisTurn(final ComboTracker.View v, final ComboLines.Line l, final Fit fit) {
+        final ComboLines.Winner w = l.winner();
+        if (w == ComboLines.Winner.FBLTHP || (w == ComboLines.Winner.DOOM && !ComboExecute.staged(v, w))) {
+            return false;
+        }
+        final List<ManaCost> costs = new ArrayList<>(4);
         SpellAbility spell = null;
         for (final String name : l.names()) {
-            final ComboTracker.Where w = v.where(name);
-            if (w != ComboTracker.Where.HAND && w != ComboTracker.Where.LIBRARY && w != ComboTracker.Where.COMMAND) {
+            final ComboTracker.Where where = v.where(name);
+            if (where != ComboTracker.Where.HAND && where != ComboTracker.Where.LIBRARY
+                    && where != ComboTracker.Where.COMMAND) {
+                continue;
+            }
+            if (where == ComboTracker.Where.LIBRARY && fit == Fit.BATTLEFIELD) {
                 continue;
             }
             final Card c = v.card(name);
@@ -457,21 +489,32 @@ public final class ComboFetch {
                 spell = Iterables.getFirst(c.getSpells(), null);
             }
         }
-        if (spell == null) {
-            return false;
-        }
         final int tax = ComboSignals.commanderTax(v, l);
         if (tax > 0) {
             costs.add(ManaCost.get(tax));
         }
-        return ComboMana.of(v.ai(), spell, true).pays(costs.toArray(new ManaCost[0]));
+        final Player ai = v.ai();
+        if (!ComboExecute.drawsAfter(w)) {
+            return spell != null && ComboMana.of(ai, spell, true).pays(costs.toArray(new ManaCost[0]));
+        }
+        final ComboMana mana = spell == null ? null : ComboMana.of(ai, spell, true);
+        for (final Card draw : ComboExecute.followUpDraws(ai)) {
+            final ComboMana m = mana != null ? mana
+                    : ComboMana.of(ai, Iterables.getFirst(draw.getSpells(), null), true);
+            final List<ManaCost> withDraw = new ArrayList<>(costs);
+            withDraw.add(draw.getManaCost());
+            if (m.pays(withDraw.toArray(new ManaCost[0]))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // the missing piece of the first fetchable line, by the tracker's rank, that the fetch may take and that the cards
     // hold one of ours of: the first such card in their order
     private static Card pick(final ComboTracker.View v, final Player owner, final Iterable<Card> cards,
             final Fit fit) {
-        for (final ComboLines.Line l : fetchable(v)) {
+        for (final ComboLines.Line l : fetchable(v, fit)) {
             final String name = v.missing(l).get(0);
             if (fit == Fit.BATTLEFIELD && !startsOnBattlefield(l, name)) {
                 continue;

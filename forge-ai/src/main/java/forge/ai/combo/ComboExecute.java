@@ -1,5 +1,6 @@
 package forge.ai.combo;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import forge.ai.AiAbilityDecision;
@@ -330,8 +331,8 @@ public final class ComboExecute {
     // the winner's own part of its window, read from the board (an if chain, not an enum switch: javac would add a
     // synthetic switch-map class): Oracle's or Fblthp's trigger of ours on the stack; our Doctor Doom untapped and
     // free of summoning sickness; Laboratory Maniac or Jace on our battlefield, whose window also needs a draw of ours
-    // to follow (drawsAfter, drawFollows)
-    private static boolean staged(final ComboTracker.View v, final Winner w) {
+    // to follow (drawsAfter, drawFollows). ComboFetch's win this turn under danger reads Doom's
+    static boolean staged(final ComboTracker.View v, final Winner w) {
         if (w == Winner.ORACLE || w == Winner.FBLTHP) {
             return v.triggerOnOurStack(w.card);
         }
@@ -345,8 +346,9 @@ public final class ComboExecute {
         return true;
     }
 
-    // whether the winner wins off a draw of ours after the emptier: Laboratory Maniac and Jace
-    private static boolean drawsAfter(final Winner w) {
+    // whether the winner wins off a draw of ours after the emptier: Laboratory Maniac and Jace (ComboFetch's win this
+    // turn under danger asks it too)
+    static boolean drawsAfter(final Winner w) {
         return w == Winner.LAB || w == Winner.JACE;
     }
 
@@ -374,6 +376,20 @@ public final class ComboExecute {
             }
         }
         return false;
+    }
+
+    // the cards of our hand whose spell the AI casts right after the emptier on the emptied library now, as drawFollows
+    // reads the hand (lands left out, castsOwnDrawAfter): ComboFetch's win this turn under danger pays one of them
+    // beside a Laboratory Maniac or Jace line's casts
+    static List<Card> followUpDraws(final Player ai) {
+        final PhaseHandler ph = ai.getGame().getPhaseHandler();
+        final List<Card> out = new ArrayList<>(2);
+        for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+            if (!c.isLand() && castsOwnDrawAfter(ai, ph, c)) {
+                out.add(c);
+            }
+        }
+        return out;
     }
 
     // a spell of the card that the AI casts right after the emptier on the emptied library (Review Focus 4):

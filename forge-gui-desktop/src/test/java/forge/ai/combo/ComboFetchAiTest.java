@@ -36,6 +36,7 @@ import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
+import forge.game.card.CounterEnumType;
 import forge.game.cost.Cost;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -55,10 +56,17 @@ public class ComboFetchAiTest extends AITest {
     private static final String EXILE = "F|88|H|Exile your library";
     private static final String ORACLE_CONSULTATION = "V|742-1295|3|{U}{U}{B}|2,88|H:Demonic Consultation|H:Thassa's Oracle";
     private static final String LAB_CONSULTATION = "V|742-2836|1|{B}|2,88|H:Demonic Consultation|B:Laboratory Maniac";
+    private static final String JACE_CONSULTATION = "V|742-3096|1|{B}|2,88|H:Demonic Consultation|B:Jace, Wielder of Mysteries";
+    private static final String DOOM_CONSULTATION = "V|x-1|1|{B}|2,88|H:Demonic Consultation|B:Doctor Doom, Unrivaled";
+    private static final String FBLTHP_CONSULTATION = "V|742-8266|1|{B}|2,88|B:Fblthp, Impossibly Lost|H:Demonic Consultation";
 
     private static final String ORACLE = "Thassa's Oracle";
     private static final String CONSULTATION = "Demonic Consultation";
     private static final String LAB = "Laboratory Maniac";
+    private static final String JACE = "Jace, Wielder of Mysteries";
+    private static final String DOOM = "Doctor Doom, Unrivaled";
+    private static final String FBLTHP = "Fblthp, Impossibly Lost";
+    private static final String OPT = "Opt";
     private static final String WURM = "Craw Wurm";
 
     // ten distinct names, Consultation on top and Craw Wurm second (fillLibrary makes ten of one name)
@@ -813,13 +821,15 @@ public class ComboFetchAiTest extends AITest {
         assertSame(pick(ZoneType.Hand, main2), later);
     }
 
-    /** Line 742-2836 with Laboratory Maniac in play, the ten-name library, and Island, Island and Swamp open in our
-     *  Main 1, at 3 life against an opposing Colossal Dreadmaw (Lab chumps it, and its trample puts 4 through): DANGER
-     *  is the line's only signal and Consultation its one piece missing, so no line is one short. Returns the
-     *  library's Consultation. */
+    /** Line 742-2836 with Laboratory Maniac in play, Opt in hand, the ten-name library, and Island, Island and Swamp
+     *  open in our Main 1, at 3 life against an opposing Colossal Dreadmaw (Lab chumps it, and its trample puts 4
+     *  through): DANGER is the line's only signal and Consultation its one piece missing, so no line is one short.
+     *  Consultation fetched now wins this turn: cast with Lab in play, Opt follows it on the emptied library, and the
+     *  three lands pay Consultation's {B} and Opt's {U} together. Returns the library's Consultation. */
     private Card labDangerBoard() {
         start(LAB_CONSULTATION);
         addCard(LAB, ai);
+        addCardToZone(OPT, ai, ZoneType.Hand);
         for (final String name : LIBRARY) {
             addCardToZone(name, ai, ZoneType.Library);
         }
@@ -835,8 +845,8 @@ public class ComboFetchAiTest extends AITest {
     @Test
     public void dangerDoesNotRecountAPieceAlreadyInPlay() {
         // beyond the plan's tests (F4 review): a piece on our battlefield is cast already, so the win this turn costs
-        // only Consultation's {B}, which Island, Island and Swamp pay; Laboratory Maniac's {2}{U} counted beside it
-        // would need four
+        // only Consultation's {B} and the following Opt's {U}, which Island, Island and Swamp pay; Laboratory Maniac's
+        // {2}{U} counted beside them would need five
         final Card consultation = labDangerBoard();
         final SpellAbility tutor = spell("Demonic Tutor");
         t.useLines(List.of());
@@ -848,8 +858,9 @@ public class ComboFetchAiTest extends AITest {
 
     @Test
     public void dangerSingleCostNeedsItsManaOpen() {
-        // beyond the plan's tests (F4 review): a line with one cost left still needs that cost's mana open now. The
-        // Swamp tapped: next turn's mana counts it (no NO_MANA), but nothing open now makes Consultation's {B}
+        // beyond the plan's tests (F4 review): a line with one cast left still needs that cast's mana open now. The
+        // Swamp tapped: next turn's mana counts it (no NO_MANA), but nothing open now makes Consultation's {B}, though
+        // the Islands make the following Opt's {U}
         labDangerBoard();
         for (final Card land : ai.getLandsInPlay()) {
             if ("Swamp".equals(land.getName())) {
@@ -1019,9 +1030,11 @@ public class ComboFetchAiTest extends AITest {
 
     @Test
     public void dangerTakesTheNearestWinFirst() {
-        // beyond the plan's tests: two lines one short whose only signal is DANGER, each won this turn on Island,
-        // Island, Swamp and Swamp, rank as the one-short lines do (theCheapestOneShortLineThatTheListHoldsIsServed):
-        // Oracle's (3 still to cast) before Laboratory Maniac's (4), though the deck lists Lab's first
+        // beyond the plan's tests: two lines one short whose only signal is DANGER rank as the one-short lines do
+        // (theCheapestOneShortLineThatTheListHoldsIsServed): Oracle's (3 still to cast) before Laboratory Maniac's
+        // (4), though the deck lists Lab's first. Oracle's is won this turn on Island, Island, Swamp and Swamp; Lab's
+        // only with a draw to follow Consultation (follow-up final review, round 1): Opt in hand and a fifth land,
+        // which pay Lab's {2}{U}, Consultation's {B} and Opt's {U} together
         start(LAB_CONSULTATION, ORACLE_CONSULTATION);
         addCard("Swamp", ai);
         addCardToZone(CONSULTATION, ai, ZoneType.Hand);
@@ -1040,8 +1053,251 @@ public class ComboFetchAiTest extends AITest {
 
         assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(lab, oracle, wurm)), ai, ai),
                 oracle);
-        // the first line's piece not offered: the next line is served
+        // the first line's piece not offered, and no draw follows Laboratory Maniac: the next line wins nothing this
+        // turn, and the stock pick decides
+        assertNull(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(wurm, lab)), ai, ai));
+
+        // Opt in hand and a fifth land: the next line is served
+        addCardToZone(OPT, ai, ZoneType.Hand);
+        addCard("Swamp", ai);
+        for (final ComboLines.Line l : t.deckLines()) {
+            assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER, l.variant().id());
+        }
+        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(lab, oracle, wurm)), ai, ai),
+                oracle);
         assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, new CardCollection(List.of(wurm, lab)), ai, ai), lab);
+    }
+
+    @Test
+    public void dangerLabOrJaceWinsThisTurnOnlyWithADrawToFollow() {
+        // follow-up final review, round 1: Laboratory Maniac and Jace win off a draw of ours after the emptier, and
+        // under danger in our main phase only a draw spell of our hand can follow it this turn (the opponent's end step
+        // comes after their attack). Without one, or without the mana for it beside the line's, the stock pick, with
+        // the stock draws
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+
+        // Laboratory Maniac in play, no draw spell in hand
+        labDangerBoard();
+        game.getAction().moveTo(ZoneType.Graveyard, t.find(OPT, ZoneType.Hand), null, AbilityKey.newMap());
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility noDraw = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, noDraw), lab);
+
+        // Opt in hand, but both Islands tapped: Consultation's {B} is open now, Opt's {U} is not
+        labDangerBoard();
+        for (final Card land : ai.getLandsInPlay()) {
+            if ("Island".equals(land.getName())) {
+                land.setTapped(true);
+            }
+        }
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility noBlue = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, noBlue), lab);
+
+        // Laboratory Maniac in hand, Consultation in the library (the finding's Sauron state): Island, Island, Swamp
+        // and Swamp pay Lab's {2}{U} and Consultation's {B}, but no draw follows
+        start(LAB_CONSULTATION);
+        addCard("Swamp", ai);
+        addCardToZone(LAB, ai, ZoneType.Hand);
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(t.where(LAB), ComboTracker.Where.HAND);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(CONSULTATION));
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility inHand = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, inHand), lab);
+        // Opt in hand too: Lab's, Consultation's and Opt's five mana outrun the four lands
+        addCardToZone(OPT, ai, ZoneType.Hand);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertWarmStockParity(() -> pick(ZoneType.Hand, inHand), lab);
+        // a fifth land: Lab cast now, then Consultation and Opt, win this turn
+        addCard("Island", ai);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Hand, inHand), consultation);
+        t.useLines(lab);
+        assertSame(pick(ZoneType.Hand, inHand), consultation);
+
+        // Jace, Wielder of Mysteries in play: the same window, without and then with Opt in hand
+        final List<ComboLines.Line> jace = lines(JACE_CONSULTATION);
+        start(JACE_CONSULTATION);
+        addCard(JACE, ai).setCounters(CounterEnumType.LOYALTY, 4);
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(t.where(JACE), ComboTracker.Where.BATTLEFIELD);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(CONSULTATION));
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility jaceTutor = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, jaceTutor), jace);
+        addCardToZone(OPT, ai, ZoneType.Hand);
+        final Card jaceConsultation = t.find(CONSULTATION, ZoneType.Library);
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Hand, jaceTutor), jaceConsultation);
+        t.useLines(jace);
+        assertSame(pick(ZoneType.Hand, jaceTutor), jaceConsultation);
+    }
+
+    @Test
+    public void dangerFetchesLabOntoTheBattlefieldUncast() {
+        // follow-up final review, round 1: a search to the battlefield puts Laboratory Maniac there uncast, so the win
+        // this turn costs only Consultation's {B} and the following Opt's {U}, which Island, Island, Swamp and Swamp
+        // pay; Lab's {2}{U} counted beside them would need five. Without Opt no draw follows: the stock pick
+        start(LAB_CONSULTATION);
+        addCard("Swamp", ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        addCardToZone(OPT, ai, ZoneType.Hand);
+        for (final String name : LIBRARY) {
+            addCardToZone(CONSULTATION.equals(name) ? LAB : name, ai, ZoneType.Library);
+        }
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(LAB));
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEquals(t.oneShort(), List.of());
+        final Card lab = t.find(LAB, ZoneType.Library);
+        final SpellAbility chord = spell("Chord of Calling");
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Battlefield, chord), lab);
+        t.useLines(lines(LAB_CONSULTATION));
+        assertSame(pick(ZoneType.Battlefield, chord), lab);
+
+        game.getAction().moveTo(ZoneType.Graveyard, t.find(OPT, ZoneType.Hand), null, AbilityKey.newMap());
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertWarmStockParity(() -> pick(ZoneType.Battlefield, chord), lines(LAB_CONSULTATION));
+    }
+
+    /** Line x-1 with Doctor Doom, Unrivaled in {@code zone} (summoning sick on our battlefield), the ten-name library,
+     *  and Island, Island and three Swamps open in our Main 1, at 2 life against an opposing Colossal Dreadmaw (a Doom
+     *  of ours in play blocks it, and its trample puts 2 through): DANGER is the line's only signal and Consultation
+     *  its one piece missing, so no line is one short. Returns the Doom. */
+    private Card doomDangerBoard(final ZoneType zone) {
+        start(DOOM_CONSULTATION);
+        addCard("Swamp", ai);
+        addCard("Swamp", ai);
+        final Card doom = addCardToZone(DOOM, ai, zone);
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        ai.setLife(2, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(t.where(DOOM),
+                zone == ZoneType.Hand ? ComboTracker.Where.HAND : ComboTracker.Where.BATTLEFIELD);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(CONSULTATION));
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEquals(t.oneShort(), List.of());
+        return doom;
+    }
+
+    @Test
+    public void dangerDoomWinsThisTurnOnlyReadyOnOurBattlefield() {
+        // follow-up final review, round 1: Doctor Doom wins off its own {T} after Consultation, so this turn only a
+        // Doom already on our battlefield, untapped and free of summoning sickness, wins
+        final List<ComboLines.Line> doom = lines(DOOM_CONSULTATION);
+
+        // Doom in hand (the finding's Sauron state): the five lands pay Doom's {2}{B}{B} and Consultation's {B}, but a
+        // Doom cast now is summoning sick
+        doomDangerBoard(ZoneType.Hand);
+        final SpellAbility inHand = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, inHand), doom);
+
+        // Doom on our battlefield, summoning sick, then tapped: no {T} this turn
+        final Card inPlay = doomDangerBoard(ZoneType.Battlefield);
+        assertTrue(inPlay.isSick());
+        final SpellAbility tutor = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), doom);
+        inPlay.setSickness(false);
+        inPlay.setTapped(true);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), doom);
+
+        // untapped and free of summoning sickness: Consultation now, then Doom's {T}, win this turn
+        inPlay.setTapped(false);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Hand, tutor), consultation);
+        t.useLines(doom);
+        assertSame(pick(ZoneType.Hand, tutor), consultation);
+    }
+
+    @Test
+    public void dangerNeverFetchesForFblthp() {
+        // follow-up final review, round 1: Fblthp, Impossibly Lost wins off its trigger on combat damage to an
+        // opponent, which no fetch in a main phase can count on: none comes after combat, and before it Fblthp may not
+        // attack, or be blocked. Line 742-8266, Island, Island and Swamp, at 3 life against an opposing Colossal
+        // Dreadmaw
+        final List<ComboLines.Line> fblthp = lines(FBLTHP_CONSULTATION);
+
+        // Consultation in hand, Fblthp in the library (the finding's Yuriko state): Fblthp's {1}{U} and
+        // Consultation's {B} are open, but a Fblthp cast now is summoning sick
+        start(FBLTHP_CONSULTATION);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        addCardToZone(FBLTHP, ai, ZoneType.Library);
+        for (final String name : LIBRARY.subList(1, LIBRARY.size())) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(FBLTHP));
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility tutor = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), fblthp);
+
+        // Fblthp ready on our battlefield (it chumps the Dreadmaw, whose trample puts 5 through), Consultation in the
+        // library: in our Main 1, and in our Main 2, after combat
+        for (final PhaseType phase : List.of(PhaseType.MAIN1, PhaseType.MAIN2)) {
+            start(FBLTHP_CONSULTATION);
+            game.getPhaseHandler().devModeSet(phase, ai);
+            addCard(FBLTHP, ai).setSickness(false);
+            for (final String name : LIBRARY) {
+                addCardToZone(name, ai, ZoneType.Library);
+            }
+            ai.setLife(3, null);
+            addCard("Colossal Dreadmaw", opp).setSickness(false);
+            assertEquals(game.getPhaseHandler().getPhase(), phase);
+            assertEquals(t.missing(t.deckLines().get(0)), List.of(CONSULTATION), phase.name());
+            assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER, phase.name());
+            final SpellAbility main = spell("Demonic Tutor");
+            assertWarmStockParity(() -> pick(ZoneType.Hand, main), fblthp);
+        }
+    }
+
+    @Test
+    public void dangerNeverFetchesToTheTop() {
+        // follow-up final review, round 1: a piece put on top of our library in our main phase is not in our hand this
+        // turn, so a search or a dig to the top, and the Vault's stack, keep the one-short lines under danger. On the
+        // danger board each makes the stock decision with the stock draws, and remembers no known top
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
+        for (final String name : List.of("Imperial Seal", "Vampiric Tutor", "Mystical Tutor")) {
+            final Card consultation = dangerBoard();
+            final SpellAbility top = spell(name);
+            assertEquals(top.getParam("LibraryPosition"), "0", name);
+            assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, top), held), consultation, name);
+            assertEquals(t.knownTops(), Set.of(), name);
+        }
+
+        // Thassa's Oracle's own look (LibraryPosition$ 0)
+        Card consultation = dangerBoard();
+        final List<Card> shown = List.of(t.find(WURM, ZoneType.Library), consultation);
+        final SpellAbility look = addCardToZone(ORACLE, ai, ZoneType.Hand).getTriggers().get(0).ensureAbility();
+        look.setActivatingPlayer(ai);
+        assertEquals(look.getParam("LibraryPosition"), "0");
+        assertNull(ComboFetch.digPick(ai, look, shown, ai));
+        assertEquals(t.knownTops(), Set.of());
+
+        // the Vault: Consultation on top among the five shown, then five that miss it with it still in our library
+        consultation = dangerBoard();
+        final List<Card> lib = list(ai.getCardsIn(ZoneType.Library));
+        assertSame(lib.get(0), consultation);
+        assertNull(ComboFetch.vaultDig(ai, lib.subList(0, 5)));
+        assertNull(ComboFetch.vaultDig(ai, lib.subList(1, 6)));
     }
 
     @Test
@@ -1075,23 +1331,17 @@ public class ComboFetchAiTest extends AITest {
 
     @Test
     public void dangerStillDigsForAWinThisTurn() {
-        // the win this turn holds for the digs and the Vault as for the searches
+        // the win this turn holds for a dig to our hand as for a search (a dig to the top, and the Vault, never:
+        // dangerNeverFetchesToTheTop)
         final Card consultation = dangerBoard();
         final SpellAbility impulse = spell("Impulse");
         final List<Card> shown = List.of(t.find(WURM, ZoneType.Library), consultation);
         assertSame(ComboFetch.digPick(ai, impulse, shown, ai), consultation);
         assertSame(new DigAi().chooseSingleCard(ai, impulse, shown, false, null, Map.of()), consultation);
-        // the Vault: Consultation on top among the five shown keeps them; five that miss it, with it still in our
-        // library, dig on
-        final List<Card> lib = list(ai.getCardsIn(ZoneType.Library));
-        assertSame(lib.get(0), consultation);
-        assertEquals(ComboFetch.vaultDig(ai, lib.subList(0, 5)), Boolean.FALSE);
-        assertEquals(ComboFetch.vaultDig(ai, lib.subList(1, 6)), Boolean.TRUE);
 
-        // with no line, each is the stock rule
+        // with no line, it is the stock rule
         t.useLines(List.of());
         assertNull(ComboFetch.digPick(ai, impulse, shown, ai));
-        assertNull(ComboFetch.vaultDig(ai, lib.subList(0, 5)));
     }
 
     @Test
