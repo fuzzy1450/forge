@@ -796,6 +796,61 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(consider(consultation), AiPlayDecision.WillPlay);
     }
 
+    /** Spec 6.4: Consultation goes for Laboratory Maniac or Jace "when one of them is on our battlefield and a draw we
+     *  control follows". With the winner still in our hand the opponent's end step, our turn next, opens no window:
+     *  Consultation would take the library, and our draw would lose with the winner still in hand. The same card moved
+     *  onto our battlefield opens it. */
+    private void aWinnerInHandOpensNoWindow(final String row, final String winner, final String id) {
+        start(row);
+        final Card held = hand(winner);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        opponentsEndStep();
+        assertEquals(ids(t.executable()), List.of(id));
+        assertEquals(t.where(winner), ComboTracker.Where.HAND);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, winner + " in our hand opened a window");
+
+        game.getAction().moveTo(ZoneType.Battlefield, held, null, AbilityKey.newMap());
+        assertEquals(t.where(winner), ComboTracker.Where.BATTLEFIELD);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
+    @Test
+    public void labInHandIsNoWindow() {
+        aWinnerInHandOpensNoWindow(LAB_CONSULTATION, LAB, "742-2836");
+    }
+
+    @Test
+    public void jaceInHandIsNoWindow() {
+        aWinnerInHandOpensNoWindow(JACE_CONSULTATION, JACE, "742-3096");
+    }
+
+    /** A window is its own line's (the ComboExecute header: each window is gated by a line executable now pairing that
+     *  emptier with that winner). A deck with two Consultation lines, in our Main 1 with no draw spell: Laboratory
+     *  Maniac on our battlefield stages its line, but no draw of ours follows; Doctor Doom in our library, whose line
+     *  wants no draw after, does not stage its own. Lab's staging opens no window for Doom's line. Doom moved onto our
+     *  battlefield, ready, opens its own. */
+    @Test
+    public void twoLinesOpenOnlyTheirOwnWindow() {
+        start(LAB_CONSULTATION, DOOM_CONSULTATION);
+        ready(LAB);
+        final Card doom = addCardToZone(DOOM, ai, ZoneType.Library);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(game.getPhaseHandler().getPhase(), PhaseType.MAIN1);
+        assertEquals(game.getPhaseHandler().getPlayerTurn(), ai);
+        assertEquals(ids(t.executable()).stream().sorted().collect(Collectors.toList()), List.of("742-2836", "x-1"));
+        assertEquals(t.where(DOOM), ComboTracker.Where.LIBRARY);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, "Lab's staging opened Doom's window");
+
+        final Card inPlay = game.getAction().moveTo(ZoneType.Battlefield, doom, null, AbilityKey.newMap());
+        inPlay.setSickness(false);
+        assertEquals(t.where(DOOM), ComboTracker.Where.BATTLEFIELD);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+    }
+
     /** Only Fblthp's own trigger is answered: Oracle's entering trigger on top of our stack asks for no response, with
      *  Fblthp's line, Consultation and black all there; Fblthp's trigger on top does. */
     @Test
