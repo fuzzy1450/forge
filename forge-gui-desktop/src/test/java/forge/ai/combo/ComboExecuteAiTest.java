@@ -1602,6 +1602,69 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(MyRandom.callCount() - before, stock, "the draws moved");
     }
 
+    /** The go-off is the Oracle's own cast, not whichever spell the go-off's mana would also pay: Ponder ({U}), first
+     *  in hand, fits beside Demonic Consultation's {B} on Island, Island and Swamp as the Oracle's {U}{U} does, and the
+     *  Oracle is still the spell chosen. */
+    @Test
+    public void goOffCastsTheOracleNotACheaperSpell() {
+        sequencerBoard("Ponder", true);
+        final Card ponder = t.find("Ponder", ZoneType.Hand);
+        final Card consultation = t.find(CONSULTATION, ZoneType.Hand);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertTrue(ComboMana.of(ai, castOf(ponder), true).pays(ponder.getManaCost(), consultation.getManaCost()),
+                "the go-off's mana does not pay Ponder beside the Consultation");
+        assertEquals(decision(), ORACLE, "a cheaper spell stood in for the Oracle");
+    }
+
+    /** The go-off goes ahead of the pre-casts after the walk too. Our Main 2: Air Elemental, High Tide, Thassa's Oracle
+     *  and Demonic Consultation in hand, Island, Island, Island and Swamp. With no line the stock play is a pre-cast,
+     *  High Tide in front of the four-drop its extra {U} newly pays (SpecialCardAi.HighTide.findPreCast); with the line
+     *  the go-off is ready, and the Oracle is cast first. */
+    @Test
+    public void goOffBeatsAPreCast() {
+        start(ORACLE_CONSULTATION);
+        moveToMain2(game, ai);
+        hand("Air Elemental");
+        hand("High Tide");
+        hand(ORACLE);
+        hand(CONSULTATION);
+        lands("Island", "Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        t.useLines(List.of());
+        assertEquals(decision(), "High Tide", "without a line the stock pre-cast is not High Tide");
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertEquals(decision(), ORACLE, "a pre-cast spent the go-off's mana");
+    }
+
+    /** The go-off asks nothing of the walk first: with the line, the decision makes the same draws whether Divination
+     *  stands in hand ahead of Thassa's Oracle and Demonic Consultation or not, those of the Oracle's own
+     *  canPlayAndPayFor. A go-off asked after the walk would come after the walk's evaluation of the Divination. */
+    @Test
+    public void goOffAsksNothingBeforeItsOwnCast() {
+        final long alone = goOffDraws(false);
+        assertTrue(alone > 0, "the Oracle's cast draws nothing: no draw count to compare");
+        assertEquals(goOffDraws(true), alone, "the walk ran before the go-off");
+    }
+
+    // the draws of the decision, the Oracle's cast, on line 742-1295's go-off board in our Main 2 (Island, Island and
+    // Swamp, a 20-card library), with Divination in hand ahead of the Oracle and the Consultation when withDivination
+    private long goOffDraws(final boolean withDivination) {
+        start(ORACLE_CONSULTATION);
+        moveToMain2(game, ai);
+        if (withDivination) {
+            hand("Divination");
+        }
+        hand(ORACLE);
+        hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        MyRandom.setRandom(new Random(7));
+        final long before = MyRandom.callCount();
+        assertEquals(decision(), ORACLE);
+        return MyRandom.callCount() - before;
+    }
+
     /** A deck holding no line (here, Laboratory Maniac's with no Laboratory Maniac) keeps the stock decision and its
      *  draws: the other spell first. */
     @Test

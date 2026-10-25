@@ -873,6 +873,79 @@ public class ComboHoldAiTest extends AITest {
         return sa;
     }
 
+    /** A discard of a counted number of cards is no wheel: Faithless Looting's and Careful Study's "draw two, then
+     *  discard two" (a sub Discard of Mode$ TgtChoose) leave the choice to our own discard, which spares a protected
+     *  piece while another card can go (ComboHold.spare). Neither waits, while Wheel of Fortune beside them, a Discard
+     *  of Mode$ Hand, does. */
+    @Test
+    public void aCountedDiscardIsNoWheel() {
+        final Card oracle = wheelBoard("Faithless Looting", "Careful Study", WHEEL);
+        assertTrue(t.protects(oracle));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(t.find(WHEEL, ZoneType.Hand))));
+        for (final String name : List.of("Faithless Looting", "Careful Study")) {
+            assertFalse(ComboHold.vetoesCast(ai, castOf(t.find(name, ZoneType.Hand))),
+                    name + " waited for a discard of two");
+        }
+    }
+
+    /** A part that takes our hand need not be the spell's root: Apocalypse's root exiles every permanent, and a sub of
+     *  it discards our hand (a Discard of Mode$ Hand naming no player: you). It waits while the Oracle is protected,
+     *  and with no line it is an ordinary spell again. */
+    @Test
+    public void aSubThatDiscardsTheHandWaits() {
+        final Card oracle = wheelBoard("Apocalypse");
+        final Card apocalypse = t.find("Apocalypse", ZoneType.Hand);
+        assertTrue(t.protects(oracle));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(apocalypse)), "Apocalypse discarded the held Oracle");
+
+        t.useLines(List.of());
+        assertFalse(ComboHold.vetoesCast(ai, castOf(apocalypse)));
+    }
+
+    /** A hand put into the graveyard is a wheel as much as a hand put into exile: Harness Infinity ("Exchange your hand
+     *  and graveyard": a ChangeZoneAll of our cards from the hand to the graveyard, then the graveyard's others back to
+     *  the hand) waits, and so does a bare hand-to-graveyard ChangeZoneAll written for the test. */
+    @Test
+    public void aHandToTheGraveyardWaits() {
+        final Card oracle = wheelBoard("Harness Infinity");
+        final Card host = hand("Hex Magic");
+        assertTrue(t.protects(oracle));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(t.find("Harness Infinity", ZoneType.Hand))),
+                "Harness Infinity put the held Oracle into the graveyard");
+        assertTrue(ComboHold.vetoesCast(ai, zoneAll(host, "Hand", "Graveyard", "Card.YouCtrl")),
+                "a hand to the graveyard was cast into the held Oracle");
+    }
+
+    /** A ChangeZoneAll from another zone takes nothing from our hand, whatever its ChangeType would fit there: Final
+     *  Judgment's exile of the battlefield's creatures and Calamity's Wake's exile of every graveyard never wait, nor do
+     *  a battlefield-to-exile, a battlefield-to-graveyard and a graveyard-to-exile written for the test, while each of
+     *  those from the hand does. */
+    @Test
+    public void otherOriginsAreNoWheel() {
+        final Card oracle = wheelBoard("Final Judgment", "Calamity's Wake");
+        final Card host = hand("Hex Magic");
+        assertTrue(t.protects(oracle));
+        for (final String name : List.of("Final Judgment", "Calamity's Wake")) {
+            assertFalse(ComboHold.vetoesCast(ai, castOf(t.find(name, ZoneType.Hand))), name);
+        }
+        for (final List<String> move : List.of(List.of("Battlefield", "Exile", "Creature"),
+                List.of("Battlefield", "Graveyard", "Creature"), List.of("Graveyard", "Exile", "Card"))) {
+            assertFalse(ComboHold.vetoesCast(ai, zoneAll(host, move.get(0), move.get(1), move.get(2))),
+                    move.toString());
+            assertTrue(ComboHold.vetoesCast(ai, zoneAll(host, "Hand", move.get(1), move.get(2))),
+                    "from the hand: " + move);
+        }
+    }
+
+    // a spell of host's moving every card of the type from the origin to the destination, cast by us
+    private SpellAbility zoneAll(final Card host, final String origin, final String destination, final String type) {
+        final SpellAbility sa = AbilityFactory.getAbility("SP$ ChangeZoneAll | Origin$ " + origin + " | Destination$ "
+                + destination + " | ChangeType$ " + type, host);
+        sa.setActivatingPlayer(ai);
+        assertTrue(sa.isSpell());
+        return sa;
+    }
+
     /** The go-off's own last draw: Laboratory Maniac in play and our library empty, a wheel's draw wins, so it is cast
      *  though Tainted Pact, the piece of the Pact line still live on the empty library, goes with our hand. With a
      *  library too deep for its seven draws it waits. */
