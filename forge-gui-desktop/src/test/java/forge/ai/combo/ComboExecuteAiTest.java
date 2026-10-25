@@ -797,19 +797,21 @@ public class ComboExecuteAiTest extends AITest {
     }
 
     /** Spec 6.4: Consultation goes for Laboratory Maniac or Jace "when one of them is on our battlefield and a draw we
-     *  control follows". With the winner still in our hand the opponent's end step, our turn next, opens no window:
-     *  Consultation would take the library, and our draw would lose with the winner still in hand. The same card moved
-     *  onto our battlefield opens it. */
-    private void aWinnerInHandOpensNoWindow(final String row, final String winner, final String id) {
+     *  control follows". With the winner still in our {@code zone}, hand or library, the opponent's end step, our turn
+     *  next, opens no window, though the line is executable (both zones are reachable): Consultation would take the
+     *  library, the winner with it when it is there, and our draw would lose. The library is the likelier zone while
+     *  Consultation is in hand. The same card moved onto our battlefield opens it. */
+    private void aWinnerOffTheBattlefieldOpensNoWindow(final String row, final String winner, final String id,
+            final ZoneType zone, final ComboTracker.Where where) {
         start(row);
-        final Card held = hand(winner);
+        final Card held = addCardToZone(winner, ai, zone);
         final Card consultation = hand(CONSULTATION);
         lands("Swamp");
         fillLibrary(ai, 20);
         opponentsEndStep();
         assertEquals(ids(t.executable()), List.of(id));
-        assertEquals(t.where(winner), ComboTracker.Where.HAND);
-        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, winner + " in our hand opened a window");
+        assertEquals(t.where(winner), where);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, winner + " in our " + where + " opened a window");
 
         game.getAction().moveTo(ZoneType.Battlefield, held, null, AbilityKey.newMap());
         assertEquals(t.where(winner), ComboTracker.Where.BATTLEFIELD);
@@ -818,12 +820,26 @@ public class ComboExecuteAiTest extends AITest {
 
     @Test
     public void labInHandIsNoWindow() {
-        aWinnerInHandOpensNoWindow(LAB_CONSULTATION, LAB, "742-2836");
+        aWinnerOffTheBattlefieldOpensNoWindow(LAB_CONSULTATION, LAB, "742-2836", ZoneType.Hand,
+                ComboTracker.Where.HAND);
     }
 
     @Test
     public void jaceInHandIsNoWindow() {
-        aWinnerInHandOpensNoWindow(JACE_CONSULTATION, JACE, "742-3096");
+        aWinnerOffTheBattlefieldOpensNoWindow(JACE_CONSULTATION, JACE, "742-3096", ZoneType.Hand,
+                ComboTracker.Where.HAND);
+    }
+
+    @Test
+    public void labInTheLibraryIsNoWindow() {
+        aWinnerOffTheBattlefieldOpensNoWindow(LAB_CONSULTATION, LAB, "742-2836", ZoneType.Library,
+                ComboTracker.Where.LIBRARY);
+    }
+
+    @Test
+    public void jaceInTheLibraryIsNoWindow() {
+        aWinnerOffTheBattlefieldOpensNoWindow(JACE_CONSULTATION, JACE, "742-3096", ZoneType.Library,
+                ComboTracker.Where.LIBRARY);
     }
 
     /** A window is its own line's (the ComboExecute header: each window is gated by a line executable now pairing that
