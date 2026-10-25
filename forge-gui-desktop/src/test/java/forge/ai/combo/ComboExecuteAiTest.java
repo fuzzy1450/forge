@@ -1676,4 +1676,37 @@ public class ComboExecuteAiTest extends AITest {
             assertEquals(assertStockParity(this::decision, lines(LAB_CONSULTATION)), other);
         }
     }
+
+    /** A mind-slave turn (Mindslaver; Opposition Agent's search runs the same way): a fresh PlayerControllerAi decides
+     *  for us, and ComboTracker.of(ai) is null, so the go-off has no tracker to read. On the board whose go-off is ready
+     *  the decision throws nothing and is the stock one, with the stock draws, whatever lines the master's fresh
+     *  tracker holds; once control ends, the go-off goes first again. */
+    @Test
+    public void aControlledPlayerHasNoGoOff() {
+        sequencerBoard("Divination", true);
+        assertEquals(decision(), ORACLE);
+
+        final long timestamp = game.getNextTimestamp();
+        ai.addController(timestamp, opp);
+        try {
+            assertTrue(ai.isControlled());
+            assertNull(ComboTracker.of(ai));
+            final ComboTracker fresh = aiOf(ai).getComboTracker();
+            fresh.useLines(List.of());
+            MyRandom.setRandom(new Random(7));
+            long before = MyRandom.callCount();
+            final String stock = decision();
+            final long stockDraws = MyRandom.callCount() - before;
+            assertNotEquals(stock, ORACLE, "the stock decision is the go-off: this board tells nothing");
+            fresh.useLines(lines(ORACLE_CONSULTATION));
+            MyRandom.setRandom(new Random(7));
+            before = MyRandom.callCount();
+            assertEquals(decision(), stock, "the answer moved");
+            assertEquals(MyRandom.callCount() - before, stockDraws, "the draws moved");
+        } finally {
+            ai.removeController(timestamp);
+        }
+        assertFalse(ai.isControlled());
+        assertEquals(decision(), ORACLE);
+    }
 }

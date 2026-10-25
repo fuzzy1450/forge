@@ -32,6 +32,7 @@ import forge.game.Game;
 import forge.game.ability.AbilityFactory;
 import forge.game.ability.AbilityKey;
 import forge.game.ability.AbilityUtils;
+import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CounterEnumType;
@@ -886,6 +887,31 @@ public class ComboHoldAiTest extends AITest {
             assertFalse(ComboHold.vetoesCast(ai, castOf(t.find(name, ZoneType.Hand))),
                     name + " waited for a discard of two");
         }
+    }
+
+    /** A counted exile from the hand is no wheel, as a counted discard is none: Mind Swords' "each player exiles two
+     *  cards from their hand" (a ChangeZone of ChangeNum$ 2, not a ChangeZoneAll) and an exile of one card of our hand
+     *  written for the test leave the choice to our own exile, which spares a protected piece. Neither waits, while
+     *  Wheel of Fortune beside them, a Discard of Mode$ Hand, does. */
+    @Test
+    public void aCountedExileIsNoWheel() {
+        final Card oracle = wheelBoard("Mind Swords", WHEEL);
+        final Card host = hand("Hex Magic");
+        assertTrue(t.protects(oracle));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(t.find(WHEEL, ZoneType.Hand))));
+
+        final SpellAbility swords = castOf(t.find("Mind Swords", ZoneType.Hand));
+        assertEquals(swords.getApi(), ApiType.ChangeZone);
+        assertEquals(swords.getParam("Origin"), "Hand");
+        assertEquals(swords.getParam("Destination"), "Exile");
+        assertFalse(ComboHold.vetoesCast(ai, swords), "Mind Swords waited for an exile of two");
+
+        final SpellAbility one = AbilityFactory.getAbility("SP$ ChangeZone | Origin$ Hand | Destination$ Exile"
+                + " | ChangeType$ Card | ChangeNum$ 1 | Hidden$ True | Mandatory$ True | DefinedPlayer$ You"
+                + " | Chooser$ You", host);
+        one.setActivatingPlayer(ai);
+        assertTrue(one.isSpell());
+        assertFalse(ComboHold.vetoesCast(ai, one), "an exile of one card waited");
     }
 
     /** A part that takes our hand need not be the spell's root: Apocalypse's root exiles every permanent, and a sub of
