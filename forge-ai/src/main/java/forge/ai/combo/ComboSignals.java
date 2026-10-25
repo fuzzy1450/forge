@@ -93,8 +93,8 @@ public final class ComboSignals {
     }
 
     /** Signal 2 as read now, the moment of a window that is open now (the view keeps it for a deck line): we cannot
-     *  win; every opponent cannot lose; a piece we have not yet put on the battlefield cannot be cast now (a CantBeCast
-     *  static covers its first spell, Void Winnower's even mana values); Thassa's Oracle's entering trigger is
+     *  win; every opponent cannot lose; a piece we have not yet put on the battlefield cannot be cast now, its first
+     *  spell barred by a CantBeCast static (Void Winnower's even mana values); Thassa's Oracle's entering trigger is
      *  disabled (Torpor Orb, Hushbringer); a winner of ours on the battlefield has lost its win ({@link #disarmed}:
      *  Imprisoned in the Moon, Lignify, Humility, a face-down copy), or Doctor Doom's {T} draw cannot be activated
      *  (Linvala, Keeper of Silence). */
