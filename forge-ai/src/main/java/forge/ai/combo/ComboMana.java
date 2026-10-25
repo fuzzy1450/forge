@@ -30,8 +30,9 @@ import forge.game.zone.ZoneType;
  *
  * <p>The sources are HonestMana's (a private copy of its reading, which is frozen): the floating pool, and each
  * battlefield source we control whose mana ability canPlay() (untapped, not summoning-sick, its restrictions met), has
- * no mana in its own cost, meets its conditions and may be spent on {@code sa}, less the sources isManaSourceReserved
- * holds when {@code skipHeld}. A source makes one activation's mana: a fixed production its symbols (Karoo's "U B" a
+ * no mana in its own cost, meets its conditions, may be spent on {@code sa} and is no "activate only as an instant"
+ * ability (Lion's Eye Diamond: the AI's payer never taps one), less the sources isManaSourceReserved holds when
+ * {@code skipHeld}. A source makes one activation's mana: a fixed production its symbols (Karoo's "U B" a
  * {U} and a {B}), a choice production its amount of one kind among its letters (Command Tower one of its colours,
  * Gilded Lotus three of one colour), "AnyDifferent" one coloured and the rest generic only (an under-count), a
  * reflected, special or letterless production generic only. A source with several abilities of one mana each is one
@@ -84,7 +85,7 @@ final class ComboMana {
                 }
                 ma.setActivatingPlayer(ai);
                 if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
-                        || !mp.meetsManaRestrictions(sa)) {
+                        || !mp.meetsManaRestrictions(sa) || instantSpeed(ma)) {
                     continue;
                 }
                 final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
@@ -95,6 +96,14 @@ final class ComboMana {
             m.add(options);
         }
         return m;
+    }
+
+    // an "activate only as an instant" mana ability (Lion's Eye Diamond, Diamond Lion, Charmed Pendant): playable at
+    // priority (canPlay), but the AI's payer never taps one (ComputerUtilMana's getAIPlayableMana and
+    // canPayShardWithSpellAbility skip it, as SpellAbility.isManaAbilityFor does), so it pays none of these costs
+    // (follow-up final review, round 1)
+    private static boolean instantSpeed(final SpellAbility ma) {
+        return ma.getRestrictions() != null && ma.getRestrictions().isInstantSpeed();
     }
 
     /** Whether these costs can all be paid together from this mana, each source making one activation's mana. */

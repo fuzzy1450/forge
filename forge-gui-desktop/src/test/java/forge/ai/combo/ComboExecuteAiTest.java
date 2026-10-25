@@ -20,6 +20,7 @@ import forge.ai.AITest;
 import forge.ai.AiController;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtilCard;
+import forge.ai.ComputerUtilMana;
 import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
 import forge.ai.SpecialCardAi;
@@ -1779,5 +1780,51 @@ public class ComboExecuteAiTest extends AITest {
         }
         assertFalse(ai.isControlled());
         assertEquals(decision(), ORACLE);
+    }
+
+    // ---- follow-up final review, round 1: mana the payer never taps ----
+
+    /** Line 742-1295 in our Main 1: Oracle and Consultation in hand, Island, Island and Lion's Eye Diamond, a 20-card
+     *  library. The Diamond's "activate only as an instant" ability is playable now (canPlay), but the AI's payer
+     *  never taps an instant-speed mana ability (ComputerUtilMana's getAIPlayableMana and canPayShardWithSpellAbility
+     *  skip it), so Consultation's {B} cannot be paid. Returns the Oracle. */
+    private Card diamondBoard() {
+        start(ORACLE_CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Lion's Eye Diamond");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        final SpellAbility diamond = t.find("Lion's Eye Diamond", ZoneType.Battlefield).getManaAbilities().get(0);
+        diamond.setActivatingPlayer(ai);
+        assertTrue(diamond.getRestrictions().isInstantSpeed());
+        assertTrue(diamond.canPlay(), "the Diamond's mana ability is not playable now: this board tells nothing");
+        assertFalse(ComputerUtilMana.canPayManaCost(castOf(consultation), ai, 0, false),
+                "the payer taps the Diamond for Consultation's {B}");
+        return oracle;
+    }
+
+    /** ComboMana counts no instant-speed-only mana: on the Diamond's board the go-off is not ready, so the Oracle is
+     *  held, not cast first and spent as a 1/3 when Consultation's {B} finds no source at its trigger. With a Swamp
+     *  added the go-off is ready. End to end, the held Oracle is still in hand at our end step, the library whole. */
+    @Test
+    public void instantSpeedManaPaysNoGoOff() {
+        Card oracle = diamondBoard();
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)), "the Diamond paid the go-off's {B}");
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)), "the Oracle was not held");
+        assertNull(ComboExecute.goOffFirst(ai, List.of(castOf(oracle))));
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertFalse(game.isGameOver());
+        assertNotNull(t.find(ORACLE, ZoneType.Hand), "the Oracle was cast");
+        assertNotNull(t.find(CONSULTATION, ZoneType.Hand));
+        assertEquals(ai.getCardsIn(ZoneType.Library).size(), 20);
+
+        oracle = diamondBoard();
+        lands("Swamp");
+        assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertWonThisTurn();
     }
 }
