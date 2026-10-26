@@ -15,12 +15,14 @@ import org.testng.annotations.Test;
 
 import forge.ai.AITest;
 import forge.ai.AiController;
+import forge.ai.ComputerUtilCombat;
 import forge.ai.PlayerControllerAi;
 import forge.ai.combo.ComboSignals.Signal;
 import forge.game.Game;
 import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
+import forge.game.combat.CombatUtil;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -1961,6 +1963,153 @@ public class ComboSignalsTest extends AITest {
         assertNull(abandon(jace));
         assertEquals(ids(t.live()), List.of("742-3096"));
         assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)));
+    }
+
+    // ---- follow-up 2, G5: DANGER's cost on big boards ----
+
+    @Test
+    public void dangerSkipsTheBlockMatrixWhenTheDamageCannotKill() {
+        // DANGER builds an opponent's attackers-by-blockers matrix (CombatUtil.canBlock for each pair, each a
+        // game-wide static scan) only when that opponent's whole attack, unblocked, reaches our life: the cheap sum
+        // first. Two ready Hill Giants (3/3) bring 6, and our Grizzly Bears could chump one
+        ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ready(GIANT, 2, opp);
+        addCard(BEARS, ai);
+        ai.setLife(7, null);
+        ComboTracker.View v = t.view();
+        assertFalse(v.danger());
+        assertEquals(v.blockMatrixBuilds(), 0, "6 unblocked against our 7: nothing to block");
+        assertNull(ComboSignals.abandon(v, l));
+        assertEquals(ids(v.live()), List.of("742-1295"));
+        assertEquals(v.blockMatrixBuilds(), 0);
+
+        // at our 6 the sum reaches our life: the matrix is built, and the Bears' chump leaves 3, short of 6
+        ai.setLife(6, null);
+        v = t.view();
+        assertFalse(v.danger(), "the Bears chump one Giant: 3 against 6");
+        assertEquals(v.blockMatrixBuilds(), 1, "6 unblocked against our 6");
+
+        // the 12-against-10 board, its whole attack 50 with the opponent's Glorious Anthem, against our 51: nothing
+        // built, however big the board
+        l = bigBoard();
+        ai.setLife(51, null);
+        v = t.view();
+        assertFalse(v.danger());
+        assertNull(ComboSignals.abandon(v, l));
+        assertEquals(v.blockMatrixBuilds(), 0, "50 unblocked against our 51");
+        ai.setLife(50, null);
+        v = t.view();
+        assertFalse(v.danger(), "seven of our ten can block, and they hold the 50 short of our 50");
+        assertEquals(v.blockMatrixBuilds(), 1, "50 unblocked against our 50");
+
+        // in a pod each opponent's own sum: seat 0's two Giants bring 6 at our 6, so its matrix is built; seat 2's
+        // one Giant brings 3, so its matrix is not. The Bears chump one of seat 0's Giants: no danger
+        l = threeSeatOracleLine();
+        ready(GIANT, 2, game.getPlayers().get(0));
+        ready(GIANT, 1, game.getPlayers().get(2));
+        addCard(BEARS, ai);
+        ai.setLife(6, null);
+        v = t.view();
+        assertFalse(v.danger());
+        assertNull(ComboSignals.abandon(v, l));
+        assertEquals(v.blockMatrixBuilds(), 1, "seat 0's 6 reaches our 6, seat 2's 3 does not");
+    }
+
+    @Test
+    public void dangerBuildsTheMatrixOncePerView() {
+        // the 12-against-10 board at our 20 (follow-up 2's Review Focus 5): the attack reaches our life, so the matrix
+        // is built, and only when DANGER is first asked; every later reading in the view, whether DANGER itself, a
+        // line's signals or the live lines, reads that one build
+        final ComboLines.Line l = bigBoard();
+        ai.setLife(20, null);
+        final ComboTracker.View v = t.view();
+        assertEquals(v.where(ORACLE), ComboTracker.Where.HAND);
+        assertFalse(v.denied(l));
+        assertEquals(v.blockMatrixBuilds(), 0, "nothing built before DANGER is asked");
+        assertTrue(v.danger(), "the fliers' 11 and what our blockers leave of the rest reach our 20");
+        assertTrue(v.danger());
+        assertEquals(v.blockMatrixBuilds(), 1, "two DANGER reads, one build");
+        assertEquals(ComboSignals.abandon(v, l), Signal.DANGER);
+        assertEquals(v.live(), List.of());
+        assertTrue(v.danger());
+        assertEquals(v.blockMatrixBuilds(), 1);
+
+        // a fresh view reads the board again, once; the first view's count is its own
+        final ComboTracker.View w = t.view();
+        assertTrue(w.danger());
+        assertTrue(w.danger());
+        assertEquals(w.blockMatrixBuilds(), 1);
+        assertEquals(v.blockMatrixBuilds(), 1);
+
+        // in a pod, one matrix for each opponent whose attack reaches our life, each built once a view: two Giants
+        // for seat 0 and two for seat 2, 6 each at our 6, our Bears chumping one, so neither opponent's attack is
+        // lethal and both are read
+        final ComboLines.Line pod = threeSeatOracleLine();
+        ready(GIANT, 2, game.getPlayers().get(0));
+        ready(GIANT, 2, game.getPlayers().get(2));
+        addCard(BEARS, ai);
+        ai.setLife(6, null);
+        final ComboTracker.View p = t.view();
+        assertFalse(p.danger());
+        assertFalse(p.danger());
+        assertNull(ComboSignals.abandon(p, pod));
+        assertEquals(p.blockMatrixBuilds(), 2, "one build for each of the two opponents");
+    }
+
+    /** Line 742-1295 on the 12-against-10 board of follow-up 2's Review Focus 5, our MAIN1: Oracle in hand,
+     *  Consultation in the library, the line's mana among seven lands of ours, seven of the opponent's. A handful of
+     *  statics are in play: the opponent's Glorious Anthem (+1/+1), Familiar Ground and Champion of Lambholt (a
+     *  CantBlockBy), our Ghostly Prison, Crawlspace and Silent Arbiter. The opponent's twelve ready creatures bring
+     *  50 unblocked with the Anthem, 11 of it in the air (Shivan Dragon, Serra Angel), which none of ours can block:
+     *  the Champion's 2 power bars our Suntail Hawk, Wall of Stone and Silent Arbiter, so seven of ours block. */
+    private ComboLines.Line bigBoard() {
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        lands("Plains", "Plains", "Plains", "Plains");
+        for (int i = 0; i < 7; i++) {
+            addCard("Forest", opp);
+        }
+        addCard("Glorious Anthem", opp);
+        addCard("Familiar Ground", opp);
+        addCard("Ghostly Prison", ai);
+        addCard("Crawlspace", ai);
+        ready(BEARS, 3, opp);
+        ready(GIANT, 2, opp);
+        ready("Craw Wurm", 1, opp);
+        ready("Serra Angel", 1, opp);
+        ready(DREADMAW, 1, opp);
+        ready("Champion of Lambholt", 1, opp);
+        ready("Runeclaw Bear", 2, opp);
+        ready("Shivan Dragon", 1, opp);
+        ready(BEARS, 3, ai);
+        ready("Runeclaw Bear", 2, ai);
+        ready(GIANT, 2, ai);
+        ready("Suntail Hawk", 1, ai);
+        ready("Wall of Stone", 1, ai);
+        ready("Silent Arbiter", 1, ai);
+        game.getAction().checkStateEffects(true);
+        assertEquals(opp.getCreaturesInPlay().size(), 12);
+        assertEquals(ai.getCreaturesInPlay().size(), 10);
+        int attack = 0;
+        for (final Card c : opp.getCreaturesInPlay()) {
+            attack += ComputerUtilCombat.damageIfUnblocked(c, ai, null, true);
+        }
+        assertEquals(attack, 50, "the opponent's whole attack, unblocked");
+        int ground = 0;
+        int air = 0;
+        for (final Card c : ai.getCreaturesInPlay()) {
+            ground += CombatUtil.canBlock(opponents(GIANT).get(0), c) ? 1 : 0;
+            air += CombatUtil.canBlock(opponents("Serra Angel").get(0), c) ? 1 : 0;
+        }
+        assertEquals(ground, 7, "the Champion bars our Hawk, Wall and Arbiter");
+        assertEquals(air, 0);
+        return l;
+    }
+
+    /** The opponent's creatures named {@code name}, in battlefield order. */
+    private List<Card> opponents(final String name) {
+        return opp.getCreaturesInPlay().stream().filter(c -> name.equals(c.getName())).collect(Collectors.toList());
     }
 
     /** Line 742-8266 in a fresh two-player game in our MAIN1: Fblthp, Impossibly Lost ready on our battlefield, cast

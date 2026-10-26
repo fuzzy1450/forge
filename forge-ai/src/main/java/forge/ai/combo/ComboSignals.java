@@ -613,15 +613,19 @@ public final class ComboSignals {
     /**
      * Signal 3, about to die: one opponent's own next-turn attack reaches our life after our creatures block it
      * ({@link #lethal}). Each opponent is read alone: they attack in their own turns, so one's creatures never add to
-     * another's. Never while we cannot lose.
+     * another's. Never while we cannot lose. Read once a view, when the view is first asked ({@code View.danger}); an
+     * opponent's attackers-by-blockers matrix, a game-wide static scan for each pair, is built only when that
+     * opponent's whole attack, unblocked, reaches our life (the cheap sum first), and the view counts each build
+     * (follow-up 2, G5).
      */
-    static boolean dangerNow(final Player ai) {
+    static boolean dangerNow(final ComboTracker.View v) {
+        final Player ai = v.ai();
         if (ai.cantLose()) {
             return false;
         }
         final List<Card> ours = ai.getCreaturesInPlay();
         for (final Player opp : ai.getOpponents()) {
-            if (lethal(ai, opp, ours)) {
+            if (lethal(v, ai, opp, ours)) {
                 return true;
             }
         }
@@ -633,8 +637,10 @@ public final class ComboSignals {
     // to block it (CombatUtil.canBlock) as it needs (CombatUtil.getMinNumBlockersForAttacker: two for menace), taking
     // those able to block the fewest of the hits still to come first, then in battlefield order. An attacker without
     // enough spare blockers comes through whole, a blocked one deals us nothing, and a blocked trampler puts through
-    // its hit less its blockers' toughness. A board whose whole unblocked attack falls short is never blocked.
-    private static boolean lethal(final Player ai, final Player opp, final List<Card> ours) {
+    // its hit less its blockers' toughness. A board whose whole unblocked attack falls short is never blocked: its
+    // block matrix is never built (blockMatrix)
+    private static boolean lethal(final ComboTracker.View v, final Player ai, final Player opp,
+            final List<Card> ours) {
         final List<Card> attackers = new ArrayList<>();
         final List<Integer> hits = new ArrayList<>();
         int unblocked = 0;
@@ -656,12 +662,7 @@ public final class ComboSignals {
             order.add(i);
         }
         order.sort((a, b) -> Integer.compare(hits.get(b), hits.get(a)));
-        final boolean[][] blocks = new boolean[attackers.size()][ours.size()];
-        for (int i = 0; i < attackers.size(); i++) {
-            for (int j = 0; j < ours.size(); j++) {
-                blocks[i][j] = CombatUtil.canBlock(attackers.get(i), ours.get(j));
-            }
-        }
+        final boolean[][] blocks = blockMatrix(v, attackers, ours);
         final boolean[] spent = new boolean[ours.size()];
         int through = 0;
         for (int k = 0; k < order.size(); k++) {
@@ -683,6 +684,21 @@ public final class ComboSignals {
             }
         }
         return through >= life;
+    }
+
+    // whether each of our creatures can block each attacker (CombatUtil.canBlock, Forge's own reading: two or three
+    // game-wide static scans a pair), by the attacker's index, then ours: built once for each opponent whose whole
+    // attack reaches our life, the build counted on the view
+    private static boolean[][] blockMatrix(final ComboTracker.View v, final List<Card> attackers,
+            final List<Card> ours) {
+        v.blockMatrixBuilt();
+        final boolean[][] blocks = new boolean[attackers.size()][ours.size()];
+        for (int i = 0; i < attackers.size(); i++) {
+            for (int j = 0; j < ours.size(); j++) {
+                blocks[i][j] = CombatUtil.canBlock(attackers.get(i), ours.get(j));
+            }
+        }
+        return blocks;
     }
 
     // the need spare blockers of ours for the k-th attacker in order, those able to block the fewest of the attackers

@@ -447,6 +447,9 @@ public final class ComboTracker {
         private Boolean castBarsInForce;
         private Boolean oracleTriggerDisabled;
         private int nextTurnMana = -1;
+        // the attackers-by-blockers matrices the danger reading built in this view: one for each opponent whose whole
+        // attack, unblocked, reaches our life (follow-up 2, G5), read by the view's tests
+        private int blockMatrixBuilds;
         private final Map<String, Boolean> castBarred = new HashMap<>(4);
         // per winner, by its ordinal: 0 unread, 1 armed, 2 disarmed
         private final byte[] disarmed = new byte[ComboLines.Winner.values().length];
@@ -750,11 +753,24 @@ public final class ComboTracker {
             return everyOpponentCantLose;
         }
 
+        // signal 3, read once a view and only when asked: the block matrices it builds are built once a view
         boolean danger() {
             if (danger == null) {
-                danger = ComboSignals.dangerNow(ai);
+                danger = ComboSignals.dangerNow(this);
             }
             return danger;
+        }
+
+        /** How many attackers-by-blockers matrices this view's danger reading built ({@link ComboSignals#dangerNow}):
+         *  none before {@link #danger} is first asked, then at most one for each opponent, and none for an opponent
+         *  whose whole attack, unblocked, falls short of our life. */
+        int blockMatrixBuilds() {
+            return blockMatrixBuilds;
+        }
+
+        // the danger reading built one more block matrix
+        void blockMatrixBuilt() {
+            blockMatrixBuilds++;
         }
 
         boolean surerKill() {
