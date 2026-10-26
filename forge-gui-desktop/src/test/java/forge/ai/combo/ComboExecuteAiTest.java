@@ -1922,4 +1922,97 @@ public class ComboExecuteAiTest extends AITest {
                 AiPlayDecision.CantPlayAi);
         assertEquals(t.deckLines(), List.of());
     }
+
+    // ---- follow-up 2, G1 review, round 1 ----
+
+    /** Line 1295-3093 (Thassa's Oracle and Tainted Pact) in our Main 1: Carpet of Flowers, Oracle and Pact in hand,
+     *  Island, Island, Swamp and Forest (Oracle's {U}{U} and Pact's {1}{B}, the go-off's whole mana), the opponent
+     *  holding an Island (Carpet's cast floor), a library of fifteen distinct names (Pact's own condition). With no line
+     *  the stock Main 1 is Tainted Pact, the stock cantrip (pactCantripsWithoutALine), on two of the go-off's lands.
+     *  With the line Pact is held for its window, and Carpet, whose {G} takes the Forest that Pact's {1} needs, is the
+     *  Main-1 play the Oracle's wait would leave to go first. The go-off is ready, and the Oracle's wait is lifted for a
+     *  Pact line as for a Consultation one: Oracle is cast first, and Oracle and Pact win the turn in Main 1, the
+     *  library exiled whole. */
+    @Test
+    public void goOffInMainOneOnAPactLine() {
+        start(ORACLE_PACT);
+        final Card carpet = hand("Carpet of Flowers");
+        hand(ORACLE);
+        final Card pact = hand(PACT);
+        lands("Island", "Island", "Swamp", "Forest");
+        singletonLibrary();
+        addCard("Island", opp);
+        assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai));
+        assertEquals(ids(t.deckLines()), List.of("1295-3093"));
+        assertEquals(ids(t.executable()), List.of("1295-3093"));
+        assertTrue(ComboExecute.goOffNow(ai, castOf(t.find(ORACLE, ZoneType.Hand))));
+        t.useLines(List.of());
+        assertEquals(decision(), PACT, "the stock Main 1 is not Pact's cantrip: this board tells nothing");
+        t.useLines(lines(ORACLE_PACT));
+        assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.FALSE, "Pact is not held for its window");
+        assertEquals(aiOf(ai).canPlaySa(castOf(carpet)), AiPlayDecision.WillPlay,
+                "Carpet of Flowers is no Main-1 play here: this board tells nothing");
+        assertEquals(decision(), ORACLE, "Carpet of Flowers went first on the Pact line");
+        assertWonInMainOne("Carpet of Flowers");
+        assertEquals(ai.getCardsIn(ZoneType.Exile).size(), SINGLETON.size(), "Pact did not exile the library whole");
+    }
+
+    /** aControlledPlayerHasNoGoOff in our Main 1, where the lift reads the tracker: under a mind-slave turn
+     *  ComboTracker.of(ai) is null, so the go-off has no tracker to read, and on the board whose go-off is ready the
+     *  Oracle keeps the stock wait. Its decision (canPlaySa: the creature's phase rule) throws nothing and is CantPlayAi,
+     *  and the AI's choice is the stock one, not the Oracle, with the stock draws, whatever lines the master's fresh
+     *  tracker holds. canPlaySa is asked on the test's own thread: the AI's eval thread prints an exception and reads it
+     *  as nothing to play. Once control ends, the go-off goes first in Main 1 again. */
+    @Test
+    public void aControlledPlayerHasNoGoOffInMainOne() {
+        sequencerBoard("Divination", false);
+        final Card oracle = t.find(ORACLE, ZoneType.Hand);
+        assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai));
+        assertEquals(decision(), ORACLE);
+
+        final long timestamp = game.getNextTimestamp();
+        ai.addController(timestamp, opp);
+        try {
+            assertTrue(ai.isControlled());
+            assertNull(ComboTracker.of(ai));
+            final ComboTracker fresh = aiOf(ai).getComboTracker();
+            fresh.useLines(List.of());
+            MyRandom.setRandom(new Random(7));
+            long before = MyRandom.callCount();
+            final AiPlayDecision stockWait = aiOf(ai).canPlaySa(castOf(oracle));
+            final String stock = decision();
+            final long stockDraws = MyRandom.callCount() - before;
+            assertEquals(stockWait, AiPlayDecision.CantPlayAi, "a controlled player's Oracle was not held for Main 2");
+            assertNotEquals(stock, ORACLE, "a controlled player's Oracle was cast in Main 1");
+            fresh.useLines(lines(ORACLE_CONSULTATION));
+            MyRandom.setRandom(new Random(7));
+            before = MyRandom.callCount();
+            assertEquals(aiOf(ai).canPlaySa(castOf(oracle)), stockWait, "the Oracle's wait moved");
+            assertEquals(decision(), stock, "the answer moved");
+            assertEquals(MyRandom.callCount() - before, stockDraws, "the draws moved");
+        } finally {
+            ai.removeController(timestamp);
+        }
+        assertFalse(ai.isControlled());
+        assertEquals(decision(), ORACLE);
+    }
+
+    /** The lift's mana gate. Thassa's Oracle and Demonic Consultation both in hand and line 742-1295 executable, but
+     *  Island, Island and Plains make no {B} beside the Oracle's {U}{U}: the go-off is not ready. In our Main 1 the
+     *  Oracle's decision (canPlaySa: the creature's phase rule) is the stock wait, with the stock draws, and so is the
+     *  AI's choice. */
+    @Test
+    public void mainTwoWaitStaysWithTheManaShort() {
+        start(ORACLE_CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        hand(CONSULTATION);
+        lands("Island", "Island", "Plains");
+        fillLibrary(ai, 20);
+        assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai));
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)), "Island, Island and Plains paid Consultation's {B}");
+        assertEquals(assertStockParity(() -> aiOf(ai).canPlaySa(castOf(oracle)), lines(ORACLE_CONSULTATION)),
+                AiPlayDecision.CantPlayAi);
+        assertNull(assertStockParity(this::decision, lines(ORACLE_CONSULTATION)));
+    }
 }
