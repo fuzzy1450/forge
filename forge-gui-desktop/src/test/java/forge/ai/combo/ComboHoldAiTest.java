@@ -1127,4 +1127,64 @@ public class ComboHoldAiTest extends AITest {
         assertEquals(ids(t.live()), List.of("742-2836"));
         return castOf(hand("Ponder"));
     }
+
+    // ---- follow-up 2, G3: the go-off's costs as the engine prices them ----
+
+    /** Review Focus 3: the opponent's Thalia, Guardian of Thraben taxes Demonic Consultation, a noncreature spell, to
+     *  {1}{B}, and not Thassa's Oracle. Island, Island and Swamp pay the printed {U}{U} and {B} but not the engine's
+     *  price: no go-off, so the Oracle is held, not cast into a trigger Consultation could not answer. One more land
+     *  pays it: the go-off is ready, and the Oracle is the spell chosen. */
+    @Test
+    public void thaliaRaisesTheGoOffCost() {
+        final Card oracle = goOffBoard("Island", "Island", "Swamp");
+        addCard("Thalia, Guardian of Thraben", opp);
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)), "the go-off read Consultation's printed cost");
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)), "the Oracle was not held");
+        assertNull(aiOf(ai).chooseSpellAbilityToPlay());
+
+        lands("Swamp");
+        assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
+        assertSame(decision(), oracle);
+    }
+
+    /** Sphere of Resistance ("Spells cost {1} more to cast") raises both of the go-off's costs, the Oracle's to
+     *  {1}{U}{U} and Consultation's to {1}{B}. Island, Island, Swamp and Island pay either raised cost beside the other
+     *  one printed, but not both raised: no go-off, and the Oracle is held. A fifth land pays both. The opponent's
+     *  Grand Arbiter Augustin IV ("Spells your opponents cast cost {1} more to cast") alike. */
+    @Test
+    public void sphereOfResistanceRaisesBothCosts() {
+        for (final String tax : List.of("Sphere of Resistance", "Grand Arbiter Augustin IV")) {
+            final Card oracle = goOffBoard("Island", "Island", "Swamp", "Island");
+            addCard(tax, opp);
+            assertEquals(ids(t.live()), List.of("742-1295"), tax);
+            assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)), tax + ": a cost was read as printed");
+            assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)), tax);
+
+            lands("Swamp");
+            assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)), tax);
+            assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)), tax);
+        }
+    }
+
+    /** Beyond the plan's tests: the engine's price lowers a cost as well. Helm of Awakening ("Spells cost {1} less to
+     *  cast") takes Tainted Pact's {1}, so Island, Island and Swamp pay the Oracle's {U}{U} and Pact's {B}, where the
+     *  printed costs need a fourth mana: the go-off is ready, and the Oracle is not held. */
+    @Test
+    public void aCostReductionLowersTheGoOff() {
+        start(PACT_ORACLE);
+        final Card oracle = hand(ORACLE);
+        hand(PACT);
+        library("Island");
+        lands("Island", "Island", "Swamp");
+        assertEquals(ids(t.live()), List.of("1295-3093"));
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+
+        addCard("Helm of Awakening", opp);
+        assertEquals(ids(t.live()), List.of("1295-3093"));
+        assertTrue(ComboExecute.goOffNow(ai, castOf(oracle)), "the go-off read Pact's printed cost");
+        assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
+    }
 }

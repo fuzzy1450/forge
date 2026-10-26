@@ -31,12 +31,15 @@ import forge.game.Game;
 import forge.game.GameEndReason;
 import forge.game.ability.AbilityFactory;
 import forge.game.ability.AbilityKey;
+import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
+import forge.game.cost.Cost;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.player.PlayerCollection;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
@@ -2014,5 +2017,244 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(assertStockParity(() -> aiOf(ai).canPlaySa(castOf(oracle)), lines(ORACLE_CONSULTATION)),
                 AiPlayDecision.CantPlayAi);
         assertNull(assertStockParity(this::decision, lines(ORACLE_CONSULTATION)));
+    }
+
+    // ---- follow-up 2, G3: taxes and Rhystic Study at the go-off ----
+
+    private static final String THALIA = "Thalia, Guardian of Thraben";
+    private static final String RHYSTIC = "Rhystic Study";
+
+    /** Beyond the plan's tests: the Laboratory Maniac window of a draw spell reads both costs as the engine prices
+     *  them. Under the opponent's Thalia, Guardian of Thraben, Demonic Consultation costs {1}{B} and Opt {1}{U}: Island
+     *  and Swamp, which pay the printed {B} and {U}, open no window; a third land pays one taxed cost beside the other
+     *  printed, not both; a fourth opens it. Tainted Pact resolving, its own mana paid: Opt's taxed {1}{U} needs two
+     *  lands, where an Island paid its printed {U}. */
+    @Test
+    public void thaliaRaisesTheDrawSpellWindowsCosts() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        hand(OPT);
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+        addCard(THALIA, opp);
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, "the window read the printed costs");
+        lands("Island");
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, "the window read a printed cost");
+        lands("Swamp");
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay);
+
+        start(LAB_PACT);
+        addCard(LAB, ai);
+        hand(OPT);
+        lands("Island");
+        singletonLibrary();
+        final Card resolving = castOnStack(PACT);
+        assertTrue(ComboExecute.pactDeclines(ai, returnToHand(resolving)));
+        addCard(THALIA, opp);
+        assertEquals(ids(t.executable()), List.of("2836-3093"));
+        assertFalse(ComboExecute.pactDeclines(ai, returnToHand(resolving)), "the window read Opt's printed cost");
+        lands("Swamp");
+        assertTrue(ComboExecute.pactDeclines(ai, returnToHand(resolving)));
+    }
+
+    /** Lands of ours on our battlefield, tapped: mana spent already. */
+    private void tapped(final String... names) {
+        for (final String name : names) {
+            addCard(name, ai).setTapped(true);
+        }
+    }
+
+    /** Line 742-1295 in our Main 1, mid go-off: Thassa's Oracle cast and on our stack, its {U}{U} paid (our two
+     *  Islands tapped), Demonic Consultation in hand, the Swamp and {@code more} untapped, a 20-card library. Returns the
+     *  Oracle's spell. */
+    private SpellAbility oracleCast(final String... more) {
+        start(ORACLE_CONSULTATION);
+        hand(CONSULTATION);
+        tapped("Island", "Island");
+        lands("Swamp");
+        lands(more);
+        fillLibrary(ai, 20);
+        final SpellAbility oracle = castOnStack(ORACLE).getFirstSpellAbility();
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        return oracle;
+    }
+
+    /** The opponent's Rhystic Study on their battlefield, a 20-card library for them to draw from, and Rhystic's draw
+     *  as its trigger resolves: "you may draw a card unless that player pays {1}", the opponent its activator. */
+    private SpellAbility rhysticDraw() {
+        fillLibrary(opp, 20);
+        final Card rhystic = addCard(RHYSTIC, opp);
+        for (final Trigger tr : rhystic.getTriggers()) {
+            if (tr.getMode() == TriggerType.SpellCast) {
+                final SpellAbility sa = tr.ensureAbility().copy(opp);
+                sa.setTrigger(tr);
+                assertEquals(sa.getApi(), ApiType.Draw);
+                return sa;
+            }
+        }
+        throw new AssertionError("no cast trigger on " + rhystic);
+    }
+
+    /** Whether we pay the unless cost of {@code sa} as it resolves, we its one payer
+     *  (PlayerControllerAi.payCostToPreventEffect, AbilityUtils.handleUnlessCost's call). */
+    private boolean paysUnless(final SpellAbility sa) {
+        final Cost cost = AbilityUtils.calculateUnlessCost(sa, sa.getParam("UnlessCost"), true);
+        return ((PlayerControllerAi) ai.getController()).payCostToPreventEffect(cost, sa, false,
+                new PlayerCollection(ai));
+    }
+
+    /** On a board {@code board} builds, stock pays the unless cost it returns (no line), and on a second one built
+     *  alike our own decision (the board's lines) declines it. */
+    private void assertDeclined(final Supplier<SpellAbility> board) {
+        SpellAbility sa = board.get();
+        t.useLines(List.of());
+        assertTrue(paysUnless(sa), "stock does not pay: this board tells nothing");
+        sa = board.get();
+        assertFalse(t.deckLines().isEmpty());
+        assertFalse(paysUnless(sa), "the unless cost was paid");
+    }
+
+    /** Stock parity for an unless payment, on two boards {@code board} builds alike, the random stream seeded alike:
+     *  the unless cost it returns is paid or not with no line and with the board's own lines, the same answer with the
+     *  same draws. Returns the stock answer. */
+    private boolean assertPaysAsStock(final Supplier<SpellAbility> board) {
+        SpellAbility sa = board.get();
+        t.useLines(List.of());
+        MyRandom.setRandom(new Random(7));
+        long before = MyRandom.callCount();
+        final boolean stock = paysUnless(sa);
+        final long stockDraws = MyRandom.callCount() - before;
+        sa = board.get();
+        assertFalse(t.deckLines().isEmpty());
+        MyRandom.setRandom(new Random(7));
+        before = MyRandom.callCount();
+        assertEquals(paysUnless(sa), stock, "the answer moved");
+        assertEquals(MyRandom.callCount() - before, stockDraws, "the draws moved");
+        return stock;
+    }
+
+    /** Beyond the plan's tests, the decline itself, in both of a go-off's windows. The opponent's Rhystic Study asks
+     *  {1} of us while our Thassa's Oracle is cast and on our stack, or while its entering trigger waits there, with
+     *  Demonic Consultation in hand and only its {B} untapped: paid, Consultation could not follow. The AI declines,
+     *  where stock pays. Tainted Pact's {1}{B} alike, with the Swamp and an Island untapped; and Consultation's {1}{B}
+     *  under the opponent's Thalia, Guardian of Thraben, the engine's price, on that same Swamp and Island. */
+    @Test
+    public void rhysticStudyIsDeclinedInBothWindowsOfTheGoOff() {
+        assertDeclined(() -> {
+            oracleCast();
+            return rhysticDraw();
+        });
+        assertDeclined(() -> {
+            start(ORACLE_CONSULTATION);
+            final Card oracle = hand(ORACLE);
+            hand(CONSULTATION);
+            tapped("Island", "Island");
+            lands("Swamp");
+            fillLibrary(ai, 20);
+            enters(oracle);
+            assertEquals(ids(t.executable()), List.of("742-1295"));
+            return rhysticDraw();
+        });
+        assertDeclined(() -> {
+            start(ORACLE_PACT);
+            hand(PACT);
+            tapped("Island", "Island");
+            lands("Swamp", "Island");
+            singletonLibrary();
+            castOnStack(ORACLE);
+            assertEquals(ids(t.executable()), List.of("1295-3093"));
+            return rhysticDraw();
+        });
+        assertDeclined(() -> {
+            oracleCast("Island");
+            addCard(THALIA, opp);
+            return rhysticDraw();
+        });
+    }
+
+    /** Rhystic Study's {1} is paid as stock, with the stock draws, outside a go-off's window, where the go-off is not
+     *  starved by it, and where it is lost already: the Oracle and Consultation in hand, nothing on our stack, only the
+     *  Swamp untapped (a go-off not begun); the Oracle cast with an Island beside the Swamp, which pays the {1} and
+     *  leaves the {B}; Consultation cast already, in response to the Oracle's trigger, a Swamp untapped; and the Oracle
+     *  cast with only an Island untapped, Consultation's {B} gone whether the {1} is paid or not. */
+    @Test
+    public void rhysticStudyPaidAsStockOutsideAGoOff() {
+        assertTrue(assertPaysAsStock(() -> {
+            start(ORACLE_CONSULTATION);
+            hand(ORACLE);
+            hand(CONSULTATION);
+            tapped("Island", "Island");
+            lands("Swamp");
+            fillLibrary(ai, 20);
+            assertEquals(ids(t.executable()), List.of("742-1295"));
+            return rhysticDraw();
+        }), "not begun");
+        assertTrue(assertPaysAsStock(() -> {
+            oracleCast("Island");
+            return rhysticDraw();
+        }), "a mana to spare");
+        assertTrue(assertPaysAsStock(() -> {
+            start(ORACLE_CONSULTATION);
+            final Card oracle = hand(ORACLE);
+            tapped("Island", "Island", "Swamp");
+            lands("Swamp");
+            fillLibrary(ai, 20);
+            enters(oracle);
+            castOnStack(CONSULTATION);
+            assertEquals(ids(t.executable()), List.of("742-1295"));
+            return rhysticDraw();
+        }), "Consultation cast");
+        assertTrue(assertPaysAsStock(() -> {
+            start(ORACLE_CONSULTATION);
+            hand(CONSULTATION);
+            tapped("Island", "Island", "Swamp");
+            lands("Island");
+            fillLibrary(ai, 20);
+            castOnStack(ORACLE);
+            assertEquals(ids(t.executable()), List.of("742-1295"));
+            return rhysticDraw();
+        }), "the go-off lost");
+    }
+
+    /** Beyond the plan's tests: inside the go-off's window, an unless cost that stops anything but an opponent's draw
+     *  keeps the stock decision, with the stock draws. The opponent's Mana Leak on our Thassa's Oracle asks {3}: the
+     *  Swamp and two Islands untapped pay it but leave no {B} for Demonic Consultation, and declined, the Oracle would be
+     *  countered, the go-off lost all the same. A draw for us that {1} would stop (Rhystic Study's draw made ours,
+     *  standing in for one), only the Swamp untapped: declined, we would draw, and on an empty library lose. And an
+     *  opponent's untargeted effect that is no draw (a life gain of theirs that {1} would stop, built on their Rhystic
+     *  Study, standing in for any other), only the Swamp untapped: the decline reads a draw alone. */
+    @Test
+    public void unlessCostsBeyondAnOpponentsDrawArePaidAsStock() {
+        assertTrue(assertPaysAsStock(() -> {
+            oracleCast();
+            final Card host = addCard(RHYSTIC, opp);
+            final SpellAbility gain = AbilityFactory.getAbility(
+                    "DB$ GainLife | LifeAmount$ 1 | UnlessCost$ 1 | UnlessPayer$ TriggeredActivator", host);
+            gain.setActivatingPlayer(opp);
+            return gain;
+        }), "an opponent's life gain");
+        assertTrue(assertPaysAsStock(() -> {
+            final SpellAbility oracle = oracleCast("Island", "Island");
+            final Card leak = createCard("Mana Leak", opp);
+            final SpellAbility counter = leak.getFirstSpellAbility();
+            counter.setActivatingPlayer(opp);
+            counter.getTargets().add(oracle);
+            return counter;
+        }), "Mana Leak");
+        assertTrue(assertPaysAsStock(() -> {
+            oracleCast();
+            final Card rhystic = addCard(RHYSTIC, ai);
+            for (final Trigger tr : rhystic.getTriggers()) {
+                if (tr.getMode() == TriggerType.SpellCast) {
+                    final SpellAbility sa = tr.ensureAbility().copy(ai);
+                    sa.setTrigger(tr);
+                    return sa;
+                }
+            }
+            throw new AssertionError("no cast trigger on " + rhystic);
+        }), "a draw for us");
     }
 }

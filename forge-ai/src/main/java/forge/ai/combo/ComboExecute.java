@@ -3,15 +3,19 @@ package forge.ai.combo;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.google.common.collect.Iterables;
+
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtilCard;
+import forge.ai.ComputerUtilMana;
 import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.ai.combo.ComboLines.Emptier;
 import forge.ai.combo.ComboLines.Winner;
 import forge.card.MagicColor;
 import forge.card.mana.ManaCost;
+import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.cost.Cost;
@@ -20,6 +24,7 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
+import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.zone.ZoneType;
 
 /**
@@ -53,7 +58,10 @@ import forge.game.zone.ZoneType;
  * tracker) or reads the library's order. The mana for two casts together, Oracle's and its emptier's or an emptier's and
  * the draw spell after it, is read with {@link ComboMana}, which assigns each source to one pip: SpecialCardAi.HonestMana
  * counts one multicolour source toward each of its colours, and would approve Oracle and Consultation on Island,
- * Underground Sea and Sol Ring, where Oracle's {U}{U} takes the Sea and nothing is left for the {B}.
+ * Underground Sea and Sol Ring, where Oracle's {U}{U} takes the Sea and nothing is left for the {B}. Each of those
+ * costs is the spell's own as the engine prices it now ({@link #priced}, follow-up 2, G3: Thalia, Guardian of Thraben,
+ * Sphere of Resistance and Grand Arbiter Augustin IV raise it, Helm of Awakening lowers it), and while a go-off is under
+ * way an opponent's Rhystic Study is not paid when its {1} would leave the emptier unpaid ({@link #declinesUnlessCost}).
  */
 public final class ComboExecute {
     private ComboExecute() {
@@ -63,7 +71,9 @@ public final class ComboExecute {
      * Whether Thassa's Oracle goes off now (section 6.4): an {@link ComboTracker#executable} line whose winner is
      * Oracle, not denied this turn (its emptier castable at Oracle's trigger this turn), has its emptier in our hand,
      * and the mana we can make now ({@code ComboMana.of(ai, oracleCast, true)}) pays Oracle's cost and the emptier's
-     * together, each source assigned to one pip: {U}{U} and Consultation's {B} or Pact's {1}{B}.
+     * together, each source assigned to one pip: {U}{U} and Consultation's {B} or Pact's {1}{B}, each cost as the engine
+     * prices it now ({@link #priced}, follow-up 2, G3: under an opponent's Thalia, Guardian of Thraben, Consultation's
+     * {1}{B}).
      */
     public static boolean goOffNow(final Player ai, final SpellAbility oracleCast) {
         final ComboTracker t = ComboTracker.of(ai);
@@ -132,23 +142,126 @@ public final class ComboExecute {
      *  barred (Deafening Silence after a noncreature spell this turn) waits for a later turn, Oracle held for it. */
     static boolean goOffNow(final Player ai, final SpellAbility oracleCast, final ComboTracker.View v) {
         ComboMana mana = null;
+        ManaCost oracle = null;
         for (final ComboLines.Line l : v.executable()) {
             if (l.winner() != ComboLines.Winner.ORACLE || v.deniedThisTurn(l)) {
                 continue;
             }
-            final Card emptier = v.where(l.emptier().card) == ComboTracker.Where.HAND ? v.card(l.emptier().card)
-                    : null;
+            final SpellAbility emptier = handSpell(v, l.emptier());
             if (emptier == null) {
                 continue;
             }
             if (mana == null) {
                 mana = ComboMana.of(ai, oracleCast, true);
+                oracle = priced(ai, oracleCast);
             }
-            if (mana.pays(oracleCast.getHostCard().getManaCost(), emptier.getManaCost())) {
+            if (mana.pays(oracle, priced(ai, emptier))) {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Whether we decline an unless cost now (follow-up 2, G3; PlayerControllerAi.payCostToPreventEffect, once the stock
+     * decision would pay it and canPayCost finds it payable): while a go-off is under way, our Thassa's Oracle cast and
+     * still on our stack, or its entering trigger there, a line of {@link #goOffNow}'s (executable, Oracle its winner,
+     * not denied this turn) has its emptier in our hand; the mana we can make now pays that emptier, its cost as the
+     * engine prices it, but not beside the unless cost's mana; and the cost only stops a draw for opponents of ours
+     * ({@link #opponentsDraw}: an opponent's Rhystic Study, "you may draw a card unless that player pays {1}"). Declined,
+     * the opponent draws a card and the emptier is cast: the combo wins. Every other unless cost keeps the stock decision
+     * (the opponent's Mana Leak on our Oracle: declined, the Oracle would be countered), as does any outside a go-off,
+     * one that leaves the emptier's mana whole and one whose emptier the mana cannot pay anyway. False at once for a
+     * deck holding no line that Thassa's Oracle wins. Draws nothing.
+     */
+    public static boolean declinesUnlessCost(final Player ai, final SpellAbility sa, final Cost cost) {
+        if (sa == null || cost == null || !cost.hasManaCost() || !opponentsDraw(ai, sa)) {
+            return false;
+        }
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null || !names(t, Winner.ORACLE)) {
+            return false;
+        }
+        final ComboTracker.View v = t.view();
+        if (!v.triggerOnOurStack(Winner.ORACLE.card) && !oracleCastOnOurStack(ai)) {
+            return false;
+        }
+        ManaCost unless = null;
+        for (final ComboLines.Line l : v.executable()) {
+            if (l.winner() != Winner.ORACLE || v.deniedThisTurn(l)) {
+                continue;
+            }
+            final SpellAbility emptier = handSpell(v, l.emptier());
+            if (emptier == null) {
+                continue;
+            }
+            final ComboMana mana = ComboMana.of(ai, emptier, true);
+            final ManaCost emptierCost = priced(ai, emptier);
+            if (!mana.pays(emptierCost)) {
+                continue;
+            }
+            if (unless == null) {
+                // the unless cost as the payment prices it (canPayCost's effect-mode reading: no taxes, X counted)
+                unless = ComputerUtilMana.calculateManaCost(cost, sa, ai, true, 0, true).toManaCost();
+            }
+            if (!mana.pays(emptierCost, unless)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // the cost of our cast of spell as the engine prices it now: test-mode calculateManaCost on the spell's own cost
+    // (SpecialCardAi.VampiricTutor.consider's precedent), taxes and reductions included (Thalia, Guardian of Thraben;
+    // Sphere of Resistance; Grand Arbiter Augustin IV; Helm of Awakening). Nothing drawn; we are made the spell's
+    // activator first, as the AI's own walk makes us every spell's (ComputerUtilAbility.getOriginalAndAltCostAbilities)
+    static ManaCost priced(final Player ai, final SpellAbility spell) {
+        spell.setActivatingPlayer(ai);
+        return ComputerUtilMana.calculateManaCost(spell.getPayCosts(), spell, ai, true, 0, false).toManaCost();
+    }
+
+    // the spell of our card of the emptier e in our hand, its first (Consultation and Pact have one); null when no card
+    // of it is in our hand
+    private static SpellAbility handSpell(final ComboTracker.View v, final Emptier e) {
+        if (v.where(e.card) != ComboTracker.Where.HAND) {
+            return null;
+        }
+        return Iterables.getFirst(v.card(e.card).getSpells(), null);
+    }
+
+    // our Thassa's Oracle cast and still on our stack: its emptier is still to be cast after its trigger
+    private static boolean oracleCastOnOurStack(final Player ai) {
+        for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+            final Card host = si.getSourceCard();
+            if (si.isSpell() && host != null && ai.equals(si.getActivatingPlayer())
+                    && Winner.ORACLE.card.equals(ComboTracker.nameOf(host))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // the unless cost only stops a draw for opponents of ours, which cannot stop a go-off: sa is a Draw, untargeted,
+    // with no sub and no UnlessSwitched (paying would make it happen), and every player it draws for (Defined, else its
+    // activator) is an opponent of ours (Rhystic Study, Mystic Remora and Esper Sentinel, whose controller draws). Not a
+    // draw for us, which on an empty library would lose the game before Oracle's trigger resolves; not a counter
+    // (Mana Leak), damage or anything else that declining lets happen
+    private static boolean opponentsDraw(final Player ai, final SpellAbility sa) {
+        if (sa.getApi() != ApiType.Draw || sa.usesTargeting() || sa.getSubAbility() != null
+                || sa.hasParam("UnlessSwitched") || sa.getHostCard() == null) {
+            return false;
+        }
+        final List<Player> drawers = AbilityUtils.getDefinedPlayers(sa.getHostCard(),
+                sa.getParamOrDefault("Defined", "You"), sa);
+        if (drawers.isEmpty()) {
+            return false;
+        }
+        for (final Player p : drawers) {
+            if (!p.isOpponentOf(ai)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -379,25 +492,29 @@ public final class ComboExecute {
     }
 
     // a draw of ours follows the emptier: the opponent's end step with our turn next (our draw step), or a spell in our
-    // hand that the AI casts right after the emptier on the emptied library (castsOwnDrawAfter) and that the mana pays
+    // hand that the AI casts right after the emptier on the emptied library (followUpSpell) and that the mana pays
     // together with the emptier still to be cast, each source assigned to one pip of the two costs (ComboMana):
     // Consultation's or Pact's {B} beside Opt's {U} (Review Focus 4: two Swamps pay the two mana values, never Opt;
-    // Command Tower and Sol Ring make three mana, but one coloured)
+    // Command Tower and Sol Ring make three mana, but one coloured). Each cost is its spell's as the engine prices it
+    // now (priced, follow-up 2, G3: under an opponent's Thalia, Guardian of Thraben, Consultation's {1}{B} and Opt's
+    // {1}{U})
     private static boolean drawFollows(final Player ai, final SpellAbility sa, final boolean unpaid) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         if (ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn())) {
             return true;
         }
-        final ManaCost emptierCost = unpaid ? sa.getHostCard().getManaCost() : ManaCost.ZERO;
+        ManaCost emptierCost = null;
         ComboMana mana = null;
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
-            if (c.isLand() || !castsOwnDrawAfter(ai, ph, c)) {
+            final SpellAbility draw = c.isLand() ? null : followUpSpell(ai, ph, c);
+            if (draw == null) {
                 continue;
             }
             if (mana == null) {
                 mana = ComboMana.of(ai, sa, true);
+                emptierCost = unpaid ? priced(ai, sa) : ManaCost.ZERO;
             }
-            if (mana.pays(emptierCost, c.getManaCost())) {
+            if (mana.pays(emptierCost, priced(ai, draw))) {
                 return true;
             }
         }
@@ -405,20 +522,21 @@ public final class ComboExecute {
     }
 
     // the cards of our hand whose spell the AI casts right after the emptier on the emptied library now, as drawFollows
-    // reads the hand (lands left out, castsOwnDrawAfter): ComboFetch's win this turn under danger pays one of them
-    // beside a Laboratory Maniac or Jace line's casts
+    // reads the hand (lands left out, followUpSpell): ComboFetch's win this turn under danger pays one of them beside a
+    // Laboratory Maniac or Jace line's casts
     static List<Card> followUpDraws(final Player ai) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         final List<Card> out = new ArrayList<>(2);
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
-            if (!c.isLand() && castsOwnDrawAfter(ai, ph, c)) {
+            if (!c.isLand() && followUpSpell(ai, ph, c) != null) {
                 out.add(c);
             }
         }
         return out;
     }
 
-    // a spell of the card that the AI casts right after the emptier on the emptied library (Review Focus 4):
+    // the first spell of the card that the AI casts right after the emptier on the emptied library (Review Focus 4),
+    // else null:
     // - of the follow-up shape (followsUp), whose every part the AI approves on the emptied library;
     // - a sorcery-speed spell (SpellAbilityAi.isSorcerySpeed: no flash of its own or from a static) only in our own
     //   main phase; elsewhere it waits past our draw step, which the emptied library loses (Serum Visions in the
@@ -426,7 +544,7 @@ public final class ComboExecute {
     // - a card the AI is never offered, never: getSpellAbilityToPlay drops a RemoveDeck-hinted card's spell unless its
     //   own row readmits it (SpecialCardAi.RemoveDeckFilter.readmit, asked as that filter asks it; See Beyond and
     //   Gitaxian Probe have none)
-    private static boolean castsOwnDrawAfter(final Player ai, final PhaseHandler ph, final Card c) {
+    private static SpellAbility followUpSpell(final Player ai, final PhaseHandler ph, final Card c) {
         final boolean ourMain = ph.isPlayerTurn(ai) && ph.getPhase() != null && ph.getPhase().isMain();
         final boolean hinted = ComputerUtilCard.isCardRemAIDeck(c);
         for (final SpellAbility spell : c.getSpells()) {
@@ -434,10 +552,10 @@ public final class ComboExecute {
                 continue;
             }
             if (!hinted || SpecialCardAi.RemoveDeckFilter.readmit(ai, spell)) {
-                return true;
+                return spell;
             }
         }
-        return false;
+        return null;
     }
 
     // the follow-up shape, read from the spell, never its name: what the AI casts on our emptied library, each part's

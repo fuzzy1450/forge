@@ -5,6 +5,7 @@ import forge.LobbyPlayer;
 import forge.StaticData;
 import forge.ai.ability.ProtectAi;
 import forge.ai.ability.PutStickerAi;
+import forge.ai.combo.ComboExecute;
 import forge.ai.combo.ComboFetch;
 import forge.card.CardStateName;
 import forge.card.ColorSet;
@@ -1366,6 +1367,12 @@ public class PlayerControllerAi extends PlayerController {
     public boolean payCostToPreventEffect(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
         if (SpellApiToAi.Converter.get(sa).willPayUnlessCost(player, sa, cost, alreadyPaid, allPayers)) {
             if (!ComputerUtilCost.canPayCost(cost, sa, player, true)) {
+                return false;
+            }
+            // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4, follow-up 2, G3): during a
+            // go-off, an opponent's Rhystic Study is not paid when its {1} would leave the emptier unpaid; after the
+            // stock decision and its canPayCost, whose draws stay the stock path's.
+            if (ComboExecute.declinesUnlessCost(player, sa, cost)) {
                 return false;
             }
 

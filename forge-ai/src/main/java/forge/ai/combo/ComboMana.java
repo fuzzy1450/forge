@@ -42,9 +42,10 @@ import forge.game.zone.ZoneType;
  * over the kinds demanded, which is exact for one mana a source), and the sources must number its whole mana value.
  * A Phyrexian or a {2/C} pip is read as its colour alone and a snow pip as generic; X is none. Under-counts, the safe
  * side for a go-off: those Phyrexian and {2/C} readings, hand sources, mana multipliers and the sources past
- * {@link #MAX_CHOICES}. Not read: a cost's taxes, and a restriction that lets a source pay one of the costs but not the
- * other (each source is read against {@code sa}). Draws nothing and keeps nothing; its only write is
- * setActivatingPlayer on the mana abilities it reads, as HonestMana does.
+ * {@link #MAX_CHOICES}. The costs are read as handed: ComboExecute hands each spell's as the engine prices it, taxes
+ * and reductions included (follow-up 2, G3), ComboFetch and ComboSignals a card's printed cost. Not read: a restriction
+ * that lets a source pay one of the costs but not the other (each source is read against {@code sa}). Draws nothing and
+ * keeps nothing; its only write is setActivatingPlayer on the mana abilities it reads, as HonestMana does.
  */
 final class ComboMana {
     /** The kinds of mana, as ManaAtom's low bits: W, U, B, R, G, and colourless. */

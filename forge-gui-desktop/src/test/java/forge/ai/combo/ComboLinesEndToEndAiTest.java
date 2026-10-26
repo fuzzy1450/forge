@@ -376,4 +376,41 @@ public class ComboLinesEndToEndAiTest extends AITest {
             assertNotNull(t.find(name, ZoneType.Hand), name + " was cast");
         }
     }
+
+    /**
+     * Review Focus 3 (follow-up 2, G3): the opponent's Rhystic Study, and Thassa's Oracle and Demonic Consultation in
+     * hand behind the five junk cards, Island, Island and Swamp: exactly the go-off's mana. Rhystic asks {1} of us as
+     * the Oracle is cast; paid, the Swamp would be gone, Consultation could not follow, and the Oracle would resolve
+     * for value. The AI declines and the opponent draws; Consultation answers Oracle's trigger (Rhystic asks again,
+     * and nothing is left to pay it with, so the opponent draws again), and the AI wins the turn it began in.
+     */
+    @Test
+    public void rhysticStudyIsNotPaidDuringAGoOff() {
+        start();
+        for (final String name : JUNK) {
+            addCardToZone(name, ai, ZoneType.Hand);
+        }
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        assertEquals(ai.getCardsIn(ZoneType.Hand).size(), 7, "not a full hand");
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        addCard("Rhystic Study", opp);
+        assertEquals(ids(t.deckLines()), List.of("742-1295"));
+        final int turn = game.getPhaseHandler().getTurn();
+        final int oppHand = opp.getCardsIn(ZoneType.Hand).size();
+
+        final List<Event> events = play();
+        assertWonBy(ORACLE, events);
+        assertLibraryEmpty();
+        assertFalse(events.isEmpty());
+        assertEquals(events.get(0).what(), ORACLE, "a junk card went first: " + whats(events));
+        final Event consultation = first(events, CONSULTATION);
+        assertTrue(consultation.stack().contains(ORACLE + " trigger"), "Consultation was not cast in response to "
+                + "Oracle's trigger: " + consultation.stack());
+        assertEquals(game.getPhaseHandler().getPlayerTurn(), ai);
+        assertEquals(game.getPhaseHandler().getTurn(), turn, "the go-off waited a turn");
+        // Rhystic's two draws: the one the AI declined to pay for, and the one it had nothing left to pay for
+        assertEquals(opp.getCardsIn(ZoneType.Hand).size(), oppHand + 2, "Rhystic's {1} was paid");
+    }
 }
