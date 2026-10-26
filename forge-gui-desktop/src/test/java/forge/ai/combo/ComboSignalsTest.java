@@ -2057,6 +2057,38 @@ public class ComboSignalsTest extends AITest {
         assertEquals(p.blockMatrixBuilds(), 2, "one build for each of the two opponents");
     }
 
+    @Test
+    public void nothingBuildsTheMatrixBeforeDangerIsAsked() {
+        // the 12-against-10 board at our 20: asking DANGER builds the matrix (dangerBuildsTheMatrixOncePerView), and no
+        // other reading of the view does: not the line's readiness, the executable lines, the executable-now lines or
+        // the denial now
+        final ComboLines.Line l = bigBoard();
+        ai.setLife(20, null);
+        ComboTracker.View v = t.view();
+        assertTrue(v.ready(l));
+        assertEquals(ids(v.executable()), List.of("742-1295"));
+        assertEquals(ids(v.executableNow()), List.of("742-1295"));
+        assertFalse(v.deniedNow(l));
+        assertEquals(v.blockMatrixBuilds(), 0, "ready, executable, executable-now and denied-now never ask DANGER");
+
+        // a denied line (an opposing Platinum Angel: we cannot win) stops at DENIED, before DANGER is asked
+        addCard("Platinum Angel", opp);
+        v = t.view();
+        assertEquals(ComboSignals.abandon(v, l), Signal.DENIED);
+        assertEquals(v.blockMatrixBuilds(), 0, "DENIED stops before DANGER");
+
+        // a line without the mana stops at NO_MANA, before DANGER is asked; asked, the two Dreadmaws' 12 reach our 5
+        final ComboLines.Line starved = oracleLine();
+        lands("Island");
+        ready(DREADMAW, 2, opp);
+        ai.setLife(5, null);
+        v = t.view();
+        assertEquals(ComboSignals.abandon(v, starved), Signal.NO_MANA);
+        assertEquals(v.blockMatrixBuilds(), 0, "NO_MANA stops before DANGER");
+        assertTrue(v.danger());
+        assertEquals(v.blockMatrixBuilds(), 1);
+    }
+
     /** Line 742-1295 on the 12-against-10 board of follow-up 2's Review Focus 5, our MAIN1: Oracle in hand,
      *  Consultation in the library, the line's mana among seven lands of ours, seven of the opponent's. A handful of
      *  statics are in play: the opponent's Glorious Anthem (+1/+1), Familiar Ground and Champion of Lambholt (a
