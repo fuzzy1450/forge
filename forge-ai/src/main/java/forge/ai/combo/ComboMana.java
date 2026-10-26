@@ -37,6 +37,8 @@ import forge.game.zone.ZoneType;
  * Gilded Lotus three of one colour), "AnyDifferent" one coloured and the rest generic only (an under-count), a
  * reflected, special or letterless production generic only. A source with several abilities of one mana each is one
  * mana of any of their kinds (Talisman's {C}, {U} or {B}); one whose abilities make more is tried ability by ability.
+ * {@link #nextTurn} reads our next turn's mana instead (follow-up 2, G4): the same sources, whether or not they can be
+ * activated now, and no pool.
  *
  * <p>A cost's coloured, colourless and hybrid pips must each meet a source of a kind that pays it (Hall's condition
  * over the kinds demanded, which is exact for one mana a source), and the sources must number its whole mana value.
@@ -65,15 +67,34 @@ final class ComboMana {
 
     /** The mana {@code ai} can make now for {@code sa}, held sources left out when {@code skipHeld}. */
     static ComboMana of(final Player ai, final SpellAbility sa, final boolean skipHeld) {
+        return read(ai, sa, skipHeld, false);
+    }
+
+    /** The mana {@code ai} can make for {@code sa} in its own next turn, untapped (follow-up 2, G4: a piece put on top
+     *  of our library at the end step before our turn is cast in that turn's Main 1): each battlefield source we
+     *  control, read as {@link #of} reads it but whether or not its mana ability can be activated now (tapped,
+     *  summoning-sick, restricted to our turn), as Forge's own estimate of next turn's mana skips canPlay
+     *  (ComputerUtilMana.getAvailableManaEstimate with checkPlayable false: signal 1's next turn's mana); no floating
+     *  mana, which empties before that turn, and no held source, the AI's card memory resetting at each end step
+     *  (PlayerControllerAi.resetAtEndOfTurn). A land still to be played is not counted (the hand sources' under-count). */
+    static ComboMana nextTurn(final Player ai, final SpellAbility sa) {
+        return read(ai, sa, false, true);
+    }
+
+    // the mana of the sources, now (the pool, then each source whose mana ability canPlay()) or in our next turn
+    private static ComboMana read(final Player ai, final SpellAbility sa, final boolean skipHeld,
+            final boolean nextTurn) {
         final ComboMana m = new ComboMana();
-        final ManaPool pool = ai.getManaPool();
-        int coloured = 0;
-        for (int i = 0; i < MagicColor.WUBRG.length; i++) {
-            final int n = pool.getAmountOfColor(MagicColor.WUBRG[i]);
-            m.units[MagicColor.WUBRG[i]] += n;
-            coloured += n;
+        if (!nextTurn) {
+            final ManaPool pool = ai.getManaPool();
+            int coloured = 0;
+            for (int i = 0; i < MagicColor.WUBRG.length; i++) {
+                final int n = pool.getAmountOfColor(MagicColor.WUBRG[i]);
+                m.units[MagicColor.WUBRG[i]] += n;
+                coloured += n;
+            }
+            m.units[COLOURLESS] += Math.max(0, pool.totalMana() - coloured);
         }
-        m.units[COLOURLESS] += Math.max(0, pool.totalMana() - coloured);
         for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
             if (skipHeld && isHeld(ai, src)) {
                 continue;
@@ -85,7 +106,7 @@ final class ComboMana {
                     continue;
                 }
                 ma.setActivatingPlayer(ai);
-                if (!ma.canPlay() || ma.getPayCosts().hasManaCost() || !ma.metConditions()
+                if ((!nextTurn && !ma.canPlay()) || ma.getPayCosts().hasManaCost() || !ma.metConditions()
                         || !mp.meetsManaRestrictions(sa) || instantSpeed(ma)) {
                     continue;
                 }

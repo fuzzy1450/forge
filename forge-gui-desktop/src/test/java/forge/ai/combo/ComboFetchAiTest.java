@@ -30,6 +30,7 @@ import forge.ai.PlayerControllerAi;
 import forge.ai.SpecialCardAi;
 import forge.ai.ability.ChangeZoneAi;
 import forge.ai.ability.DigAi;
+import forge.card.mana.ManaAtom;
 import forge.game.Game;
 import forge.game.ability.AbilityKey;
 import forge.game.ability.AbilityUtils;
@@ -38,6 +39,7 @@ import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CounterEnumType;
 import forge.game.cost.Cost;
+import forge.game.mana.Mana;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -941,9 +943,10 @@ public class ComboFetchAiTest extends AITest {
     }
 
     @Test
-    public void dangerYieldsOutsideOurMainPhaseWithoutTheManaNowAndToTheOtherSignals() {
-        // beyond the plan's tests: the win this turn needs DANGER as the line's only signal, our main phase and the
-        // mana open now; each board below takes the stock pick with the stock draws
+    public void dangerYieldsAfterOurMainPhasesWithoutTheManaNowAndToTheOtherSignals() {
+        // beyond the plan's tests: the win this turn needs DANGER as the line's only signal, a main phase of ours still
+        // to come this turn (follow-up 2, G4: our upkeep, draw step and combat too, dangerToHandInOurTurnUnchanged) and
+        // the mana open now; each board below takes the stock pick with the stock draws
         final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
 
         // the Swamps tapped: next turn's mana counts them (no NO_MANA), but nothing open now makes Consultation's {B}
@@ -996,12 +999,13 @@ public class ComboFetchAiTest extends AITest {
         final SpellAbility twoShort = spell("Demonic Tutor");
         assertWarmStockParity(() -> pick(ZoneType.Hand, twoShort), held);
 
-        // our upkeep, and the opponent's Main 1: no main phase of ours
+        // our end step, and the opponent's Main 1: no main phase of ours before the opponent's attack (follow-up 2, G4:
+        // this case read our upkeep before, which a piece fetched to our hand now wins from, in our Main 1)
         dangerBoard();
-        game.getPhaseHandler().devModeSet(PhaseType.UPKEEP, ai);
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, ai);
         assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
-        final SpellAbility upkeep = spell("Demonic Tutor");
-        assertWarmStockParity(() -> pick(ZoneType.Hand, upkeep), held);
+        final SpellAbility endStep = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, endStep), held);
         dangerBoard();
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
         assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
@@ -1270,10 +1274,12 @@ public class ComboFetchAiTest extends AITest {
     }
 
     @Test
-    public void dangerNeverFetchesToTheTop() {
+    public void dangerNeverFetchesToTheTopInOurMainPhase() {
         // follow-up final review, round 1: a piece put on top of our library in our main phase is not in our hand this
         // turn, so a search or a dig to the top, and the Vault's stack, keep the one-short lines under danger. On the
-        // danger board each makes the stock decision with the stock draws, and remembers no known top
+        // danger board each makes the stock decision with the stock draws, and remembers no known top (follow-up 2, G4:
+        // in our upkeep, and at the end step before our turn, the piece arrives in time and is fetched:
+        // vampiricInOurUpkeepFetchesUnderDanger, vaultAtTheEndStepBeforeOurTurnStacksThePieceUnderDanger)
         final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
         for (final String name : List.of("Imperial Seal", "Vampiric Tutor", "Mystical Tutor")) {
             final Card consultation = dangerBoard();
@@ -1331,8 +1337,8 @@ public class ComboFetchAiTest extends AITest {
 
     @Test
     public void dangerStillDigsForAWinThisTurn() {
-        // the win this turn holds for a dig to our hand as for a search (a dig to the top, and the Vault, never:
-        // dangerNeverFetchesToTheTop)
+        // the win this turn holds for a dig to our hand as for a search (a dig to the top, and the Vault, never in our
+        // main phase: dangerNeverFetchesToTheTopInOurMainPhase)
         final Card consultation = dangerBoard();
         final SpellAbility impulse = spell("Impulse");
         final List<Card> shown = List.of(t.find(WURM, ZoneType.Library), consultation);
@@ -1472,6 +1478,406 @@ public class ComboFetchAiTest extends AITest {
     private Card decision() {
         final List<SpellAbility> choice = aiOf(ai).chooseSpellAbilityToPlay();
         return choice == null || choice.isEmpty() ? null : choice.get(0).getHostCard();
+    }
+
+    // ---- follow-up 2, G4: under danger, a fetch takes the piece that arrives in time ----
+
+    /** The danger board ({@link #dangerBoard}) at {@code phase} of our turn ({@code ours}) or of the opponent's
+     *  (devModeSet: the stack, the lands and the library as they are). DANGER is still line 742-1295's only signal, so
+     *  no line is one short. Returns the library's Consultation, the top card. */
+    private Card dangerBoardAt(final PhaseType phase, final boolean ours) {
+        final Card consultation = dangerBoard();
+        final Player turn = ours ? ai : opp;
+        game.getPhaseHandler().devModeSet(phase, turn);
+        assertEquals(game.getPhaseHandler().getPhase(), phase);
+        assertSame(game.getPhaseHandler().getPlayerTurn(), turn);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER, phase.name());
+        assertEquals(t.oneShort(), List.of(), phase.name());
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation);
+        return consultation;
+    }
+
+    /** Taps every land of ours named {@code name}. */
+    private void tapLands(final String name) {
+        for (final Card land : ai.getLandsInPlay()) {
+            if (name.equals(land.getName())) {
+                land.setTapped(true);
+            }
+        }
+    }
+
+    /** Review Focus 4: Vampiric Tutor in our upkeep, on the danger board. The piece it puts on top of our library is
+     *  drawn in our draw step and cast in our Main 1, before the opponent's attack, and this turn's mana (the four lands
+     *  open now) pays Oracle's {U}{U} and Consultation's {B}: the tutor takes Consultation, a known top; with no line it
+     *  is the stock pick. In our draw step the piece would be drawn only next turn, after the attack: the stock pick,
+     *  with the stock draws. So it is in our upkeep with the Swamps tapped (next turn's mana counts them, this turn's
+     *  makes no {B}), and under an opposing Deafening Silence with Vampiric Tutor this turn's noncreature spell (this
+     *  turn's go-off is barred, though next turn's is not, so DANGER is still the only signal). */
+    @Test
+    public void vampiricInOurUpkeepFetchesUnderDanger() {
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
+        Card consultation = dangerBoardAt(PhaseType.UPKEEP, true);
+        final SpellAbility vampiric = spell("Vampiric Tutor");
+        assertEquals(vampiric.getParam("LibraryPosition"), "0");
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Library, vampiric), consultation);
+        assertEquals(t.knownTops(), Set.of());
+        t.useLines(held);
+        assertSame(pick(ZoneType.Library, vampiric), consultation);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()));
+        // Vampiric Tutor resolving: our search, the shuffle, then Consultation on top, where our draw step takes it
+        AbilityUtils.resolve(vampiric);
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()));
+
+        // our draw step: the piece is drawn only next turn
+        consultation = dangerBoardAt(PhaseType.DRAW, true);
+        final SpellAbility drawStep = spell("Vampiric Tutor");
+        assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, drawStep), held), consultation);
+        assertEquals(t.knownTops(), Set.of());
+
+        // this turn's mana short
+        dangerBoardAt(PhaseType.UPKEEP, true);
+        tapLands("Swamp");
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility tapped = spell("Vampiric Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Library, tapped), held);
+        assertEquals(t.knownTops(), Set.of());
+
+        // this turn's go-off barred
+        dangerBoardAt(PhaseType.UPKEEP, true);
+        addCard("Deafening Silence", opp);
+        final Card cast = castOnStack("Vampiric Tutor");
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(cast));
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "this turn's go-off is barred");
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER, "next turn's is not");
+        final SpellAbility silenced = cast.getFirstSpellAbility();
+        assertWarmStockParity(() -> pick(ZoneType.Library, silenced), held);
+        assertEquals(t.knownTops(), Set.of());
+    }
+
+    /** The Vault on the board as it is, Consultation the library's top card, its holds checked against the stock rule
+     *  with no line: the five on top (holding Consultation) and the five under it (missing it, Consultation still in our
+     *  library); and its stack (the last move, Craw Wurm, Consultation and an Island put back on top in the AI's order:
+     *  the last card of the list ends on top). {@code inTime}: the Vault keeps the first five, digs past the second
+     *  and stacks Consultation on top, a known top; else each is the stock rule. The stock stack puts another card on
+     *  top. Either way the same three put on the bottom (the Vault's GoToBottom, LibraryPosition$ -1) keep the stock
+     *  order, with the stock draws: only a move to the top takes the piece first. */
+    private void assertVault(final List<ComboLines.Line> held, final boolean inTime, final String why) {
+        final List<Card> lib = list(ai.getCardsIn(ZoneType.Library));
+        final Card consultation = lib.get(0);
+        assertEquals(consultation.getName(), CONSULTATION, why);
+        final List<Card> five = List.copyOf(lib.subList(0, 5));
+        final List<Card> below = List.copyOf(lib.subList(1, 6));
+        final Card wurm = t.find(WURM, ZoneType.Library);
+        final Card island = addCardToZone("Island", ai, ZoneType.Library);
+        final SpellAbility reorder = vaultReorder();
+        final SpellAbility bottom = vaultGoToBottom();
+        final Supplier<Card> top = () -> {
+            final List<Card> order = list(pc().orderMoveToZoneList(new CardCollection(List.of(wurm, consultation,
+                    island)), ZoneType.Library, reorder));
+            return order.get(order.size() - 1);
+        };
+        t.useLines(List.of());
+        assertNull(ComboFetch.vaultDig(ai, five), why);
+        assertNotSame(top.get(), consultation, why);
+        assertEquals(t.knownTops(), Set.of(), why);
+        final List<Card> bottomed = assertStockParity(() -> list(pc().orderMoveToZoneList(new CardCollection(
+                List.of(wurm, consultation, island)), ZoneType.Library, bottom)), held);
+        assertNotSame(bottomed.get(0), consultation, why);
+        assertEquals(t.knownTops(), Set.of(), why);
+        if (!inTime) {
+            assertNull(ComboFetch.vaultDig(ai, five), why);
+            assertNull(ComboFetch.vaultDig(ai, below), why);
+            assertNotSame(assertStockParity(top, held), consultation, why);
+            assertEquals(t.knownTops(), Set.of(), why);
+            return;
+        }
+        assertEquals(ComboFetch.vaultDig(ai, five), Boolean.FALSE, why);
+        assertEquals(ComboFetch.vaultDig(ai, below), Boolean.TRUE, why);
+        assertSame(top.get(), consultation, why);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()), why);
+    }
+
+    /** Review Focus 4: Lim-Dul's Vault at the end step of the opponent whose turn comes right before ours, on the
+     *  danger board. The five it stacks on top of our library are drawn from in our draw step, so Consultation stacked
+     *  first is in our hand for our Main 1, before that opponent attacks again, and next turn's untapped mana pays
+     *  Oracle's {U}{U} and Consultation's {B}: the Vault keeps a five holding Consultation, digs past one missing it,
+     *  and stacks Consultation on top ({@link #assertVault}); a scry's kept cards there keep the stock order (the Vault's
+     *  stack is the order of a move to the top). So it is in that turn's cleanup ("or later in their
+     *  turn"), with every land of ours tapped now (our untap step untaps them), and under an opposing Deafening Silence
+     *  with the Vault this turn's noncreature spell (Consultation is next turn's first: denied now, not at its window).
+     *  The stock rule in the opponent's Main 1 (before their attack) and Main 2, and at our own end step (the
+     *  opponent's turn comes before our next main phase). With three seats, at the end step of the opponent right
+     *  before us the Vault stacks Consultation; at the end step of the one right after us, the other opponent's turn
+     *  comes first: the stock rule. */
+    @Test
+    public void vaultAtTheEndStepBeforeOurTurnStacksThePieceUnderDanger() {
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
+        for (final PhaseType phase : List.of(PhaseType.END_OF_TURN, PhaseType.CLEANUP)) {
+            dangerBoardAt(phase, false);
+            assertSame(game.getPhaseHandler().getNextTurn(), ai);
+            assertVault(held, true, phase.name());
+        }
+
+        // a scry's kept cards at that end step are not the Vault's stack: Runeclaw Bear and Consultation, both kept,
+        // come back in the stock order, whichever order the shuffle gives them, with no live line to protect the piece
+        final Card consultation = dangerBoardAt(PhaseType.END_OF_TURN, false);
+        final Card bear = t.find("Runeclaw Bear", ZoneType.Library);
+        final CardCollection scried = new CardCollection(List.of(bear, consultation));
+        final List<List<Card>> orders = new ArrayList<>();
+        for (final long seed : SHUFFLE_SEEDS) {
+            t.useLines(List.of());
+            MyRandom.setRandom(new Random(seed));
+            final ImmutablePair<CardCollection, CardCollection> stock = pc().arrangeForScry(scried);
+            t.useLines(held);
+            MyRandom.setRandom(new Random(seed));
+            final ImmutablePair<CardCollection, CardCollection> ours = pc().arrangeForScry(scried);
+            assertEquals(list(ours.getLeft()), list(stock.getLeft()), "seed " + seed);
+            assertEquals(list(ours.getRight()), list(stock.getRight()), "seed " + seed);
+            orders.add(list(stock.getLeft()));
+        }
+        assertEquals(orders.get(0).size(), 2, "both kept");
+        assertNotEquals(orders.get(0), orders.get(1), "the two seeds give both orders");
+        assertEquals(t.knownTops(), Set.of());
+
+        dangerBoardAt(PhaseType.END_OF_TURN, false);
+        for (final Card land : ai.getLandsInPlay()) {
+            land.setTapped(true);
+        }
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertVault(held, true, "every land tapped now");
+
+        dangerBoardAt(PhaseType.END_OF_TURN, false);
+        addCard("Deafening Silence", opp);
+        castOnStack(SpecialCardAi.LimDulsVault.NAME);
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertTrue(ComboSignals.deniedNow(t.view(), l), "read now, Consultation would be this turn's second");
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER, "next turn's go-off is not barred");
+        assertVault(held, true, "Deafening Silence");
+
+        dangerBoardAt(PhaseType.MAIN1, false);
+        assertVault(held, false, "the opponent's Main 1");
+        dangerBoardAt(PhaseType.MAIN2, false);
+        assertVault(held, false, "the opponent's Main 2");
+        dangerBoardAt(PhaseType.END_OF_TURN, true);
+        assertNotSame(game.getPhaseHandler().getNextTurn(), ai);
+        assertVault(held, false, "our end step");
+
+        // three seats: the opponent right before us (the Dreadmaw's), us, the opponent right after us
+        for (final int seat : List.of(0, 2)) {
+            game = initAndCreateThreePlayerGame();
+            ai = game.getPlayers().get(1);
+            opp = game.getPlayers().get(0);
+            ((LobbyPlayerAi) ai.getLobbyPlayer()).setAiProfile("Default");
+            t = aiOf(ai).getComboTracker();
+            t.useLines(held);
+            for (final String land : List.of("Island", "Island", "Swamp", "Swamp")) {
+                addCard(land, ai);
+            }
+            addCardToZone(ORACLE, ai, ZoneType.Hand);
+            for (final String name : LIBRARY) {
+                addCardToZone(name, ai, ZoneType.Library);
+            }
+            ai.setLife(3, null);
+            addCard("Colossal Dreadmaw", opp).setSickness(false);
+            final Player endStep = game.getPlayers().get(seat);
+            game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, endStep);
+            assertEquals(game.getPhaseHandler().getNextTurn() == ai, seat == 0);
+            assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+            assertVault(held, seat == 0, "the end step of seat " + seat);
+        }
+    }
+
+    /** Imperial Seal in our Main 1, on the danger board: its piece goes on top of our library, drawn only in our next
+     *  draw step, after the opponent's attack. No win comes in time, so it is the stock pick, with the stock draws, and
+     *  nothing is a known top. So it is for a fetch to the top in every other step of our turn past our upkeep (Vampiric
+     *  Tutor in our draw step, combat, Main 2 and end step), in the opponent's turn before their end step (their Main 1
+     *  and Main 2), and for the Vault in our Main 1 (its holds and its stack the stock rule's). */
+    @Test
+    public void imperialSealInMainOneStillTakesTheStockPick() {
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
+        Card consultation = dangerBoardAt(PhaseType.MAIN1, true);
+        final SpellAbility seal = spell("Imperial Seal");
+        assertEquals(seal.getParam("LibraryPosition"), "0");
+        assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, seal), held), consultation);
+        assertEquals(t.knownTops(), Set.of());
+
+        final Object[][] moments = {{PhaseType.DRAW, true}, {PhaseType.COMBAT_END, true}, {PhaseType.MAIN2, true},
+                {PhaseType.END_OF_TURN, true}, {PhaseType.MAIN1, false}, {PhaseType.MAIN2, false}};
+        for (final Object[] moment : moments) {
+            final PhaseType phase = (PhaseType) moment[0];
+            final boolean ours = (Boolean) moment[1];
+            final String why = phase.name() + (ours ? " ours" : " theirs");
+            consultation = dangerBoardAt(phase, ours);
+            final SpellAbility vampiric = spell("Vampiric Tutor");
+            assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, vampiric), held), consultation, why);
+            assertEquals(t.knownTops(), Set.of(), why);
+        }
+
+        dangerBoardAt(PhaseType.MAIN1, true);
+        assertVault(held, false, "our Main 1");
+    }
+
+    /** A fetch to our hand under danger, in our turn: the piece is in our hand at once and the win comes in a main phase
+     *  of ours this turn, read with this turn's mana and this turn's denial. Demonic Tutor on the danger board takes
+     *  Consultation in every step of our turn before our end step: Main 1 and Main 2 as before, and (follow-up 2, G4)
+     *  our upkeep, draw step and combat, whose piece is in our hand before a main phase of ours as well (the base read
+     *  our main phases only). With no line it is the stock pick. In our Main 1 with the Swamps tapped (next turn's mana
+     *  counts them, this turn's makes no {B}) the stock pick: next turn's mana is never read for a fetch to our hand. At
+     *  our end step (our next main phase comes after the opponent's attack) and in the opponent's turn (their Main 1,
+     *  before their attack, and their end step: a fetch to our hand there keeps today's rule), the stock pick. */
+    @Test
+    public void dangerToHandInOurTurnUnchanged() {
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
+        for (final PhaseType phase : List.of(PhaseType.UPKEEP, PhaseType.DRAW, PhaseType.MAIN1, PhaseType.COMBAT_END,
+                PhaseType.MAIN2)) {
+            final Card consultation = dangerBoardAt(phase, true);
+            final SpellAbility tutor = spell("Demonic Tutor");
+            t.useLines(List.of());
+            assertNotSame(pick(ZoneType.Hand, tutor), consultation, phase.name());
+            t.useLines(held);
+            assertSame(pick(ZoneType.Hand, tutor), consultation, phase.name());
+            assertEquals(t.knownTops(), Set.of(), phase.name());
+        }
+
+        dangerBoardAt(PhaseType.MAIN1, true);
+        tapLands("Swamp");
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility tapped = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, tapped), held);
+
+        final Object[][] moments = {{PhaseType.END_OF_TURN, true}, {PhaseType.MAIN1, false},
+                {PhaseType.END_OF_TURN, false}};
+        for (final Object[] moment : moments) {
+            final PhaseType phase = (PhaseType) moment[0];
+            final boolean ours = (Boolean) moment[1];
+            final String why = phase.name() + (ours ? " ours" : " theirs");
+            final Card consultation = dangerBoardAt(phase, ours);
+            final SpellAbility tutor = spell("Demonic Tutor");
+            assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), held), consultation, why);
+        }
+    }
+
+    /** Vampiric Tutor at the end step of the opponent whose turn comes right before ours (follow-up 2, G4): the piece
+     *  is drawn in our draw step, and each winner's window is read in our next Main 1 (F4's per-winner rules), with
+     *  next turn's untapped mana. With no line each is the stock pick.
+     *  <ul>
+     *  <li>Laboratory Maniac in play: Consultation cast in our Main 1 with a draw spell of our hand to follow it, paid
+     *  beside it: Opt (an instant), and Divination (a sorcery: none can be cast now, but our main phase casts it), on
+     *  four lands, every one tapped now. With three lands Divination's {2}{U} and Consultation's {B} outrun them, and
+     *  with no draw spell no draw follows: the stock pick.
+     *  <li>Doctor Doom on our battlefield, summoning sick now, then tapped too: our next turn untaps it, free of
+     *  summoning sickness, and its {T} follows Consultation. Doom in our hand would be cast summoning sick: the stock
+     *  pick.
+     *  <li>Fblthp, Impossibly Lost ready on our battlefield: never (its win needs combat damage).
+     *  <li>Thassa's Oracle on the danger board, both Swamps held now for the AI's next spell: the AI's card memory resets
+     *  at each end step, so next turn's mana counts them, and it takes Consultation.
+     *  <li>Thassa's Oracle with Island and Island in play and {B} floating: the pool empties before our turn, so next
+     *  turn's mana makes no {B} for Consultation: the stock pick, though next turn's mana count (signal 1's) is met.
+     *  </ul> */
+    @Test
+    public void dangerAtTheEndStepBeforeOurTurnReadsEachWinnersWindowNextTurn() {
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+        Card consultation = labDangerBoard();
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEndStepFetch(consultation, lab, "Opt");
+
+        consultation = labDangerBoard();
+        game.getAction().moveTo(ZoneType.Graveyard, t.find(OPT, ZoneType.Hand), null, AbilityKey.newMap());
+        addCardToZone("Divination", ai, ZoneType.Hand);
+        addCard("Island", ai);
+        for (final Card land : ai.getLandsInPlay()) {
+            land.setTapped(true);
+        }
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEndStepFetch(consultation, lab, "Divination");
+
+        // Divination on three lands
+        labDangerBoard();
+        game.getAction().moveTo(ZoneType.Graveyard, t.find(OPT, ZoneType.Hand), null, AbilityKey.newMap());
+        addCardToZone("Divination", ai, ZoneType.Hand);
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility threeLands = spell("Vampiric Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Library, threeLands), lab);
+        // no draw spell
+        labDangerBoard();
+        game.getAction().moveTo(ZoneType.Graveyard, t.find(OPT, ZoneType.Hand), null, AbilityKey.newMap());
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility noDraw = spell("Vampiric Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Library, noDraw), lab);
+
+        // Doctor Doom
+        final List<ComboLines.Line> doom = lines(DOOM_CONSULTATION);
+        final Card sick = doomDangerBoard(ZoneType.Battlefield);
+        assertTrue(sick.isSick());
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEndStepFetch(t.find(CONSULTATION, ZoneType.Library), doom, "Doom summoning sick");
+        sick.setTapped(true);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEndStepFetch(t.find(CONSULTATION, ZoneType.Library), doom, "Doom tapped");
+        doomDangerBoard(ZoneType.Hand);
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility doomInHand = spell("Vampiric Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Library, doomInHand), doom);
+
+        // Fblthp
+        final List<ComboLines.Line> fblthp = lines(FBLTHP_CONSULTATION);
+        start(FBLTHP_CONSULTATION);
+        addCard(FBLTHP, ai).setSickness(false);
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(CONSULTATION));
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility never = spell("Vampiric Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Library, never), fblthp);
+
+        // Thassa's Oracle, both Swamps held for the AI's next spell (AiCardMemory's HELD_MANA_SOURCES_FOR_NEXT_SPELL,
+        // which isManaSourceReserved keeps from other payments now): the memory resets at each end step, so next
+        // turn's mana counts them
+        final Card reserved = dangerBoardAt(PhaseType.END_OF_TURN, false);
+        for (final Card land : ai.getLandsInPlay()) {
+            if ("Swamp".equals(land.getName())) {
+                AiCardMemory.rememberCard(ai, land, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+            }
+        }
+        assertEndStepFetch(reserved, lines(ORACLE_CONSULTATION), "Swamps held now");
+
+        // Thassa's Oracle, {B} floating
+        dangerBoardAt(PhaseType.END_OF_TURN, false);
+        for (final Card land : new ArrayList<>(ai.getLandsInPlay())) {
+            if ("Swamp".equals(land.getName())) {
+                game.getAction().moveTo(ZoneType.Graveyard, land, null, AbilityKey.newMap());
+            }
+        }
+        ai.getManaPool().addMana(new Mana((byte) ManaAtom.BLACK, createCard("Swamp", ai), null, ai));
+        assertEquals(ai.getManaPool().totalMana(), 1);
+        assertEquals(ComboSignals.nextTurnManaNow(ai), 3, "Island, Island and the floating {B}");
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        final SpellAbility floating = spell("Vampiric Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Library, floating), lines(ORACLE_CONSULTATION));
+    }
+
+    /** Vampiric Tutor on the board as it is: with no line another card, with {@code held} {@code consultation}, a known
+     *  top. */
+    private void assertEndStepFetch(final Card consultation, final List<ComboLines.Line> held, final String why) {
+        final SpellAbility vampiric = spell("Vampiric Tutor");
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Library, vampiric), consultation, why);
+        t.useLines(held);
+        assertSame(pick(ZoneType.Library, vampiric), consultation, why);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()), why);
     }
 
     @Test
