@@ -2060,8 +2060,9 @@ public class ComboSignalsTest extends AITest {
     @Test
     public void nothingBuildsTheMatrixBeforeDangerIsAsked() {
         // the 12-against-10 board at our 20: asking DANGER builds the matrix (dangerBuildsTheMatrixOncePerView), and no
-        // other reading of the view does: not the line's readiness, the executable lines, the executable-now lines or
-        // the denial now
+        // other reading of the view does: not the line's readiness, the executable lines, the executable-now lines,
+        // the denial now or the go-off's denial this turn; and on a view whose line is denied or short of mana, not
+        // the readings built on the live lines either (live, one-short, nearest, protects) nor the missing pieces
         final ComboLines.Line l = bigBoard();
         ai.setLife(20, null);
         ComboTracker.View v = t.view();
@@ -2069,13 +2070,24 @@ public class ComboSignalsTest extends AITest {
         assertEquals(ids(v.executable()), List.of("742-1295"));
         assertEquals(ids(v.executableNow()), List.of("742-1295"));
         assertFalse(v.deniedNow(l));
-        assertEquals(v.blockMatrixBuilds(), 0, "ready, executable, executable-now and denied-now never ask DANGER");
+        assertFalse(v.windowBarred(l));
+        assertFalse(v.deniedThisTurn(l));
+        assertEquals(v.blockMatrixBuilds(), 0, "ready, executable, executable-now, denied-now and the go-off's denial"
+                + " never ask DANGER");
 
         // a denied line (an opposing Platinum Angel: we cannot win) stops at DENIED, before DANGER is asked
         addCard("Platinum Angel", opp);
         v = t.view();
         assertEquals(ComboSignals.abandon(v, l), Signal.DENIED);
         assertEquals(v.blockMatrixBuilds(), 0, "DENIED stops before DANGER");
+        // nor do the readings built on the live lines, when none is live
+        assertEquals(v.live(), List.of());
+        assertEquals(v.oneShort(), List.of());
+        assertNull(v.nearest());
+        assertFalse(v.protects(v.card(ORACLE)));
+        assertEquals(v.missing(l).size(), 1);
+        assertEquals(v.blockMatrixBuilds(), 0, "a denied line is no live line: live, one-short, nearest and protects"
+                + " ask nothing");
 
         // a line without the mana stops at NO_MANA, before DANGER is asked; asked, the two Dreadmaws' 12 reach our 5
         final ComboLines.Line starved = oracleLine();
@@ -2085,6 +2097,13 @@ public class ComboSignalsTest extends AITest {
         v = t.view();
         assertEquals(ComboSignals.abandon(v, starved), Signal.NO_MANA);
         assertEquals(v.blockMatrixBuilds(), 0, "NO_MANA stops before DANGER");
+        assertEquals(v.live(), List.of());
+        assertEquals(v.oneShort(), List.of());
+        assertNull(v.nearest());
+        assertFalse(v.protects(v.card(ORACLE)));
+        assertEquals(v.missing(starved).size(), 1);
+        assertEquals(v.blockMatrixBuilds(), 0, "a line short of mana is no live line: live, one-short, nearest and"
+                + " protects ask nothing");
         assertTrue(v.danger());
         assertEquals(v.blockMatrixBuilds(), 1);
     }
