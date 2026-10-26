@@ -1922,6 +1922,47 @@ public class ComboSignalsTest extends AITest {
         assertEquals(abandon(doom), Signal.DENIED, "the opponent's turn");
     }
 
+    @Test
+    public void jacesWindowIsTheOpponentsEndStep() {
+        // Jace, Wielder of Mysteries' window is Laboratory Maniac's: the end step of the player whose turn comes right
+        // before ours. An opposing Grand Abolisher bars spells only in its owner's turn, so read now, in our MAIN1,
+        // nothing bars Consultation; the line is denied all the same, and nothing is held or protected for it
+        start(JACE_CONSULTATION);
+        ready(JACE, 1, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp", "Swamp");
+        final ComboLines.Line jace = t.deckLines().get(0);
+        assertNull(abandon(jace));
+        assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)));
+        addCard("Grand Abolisher", opp);
+        assertFalse(ComboSignals.deniedNow(t.view(), jace), "read now, nothing bars Consultation");
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), jace), "at the opponent's end step the Abolisher bars it");
+        assertEquals(abandon(jace), Signal.DENIED);
+        assertEquals(t.live(), List.of());
+        assertFalse(t.protects(t.find(CONSULTATION, ZoneType.Hand)));
+    }
+
+    @Test
+    public void jacesWindowOpensThisTurnInTheOpponentsTurn() {
+        // in the opponent's turn Jace's end step is this turn's, so our spell of this turn counts there: under Rule of
+        // Law, after our Opt, Consultation is barred now and at this turn's end step alike. The line waits for the next
+        // such end step, where Consultation is the turn's first spell: live, and Consultation protected
+        start(JACE_CONSULTATION);
+        ready(JACE, 1, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp", "Swamp");
+        final ComboLines.Line jace = t.deckLines().get(0);
+        addCard("Rule of Law", opp);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), jace), "no spell of ours this turn");
+        castThisTurn("Opt", ai);
+        assertTrue(ComboSignals.deniedNow(t.view(), jace), "read now, Consultation would be this turn's second");
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), jace), "the end step of this turn");
+        assertNull(abandon(jace));
+        assertEquals(ids(t.live()), List.of("742-3096"));
+        assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)));
+    }
+
     /** Line 742-8266 in a fresh two-player game in our MAIN1: Fblthp, Impossibly Lost ready on our battlefield, cast
      *  on an earlier turn (no spell is cast this turn), Consultation in hand, a Swamp. */
     private ComboLines.Line fblthpLine() {

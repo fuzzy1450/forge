@@ -1410,6 +1410,54 @@ public class ComboFetchAiTest extends AITest {
         assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lines(ORACLE_CONSULTATION));
     }
 
+    /** The win this turn under danger reads the go-off's bars this turn, not only now (G2): our own Fires of Invention,
+     *  two spells a turn. With no spell cast yet Oracle and Consultation are this turn's first two, and the tutor takes
+     *  Consultation. After Opt, Consultation alone could be cast now, but Oracle then Consultation would be the second
+     *  and third: this turn's go-off is barred, so no win this turn comes of the fetch, and the tutor takes the stock
+     *  pick. */
+    @Test
+    public void dangerWinThisTurnReadsAFiresLimitOfTwo() {
+        final Card consultation = dangerBoard();
+        addCard("Fires of Invention", ai);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), t.deckLines().get(0)), "no spell of ours this turn");
+        final SpellAbility first = spell("Demonic Tutor");
+        assertSame(pick(ZoneType.Hand, first), consultation);
+
+        dangerBoard();
+        addCard("Fires of Invention", ai);
+        castThisTurn("Opt");
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertFalse(ComboSignals.deniedNow(t.view(), l), "read now, Consultation would be this turn's second");
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "Consultation would be this turn's third");
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER);
+        final SpellAbility tutor = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lines(ORACLE_CONSULTATION));
+    }
+
+    /** The win this turn under danger reads the bars of our main phase now too (G2): Laboratory Maniac's win this turn
+     *  casts Consultation now, then Opt on the emptied library. With Opt cast this turn and no hoser the tutor takes
+     *  Consultation. Under an opposing Rule of Law after that Opt, Consultation cannot be cast now, so no win this turn
+     *  comes of the fetch, though the line's own window (the opponent's end step, a turn of its own) is not barred:
+     *  the tutor takes the stock pick. */
+    @Test
+    public void dangerWinThisTurnReadsTheBarsOfTheMainPhaseNow() {
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+        final Card consultation = labDangerBoard();
+        castThisTurn("Opt");
+        final SpellAbility first = spell("Demonic Tutor");
+        assertSame(pick(ZoneType.Hand, first), consultation);
+
+        labDangerBoard();
+        addCard("Rule of Law", opp);
+        castThisTurn("Opt");
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertTrue(ComboSignals.deniedNow(t.view(), l), "read now, Consultation would be this turn's second");
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "the end step is in a turn of its own");
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER);
+        final SpellAbility tutor = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lab);
+    }
+
     /** Our {@code name} cast this turn and gone from the stack to our graveyard: the turn's record of its casts holds
      *  it (ComboSignalsTest's castThisTurn). */
     private void castThisTurn(final String name) {
