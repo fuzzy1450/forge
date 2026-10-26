@@ -2,6 +2,7 @@ package forge.ai.ability;
 
 import com.google.common.collect.Lists;
 import forge.ai.*;
+import forge.ai.combo.ComboExecute;
 import forge.game.Game;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
@@ -112,6 +113,16 @@ public class PermanentCreatureAi extends PermanentAi {
         // held for Main 2 (PermanentAi's wait) in our Main 1 when real mana pays her taxed cost (G1); she then competes
         // by the stock cost sort only. A name compare first: inert for every other card. See SpecialCardAi.NeeraOwnTurn.
         if (SpecialCardAi.NeeraOwnTurn.commanderInMainOne(ai, sa)) {
+            return true;
+        }
+
+        // Combo-aware AI (follow-up 2, G1; spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): our own hand
+        // cast of Thassa's Oracle is not held for Main 2 (PermanentAi's wait) in our Main 1 once its go-off is ready,
+        // so the go-off sequencer (AiController.getSpellAbilityToPlay, ComboExecute.goOffFirst) casts it there, ahead
+        // of a Main-1 play that would spend the go-off's mana (Rampant Growth, Carpet of Flowers). A name compare
+        // first: inert for every other card, and for a deck holding no Oracle line. Draws nothing. See
+        // ComboExecute.goOffInMainOne.
+        if (ComboExecute.goOffInMainOne(ai, sa)) {
             return true;
         }
 

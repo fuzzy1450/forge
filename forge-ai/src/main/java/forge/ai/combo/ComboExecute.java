@@ -24,8 +24,9 @@ import forge.game.zone.ZoneType;
 
 /**
  * Executing the empty-library family (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): Thassa's Oracle goes
- * off ({@link #goOffNow}, which releases its hold, {@link ComboHold#vetoesCast}, and puts its cast ahead of every other
- * spell at that priority pass, {@link #goOffFirst}), and an emptier, Demonic Consultation
+ * off ({@link #goOffNow}, which releases its hold, {@link ComboHold#vetoesCast}, lifts its Main-2 wait in our Main 1,
+ * {@link #goOffInMainOne}, and puts its cast ahead of every other spell at that priority pass, {@link #goOffFirst}),
+ * and an emptier, Demonic Consultation
  * or Tainted Pact, is our own cast only inside a window of one of its lines, each gated by a line executable now (the
  * view's executableNow: denied as read now, the window's own moment) pairing that emptier with that winner:
  * <ul>
@@ -75,7 +76,8 @@ public final class ComboExecute {
      * The go-off goes first (follow-up F5; AiController.getSpellAbilityToPlay, ahead of its walk): among
      * {@code spells}, what the AI may play now, our own hand cast of Thassa's Oracle (not a copy, not a Play-effect
      * cast) when {@link #goOffNow} holds for it, on an empty stack; else null. The caller plays it when
-     * canPlayAndPayFor approves it, so no spell that the walk sorts ahead of it (Divination beside Oracle's two mana
+     * canPlayAndPayFor approves it (in our Main 1 too: {@link #goOffInMainOne} lifts the creature's wait for Main 2),
+     * so no spell that the walk sorts ahead of it (Divination beside Oracle's two mana
      * and a creature's one; a Wind Drake the creature sort prefers), nor a pre-cast after the walk, spends the
      * go-off's mana first and holds the Oracle again. A go-off starts on an empty stack; with our Oracle's trigger on
      * the stack it is under way, and the emptier's window casts the emptier. The cast returned has us as its
@@ -101,6 +103,26 @@ public final class ComboExecute {
             }
         }
         return null;
+    }
+
+    /**
+     * Whether Thassa's Oracle's Main-2 wait is lifted (follow-up 2, G1; PermanentCreatureAi.checkPhaseRestrictions,
+     * beside Neera's commander lift, ahead of PermanentAi's wait for Main 2): our own hand cast of Oracle (not a copy,
+     * not a Play-effect cast) in our Main 1 on an empty stack, while {@link #goOffNow} holds for it. The go-off
+     * sequencer ({@link #goOffFirst}) then has Oracle approved there, ahead of the walk, so no Main-1 play (Rampant
+     * Growth, Carpet of Flowers) spends the go-off's mana first and leaves it for a turn. False at once for any other
+     * card and for a deck holding no line that Thassa's Oracle wins; then, and while the go-off is not ready, the
+     * stock wait answers as before. Draws nothing.
+     */
+    public static boolean goOffInMainOne(final Player ai, final SpellAbility sa) {
+        if (!ownHandCast(ai, sa, Winner.ORACLE.card)) {
+            return false;
+        }
+        if (!ai.getGame().getPhaseHandler().is(PhaseType.MAIN1, ai) || !ai.getGame().getStack().isEmpty()) {
+            return false;
+        }
+        final ComboTracker t = ComboTracker.of(ai);
+        return t != null && names(t, Winner.ORACLE) && goOffNow(ai, sa, t.view());
     }
 
     /** {@link #goOffNow}, read through the decision's view (ComboHold.vetoesCast's, which read its live lines). */

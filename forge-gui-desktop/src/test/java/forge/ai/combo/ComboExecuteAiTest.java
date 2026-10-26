@@ -1623,8 +1623,9 @@ public class ComboExecuteAiTest extends AITest {
 
     /** Our Main 2, the go-off ready: Divination ({2}{U}) sorts with Thassa's Oracle ({U}{U}, and a creature's one) and
      *  comes first in hand, and the creature sort puts Wind Drake ahead of the Oracle whatever the hand's order. Stock
-     *  casts either, spending the go-off's mana, and the Oracle is held again; the go-off goes first. End to end from
-     *  our Main 1, Oracle and Consultation then win the turn past the Divination. */
+     *  casts either, spending the go-off's mana, and the Oracle is held again; the go-off goes first. From our Main 1
+     *  the go-off goes first there (follow-up 2, G1: the Oracle's Main-2 wait is lifted), and Oracle and Consultation
+     *  win the turn in Main 1, past the Divination. */
     @Test
     public void goOffCastsOracleBeforeAnotherSpell() {
         for (final String other : List.of("Divination", "Wind Drake")) {
@@ -1637,13 +1638,14 @@ public class ComboExecuteAiTest extends AITest {
             assertEquals(decision(), ORACLE, other + " took the go-off's mana");
         }
 
-        // our Main 1: the go-off is ready, but canPlayAndPayFor holds the creature for Main 2 (the stock rule), so the
-        // Oracle is not chosen there, and nothing else is either
+        // our Main 1: the go-off is ready, so the creature's Main-2 wait (the stock rule) is lifted for the Oracle
+        // (follow-up 2, G1), and the go-off is chosen there
         sequencerBoard("Divination", false);
         assertTrue(ComboExecute.goOffNow(ai, castOf(t.find(ORACLE, ZoneType.Hand))));
-        assertNull(decision(), "the go-off was cast unapproved in Main 1");
+        assertEquals(decision(), ORACLE, "the go-off waited for Main 2");
         playUntilPhase(PhaseType.END_OF_TURN);
         assertWonThisTurn();
+        assertEquals(game.getPhaseHandler().getPhase(), PhaseType.MAIN1, "the go-off waited past Main 1");
         assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
         assertNotNull(t.find("Divination", ZoneType.Hand), "Divination was cast");
     }
@@ -1826,5 +1828,98 @@ public class ComboExecuteAiTest extends AITest {
         assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
         playUntilPhase(PhaseType.END_OF_TURN);
         assertWonThisTurn();
+    }
+
+    // ---- follow-up 2, G1: the go-off in Main 1 ----
+
+    /** Line 742-1295 in our Main 1: {@code other} in hand ahead of Thassa's Oracle and Demonic Consultation, Island,
+     *  Island, Swamp and Forest (the go-off's whole mana, and a Forest), a library of a Forest, an Island and eighteen
+     *  Runeclaw Bears (basics a ramp spell can find); the go-off ready. */
+    private void mainOneBoard(final String other) {
+        start(ORACLE_CONSULTATION);
+        hand(other);
+        hand(ORACLE);
+        hand(CONSULTATION);
+        lands("Island", "Island", "Swamp", "Forest");
+        library("Forest", "Island");
+        fillLibrary(ai, 18);
+        assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai));
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertTrue(ComboExecute.goOffNow(ai, castOf(t.find(ORACLE, ZoneType.Hand))));
+    }
+
+    /** Played out to our end step from mainOneBoard: Oracle and Consultation won the turn in our Main 1, the library
+     *  emptied, {@code other} never cast. */
+    private void assertWonInMainOne(final String other) {
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertWonThisTurn();
+        assertEquals(game.getPhaseHandler().getPhase(), PhaseType.MAIN1, "the go-off waited past Main 1");
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+        assertNotNull(t.find(other, ZoneType.Hand), other + " was cast");
+    }
+
+    /** Our Main 1, the go-off ready, a ramp spell in hand. Stock holds the Oracle for Main 2 (PermanentAi's wait) and
+     *  casts Rampant Growth in Main 1: its {1}{G} takes the Forest and a go-off land, its basic enters tapped, and the
+     *  go-off is gone for the turn. Cultivate's stock Main 1 is nothing (ChangeZoneAi keeps a search whose first
+     *  destination is the library for Main 2), the Oracle held all the same. With the go-off ready the Oracle's wait is
+     *  lifted: it is cast first, in Main 1, and Oracle and Consultation win the turn there. */
+    @Test
+    public void goOffCastsOracleInMainOneBeforeARampSpell() {
+        mainOneBoard("Rampant Growth");
+        t.useLines(List.of());
+        assertEquals(decision(), "Rampant Growth", "the stock Main 1 is not the ramp spell: this board tells nothing");
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertEquals(decision(), ORACLE, "the ramp spell took the go-off's mana");
+        assertWonInMainOne("Rampant Growth");
+
+        mainOneBoard("Cultivate");
+        assertEquals(decision(), ORACLE, "the go-off waited for Main 2");
+        assertWonInMainOne("Cultivate");
+    }
+
+    /** The same with Carpet of Flowers, the opponent holding an Island (Carpet's own cast floor,
+     *  SpecialCardAi.CarpetOfFlowers: it is worth the Islands of the opponent its trigger targets). Its PlayMain1 casts
+     *  it in our Main 1 while the Oracle is held for Main 2; with the go-off ready the Oracle goes first, in Main 1. */
+    @Test
+    public void goOffInMainOneBeforeCarpetOfFlowers() {
+        mainOneBoard("Carpet of Flowers");
+        addCard("Island", opp);
+        t.useLines(List.of());
+        assertEquals(decision(), "Carpet of Flowers", "the stock Main 1 is not Carpet: this board tells nothing");
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertEquals(decision(), ORACLE, "Carpet of Flowers went first");
+        assertWonInMainOne("Carpet of Flowers");
+    }
+
+    /** Stock parity for the Main-2 wait. Thassa's Oracle in hand, Demonic Consultation still in the library: the line
+     *  is live, the go-off not ready, and in our Main 1 the Oracle's decision (canPlaySa: the creature's phase rule)
+     *  and the AI's choice are the stock wait's, with the stock draws. On the go-off's ready board the wait stands for
+     *  every other creature (Wind Drake, whose {2}{U} the go-off's mana pays beside Consultation's {B}), and for the
+     *  Oracle of a deck holding no line (Laboratory Maniac's, with no Lab). */
+    @Test
+    public void mainTwoWaitStaysWithoutAGoOff() {
+        start(ORACLE_CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        library(CONSULTATION, "Island");
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 18);
+        assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai));
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertEquals(assertStockParity(() -> aiOf(ai).canPlaySa(castOf(oracle)), lines(ORACLE_CONSULTATION)),
+                AiPlayDecision.CantPlayAi);
+        assertNull(assertStockParity(this::decision, lines(ORACLE_CONSULTATION)));
+
+        mainOneBoard("Wind Drake");
+        final Card drake = t.find("Wind Drake", ZoneType.Hand);
+        assertTrue(ComboMana.of(ai, castOf(drake), true).pays(drake.getManaCost(),
+                t.find(CONSULTATION, ZoneType.Hand).getManaCost()), "the go-off's mana does not pay the Drake");
+        assertEquals(assertStockParity(() -> aiOf(ai).canPlaySa(castOf(drake)), lines(ORACLE_CONSULTATION)),
+                AiPlayDecision.CantPlayAi);
+
+        final Card held = t.find(ORACLE, ZoneType.Hand);
+        assertEquals(assertStockParity(() -> aiOf(ai).canPlaySa(castOf(held)), lines(LAB_CONSULTATION)),
+                AiPlayDecision.CantPlayAi);
+        assertEquals(t.deckLines(), List.of());
     }
 }
