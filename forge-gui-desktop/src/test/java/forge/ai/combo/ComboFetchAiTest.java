@@ -1344,6 +1344,88 @@ public class ComboFetchAiTest extends AITest {
         assertNull(ComboFetch.digPick(ai, impulse, shown, ai));
     }
 
+    // ---- follow-up 2, G2: denial at each line's own window ----
+
+    /** Review Focus 2: an opposing Deafening Silence, one noncreature spell a turn. Demonic Tutor resolving in our
+     *  Main 1 is this turn's noncreature spell, so Consultation cannot be cast this turn, and the Oracle line goes off
+     *  on our next turn instead, where Consultation is the first noncreature spell: the line is not denied, and the
+     *  tutor takes Consultation. Once it has resolved, Oracle is held for that turn: cast now, as a 1/3 in Main 2, it
+     *  would be spent, and this turn's go-off is barred. With no line both choices are the stock ones. */
+    @Test
+    public void deafeningSilenceAfterATutorKeepsTheLineLive() {
+        final Card consultation = oracleBoard();
+        addCard("Deafening Silence", opp);
+        final Card tutorCard = castOnStack("Demonic Tutor");
+        final SpellAbility tutor = tutorCard.getFirstSpellAbility();
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(tutorCard));
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertTrue(ComboSignals.deniedNow(t.view(), l), "read now, Consultation would be this turn's second");
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "this turn's go-off is barred");
+        assertNull(ComboSignals.abandon(ai, l, t));
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertEquals(ids(t.oneShort()), List.of("742-1295"));
+        // with no line the stock pick is another card
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Hand, tutor), consultation);
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertSame(pick(ZoneType.Hand, tutor), consultation);
+        // and the tutor's resolution puts it in our hand
+        AbilityUtils.resolve(tutor);
+        assertEquals(t.where(CONSULTATION), ComboTracker.Where.HAND);
+
+        // the tutor resolved and gone, still this turn's noncreature spell: Oracle and Consultation both in hand, the
+        // line's mana open, in our Main 2
+        game.getStack().clear();
+        game.getStackZone().remove(tutorCard);
+        ai.getZone(ZoneType.Graveyard).add(tutorCard);
+        moveToMain2(game, ai);
+        assertTrue(game.getStack().isEmpty());
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(tutorCard));
+        final Card oracle = t.find(ORACLE, ZoneType.Hand);
+        final SpellAbility cast = oracle.getFirstSpellAbility();
+        cast.setActivatingPlayer(ai);
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertTrue(t.protects(oracle));
+        assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)));
+        assertFalse(ComboExecute.goOffNow(ai, cast), "this turn's go-off is barred");
+        assertTrue(ComboHold.vetoesCast(ai, cast), "Oracle is held for next turn's go-off");
+        assertNull(decision(), "nothing is cast: Oracle waits");
+        // with no line the stock decision casts the 1/3
+        t.useLines(List.of());
+        assertSame(decision(), oracle);
+    }
+
+    /** The win this turn under danger reads the go-off's own bars this turn (G2): an opposing Deafening Silence and
+     *  Opt cast this turn. The line goes off on our next turn, so DANGER is its only signal; but Consultation fetched
+     *  now cannot be cast this turn, so no win this turn comes of it, and the tutor takes the stock pick. */
+    @Test
+    public void dangerWinThisTurnReadsThisTurnsBars() {
+        dangerBoard();
+        addCard("Deafening Silence", opp);
+        castThisTurn("Opt");
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER);
+        final SpellAbility tutor = spell("Demonic Tutor");
+        assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lines(ORACLE_CONSULTATION));
+    }
+
+    /** Our {@code name} cast this turn and gone from the stack to our graveyard: the turn's record of its casts holds
+     *  it (ComboSignalsTest's castThisTurn). */
+    private void castThisTurn(final String name) {
+        final Card card = castOnStack(name);
+        game.getStack().clear();
+        game.getStackZone().remove(card);
+        ai.getZone(ZoneType.Graveyard).add(card);
+        assertTrue(game.getStack().isEmpty());
+    }
+
+    /** The AI's choice of a spell to play now: the host of its first, or null for none. */
+    private Card decision() {
+        final List<SpellAbility> choice = aiOf(ai).chooseSpellAbilityToPlay();
+        return choice == null || choice.isEmpty() ? null : choice.get(0).getHostCard();
+    }
+
     @Test
     public void aSearchToTheTopMakesAKnownTop() {
         // spec section 6.3, known tops (Evan, 2026-10-24): a piece of ours that a combo hook puts on top of our

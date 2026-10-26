@@ -45,8 +45,9 @@ import forge.game.zone.ZoneType;
  * </ul>
  * Pact's own singleton-library condition is executable's. None of it while we cannot win or every opponent cannot lose
  * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
- * The go-off reads {@link ComboTracker#executable}, whose denial also reads the emptier at the moment Oracle's trigger
- * will be on the stack (follow-up F3): Oracle is cast before its window opens.
+ * The go-off reads {@link ComboTracker#executable}, whose denial reads the emptier at the moment Oracle's trigger will
+ * be on the stack (follow-up F3), and that same moment this turn (follow-up 2, G2: a line live for a later turn goes
+ * off in none this turn): Oracle is cast before its window opens.
  *
  * <p>Nothing here draws a random number, keeps any state of its own (Consultation's tutor intent lives on the
  * tracker) or reads the library's order. The mana for two casts together, Oracle's and its emptier's or an emptier's and
@@ -59,10 +60,10 @@ public final class ComboExecute {
     }
 
     /**
-     * Whether Thassa's Oracle goes off now (section 6.4): an {@link ComboTracker#executable} line whose winner is Oracle
-     * has its emptier in our hand, and the mana we can make now ({@code ComboMana.of(ai, oracleCast, true)}) pays
-     * Oracle's cost and the emptier's together, each source assigned to one pip: {U}{U} and Consultation's {B} or Pact's
-     * {1}{B}.
+     * Whether Thassa's Oracle goes off now (section 6.4): an {@link ComboTracker#executable} line whose winner is
+     * Oracle, not denied this turn (its emptier castable at Oracle's trigger this turn), has its emptier in our hand,
+     * and the mana we can make now ({@code ComboMana.of(ai, oracleCast, true)}) pays Oracle's cost and the emptier's
+     * together, each source assigned to one pip: {U}{U} and Consultation's {B} or Pact's {1}{B}.
      */
     public static boolean goOffNow(final Player ai, final SpellAbility oracleCast) {
         final ComboTracker t = ComboTracker.of(ai);
@@ -125,11 +126,14 @@ public final class ComboExecute {
         return t != null && names(t, Winner.ORACLE) && goOffNow(ai, sa, t.view());
     }
 
-    /** {@link #goOffNow}, read through the decision's view (ComboHold.vetoesCast's, which read its live lines). */
+    /** {@link #goOffNow}, read through the decision's view (ComboHold.vetoesCast's, which read its live lines). The
+     *  go-off comes this turn, so its line's denial is the one this turn (the view's deniedThisTurn, follow-up 2, G2):
+     *  denied now, or its emptier barred at Oracle's trigger this turn. An executable line whose window this turn is
+     *  barred (Deafening Silence after a noncreature spell this turn) waits for a later turn, Oracle held for it. */
     static boolean goOffNow(final Player ai, final SpellAbility oracleCast, final ComboTracker.View v) {
         ComboMana mana = null;
         for (final ComboLines.Line l : v.executable()) {
-            if (l.winner() != ComboLines.Winner.ORACLE) {
+            if (l.winner() != ComboLines.Winner.ORACLE || v.deniedThisTurn(l)) {
                 continue;
             }
             final Card emptier = v.where(l.emptier().card) == ComboTracker.Where.HAND ? v.card(l.emptier().card)

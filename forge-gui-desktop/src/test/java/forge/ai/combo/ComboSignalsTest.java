@@ -1429,9 +1429,11 @@ public class ComboSignalsTest extends AITest {
         assertFalse(ComboSignals.barredAtWindowNow(t.view(), doom));
         assertNull(abandon(doom));
         assertEquals(ids(t.executable()), List.of("x-1"));
-        // in the opponent's turn it is read now, as at the base: denied
+        // in the opponent's turn Teferi bars Consultation now, so Doom's window is closed now; but the line's own
+        // window is our turn (follow-up 2, G2), where Consultation is cast as a sorcery could be: not denied
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
-        assertEquals(abandon(doom), Signal.DENIED);
+        assertTrue(ComboSignals.deniedNow(t.view(), doom));
+        assertNull(abandon(doom));
     }
 
     @Test
@@ -1495,16 +1497,18 @@ public class ComboSignalsTest extends AITest {
     }
 
     @Test
-    public void deafeningSilenceDeniesAfterANoncreatureSpell() {
+    public void deafeningSilenceBarsOnlyThisTurnsGoOffAfterANoncreatureSpell() {
         // once we cast Opt this turn, Consultation would be the turn's second noncreature spell: the go-off is barred
-        // while it can still come this turn, in our MAIN2 as well
+        // while it can still come this turn, in our MAIN2 as well. The line goes off on our next turn instead, where
+        // Consultation is the first noncreature spell (follow-up 2, G2: this turn's spells do not carry over), so it
+        // is not denied: it is still held, protected and fetched for
         final ComboLines.Line l = oracleLine();
         manaForTheLine();
         addCard("Deafening Silence", opp);
         castThisTurn("Opt", ai);
         assertTrue(ComboSignals.barredAtWindowNow(t.view(), l));
-        assertEquals(abandon(l), Signal.DENIED);
-        assertEquals(t.live(), List.of());
+        assertNull(abandon(l));
+        assertEquals(ids(t.live()), List.of("742-1295"));
         moveToMain2(game, ai);
         assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "our MAIN2");
 
@@ -1696,6 +1700,268 @@ public class ComboSignalsTest extends AITest {
         endStepLabBoard();
         addCard("Fires of Invention", ai);
         assertReadsAsForge("our Fires of Invention, not our turn", true, true);
+    }
+
+    // ---- follow-up 2, G2: denial at each line's own window ----
+
+    @Test
+    public void teferiDeniesTheFblthpLine() {
+        // Fblthp's window is its combat-damage trigger on our stack, at instant speed: under an opposing Teferi, Time
+        // Raveler Consultation is never cast there. Read now, in our MAIN1 on an empty stack, nothing bars it; the line
+        // is denied all the same, so nothing is held, protected or fetched for it, in any turn
+        ComboLines.Line l = fblthpLine();
+        assertNull(abandon(l));
+        assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)));
+        teferi(opp);
+        assertTrue(ai.canCastSorcery());
+        assertFalse(ComboSignals.deniedNow(t.view(), l), "read now, nothing bars Consultation");
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "at Fblthp's trigger Teferi bars it");
+        assertEquals(abandon(l), Signal.DENIED);
+        assertEquals(t.live(), List.of());
+        assertEquals(t.executable(), List.of());
+        assertFalse(t.protects(t.find(CONSULTATION, ZoneType.Hand)));
+        assertFalse(t.protects(t.find(FBLTHP, ZoneType.Battlefield)));
+        moveToMain2(game, ai);
+        assertEquals(abandon(l), Signal.DENIED, "our MAIN2: the next trigger is barred alike");
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        assertEquals(abandon(l), Signal.DENIED, "the opponent's turn");
+
+        // one piece short, Consultation in the library: nothing is fetched for the line
+        start(FBLTHP_CONSULTATION);
+        ready(FBLTHP, 1, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        lands("Swamp");
+        assertEquals(ids(t.oneShort()), List.of("742-8266"));
+        teferi(opp);
+        assertEquals(t.oneShort(), List.of());
+
+        // Fblthp's trigger on our stack: that window is now, and Teferi bars Consultation now too
+        l = fblthpLine();
+        teferi(opp);
+        game.getStack().add(fblthpTrigger(t.find(FBLTHP, ZoneType.Battlefield)));
+        assertTrue(ComboSignals.deniedNow(t.view(), l));
+        assertEquals(abandon(l), Signal.DENIED);
+        assertEquals(t.executable(), List.of());
+    }
+
+    @Test
+    public void combatCastBarsDenyTheFblthpLine() {
+        // Fblthp's trigger comes in the combat damage step: Basandra, Battle Seraph (no player casts spells during
+        // combat) and an opposing Marisi, Breaker of the Coil (its opponents cast none then) bar Consultation there,
+        // though nothing bars it now, in our MAIN1. The Oracle line's window is in a main phase: neither denies it,
+        // even read in our combat, where Consultation is barred now
+        for (final String hoser : List.of("Basandra, Battle Seraph", "Marisi, Breaker of the Coil")) {
+            final ComboLines.Line l = fblthpLine();
+            addCard(hoser, opp);
+            assertFalse(ComboSignals.deniedNow(t.view(), l), hoser);
+            assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), hoser);
+            assertEquals(abandon(l), Signal.DENIED, hoser);
+            assertEquals(t.live(), List.of(), hoser);
+
+            final ComboLines.Line oracle = oracleLine();
+            manaForTheLine();
+            addCard(hoser, opp);
+            assertNull(abandon(oracle), hoser);
+            game.getPhaseHandler().devModeSet(PhaseType.COMBAT_DECLARE_ATTACKERS, ai);
+            assertTrue(ComboSignals.deniedNow(t.view(), oracle), hoser + ", read now in our combat");
+            assertNull(abandon(oracle), hoser + ", in our combat");
+            assertEquals(ids(t.live()), List.of("742-1295"), hoser + ", in our combat");
+        }
+    }
+
+    @Test
+    public void ruleOfLawLetsAnEarlierFblthpRun() {
+        // Rule of Law, one spell a turn: Fblthp cast on an earlier turn leaves Consultation the first spell of the turn
+        // its trigger comes in, read in our MAIN1 (the trigger comes this turn) and in the opponent's turn (it comes in
+        // our next turn), where a spell of ours already cast counts for that turn alone
+        ComboLines.Line l = fblthpLine();
+        addCard("Rule of Law", opp);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertNull(abandon(l));
+        assertEquals(ids(t.live()), List.of("742-8266"));
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        castThisTurn("Opt", ai);
+        assertTrue(ComboSignals.deniedNow(t.view(), l), "read now, Consultation would be this turn's second");
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertNull(abandon(l));
+        assertEquals(ids(t.live()), List.of("742-8266"));
+        assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)));
+
+        // Fblthp cast this turn: before combat damage its trigger comes this turn, Consultation that turn's second
+        // spell, so the line is denied; after combat the trigger comes in a later turn, Fblthp cast on an earlier one
+        start(FBLTHP_CONSULTATION);
+        castOntoTheBattlefield(FBLTHP);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        l = t.deckLines().get(0);
+        addCard("Rule of Law", opp);
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "the trigger this turn");
+        assertEquals(abandon(l), Signal.DENIED, "the trigger this turn");
+        assertEquals(t.live(), List.of());
+        moveToMain2(game, ai);
+        assertTrue(ComboSignals.deniedNow(t.view(), l), "read now, Consultation would be this turn's second");
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "the trigger in a later turn");
+        assertNull(abandon(l), "the trigger in a later turn");
+        assertEquals(ids(t.live()), List.of("742-8266"));
+
+        // an earlier Fblthp's trigger on our stack in the combat damage step, after a spell of ours this turn: that
+        // window is now, Consultation this turn's second spell, so the line is denied
+        l = fblthpLine();
+        addCard("Rule of Law", opp);
+        castThisTurn("Opt", ai);
+        game.getPhaseHandler().devModeSet(PhaseType.COMBAT_DAMAGE, ai);
+        game.getStack().add(fblthpTrigger(t.find(FBLTHP, ZoneType.Battlefield)));
+        assertEquals(abandon(l), Signal.DENIED, "the trigger on our stack");
+        assertEquals(t.executable(), List.of());
+    }
+
+    @Test
+    public void noHoserFblthpLineLive() {
+        // with no CantBeCast static the Fblthp line is live at every moment, a spell of ours cast this turn or Fblthp
+        // itself among this turn's casts, and the reading draws nothing
+        ComboLines.Line l = fblthpLine();
+        long draws = MyRandom.callCount();
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertNull(abandon(l));
+        assertEquals(ids(t.live()), List.of("742-8266"));
+        assertEquals(ids(t.executable()), List.of("742-8266"));
+        assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)));
+        assertTrue(t.protects(t.find(FBLTHP, ZoneType.Battlefield)));
+        assertEquals(MyRandom.callCount(), draws, "the window's reading drew");
+        castThisTurn("Opt", ai);
+        final Object[][] moments = {{PhaseType.MAIN1, ai}, {PhaseType.MAIN2, ai}, {PhaseType.END_OF_TURN, ai},
+                {PhaseType.MAIN1, opp}, {PhaseType.END_OF_TURN, opp}};
+        for (final Object[] m : moments) {
+            game.getPhaseHandler().devModeSet((PhaseType) m[0], (Player) m[1]);
+            draws = MyRandom.callCount();
+            assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), m[0] + " " + m[1]);
+            assertNull(abandon(l), m[0] + " " + m[1]);
+            assertEquals(ids(t.live()), List.of("742-8266"), m[0] + " " + m[1]);
+            assertEquals(MyRandom.callCount(), draws, "the window's reading drew");
+        }
+
+        // Fblthp cast this turn, and Fblthp still in hand, to be cast
+        start(FBLTHP_CONSULTATION);
+        castOntoTheBattlefield(FBLTHP);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        l = t.deckLines().get(0);
+        assertNull(abandon(l));
+        assertEquals(ids(t.live()), List.of("742-8266"));
+        start(FBLTHP_CONSULTATION);
+        addCardToZone(FBLTHP, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Island", "Island", "Swamp");
+        l = t.deckLines().get(0);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l));
+        assertNull(abandon(l));
+        assertEquals(ids(t.live()), List.of("742-8266"));
+    }
+
+    @Test
+    public void doomsWindowIsOurTurn() {
+        // Doctor Doom's window is our turn, with Doom untapped: Consultation in our main phase on an empty stack, then
+        // Doom's {T}. In the opponent's turn an opposing Teferi, Time Raveler or Grand Abolisher bars Consultation now
+        // (the Abolisher Doom's {T} too), but neither reaches our turn: the line stays live and its pieces protected,
+        // though its window is closed now
+        for (final String hoser : List.of(TEFERI, "Grand Abolisher")) {
+            start(DOOM_CONSULTATION);
+            ready(DOOM, 1, ai);
+            addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+            lands("Swamp");
+            final ComboLines.Line doom = t.deckLines().get(0);
+            if (TEFERI.equals(hoser)) {
+                teferi(opp);
+            } else {
+                addCard(hoser, opp);
+            }
+            assertNull(abandon(doom), hoser + ", our MAIN1");
+            game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+            assertTrue(ComboSignals.deniedNow(t.view(), doom), hoser + ", read now");
+            assertEquals(t.view().executableNow(), List.of(), hoser + ", the window is closed now");
+            assertNull(abandon(doom), hoser + ", the opponent's turn");
+            assertEquals(ids(t.live()), List.of("x-1"), hoser);
+            assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)), hoser);
+        }
+
+        // Doom still in hand is cast in our main phase as a sorcery is, on an earlier turn than its window: Teferi
+        // bars neither cast
+        start(DOOM_CONSULTATION);
+        addCardToZone(DOOM, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp", "Swamp", "Swamp", "Swamp", "Swamp");
+        ComboLines.Line doom = t.deckLines().get(0);
+        teferi(opp);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), doom));
+        assertNull(abandon(doom));
+
+        // Rule of Law and Opt cast this turn: Doom untapped, the window is this turn's, Consultation its second spell;
+        // Doom tapped, it is next turn's, Consultation its first. Either way the line waits for a turn it can run
+        start(DOOM_CONSULTATION);
+        final Card ready = ready(DOOM, 1, ai).get(0);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        doom = t.deckLines().get(0);
+        addCard("Rule of Law", opp);
+        castThisTurn("Opt", ai);
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), doom), "Doom untapped: this turn's window");
+        assertNull(abandon(doom), "Doom untapped");
+        ready.setTapped(true);
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), doom), "Doom tapped: next turn's window");
+        assertNull(abandon(doom), "Doom tapped");
+
+        // Linvala, Keeper of Silence bars Doom's {T} in every turn: denied in ours and in the opponent's
+        start(DOOM_CONSULTATION);
+        ready(DOOM, 1, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        doom = t.deckLines().get(0);
+        addCard("Linvala, Keeper of Silence", opp);
+        assertEquals(abandon(doom), Signal.DENIED, "our MAIN1");
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        assertEquals(abandon(doom), Signal.DENIED, "the opponent's turn");
+    }
+
+    /** Line 742-8266 in a fresh two-player game in our MAIN1: Fblthp, Impossibly Lost ready on our battlefield, cast
+     *  on an earlier turn (no spell is cast this turn), Consultation in hand, a Swamp. */
+    private ComboLines.Line fblthpLine() {
+        start(FBLTHP_CONSULTATION);
+        ready(FBLTHP, 1, ai);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        assertEquals(ids(t.deckLines()), List.of("742-8266"));
+        assertTrue(game.getStack().getSpellsCastThisTurn().isEmpty());
+        return t.deckLines().get(0);
+    }
+
+    /** Our {@code name} cast this turn and resolved onto our battlefield: the turn's record of its casts holds it and
+     *  the stack is empty again. */
+    private Card castOntoTheBattlefield(final String name) {
+        final Card card = createCard(name, ai);
+        card.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(card);
+        final SpellAbility sa = card.getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+        game.getStack().add(sa);
+        game.getStack().clear();
+        game.getStackZone().remove(card);
+        ai.getZone(ZoneType.Battlefield).add(card);
+        assertTrue(game.getStack().isEmpty());
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(card));
+        return card;
+    }
+
+    /** Fblthp's combat-damage trigger, copied for us with its trigger set (anImprisonedFblthpsFiredTriggerStillWins'
+     *  idiom). */
+    private SpellAbility fblthpTrigger(final Card fblthp) {
+        for (final Trigger tr : fblthp.getTriggers()) {
+            if (tr.getMode() == TriggerType.DamageAll) {
+                final SpellAbility sa = tr.ensureAbility().copy(ai);
+                sa.setTrigger(tr);
+                return sa;
+            }
+        }
+        throw new AssertionError("no combat-damage trigger on " + fblthp);
     }
 
     /** Line 742-2836 in a fresh two-player game in our MAIN1: Laboratory Maniac ready in play, Consultation in hand,

@@ -148,15 +148,17 @@ public final class ComboTracker {
 
     /** The deck's lines the AI chases now (section 6.2): every piece reachable, a Thassa's Oracle in play only while
      *  its entering trigger is on our stack, a singleton library where the emptier is Tainted Pact, and no abandon
-     *  signal ({@link ComboSignals#abandon}); in {@link #deckLines} order. */
+     *  signal ({@link ComboSignals#abandon}, its denial read at the line's own window: section 6.5); in
+     *  {@link #deckLines} order. */
     public List<ComboLines.Line> live() {
         return view().live();
     }
 
     /** The deck's lines that may be executed: every piece reachable, an Oracle in play only with its trigger on our
-     *  stack, Pact's singleton library, and not {@link ComboSignals#denied}, now or at the moment its window needs its
-     *  emptier (Oracle's go-off, still to come when Oracle's cast is decided, reads its trigger's moment). No mana,
-     *  danger and a surer kill never stop a win now. In deckLines order. */
+     *  stack, Pact's singleton library, and not {@link ComboSignals#denied}, read at the line's own window (each piece
+     *  still to be cast at its moment there, on the turn the line would go off: Oracle's go-off, still to come when
+     *  Oracle's cast is decided, reads its trigger's moment). No mana, danger and a surer kill never stop a win now.
+     *  The go-off itself also reads its window this turn (ComboExecute.goOffNow). In deckLines order. */
     public List<ComboLines.Line> executable() {
         return view().executable();
     }
@@ -403,8 +405,9 @@ public final class ComboTracker {
      * One reading of this tracker, for one decision (spec sections 6.2 and 7: a decision's cost stays O(1) amortised;
      * final review, round 1). It reads what the tracker's own queries read, at the moment of each first use, and keeps
      * it for the decision's later questions: where each piece is (one pass over each of our zones and our stack, for
-     * every piece name at once), whether our library is singleton, each deck line's standing prerequisites and its
-     * denial now and at its window, the live, executable, executable-now and one-short lines, and the abandon signals'
+     * every piece name at once), whether our library is singleton, each deck line's standing prerequisites, its denial
+     * now and at its window and its window's bars on the turn the board opens it, the live, executable, executable-now
+     * and one-short lines, and the abandon signals'
      * inputs that no line changes (whether we can win, whether every opponent cannot lose, the danger, the surer kill,
      * next turn's mana, the CantBeCast statics on the board and whether one is in force) with the cast bar by piece and
      * each winner's own reading. So a decision asking for the executable lines, then the live ones, then the one-short
@@ -430,6 +433,7 @@ public final class ComboTracker {
         private final byte[] ready = new byte[lines.size()];
         private final byte[] deniedNow = new byte[lines.size()];
         private final byte[] denied = new byte[lines.size()];
+        private final byte[] windowBarred = new byte[lines.size()];
         private List<ComboLines.Line> live;
         private List<ComboLines.Line> executable;
         private List<ComboLines.Line> executableNow;
@@ -683,17 +687,39 @@ public final class ComboTracker {
             return ready[i] == 2;
         }
 
-        /** {@link ComboSignals#denied} (kept for a deck line): denied now, or its emptier barred at its window
-         *  ({@link ComboSignals#barredAtWindowNow}). */
+        /** {@link ComboSignals#denied} (kept for a deck line): denied at the line's own window
+         *  ({@link ComboSignals#deniedAtWindow}, follow-up 2, G2), the denial that live and executable read. */
         boolean denied(final ComboLines.Line l) {
             final int i = indexOf(l);
             if (i < 0) {
-                return deniedNow(l) || ComboSignals.barredAtWindowNow(this, l);
+                return ComboSignals.deniedAtWindow(this, l);
             }
             if (denied[i] == 0) {
-                denied[i] = (byte) ((deniedNow(l) || ComboSignals.barredAtWindowNow(this, l)) ? 2 : 1);
+                denied[i] = (byte) (ComboSignals.deniedAtWindow(this, l) ? 2 : 1);
             }
             return denied[i] == 2;
+        }
+
+        /** {@link ComboSignals#barredAtWindowNow} (kept for a deck line): a piece still to be cast barred at the
+         *  line's window on the turn the board opens it, this turn while it can still open this turn. */
+        boolean windowBarred(final ComboLines.Line l) {
+            final int i = indexOf(l);
+            if (i < 0) {
+                return ComboSignals.barredAtWindowNow(this, l);
+            }
+            if (windowBarred[i] == 0) {
+                windowBarred[i] = (byte) (ComboSignals.barredAtWindowNow(this, l) ? 2 : 1);
+            }
+            return windowBarred[i] == 2;
+        }
+
+        /** The denial of a line executed this turn (G2; follow-up F3's denial): denied now
+         *  ({@link ComboSignals#deniedNow}), or a piece barred at its window this turn while the board can still open
+         *  it this turn ({@link #windowBarred}). The go-off reads it (ComboExecute.goOffNow), and the win this turn
+         *  under danger (ComboFetch): a line whose window this turn is barred waits for a later turn, and is held for
+         *  it, but goes off in none this turn. */
+        boolean deniedThisTurn(final ComboLines.Line l) {
+            return deniedNow(l) || windowBarred(l);
         }
 
         /** {@link ComboSignals#deniedNow} (kept for a deck line): the denial at a window open now. */

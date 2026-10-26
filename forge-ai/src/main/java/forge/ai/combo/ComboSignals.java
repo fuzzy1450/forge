@@ -43,17 +43,20 @@ import forge.game.zone.ZoneType;
  * <p>Each signal is read from what a player can see, at the moment it is asked, through the decision's
  * {@link ComboTracker.View}: the inputs no line changes (whether we can win, whether every opponent cannot lose, the
  * danger, the surer kill, next turn's mana, the CantBeCast statics on the board and whether one is in force) are read
- * once for every line the decision asks about, and nothing outlives the decision. A denial is read twice over: now
- * ({@link #deniedNow}), and for the emptier at the moment its window needs it ({@link #barredAtWindowNow}: Oracle's
- * trigger on the stack, the opponent's end step), from the same visible statics. Nothing here draws a random number or
+ * once for every line the decision asks about, and nothing outlives the decision. A denial is read at the line's own
+ * window ({@link #deniedAtWindow}: each piece still to be cast at its moment there, on the turn the line would go off,
+ * from the same visible statics), which holding, fetching and protection read, and now ({@link #deniedNow}), which a
+ * window open now reads. Nothing here draws a random number or
  * reads the library's order: the stock danger and lethal readers both draw (aiLifeInDanger through the blocker's
  * lifeInDanger roll, doAssault and possibleNonCombatDamage through canPayCost's test payments), so DANGER and
  * SURER_KILL are private floors in the AdNauseam.floor idiom, damageIfUnblocked without abilities.
  */
 public final class ComboSignals {
-    /** Why a line is not chased, in the order {@link #abandon} reads them. DENIED stops everything, execution
-     *  included; the other three stop holding, protecting and fetching, never execution (a win now beats surviving,
-     *  and each execution window checks its own mana). */
+    /** Why a line is not chased, in the order {@link #abandon} reads them. DENIED, read at the line's own window
+     *  ({@link #deniedAtWindow}), stops holding, protecting and fetching, and keeps the line from the executable ones;
+     *  each execution reads its own moment besides (a window open now the denial now, the go-off its window this
+     *  turn). The other three stop holding, protecting and fetching, never execution (a win now beats surviving, and
+     *  each execution window checks its own mana). */
     public enum Signal { DENIED, NO_MANA, DANGER, SURER_KILL }
 
     private ComboSignals() {
@@ -82,14 +85,38 @@ public final class ComboSignals {
     }
 
     /**
-     * Signal 2, the opponents can deny the line, read from visible state: the line is denied now ({@link #deniedNow}:
-     * we cannot win, every opponent cannot lose, a piece cannot be cast now, Oracle's entering trigger is disabled, a
-     * winner of ours in play has lost its win), or its emptier cannot be cast at the moment its window needs it
-     * ({@link #barredAtWindowNow}: Teferi, Time Raveler or Rule of Law against the go-off in response to Oracle's
-     * trigger, the opponent's Grand Abolisher against the opponent's end step).
+     * Signal 2, the opponents can deny the line, read from visible state at the line's own window
+     * ({@link #deniedAtWindow}): we cannot win, every opponent cannot lose, a piece still to be cast cannot be cast at
+     * its moment in the window (Teferi, Time Raveler or Rule of Law against the go-off in response to Oracle's
+     * trigger, the opponent's Grand Abolisher against the opponent's end step, Teferi against Fblthp's trigger),
+     * Oracle's entering trigger is disabled, a winner of ours in play has lost its win.
      */
     public static boolean denied(final Player ai, final ComboLines.Line l, final ComboTracker t) {
         return t.view().denied(l);
+    }
+
+    /**
+     * Signal 2 at the line's own window (follow-up 2, G2; spec section 6.5, "Denial at the line's own window"), the
+     * denial that live and executable read, so that holding, fetching and protection follow the moment the line would
+     * fire, never this instant: we cannot win; every opponent cannot lose; a piece of the line still to be cast cannot
+     * be cast at its moment in the window ({@link #barredAtWindow}); Thassa's Oracle's entering trigger is disabled; a
+     * winner of ours on the battlefield has lost its win, Doctor Doom's {T} draw read at Doom's window, our turn
+     * ({@link #disarmedAtWindow}).
+     */
+    static boolean deniedAtWindow(final ComboTracker.View v, final ComboLines.Line l) {
+        if (v.cantWin()) {
+            return true;
+        }
+        if (v.everyOpponentCantLose()) {
+            return true;
+        }
+        if (barredAtWindow(v, l)) {
+            return true;
+        }
+        if (l.winner() == ComboLines.Winner.ORACLE && v.oracleTriggerDisabled()) {
+            return true;
+        }
+        return disarmedAtWindow(v, l.winner());
     }
 
     /** Signal 2 as read now, the moment of a window that is open now (the view keeps it for a deck line): we cannot
@@ -135,6 +162,32 @@ public final class ComboSignals {
             return !v.triggerOnOurStack(w.card) && !hasCombatDamageTrigger(c);
         }
         return !winsOnDraw(c);
+    }
+
+    // a winner of ours on the battlefield without its win at its window (G2): disarmedNow, but Doctor Doom's {T} draw,
+    // barred now, is read again at Doom's window, our main phase, as StaticAbilityCantBeCast.cantBeActivatedAbility
+    // reads the CantBeActivated statics, each one's conditions at that moment (conditionsAt): a bar in force now only
+    // in its controller's turn (the opponent's Grand Abolisher, Myrel) or only in combat does not reach it there. What
+    // the other winners have no turn changes. A bar not in force now is in force at the window in no card of the tree
+    static boolean disarmedAtWindow(final ComboTracker.View v, final ComboLines.Winner w) {
+        if (w != ComboLines.Winner.DOOM || !v.disarmed(w)) {
+            return v.disarmed(w);
+        }
+        final Card doom = v.card(w.card);
+        final SpellAbility draw = doomsDraw(doom);
+        if (draw == null) {
+            return true;
+        }
+        final Player ai = v.ai();
+        for (final Card ca : ai.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
+            for (final StaticAbility st : ca.getStaticAbilities()) {
+                if (st.checkMode(StaticAbilityMode.CantBeActivated) && conditionsAt(st, ai, PhaseType.MAIN1)
+                        && StaticAbilityCantBeCast.applyCantBeActivatedAbility(st, draw, doom, ai)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Whether {@code c} has a Draw replacement that wins the game instead (Laboratory Maniac's and Jace's). */
@@ -250,73 +303,151 @@ public final class ComboSignals {
         return false;
     }
 
+    // the cast bars of the line at its own window (G2). A window open now, our Oracle's or Fblthp's trigger on our
+    // stack, reads every piece still to be cast now, as deniedNow does. Otherwise the window as the board opens it
+    // (barredAtWindowNow: this turn while it can still open this turn, else the next turn); and when that is barred,
+    // a window we open by a cast of our own (Thassa's Oracle's, Laboratory Maniac's, Jace's, Doctor Doom's) is read
+    // again as on the next turn the line could run, this turn's spells not carried over: the line waits for that
+    // turn, so a tutor resolving under Deafening Silence still fetches for it, and Oracle is held for it. Fblthp's
+    // window is not ours to put off: its trigger comes on combat damage, and resolving unanswered it shuffles Fblthp
+    // away, so a trigger this turn is the window (Rule of Law, Fblthp cast this turn)
+    private static boolean barredAtWindow(final ComboTracker.View v, final ComboLines.Line l) {
+        if (windowNow(v, l)) {
+            for (final String name : l.names()) {
+                if (v.castBarred(name)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (!v.windowBarred(l)) {
+            return false;
+        }
+        return l.winner() == ComboLines.Winner.FBLTHP || !opensThisTurn(v, l) || barredOn(v, l, false);
+    }
+
     /**
-     * Signal 2 at the window (follow-up F3): whether {@code l}'s emptier, in our hand, library or command zone, cannot
-     * be cast at the moment its window needs it, where {@link #deniedNow} reads it now. The CantBeCast statics are read
-     * as StaticAbilityCantBeCast reads them ({@link #barsAt}), with that moment's turn, stack and spells cast:
+     * Signal 2 at the window, on the turn the board opens it (follow-up F3; follow-up 2, G2, for every piece still to
+     * be cast and for Doctor Doom's and Fblthp's windows too): whether a piece of {@code l} still to be cast, ours in
+     * our hand, library or command zone, cannot be cast at its moment in the line's window, read this turn while the
+     * board can still open the window this turn ({@link #opensThisTurn}: the spells cast this turn count there), else
+     * as on the next turn it could run (none carried over); {@link #deniedNow} reads them now. The CantBeCast statics
+     * are read as StaticAbilityCantBeCast reads them ({@link #barsAt}), with the moment's turn, step, stack and spells
+     * cast:
      * <ul>
-     * <li>a Thassa's Oracle line: in response to Oracle's entering trigger, Oracle cast that turn, in our turn. The
-     * stack is not empty (OnlySorcerySpeed bars); the turn, which a Condition$ PlayerTurn reads, is ours; the spells
-     * cast that turn (NumLimitEachTurn) are this turn's while the go-off can still come this turn, in our turn before
-     * our end step, else none, and Oracle;
-     * <li>a Laboratory Maniac or Jace line: at the end step of the player whose turn comes right before ours, our draw
-     * step next. No main phase; that player's turn; the spells cast that turn are this turn's while it is that
-     * player's turn now, else none. A draw spell that follows the emptier in our main phase opens a window now, which
-     * ComboExecute reads with deniedNow (the view's executableNow).
+     * <li>a Thassa's Oracle line: Oracle in our main phase on an empty stack, a sorcery's moment, after that turn's
+     * spells; the emptier in response to Oracle's entering trigger, on the stack (OnlySorcerySpeed bars), after that
+     * turn's spells and Oracle;
+     * <li>a Laboratory Maniac or Jace line: the emptier at the end step of the player whose turn comes right before
+     * ours, our draw step next (no main phase; that player's turn), after that turn's spells. A draw spell that follows
+     * the emptier in our main phase opens a window now, which ComboExecute reads with deniedNow (the view's
+     * executableNow);
+     * <li>a Doctor Doom line: the emptier in our main phase on an empty stack, a sorcery's moment, then Doom's {T};
+     * <li>a Fblthp line: the emptier in response to Fblthp's combat-damage trigger, in our combat damage step;
+     * <li>a winner other than Oracle still to be cast: in our main phase on an empty stack, on a turn of ours before
+     * its window's, after no spell (Laboratory Maniac before that end step, Doctor Doom free of summoning sickness by
+     * its window, Fblthp on our battlefield before combat damage).
      * </ul>
-     * False for a Doctor Doom line (its window is now: Consultation, then Doom's {T}) and a Fblthp line (left to the
-     * reading now: its window, Fblthp's combat-damage trigger on our stack, is now when it is asked), for an Oracle
-     * line whose trigger of ours is on the stack (that window is now), and for an emptier on our stack or gone. The
-     * copy of the cast is made only while some CantBeCast static exists (the view's castBarStatics, else the
-     * emptier's own); nothing here draws a random number, and the cards are read, never written.
+     * False while the window is now (our Oracle's or Fblthp's trigger on our stack: the reading now), and with no piece
+     * still to be cast. A copy of a cast is made only while some CantBeCast static exists (the view's castBarStatics,
+     * else the piece's own); nothing here draws a random number, and the cards are read, never written.
      */
     static boolean barredAtWindowNow(final ComboTracker.View v, final ComboLines.Line l) {
+        return !windowNow(v, l) && barredOn(v, l, opensThisTurn(v, l));
+    }
+
+    // the line's window is now: our trigger of Thassa's Oracle or of Fblthp is on our stack, fired already
+    private static boolean windowNow(final ComboTracker.View v, final ComboLines.Line l) {
         final ComboLines.Winner w = l.winner();
-        final boolean oracle = w == ComboLines.Winner.ORACLE;
-        if (!oracle && w != ComboLines.Winner.LAB && w != ComboLines.Winner.JACE) {
+        return (w == ComboLines.Winner.ORACLE || w == ComboLines.Winner.FBLTHP) && v.triggerOnOurStack(w.card);
+    }
+
+    // whether the board can still open the line's window this turn, so that the spells cast this turn count at it (an
+    // if chain, not an enum switch: javac would add a synthetic switch-map class):
+    // - Thassa's Oracle: our turn, before our end step (a main phase of ours now or still to come);
+    // - Laboratory Maniac, Jace: the turn of the player before us is now;
+    // - Doctor Doom: our turn, before our end step, Doom on our battlefield untapped and free of summoning sickness
+    //   (ComboExecute.staged);
+    // - Fblthp: our turn, before combat damage, Fblthp on our battlefield
+    private static boolean opensThisTurn(final ComboTracker.View v, final ComboLines.Line l) {
+        final ComboLines.Winner w = l.winner();
+        final Player ai = v.ai();
+        final PhaseHandler ph = ai.getGame().getPhaseHandler();
+        if (w == ComboLines.Winner.LAB || w == ComboLines.Winner.JACE) {
+            final Player before = beforeUs(ai.getGame(), ai);
+            return before != null && ph.isPlayerTurn(before);
+        }
+        final PhaseType phase = ph.getPhase();
+        if (!ph.isPlayerTurn(ai) || phase == null) {
             return false;
         }
+        if (w == ComboLines.Winner.ORACLE) {
+            return phase.isBefore(PhaseType.END_OF_TURN);
+        }
+        if (w == ComboLines.Winner.DOOM) {
+            return phase.isBefore(PhaseType.END_OF_TURN) && ComboExecute.staged(v, w);
+        }
+        return phase.isBefore(PhaseType.COMBAT_DAMAGE) && v.where(w.card) == Where.BATTLEFIELD;
+    }
+
+    // whether a piece of l still to be cast cannot be cast at its moment in the line's window on that turn: this
+    // turn's (thisTurn: the spells cast this turn count) or the next turn the line could run (none carried over).
+    // Nothing more is read while no CantBeCast static exists (the view's castBarStatics, else a piece's own)
+    private static boolean barredOn(final ComboTracker.View v, final ComboLines.Line l, final boolean thisTurn) {
+        final ComboLines.Winner w = l.winner();
+        final Card winner = unplayed(v, w.card);
         final String name = l.emptier().card;
         final Card emptier = unplayed(v, name);
-        if (emptier == null || (oracle && v.triggerOnOurStack(w.card))) {
-            return false;
-        }
-        final SpellAbility spell = Iterables.getFirst(emptier.getSpells(), null);
-        if (spell == null || (v.castBarStatics().isEmpty() && !hasCastBar(emptier))) {
+        if (v.castBarStatics().isEmpty() && (winner == null || !hasCastBar(winner))
+                && (emptier == null || !hasCastBar(emptier))) {
             return false;
         }
         final Player ai = v.ai();
         final Game game = ai.getGame();
-        final PhaseHandler ph = game.getPhaseHandler();
-        final List<Card> castThatTurn = new ArrayList<>();
-        final Player turn;
-        if (oracle) {
-            turn = ai;
-            if (ph.isPlayerTurn(ai) && ph.getPhase() != null && ph.getPhase().isBefore(PhaseType.END_OF_TURN)) {
-                castThatTurn.addAll(game.getStack().getSpellCardsCastThisTurn());
-            }
-            final Card card = unplayed(v, w.card);
-            if (card != null) {
-                castThatTurn.add(card);
-            }
-        } else {
-            turn = beforeUs(game, ai);
-            if (turn == null) {
-                return false;
-            }
-            if (ph.isPlayerTurn(turn)) {
-                castThatTurn.addAll(game.getStack().getSpellCardsCastThisTurn());
-            }
+        final boolean endStep = w == ComboLines.Winner.LAB || w == ComboLines.Winner.JACE;
+        final Player turn = endStep ? beforeUs(game, ai) : ai;
+        if (turn == null) {
+            return false;
         }
-        final Card cast = castCopy(ai, emptier, v.where(name) == Where.COMMAND);
+        final List<Card> spells = thisTurn ? game.getStack().getSpellCardsCastThisTurn() : List.of();
+        final boolean oracle = w == ComboLines.Winner.ORACLE;
+        if (winner != null
+                && barredAt(v, winner, w.card, ai, PhaseType.MAIN1, true, oracle ? spells : List.of())) {
+            return true;
+        }
+        if (emptier == null) {
+            return false;
+        }
+        List<Card> before = spells;
+        if (oracle && winner != null) {
+            before = new ArrayList<>(spells);
+            before.add(winner);
+        }
+        final PhaseType step = endStep ? PhaseType.END_OF_TURN
+                : w == ComboLines.Winner.FBLTHP ? PhaseType.COMBAT_DAMAGE : PhaseType.MAIN1;
+        return barredAt(v, emptier, name, turn, step, w == ComboLines.Winner.DOOM, before);
+    }
+
+    // whether our card c, the piece named name, cannot be cast at the moment: whose turn it is, the step, whether a
+    // sorcery could be cast then (our main phase on an empty stack), the spells cast that turn before it. Read on a
+    // copy of its cast (castCopy), made only while some CantBeCast static exists (the view's castBarStatics, else c's
+    // own)
+    private static boolean barredAt(final ComboTracker.View v, final Card c, final String name, final Player turn,
+            final PhaseType step, final boolean sorcery, final List<Card> castThatTurn) {
+        final SpellAbility spell = Iterables.getFirst(c.getSpells(), null);
+        if (spell == null || (v.castBarStatics().isEmpty() && !hasCastBar(c))) {
+            return false;
+        }
+        final Player ai = v.ai();
+        final Card cast = castCopy(ai, c, v.where(name) == Where.COMMAND);
         cast.setCastSA(spell);
         for (final StaticAbility st : v.castBarStatics()) {
-            if (barsAt(st, cast, ai, turn, castThatTurn)) {
+            if (barsAt(st, cast, ai, turn, step, sorcery, castThatTurn)) {
                 return true;
             }
         }
         for (final StaticAbility st : cast.getStaticAbilities()) {
-            if (st.checkMode(StaticAbilityMode.CantBeCast) && barsAt(st, cast, ai, turn, castThatTurn)) {
+            if (st.checkMode(StaticAbilityMode.CantBeCast) && barsAt(st, cast, ai, turn, step, sorcery, castThatTurn)) {
                 return true;
             }
         }
@@ -324,14 +455,18 @@ public final class ComboSignals {
     }
 
     // StaticAbilityCantBeCast.applyCantBeCastAbility for a CantBeCast static at the moment, after its conditions
-    // (conditionsAt, with the moment's turn): ValidCard, Caster, the players it ignores, Origin and cmcGT as Forge
-    // reads them; OnlySorcerySpeed lets nothing through, since neither moment lets us cast a sorcery (the stack holds
-    // Oracle's trigger, an end step is no main phase); NumLimitEachTurn counts the cards cast that turn that its
-    // ValidCard matches and we control, as CardUtil.getThisTurnCast and filterControlledByAsList count this turn's
+    // (conditionsAt, with the moment's turn and step): ValidCard, Caster, the players it ignores, Origin and cmcGT as
+    // Forge reads them; OnlySorcerySpeed lets the cast through only at a sorcery's moment (Player.canCastSorcery: our
+    // main phase on an empty stack), never with a trigger of ours on the stack or at an end step; NumLimitEachTurn
+    // counts the cards cast that turn that its ValidCard matches and we control, as CardUtil.getThisTurnCast and
+    // filterControlledByAsList count this turn's
     private static boolean barsAt(final StaticAbility st, final Card cast, final Player ai, final Player turn,
-            final List<Card> castThatTurn) {
-        if (!conditionsAt(st, turn) || !st.matchesValidParam("ValidCard", cast) || !st.matchesValidParam("Caster", ai)
-                || st.getIgnoreEffectPlayers().contains(ai)) {
+            final PhaseType step, final boolean sorcery, final List<Card> castThatTurn) {
+        if (!conditionsAt(st, turn, step) || !st.matchesValidParam("ValidCard", cast)
+                || !st.matchesValidParam("Caster", ai) || st.getIgnoreEffectPlayers().contains(ai)) {
+            return false;
+        }
+        if (sorcery && st.hasParam("OnlySorcerySpeed")) {
             return false;
         }
         if (st.hasParam("Origin")) {
@@ -358,20 +493,28 @@ public final class ComboSignals {
     }
 
     // a static's conditions at the moment (cantBeCastAbility's checkConditions): Forge's own reading, now, for any
-    // static but one whose Condition$ is PlayerTurn, which holds only in its controller's turn. That one is false when
-    // the moment is another player's turn; Forge's own reading when the moment's turn is the turn now; else its zones
-    // alone (zonesCheck), its other conditions read as met (in the tree only Conqueror's Flail carries one beside the
-    // turn, its IsPresent)
-    private static boolean conditionsAt(final StaticAbility st, final Player turn) {
-        if (!"PlayerTurn".equals(st.getParam("Condition"))) {
+    // static but one whose Condition$ is PlayerTurn, which holds only in its controller's turn, or one with Phases,
+    // which holds only in those steps (Basandra, Battle Seraph and Marisi, Breaker of the Coil: combat). Such a static
+    // is false when the moment's turn or step is not its own; Forge's own reading when now's turn and step are its
+    // own as well; else its zones alone (zonesCheck), its other conditions read as met (in the tree only Conqueror's
+    // Flail carries one beside the turn, its IsPresent)
+    private static boolean conditionsAt(final StaticAbility st, final Player turn, final PhaseType step) {
+        final boolean byTurn = "PlayerTurn".equals(st.getParam("Condition"));
+        final boolean byStep = st.hasParam("Phases");
+        if (!byTurn && !byStep) {
             return st.checkConditions();
         }
         final Player controller = st.getHostCard().getController();
-        if (!controller.equals(turn)) {
+        if (byTurn && !controller.equals(turn)) {
             return false;
         }
-        return controller.getGame().getPhaseHandler().isPlayerTurn(controller) ? st.checkConditions()
-                : st.zonesCheck();
+        final Set<PhaseType> steps = byStep ? PhaseType.parseRange(st.getParam("Phases")) : null;
+        if (byStep && !steps.contains(step)) {
+            return false;
+        }
+        final PhaseHandler ph = controller.getGame().getPhaseHandler();
+        final boolean asNow = (!byTurn || ph.isPlayerTurn(controller)) && (!byStep || steps.contains(ph.getPhase()));
+        return asNow ? st.checkConditions() : st.zonesCheck();
     }
 
     // the player whose turn comes right before ours: the last of the players in turn order from us; null alone

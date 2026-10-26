@@ -38,6 +38,7 @@ import forge.game.card.CardCollection;
 import forge.game.card.CounterEnumType;
 import forge.game.cost.Cost;
 import forge.game.cost.CostExile;
+import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
@@ -764,6 +765,67 @@ public class ComboHoldAiTest extends AITest {
         assertEquals(ids(t.live()), List.of("742-1295"));
         assertTrue(ComboHold.vetoesCast(ai, castOf(held)));
         assertNull(aiOf(ai).chooseSpellAbilityToPlay());
+    }
+
+    // ---- follow-up 2, G2: denial at each line's own window ----
+
+    /** Review Focus 2: the opponent's Grand Abolisher, in its owner's turn, bars every spell of ours now, but our
+     *  Oracle line's window is our own turn: the line stays live and its pieces protected, as in our turn. Oracle in
+     *  hand is spared a discard beside a Craw Wurm, and Consultation is kept on top of our library. With no line the
+     *  stock choice stands. */
+    @Test
+    public void abolisherInItsOwnersTurnKeepsOurPiecesProtected() {
+        final Card oracle = heldBoard();
+        hand(WURM);
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        addCard("Grand Abolisher", opp);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertTrue(ComboSignals.deniedNow(t.view(), l), "read now, the Abolisher bars our spells");
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "the window is our turn");
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertTrue(t.protects(oracle));
+        assertTrue(t.protects(consultation));
+        final CardCollection hand = new CardCollection(ai.getCardsIn(ZoneType.Hand));
+        assertEquals(names(hand), List.of(ORACLE, WURM));
+        assertEquals(names(ComboHold.spare(ai, hand, 1)), List.of(WURM));
+        assertTrue(ComboFetch.keepsOnTop(ai, consultation));
+
+        // a deck with no line: nothing is protected, and the cards to discard are the stock list
+        t.useLines(List.of());
+        assertFalse(t.protects(oracle));
+        assertSame(ComboHold.spare(ai, hand, 1), hand);
+        assertFalse(ComboFetch.keepsOnTop(ai, consultation));
+    }
+
+    /** Beyond the plan's tests: our own Fires of Invention, two spells a turn, after Opt this turn. Read now, Oracle
+     *  and Consultation could each be cast, the turn's second spell; but the go-off makes Consultation the third, so
+     *  Oracle is not cast into it. Next turn's go-off makes it the second: the line is live, and Oracle waits. */
+    @Test
+    public void firesOfInventionHoldsOracleForNextTurnsGoOff() {
+        start(ORACLE_CONSULTATION);
+        final Card oracle = hand(ORACLE);
+        hand(CONSULTATION);
+        library("Island");
+        lands("Island", "Island", "Swamp");
+        addCard("Fires of Invention", ai);
+        final Card opt = createCard("Opt", ai);
+        opt.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(opt);
+        final SpellAbility optCast = opt.getFirstSpellAbility();
+        optCast.setActivatingPlayer(ai);
+        game.getStack().add(optCast);
+        game.getStack().clear();
+        game.getStackZone().remove(opt);
+        ai.getZone(ZoneType.Graveyard).add(opt);
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(opt));
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertFalse(ComboSignals.deniedNow(t.view(), l), "read now, each would be the turn's second spell");
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "this turn's go-off: Consultation the third spell");
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertFalse(ComboExecute.goOffNow(ai, castOf(oracle)));
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+        assertNull(decision(), "nothing is cast: Oracle waits for next turn's go-off");
     }
 
     // ---- follow-up F5: protect the hand; a stacked piece stays on top ----

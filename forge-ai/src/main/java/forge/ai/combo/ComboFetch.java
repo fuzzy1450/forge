@@ -421,8 +421,10 @@ public final class ComboFetch {
      * one-short lines; and, while DANGER holds (follow-up F4, spec section 6.5.3: a combo that wins this turn beats
      * surviving, so no line is one short), for a search or a dig to our hand or the battlefield, the deck's lines
      * exactly one piece short whose only signal DANGER is (neither denied nor NO_MANA, and no surer kill) when the win
-     * comes this turn ({@link #winsThisTurn}): our main phase, the winner's own window open this turn, and the mana we
-     * can make now paying the line with the fetched piece in our hand or on the battlefield. A fetch to the top of our
+     * comes this turn ({@link #winsThisTurn}): our main phase, the winner's own window open this turn and not denied
+     * this turn (the view's deniedThisTurn, follow-up 2, G2: a line denied only this turn waits for a later one, too
+     * late under danger), and the mana we can make now paying the line with the fetched piece in our hand or on the
+     * battlefield. A fetch to the top of our
      * library (Vampiric Tutor, Imperial Seal, the Vault's stack) puts nothing in our hand this turn and keeps the
      * one-short lines, as the piles, Gifts Ungiven and Consultation's tutor do (follow-up final review, round 1).
      */
@@ -434,8 +436,8 @@ public final class ComboFetch {
         }
         final List<ComboLines.Line> out = new ArrayList<>();
         for (final ComboLines.Line l : v.lines()) {
-            if (v.ready(l) && ComboSignals.abandon(v, l) == ComboSignals.Signal.DANGER && v.missing(l).size() == 1
-                    && winsThisTurn(v, l, fit)) {
+            if (v.ready(l) && ComboSignals.abandon(v, l) == ComboSignals.Signal.DANGER && !v.deniedThisTurn(l)
+                    && v.missing(l).size() == 1 && winsThisTurn(v, l, fit)) {
                 out.add(l);
             }
         }
