@@ -1880,6 +1880,50 @@ public class ComboFetchAiTest extends AITest {
         assertEquals(t.knownTops(), Set.of(consultation.getId()), why);
     }
 
+    /** A line denied at its own window on our next turn takes no fetch at the end step before that turn (follow-up 2,
+     *  G4 review, round 1; spec section 6.5: DENIED still blocks under danger). There the fetch reads no denial of
+     *  this turn's (the view's deniedThisTurn: the piece is cast only next turn), so the abandon signal's DENIED, at
+     *  the line's own window on that turn, is the one gate. On the danger board at the end step and in the cleanup of
+     *  the opponent whose turn comes right before ours, with no hoser, Vampiric Tutor takes Consultation
+     *  ({@link #assertEndStepFetch}). Under an opposing Platinum Angel (we cannot win) or Rule of Law (Consultation
+     *  would be our next turn's second spell, cast in response to Oracle's trigger) the line is DENIED, DANGER still
+     *  holding: Vampiric Tutor takes the stock pick with the stock draws and leaves no known top, and the Vault keeps
+     *  the stock holds and stack ({@link #assertVault}). */
+    @Test
+    public void aLineDeniedAtItsWindowNextTurnTakesNoFetchAtTheEndStepBeforeIt() {
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
+        for (final PhaseType phase : List.of(PhaseType.END_OF_TURN, PhaseType.CLEANUP)) {
+            assertEndStepFetch(dangerBoardAt(phase, false), held, phase.name() + ", no hoser");
+            for (final String hoser : List.of("Platinum Angel", "Rule of Law")) {
+                final String why = phase.name() + ", " + hoser;
+                final Card consultation = deniedAtTheEndStepBeforeOurTurn(phase, hoser, why);
+                final SpellAbility vampiric = spell("Vampiric Tutor");
+                assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, vampiric), held), consultation, why);
+                assertEquals(t.knownTops(), Set.of(), why);
+
+                deniedAtTheEndStepBeforeOurTurn(phase, hoser, why);
+                assertVault(held, false, why);
+            }
+        }
+    }
+
+    /** The danger board ({@link #dangerBoardAt}) at {@code phase} of the opponent's turn, ours next, under the
+     *  opponent's {@code hoser}: line 742-1295 is DENIED, and DANGER still holds with no surer kill. Returns the
+     *  library's Consultation, the top card. */
+    private Card deniedAtTheEndStepBeforeOurTurn(final PhaseType phase, final String hoser, final String why) {
+        final Card consultation = dangerBoardAt(phase, false);
+        assertSame(game.getPhaseHandler().getNextTurn(), ai, why);
+        addCard(hoser, opp);
+        game.getAction().checkStateEffects(true);
+        assertEquals(game.getPhaseHandler().getPhase(), phase, why);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DENIED, why);
+        assertTrue(t.view().danger(), why);
+        assertFalse(ComboSignals.surerKillNow(ai), why);
+        assertEquals(t.oneShort(), List.of(), why);
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation, why);
+        return consultation;
+    }
+
     @Test
     public void aSearchToTheTopMakesAKnownTop() {
         // spec section 6.3, known tops (Evan, 2026-10-24): a piece of ours that a combo hook puts on top of our
