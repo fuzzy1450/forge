@@ -2175,20 +2175,86 @@ public class ComboExecuteAiTest extends AITest {
         });
     }
 
+    /** An opponent's draw that {@code amount} would stop, "draw a card unless that player pays {amount}", the opponent
+     *  its activator, built on their Rhystic Study as its trigger's draw is (standing in for Mystic Remora's {4} and
+     *  Esper Sentinel's {X}), and a 20-card library for them to draw from. */
+    private SpellAbility opponentsDrawUnless(final int amount) {
+        fillLibrary(opp, 20);
+        final Card host = addCard(RHYSTIC, opp);
+        final SpellAbility draw = AbilityFactory.getAbility(
+                "DB$ Draw | Defined$ You | UnlessCost$ " + amount + " | UnlessPayer$ TriggeredActivator", host);
+        draw.setActivatingPlayer(opp);
+        return draw;
+    }
+
+    /** Beyond the plan's tests (follow-up 2, G3 review, round 1): the unless cost's own amount decides the decline. Our
+     *  Thassa's Oracle cast and on our stack, Demonic Consultation in hand, the Swamp and two Islands untapped: an
+     *  opponent's draw that {1} would stop is paid as stock, the {1} and Consultation's {B} three mana; one that {3}
+     *  would stop is declined where stock pays, the {3} and the {B} four mana; and with a third Island untapped the
+     *  {3} is paid as stock, the four lands paying both. */
+    @Test
+    public void theUnlessCostsOwnAmountDecidesTheDecline() {
+        assertTrue(assertPaysAsStock(() -> {
+            oracleCast("Island", "Island");
+            return opponentsDrawUnless(1);
+        }), "{1} beside the {B}");
+        assertDeclined(() -> {
+            oracleCast("Island", "Island");
+            return opponentsDrawUnless(3);
+        });
+        assertTrue(assertPaysAsStock(() -> {
+            oracleCast("Island", "Island", "Island");
+            return opponentsDrawUnless(3);
+        }), "{3} beside the {B}");
+    }
+
+    /** Line 742-1295 in our Main 1, a go-off not begun: Thassa's Oracle and Demonic Consultation in hand, our two
+     *  Islands tapped, only the Swamp untapped, a 20-card library. */
+    private void notBegun() {
+        start(ORACLE_CONSULTATION);
+        hand(ORACLE);
+        hand(CONSULTATION);
+        tapped("Island", "Island");
+        lands("Swamp");
+        fillLibrary(ai, 20);
+    }
+
+    /** Line 742-1295 mid go-off as {@link #oracleCast} has it, only the Swamp untapped, after Opt, a noncreature spell
+     *  of ours, was cast and resolved this turn; under the opponent's Deafening Silence when {@code silence}, which
+     *  then bars Consultation this turn: this turn's go-off is lost, and the line waits for a later turn. */
+    private void oracleCastAfterOpt(final boolean silence) {
+        start(ORACLE_CONSULTATION);
+        hand(CONSULTATION);
+        tapped("Island", "Island");
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        if (silence) {
+            addCard("Deafening Silence", opp);
+        }
+        final Card opt = castOnStack(OPT);
+        game.getStack().clear();
+        game.getStackZone().remove(opt);
+        ai.getZone(ZoneType.Graveyard).add(opt);
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(opt));
+        castOnStack(ORACLE);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertEquals(t.view().deniedThisTurn(t.executable().get(0)), silence, "barred this turn");
+    }
+
     /** Rhystic Study's {1} is paid as stock, with the stock draws, outside a go-off's window, where the go-off is not
      *  starved by it, and where it is lost already: the Oracle and Consultation in hand, nothing on our stack, only the
      *  Swamp untapped (a go-off not begun); the Oracle cast with an Island beside the Swamp, which pays the {1} and
      *  leaves the {B}; Consultation cast already, in response to the Oracle's trigger, a Swamp untapped; and the Oracle
-     *  cast with only an Island untapped, Consultation's {B} gone whether the {1} is paid or not. */
+     *  cast with only an Island untapped, Consultation's {B} gone whether the {1} is paid or not. And (G3 review, round
+     *  1) where no window is open though a line's pieces are near: over the go-off not begun, another spell of ours on
+     *  our stack (Opt), and the opponent's own Thassa's Oracle on the stack, they its activator; our Oracle cast after
+     *  Opt this turn under the opponent's Deafening Silence, which bars Consultation this turn (without Silence the same
+     *  board declines); and our Oracle cast with Tainted Pact in hand and the Swamp and an Island untapped, over a
+     *  library of twenty equal cards that Pact cannot empty, its line the deck's but not executable. */
     @Test
     public void rhysticStudyPaidAsStockOutsideAGoOff() {
         assertTrue(assertPaysAsStock(() -> {
-            start(ORACLE_CONSULTATION);
-            hand(ORACLE);
-            hand(CONSULTATION);
-            tapped("Island", "Island");
-            lands("Swamp");
-            fillLibrary(ai, 20);
+            notBegun();
             assertEquals(ids(t.executable()), List.of("742-1295"));
             return rhysticDraw();
         }), "not begun");
@@ -2217,6 +2283,42 @@ public class ComboExecuteAiTest extends AITest {
             assertEquals(ids(t.executable()), List.of("742-1295"));
             return rhysticDraw();
         }), "the go-off lost");
+        assertTrue(assertPaysAsStock(() -> {
+            notBegun();
+            castOnStack(OPT);
+            assertEquals(ids(t.executable()), List.of("742-1295"));
+            return rhysticDraw();
+        }), "Opt on our stack");
+        assertTrue(assertPaysAsStock(() -> {
+            notBegun();
+            final Card theirs = createCard(ORACLE, opp);
+            theirs.setGameTimestamp(game.getNextTimestamp());
+            game.getStackZone().add(theirs);
+            final SpellAbility cast = theirs.getFirstSpellAbility();
+            cast.setActivatingPlayer(opp);
+            game.getStack().add(cast);
+            assertEquals(ids(t.executable()), List.of("742-1295"));
+            return rhysticDraw();
+        }), "their Oracle on the stack");
+        assertDeclined(() -> {
+            oracleCastAfterOpt(false);
+            return rhysticDraw();
+        });
+        assertTrue(assertPaysAsStock(() -> {
+            oracleCastAfterOpt(true);
+            return rhysticDraw();
+        }), "Silence after Opt");
+        assertTrue(assertPaysAsStock(() -> {
+            start(ORACLE_PACT);
+            hand(PACT);
+            tapped("Island", "Island");
+            lands("Swamp", "Island");
+            fillLibrary(ai, 20);
+            castOnStack(ORACLE);
+            assertEquals(ids(t.deckLines()), List.of("1295-3093"));
+            assertEquals(ids(t.executable()), List.of(), "Pact cannot empty the library");
+            return rhysticDraw();
+        }), "Pact over a plain library");
     }
 
     /** Beyond the plan's tests: inside the go-off's window, an unless cost that stops anything but an opponent's draw
