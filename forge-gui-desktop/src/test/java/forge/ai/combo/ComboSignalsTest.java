@@ -2294,6 +2294,34 @@ public class ComboSignalsTest extends AITest {
     }
 
     @Test
+    public void aGlobalAttackLimitCapsOurSurerKill() {
+        // three ready Grizzly Bears of ours, nothing of the opponent's to block them: 6 at the opponent's 5
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        opp.setLife(5, null);
+        ready(BEARS, 3, ai);
+        assertEquals(abandon(l), Signal.SURER_KILL, "three attackers' 6 reach 5");
+
+        // the opponent's Dueling Grounds, an enchantment, so no blocker of theirs: no more than one creature can attack
+        // each combat, ours on the opponent among them, though no limit names the opponent as the one attacked
+        addCard("Dueling Grounds", opp);
+        assertNull(abandon(l), "a global one: one attacker's 2 against 5");
+        assertFalse(ComboSignals.surerKillNow(ai));
+        // nor the opponent's 3, which two attackers would reach
+        opp.setLife(3, null);
+        assertNull(abandon(l), "one attacker's 2 against 3");
+        // beside it the opponent's Crawlspace, no more than two creatures attacking the opponent: the least of the two
+        // limits holds, still one attacker
+        addCard("Crawlspace", opp);
+        assertNull(abandon(l), "a global one beside the opponent's Crawlspace's two: one attacker's 2 against 3");
+
+        // that one attacker's 2 reaches the opponent's 2
+        opp.setLife(2, null);
+        assertEquals(abandon(l), Signal.SURER_KILL, "one attacker's 2 reaches 2");
+        assertTrue(ComboSignals.surerKillNow(ai));
+    }
+
+    @Test
     public void aBlockLimitLetsTheAttackThrough() {
         // two ready Boggart Brutes (3/2 menace) of the opponent's, 6 at our 3, and four Grizzly Bears of ours: two block
         // each Brute (menace), and nothing comes through
