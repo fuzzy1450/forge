@@ -2165,6 +2165,42 @@ public class ComboSignalsTest extends AITest {
     }
 
     @Test
+    public void theLeastOfBothAttackLimitsCapsTheAttack() {
+        // three ready Grizzly Bears of the opponent's, 6 at our 3, nothing of ours to block them. Our Crawlspace lets
+        // two attack us: 4 reach our 3
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ready(BEARS, 3, opp);
+        ai.setLife(3, null);
+        addCard("Crawlspace", ai);
+        assertEquals(abandon(l), Signal.DANGER, "our Crawlspace's two attackers' 4 reach our 3");
+
+        // beside it the opponent's Dueling Grounds, no more than one creature attacking each combat: the least of the
+        // two limits holds, one Bears' 2 against our 3, though the limit on us alone is two
+        addCard("Dueling Grounds", opp);
+        assertNull(abandon(l), "a global one beside our Crawlspace's two: one attacker's 2 against our 3");
+        // that one attacker's 2 reaches our 2
+        ai.setLife(2, null);
+        assertEquals(abandon(l), Signal.DANGER, "one attacker's 2 reaches our 2");
+
+        // the other way round, the limit on us the smaller: three ready Wind Drakes (2/2 flying) of the opponent's, 6
+        // at our 3, and Caverns of Despair, no more than two creatures attacking each combat: 4 reach our 3
+        final ComboLines.Line second = oracleLine();
+        manaForTheLine();
+        ready("Wind Drake", 3, opp);
+        ai.setLife(3, null);
+        addCard("Caverns of Despair", opp);
+        assertEquals(abandon(second), Signal.DANGER, "Caverns' two attackers' 4 reach our 3");
+        // our Judoon Enforcers (8/8, no reach: it blocks no Drake) lets one creature attack us: the least of the two
+        // limits holds, one Drake's 2 against our 3, though the global limit is two
+        addCard("Judoon Enforcers", ai);
+        assertNull(abandon(second), "our Judoon Enforcers' one beside a global two: one attacker's 2 against our 3");
+        // that one attacker's 2 reaches our 2
+        ai.setLife(2, null);
+        assertEquals(abandon(second), Signal.DANGER, "one attacker's 2 reaches our 2");
+    }
+
+    @Test
     public void propagandaTaxesTheAttack() {
         // a Grizzly Bears (2/2) and two Hill Giants (3/3) of the opponent's, in that battlefield order: 8 at our 5
         final ComboLines.Line l = oracleLine();
