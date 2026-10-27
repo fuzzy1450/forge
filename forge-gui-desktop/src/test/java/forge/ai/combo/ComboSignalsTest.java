@@ -27,6 +27,8 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.staticability.StaticAbilityAttackRestrict;
+import forge.game.staticability.StaticAbilityBlockRestrict;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
@@ -2108,12 +2110,284 @@ public class ComboSignalsTest extends AITest {
         assertEquals(v.blockMatrixBuilds(), 1);
     }
 
+    // ---- follow-up 3, H2: attack limits and taxes in DANGER and the surer kill ----
+
+    @Test
+    public void silentArbiterCapsTheAttack() {
+        // three ready Grizzly Bears of the opponent's bring 6 at our 5, and nothing of ours blocks: the whole attack
+        // kills, though its largest single hit is 2
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ready(BEARS, 3, opp);
+        ai.setLife(5, null);
+        assertEquals(abandon(l), Signal.DANGER);
+
+        // the opponent's Silent Arbiter: no more than one creature can attack each combat, so one Bears' 2 is the most
+        // that reaches us, short of our 5; the capped attack's sum is the cheap sum, so nothing is built to block it
+        addCard("Silent Arbiter", opp);
+        final ComboTracker.View v = t.view();
+        assertFalse(v.danger(), "one attacker's 2 against our 5");
+        assertEquals(v.blockMatrixBuilds(), 0, "the capped attack's 2 against our 5: nothing to block");
+        assertNull(abandon(l));
+        // nor our 3, which two attackers would reach
+        ai.setLife(3, null);
+        assertNull(abandon(l), "one attacker's 2 against our 3");
+
+        // that one attacker's 2 reaches our 2
+        ai.setLife(2, null);
+        assertEquals(abandon(l), Signal.DANGER);
+    }
+
+    @Test
+    public void crawlspaceCapsTheAttackOnUs() {
+        // two Grizzly Bears (2/2), a Hill Giant (3/3) and a Colossal Dreadmaw (6/6) of the opponent's, in that
+        // battlefield order: 13 at our 10
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ready(BEARS, 2, opp);
+        ready(GIANT, 1, opp);
+        ready(DREADMAW, 1, opp);
+        ai.setLife(10, null);
+        assertEquals(abandon(l), Signal.DANGER);
+
+        // the opponent's own Crawlspace limits the creatures that attack the opponent, not those that attack us
+        addCard("Crawlspace", opp);
+        assertEquals(abandon(l), Signal.DANGER, "the opponent's Crawlspace does not cap the attack on us");
+
+        // ours: no more than two creatures can attack us, the largest hits, the Dreadmaw's 6 and the Giant's 3: 9
+        // against our 10
+        addCard("Crawlspace", ai);
+        assertNull(abandon(l), "two attackers' 9 against our 10");
+        // at our 9 they reach it, where the first two met, the Bears, bring only 4
+        ai.setLife(9, null);
+        assertEquals(abandon(l), Signal.DANGER, "the two largest hits, 9, reach our 9");
+    }
+
+    @Test
+    public void propagandaTaxesTheAttack() {
+        // a Grizzly Bears (2/2) and two Hill Giants (3/3) of the opponent's, in that battlefield order: 8 at our 5
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ready(BEARS, 1, opp);
+        ready(GIANT, 2, opp);
+        ai.setLife(5, null);
+        assertEquals(abandon(l), Signal.DANGER);
+
+        // our Propaganda: {2} for each creature attacking us, and the opponent has no mana: nothing attacks
+        addCard("Propaganda", ai);
+        assertNull(abandon(l), "no mana for the tax: no attacker");
+
+        // two Forests of the opponent's pay for one attacker, the largest hit, a Giant's 3: short of our 5
+        final List<Card> forests = new ArrayList<>();
+        forests.add(addCard("Forest", opp));
+        forests.add(addCard("Forest", opp));
+        assertNull(abandon(l), "one paid attacker's 3 against our 5");
+        // at our 3 that one attacker reaches it, where the Bears, met first, would bring only 2; reading the taxes and
+        // the opponent's mana draws nothing
+        ai.setLife(3, null);
+        final long draws = MyRandom.callCount();
+        assertEquals(abandon(l), Signal.DANGER, "the one paid attacker is the largest hit");
+        assertEquals(MyRandom.callCount(), draws, "the taxed attack drew");
+        // tapped now, the Forests untap for that attack: the mana the opponent will have in it
+        for (final Card forest : forests) {
+            forest.setTapped(true);
+        }
+        assertEquals(abandon(l), Signal.DANGER, "the opponent's tapped lands untap for its attack");
+
+        // four Forests pay for two attackers, both Giants: 6 at our 5
+        ai.setLife(5, null);
+        assertNull(abandon(l));
+        addCard("Forest", opp);
+        addCard("Forest", opp);
+        assertEquals(abandon(l), Signal.DANGER, "two paid attackers' 6 reach our 5");
+    }
+
+    @Test
+    public void ghostlyPrisonTaxesOurSurerKill() {
+        // two Grizzly Bears (2/2) and a Hill Giant (3/3) of ours, ready, in that battlefield order, with nothing of the
+        // opponent's to block them: 7 at the opponent's 5. Our mana is the line's three lands
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        opp.setLife(5, null);
+        ready(BEARS, 2, ai);
+        ready(GIANT, 1, ai);
+        assertEquals(abandon(l), Signal.SURER_KILL);
+
+        // the opponent's Ghostly Prison: {2} for each creature attacking it. Our three mana pay for one attacker, the
+        // largest hit, the Giant's 3: short of 5
+        addCard("Ghostly Prison", opp);
+        assertNull(abandon(l), "one paid attacker's 3 against 5");
+        assertFalse(ComboSignals.surerKillNow(ai));
+
+        // a fourth land pays for a second: the Giant and a Bears bring 5, where the first two met, the Bears, bring 4;
+        // reading the taxes and our mana draws nothing
+        final Card fourth = addCard("Island", ai);
+        final long draws = MyRandom.callCount();
+        assertEquals(abandon(l), Signal.SURER_KILL, "two paid attackers' 5 reach 5");
+        assertEquals(MyRandom.callCount(), draws, "the taxed surer kill drew");
+
+        // the mana we can make now: a tapped land pays nothing
+        fourth.setTapped(true);
+        assertNull(abandon(l), "three untapped lands pay for one attacker");
+    }
+
+    @Test
+    public void crawlspaceCapsOurSurerKill() {
+        // three ready Grizzly Bears of ours, nothing to block them: 6 at the opponent's 5. Our own Crawlspace limits
+        // the creatures that attack us, not ours
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        opp.setLife(5, null);
+        ready(BEARS, 3, ai);
+        addCard("Crawlspace", ai);
+        assertEquals(abandon(l), Signal.SURER_KILL, "our Crawlspace does not cap our attack");
+
+        // the opponent's: no more than two creatures can attack it, 4 against 5
+        addCard("Crawlspace", opp);
+        assertNull(abandon(l), "two attackers' 4 against 5");
+        opp.setLife(4, null);
+        assertEquals(abandon(l), Signal.SURER_KILL, "two attackers' 4 reach 4");
+    }
+
+    @Test
+    public void aBlockLimitLetsTheAttackThrough() {
+        // two ready Boggart Brutes (3/2 menace) of the opponent's, 6 at our 3, and four Grizzly Bears of ours: two block
+        // each Brute (menace), and nothing comes through
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ready("Boggart Brute", 2, opp);
+        for (int i = 0; i < 4; i++) {
+            addCard(BEARS, ai);
+        }
+        ai.setLife(3, null);
+        assertNull(abandon(l), "four blockers hold both Brutes");
+
+        // Caverns of Despair: no more than two creatures can block each combat (nor attack, which two Brutes do not
+        // pass), so two Bears block one Brute and the other's 3 reaches our 3
+        addCard("Caverns of Despair", opp);
+        final ComboTracker.View v = t.view();
+        assertTrue(v.danger(), "two blockers hold one Brute, the other's 3 reaches our 3");
+        assertEquals(v.blockMatrixBuilds(), 1, "the attack's 6 reaches our 3: the matrix is built");
+        assertEquals(abandon(l), Signal.DANGER);
+        // at our 4 the one Brute that comes through falls short: the two blockers the limit allows are spent
+        ai.setLife(4, null);
+        assertNull(abandon(l), "one Brute's 3 against our 4");
+
+        // the limit counts the creatures blocking, not the attackers blocked: a Boggart Brute and a Grizzly Bears of
+        // the opponent's, four Grizzly Bears of ours, our 2. Two of ours block the Brute (menace) and the limit leaves
+        // none for the Bears, whose 2 reaches our 2; without Caverns both are blocked
+        final ComboLines.Line second = oracleLine();
+        manaForTheLine();
+        ready("Boggart Brute", 1, opp);
+        ready(BEARS, 1, opp);
+        for (int i = 0; i < 4; i++) {
+            addCard(BEARS, ai);
+        }
+        ai.setLife(2, null);
+        assertNull(abandon(second), "four blockers hold the Brute and the Bears");
+        addCard("Caverns of Despair", opp);
+        assertEquals(abandon(second), Signal.DANGER, "two blockers on the Brute, none left for the Bears' 2");
+    }
+
+    @Test
+    public void anUnpaidTaxPassesToTheNextAttacker() {
+        // the opponent's Hill Giant (3/3) under our Brainwash ({3} for it to attack) and its Grizzly Bears (2/2), our
+        // Propaganda ({2} for each creature attacking us): the Giant's tax is {5}, the Bears' {2}. Two Forests of the
+        // opponent's pay the Bears' but not the Giant's, so the Giant, the larger hit, is passed over, and the Bears
+        // attack alone
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        final Card giant = ready(GIANT, 1, opp).get(0);
+        final Card bears = ready(BEARS, 1, opp).get(0);
+        addCard("Brainwash", ai).attachToEntity(giant, null);
+        addCard("Propaganda", ai);
+        addCard("Forest", opp);
+        addCard("Forest", opp);
+        game.getAction().checkStateEffects(true);
+        assertEquals(CombatUtil.getAttackCost(game, giant, ai).getCostMana().getMana().getCMC(), 5);
+        assertEquals(CombatUtil.getAttackCost(game, bears, ai).getCostMana().getMana().getCMC(), 2);
+        ai.setLife(3, null);
+        assertNull(abandon(l), "the Bears' 2 against our 3");
+        ai.setLife(2, null);
+        assertEquals(abandon(l), Signal.DANGER, "the Giant's {5} unpaid, the Bears' {2} paid: 2 at our 2");
+
+        // five Forests pay the Giant's {5}, and nothing beside it: the Giant's 3 alone
+        addCard("Forest", opp);
+        addCard("Forest", opp);
+        addCard("Forest", opp);
+        ai.setLife(4, null);
+        assertNull(abandon(l), "the Giant's 3 against our 4");
+        ai.setLife(3, null);
+        assertEquals(abandon(l), Signal.DANGER, "the Giant's {5} paid, the Bears' {2} beside it not: 3 at our 3");
+    }
+
+    @Test
+    public void aTaxBeyondManaCountsTheirAttackNotOurs() {
+        // Reclamation: black creatures can't attack unless their controller sacrifices a land for each. A tax part no
+        // mana prices is read on each signal's safe side. Paid for the opponent's attack on us: their three Walking
+        // Corpses (2/2, black) bring 6 at our 5 though they have no land to sacrifice, the attack over-read as it was
+        // before the taxes were read
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ready("Walking Corpse", 3, opp);
+        addCard("Reclamation", opp);
+        ai.setLife(5, null);
+        assertEquals(abandon(l), Signal.DANGER, "the opponent's sacrifices read as made");
+
+        // unpaid for ours: our three ready Walking Corpses at the opponent's 5 are no surer kill under it, though our
+        // lands could be sacrificed
+        final ComboLines.Line ours = oracleLine();
+        manaForTheLine();
+        opp.setLife(5, null);
+        ready("Walking Corpse", 3, ai);
+        assertEquals(abandon(ours), Signal.SURER_KILL);
+        addCard("Reclamation", opp);
+        assertNull(abandon(ours), "no surer kill rests on a tax no mana prices");
+    }
+
+    @Test
+    public void nornsAnnexIsPaidWithLife() {
+        // our Norn's Annex: {W/P} for each creature attacking us, which the opponent may pay with 2 life. Their three
+        // Grizzly Bears bring 6 at our 5 with no mana of theirs at all: read as paid, the attack over-read (DANGER's
+        // safe side), where Propaganda's {2} with no mana of theirs lets nothing attack (propagandaTaxesTheAttack)
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ready(BEARS, 3, opp);
+        ai.setLife(5, null);
+        addCard("Norn's Annex", ai);
+        assertTrue(CombatUtil.getAttackCost(game, opponents(BEARS).get(0), ai).getCostMana().getMana().hasPhyrexian());
+        assertEquals(abandon(l), Signal.DANGER, "a Phyrexian tax read as paid with life");
+    }
+
+    @Test
+    public void aRestrictedManaSourcePaysNoTax() {
+        // our Propaganda, the opponent's three Grizzly Bears, our 2: two Pillars of the Paruns of theirs, whose mana
+        // may be spent only on multicoloured spells, pay no attack tax, so nothing attacks
+        final ComboLines.Line l = oracleLine();
+        manaForTheLine();
+        ready(BEARS, 3, opp);
+        addCard("Propaganda", ai);
+        addCard("Pillar of the Paruns", opp);
+        addCard("Pillar of the Paruns", opp);
+        ai.setLife(2, null);
+        assertNull(abandon(l), "restricted mana pays no tax");
+
+        // two Forests pay for one Bears: 2 at our 2
+        addCard("Forest", opp);
+        addCard("Forest", opp);
+        assertEquals(abandon(l), Signal.DANGER, "two Forests pay for one attacker");
+    }
+
     /** Line 742-1295 on the 12-against-10 board of follow-up 2's Review Focus 5, our MAIN1: Oracle in hand,
      *  Consultation in the library, the line's mana among seven lands of ours, seven of the opponent's. A handful of
-     *  statics are in play: the opponent's Glorious Anthem (+1/+1), Familiar Ground and Champion of Lambholt (a
-     *  CantBlockBy), our Ghostly Prison, Crawlspace and Silent Arbiter. The opponent's twelve ready creatures bring
-     *  50 unblocked with the Anthem, 11 of it in the air (Shivan Dragon, Serra Angel), which none of ours can block:
-     *  the Champion's 2 power bars our Suntail Hawk, Wall of Stone and Silent Arbiter, so seven of ours block. */
+     *  statics are in play: the opponent's Glorious Anthem (+1/+1), Familiar Ground, Champion of Lambholt (a
+     *  CantBlockBy), Ghostly Prison and Crawlspace. The opponent's twelve ready creatures bring 50 unblocked with the
+     *  Anthem, 11 of it in the air (Shivan Dragon, Serra Angel), which none of ours can block: the Champion's 2 power
+     *  bars our Suntail Hawk, Wall of Stone and Wall of Wood, so seven of ours block. Follow-up 3, H2: DANGER reads
+     *  attack limits, attack taxes and block limits, so the board G5 built with our Ghostly Prison, Crawlspace and
+     *  Silent Arbiter would cap the attack on us at one creature; the Prison and Crawlspace are the opponent's now,
+     *  limiting only attacks on the opponent, and a Wall of Wood (0/3) takes the Arbiter's place: nothing limits or
+     *  taxes the attack on us, nor our blocks, and the opponent's attack and our blockers read as G5's did. */
     private ComboLines.Line bigBoard() {
         final ComboLines.Line l = oracleLine();
         manaForTheLine();
@@ -2123,8 +2397,8 @@ public class ComboSignalsTest extends AITest {
         }
         addCard("Glorious Anthem", opp);
         addCard("Familiar Ground", opp);
-        addCard("Ghostly Prison", ai);
-        addCard("Crawlspace", ai);
+        addCard("Ghostly Prison", opp);
+        addCard("Crawlspace", opp);
         ready(BEARS, 3, opp);
         ready(GIANT, 2, opp);
         ready("Craw Wurm", 1, opp);
@@ -2138,22 +2412,26 @@ public class ComboSignalsTest extends AITest {
         ready(GIANT, 2, ai);
         ready("Suntail Hawk", 1, ai);
         ready("Wall of Stone", 1, ai);
-        ready("Silent Arbiter", 1, ai);
+        ready("Wall of Wood", 1, ai);
         game.getAction().checkStateEffects(true);
         assertEquals(opp.getCreaturesInPlay().size(), 12);
         assertEquals(ai.getCreaturesInPlay().size(), 10);
         int attack = 0;
         for (final Card c : opp.getCreaturesInPlay()) {
             attack += ComputerUtilCombat.damageIfUnblocked(c, ai, null, true);
+            assertNull(CombatUtil.getAttackCost(game, c, ai), c + " attacks us untaxed");
         }
         assertEquals(attack, 50, "the opponent's whole attack, unblocked");
+        assertNull(StaticAbilityAttackRestrict.globalAttackRestrict(game), "no limit on every attack");
+        assertNull(StaticAbilityAttackRestrict.attackRestrictNum(ai), "no limit on the attack on us");
+        assertEquals(StaticAbilityBlockRestrict.blockRestrictNum(ai), Integer.MAX_VALUE, "no limit on our blocks");
         int ground = 0;
         int air = 0;
         for (final Card c : ai.getCreaturesInPlay()) {
             ground += CombatUtil.canBlock(opponents(GIANT).get(0), c) ? 1 : 0;
             air += CombatUtil.canBlock(opponents("Serra Angel").get(0), c) ? 1 : 0;
         }
-        assertEquals(ground, 7, "the Champion bars our Hawk, Wall and Arbiter");
+        assertEquals(ground, 7, "the Champion bars our Hawk and both Walls");
         assertEquals(air, 0);
         return l;
     }

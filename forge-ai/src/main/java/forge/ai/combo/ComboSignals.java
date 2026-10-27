@@ -13,7 +13,9 @@ import com.google.common.collect.Iterables;
 import forge.ai.ComputerUtilCombat;
 import forge.ai.ComputerUtilMana;
 import forge.ai.combo.ComboTracker.Where;
+import forge.card.mana.ManaCost;
 import forge.game.Game;
+import forge.game.GameEntity;
 import forge.game.ability.AbilityKey;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
@@ -21,6 +23,8 @@ import forge.game.card.Card;
 import forge.game.card.CardCopyService;
 import forge.game.card.CardLists;
 import forge.game.combat.CombatUtil;
+import forge.game.cost.Cost;
+import forge.game.cost.CostPartMana;
 import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
@@ -29,6 +33,8 @@ import forge.game.replacement.ReplacementEffect;
 import forge.game.replacement.ReplacementType;
 import forge.game.spellability.SpellAbility;
 import forge.game.staticability.StaticAbility;
+import forge.game.staticability.StaticAbilityAttackRestrict;
+import forge.game.staticability.StaticAbilityBlockRestrict;
 import forge.game.staticability.StaticAbilityCantBeCast;
 import forge.game.staticability.StaticAbilityDisableTriggers;
 import forge.game.staticability.StaticAbilityMode;
@@ -616,8 +622,10 @@ public final class ComboSignals {
      * ({@link #lethal}). Each opponent is read alone: they attack in their own turns, so one's creatures never add to
      * another's. Never while we cannot lose. Read once a view, when the view is first asked ({@code View.danger}); an
      * opponent's attackers-by-blockers matrix, a game-wide static scan for each pair, is built only when that
-     * opponent's whole attack, unblocked, reaches our life (the cheap sum first), and the view counts each build
-     * (follow-up 2, G5).
+     * opponent's attack, unblocked, reaches our life (the cheap sum first), and the view counts each build (follow-up
+     * 2, G5). The attack is the one its limits let through (follow-up 3, H2: {@link #attack}): no more creatures than
+     * an AttackRestrict static lets attack us, each one's CantAttackUnless tax paid from the mana that opponent will
+     * have in it; and no more of ours block it than a BlockRestrict static lets block.
      */
     static boolean dangerNow(final ComboTracker.View v) {
         final Player ai = v.ai();
@@ -634,47 +642,60 @@ public final class ComboSignals {
     }
 
     // whether what opp's creatures that can attack us next turn would deal us (damageIfUnblocked) reaches our life
-    // after our creatures block them: the largest hits are blocked first, each by as many of our spare creatures able
-    // to block it (CombatUtil.canBlock) as it needs (CombatUtil.getMinNumBlockersForAttacker: two for menace), taking
-    // those able to block the fewest of the hits still to come first, then in battlefield order. An attacker without
-    // enough spare blockers comes through whole, a blocked one deals us nothing, and a blocked trampler puts through
-    // its hit less its blockers' toughness. A board whose whole unblocked attack falls short is never blocked: its
-    // block matrix is never built (blockMatrix)
+    // after our creatures block them. The attack is the one its limits let through (attack: the largest hits first,
+    // capped by the AttackRestrict statics on attacks on us and by what opp's mana pays of the CantAttackUnless taxes
+    // on them), and its cheap sum is that attack's. The largest hits are blocked first, each by as many of our spare
+    // creatures able to block it (CombatUtil.canBlock) as it needs (CombatUtil.getMinNumBlockersForAttacker: two for
+    // menace), taking those able to block the fewest of the hits still to come first, then in battlefield order, while
+    // the creatures blocking stay within what a BlockRestrict static lets block (StaticAbilityBlockRestrict.
+    // blockRestrictNum, as CombatUtil.canBlock reads it in a combat: Silent Arbiter, Caverns of Despair). An attacker
+    // without enough spare blockers, or past that limit, comes through whole, a blocked one deals us nothing, and a
+    // blocked trampler puts through its hit less its blockers' toughness. An attack whose unblocked sum falls short is
+    // never blocked: its block matrix is never built (blockMatrix)
     private static boolean lethal(final ComboTracker.View v, final Player ai, final Player opp,
             final List<Card> ours) {
-        final List<Card> attackers = new ArrayList<>();
-        final List<Integer> hits = new ArrayList<>();
-        int unblocked = 0;
+        final List<Card> able = new ArrayList<>();
+        final List<Integer> ableHits = new ArrayList<>();
         for (final Card c : opp.getCreaturesInPlay()) {
             if (ComputerUtilCombat.canAttackNextTurn(c, ai)) {
-                final int hit = ComputerUtilCombat.damageIfUnblocked(c, ai, null, true);
-                attackers.add(c);
-                hits.add(hit);
-                unblocked += hit;
+                able.add(c);
+                ableHits.add(ComputerUtilCombat.damageIfUnblocked(c, ai, null, true));
             }
+        }
+        if (able.isEmpty()) {
+            return false;
+        }
+        // the attack, the largest hit first: its attackers, their hits, and their indexes in that order
+        final List<Card> attackers = new ArrayList<>();
+        final List<Integer> hits = new ArrayList<>();
+        final List<Integer> order = new ArrayList<>();
+        int unblocked = 0;
+        for (final int i : attack(able, ableHits, ai, attackLimit(ai), opp, true)) {
+            order.add(attackers.size());
+            attackers.add(able.get(i));
+            hits.add(ableHits.get(i));
+            unblocked += ableHits.get(i);
         }
         final int life = ai.getLife();
         if (unblocked < life) {
             return false;
         }
-        // the attackers' indexes, the largest hit first (a stable sort: equal hits in battlefield order)
-        final List<Integer> order = new ArrayList<>();
-        for (int i = 0; i < attackers.size(); i++) {
-            order.add(i);
-        }
-        order.sort((a, b) -> Integer.compare(hits.get(b), hits.get(a)));
         final boolean[][] blocks = blockMatrix(v, attackers, ours);
+        final int mostBlockers = StaticAbilityBlockRestrict.blockRestrictNum(ai);
         final boolean[] spent = new boolean[ours.size()];
+        int blocking = 0;
         int through = 0;
         for (int k = 0; k < order.size(); k++) {
             final int i = order.get(k);
             final Card attacker = attackers.get(i);
-            final List<Integer> blockers = blockers(blocks, spent, order, k,
-                    CombatUtil.getMinNumBlockersForAttacker(attacker, ai));
+            final int need = CombatUtil.getMinNumBlockersForAttacker(attacker, ai);
+            final List<Integer> blockers = need > mostBlockers - blocking ? null
+                    : blockers(blocks, spent, order, k, need);
             if (blockers == null) {
                 through += hits.get(i);
                 continue;
             }
+            blocking += blockers.size();
             int toughness = 0;
             for (final int j : blockers) {
                 spent[j] = true;
@@ -687,9 +708,89 @@ public final class ComboSignals {
         return through >= life;
     }
 
+    // the most creatures that can attack the defender in one combat, as GlobalAttackRestrictions.getGlobalRestrictions
+    // reads the AttackRestrict statics in force now, Forge's own readers: the least of every MaxAttackers on all attacks
+    // (StaticAbilityAttackRestrict.globalAttackRestrict: Silent Arbiter, Caverns of Despair) and of every one whose
+    // ValidDefender the defender is (attackRestrictNum: Crawlspace on its controller); Integer.MAX_VALUE when none
+    private static int attackLimit(final GameEntity defender) {
+        int most = Integer.MAX_VALUE;
+        final Integer all = StaticAbilityAttackRestrict.globalAttackRestrict(defender.getGame());
+        if (all != null) {
+            most = Math.min(most, all);
+        }
+        final Integer own = StaticAbilityAttackRestrict.attackRestrictNum(defender);
+        if (own != null) {
+            most = Math.min(most, own);
+        }
+        return most;
+    }
+
+    // the attack the defender's limits let through (follow-up 3, H2): the indexes of the able attackers that attack,
+    // the largest hit first (a stable sort: equal hits in battlefield order), each taken while fewer than most are
+    // taken and its CantAttackUnless tax against the defender (CombatUtil.getAttackCost, the reader AiAttackController
+    // and the declaration's checkPropagandaEffects use: Propaganda, Ghostly Prison) can be paid from the payer's mana
+    // together with the taxes of those taken before it; one whose tax cannot be paid is passed over for the next. The
+    // mana is read only once an attacker is taxed: for the opponent's attack on us (theirs), every mana source the
+    // payer controls, untapped, as their next turn will have it (ComboMana.nextTurn); for ours, the mana we can make
+    // now (ComboMana.of, held sources left out, as the burn reads it). A tax is no spell, so a source whose mana
+    // carries a spending restriction pays none (ComboMana, sa null)
+    private static List<Integer> attack(final List<Card> able, final List<Integer> hits, final GameEntity defender,
+            final int most, final Player payer, final boolean theirs) {
+        final List<Integer> order = new ArrayList<>();
+        for (int i = 0; i < able.size(); i++) {
+            order.add(i);
+        }
+        order.sort((a, b) -> Integer.compare(hits.get(b), hits.get(a)));
+        final Game game = payer.getGame();
+        final List<Integer> taken = new ArrayList<>();
+        final List<ManaCost> taxes = new ArrayList<>();
+        ComboMana mana = null;
+        for (final int i : order) {
+            if (taken.size() >= most) {
+                break;
+            }
+            final ManaCost due = due(CombatUtil.getAttackCost(game, able.get(i), defender), theirs);
+            if (due == null) {
+                continue;
+            }
+            if (!due.isZero()) {
+                if (mana == null) {
+                    mana = theirs ? ComboMana.nextTurn(payer, null) : ComboMana.of(payer, null, true);
+                }
+                taxes.add(due);
+                if (!mana.pays(taxes.toArray(new ManaCost[0]))) {
+                    taxes.remove(taxes.size() - 1);
+                    continue;
+                }
+            }
+            taken.add(i);
+        }
+        return taken;
+    }
+
+    // the mana an attacker's tax asks, read on each signal's safe side: none without a tax. For the opponent's attack
+    // on us (theirs) the tax's mana part alone, every other part read as paid (a land to sacrifice, life to pay), and
+    // none when that part holds a Phyrexian pip, which they may pay with life: the attack is over-read, as it was
+    // before the taxes were read. For ours, null when the tax asks anything but mana, which no mana prices: that
+    // attacker is not counted, so no surer kill rests on it; else its mana, a Phyrexian pip as its colour (ComboMana)
+    private static ManaCost due(final Cost tax, final boolean theirs) {
+        if (tax == null) {
+            return ManaCost.ZERO;
+        }
+        if (!theirs && !tax.isOnlyManaCost()) {
+            return null;
+        }
+        final CostPartMana part = tax.getCostMana();
+        if (part == null || (theirs && part.getMana().hasPhyrexian())) {
+            return ManaCost.ZERO;
+        }
+        return part.getMana();
+    }
+
     // whether each of our creatures can block each attacker (CombatUtil.canBlock, Forge's own reading: two or three
-    // game-wide static scans a pair), by the attacker's index, then ours: built once for each opponent whose whole
-    // attack reaches our life, the build counted on the view
+    // game-wide static scans a pair), by the attacker's index, then ours: built once for each opponent whose attack,
+    // as its limits let it through, reaches our life unblocked, over that attack's attackers, the build counted on the
+    // view
     private static boolean[][] blockMatrix(final ComboTracker.View v, final List<Card> attackers,
             final List<Card> ours) {
         v.blockMatrixBuilt();
@@ -743,18 +844,30 @@ public final class ComboSignals {
     }
 
     // an opponent who can lose, whose life our unblockable ready attackers or one burn spell in hand reach, its mana
-    // cost paid colour by colour from the mana we can make now (ComboMana: a Swamp is no Lightning Bolt's {R})
+    // cost paid colour by colour from the mana we can make now (ComboMana: a Swamp is no Lightning Bolt's {R}). The
+    // attackers are those the opponent's limits let through (follow-up 3, H2: attack): no more than an AttackRestrict
+    // static lets attack the opponent (Silent Arbiter, the opponent's Crawlspace), the largest hits first, each one's
+    // CantAttackUnless tax against the opponent (the opponent's Ghostly Prison, Propaganda) paid from the mana we can
+    // make now
     private static boolean killable(final Player ai, final Player opp) {
         if (opp.cantLose()) {
             return false;
         }
         final int life = opp.getLife();
-        int combat = 0;
+        final List<Card> able = new ArrayList<>();
+        final List<Integer> hits = new ArrayList<>();
         for (final Card c : ai.getCreaturesInPlay()) {
             if (c.isSick() || c.isTapped() || !CombatUtil.canAttack(c, opp) || blockable(c, opp)) {
                 continue;
             }
-            combat += ComputerUtilCombat.damageIfUnblocked(c, opp, null, true);
+            able.add(c);
+            hits.add(ComputerUtilCombat.damageIfUnblocked(c, opp, null, true));
+        }
+        int combat = 0;
+        if (!able.isEmpty()) {
+            for (final int i : attack(able, hits, opp, attackLimit(opp), ai, false)) {
+                combat += hits.get(i);
+            }
         }
         if (combat >= life) {
             return true;

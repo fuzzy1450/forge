@@ -47,8 +47,11 @@ import forge.game.zone.ZoneType;
  * {@link #MAX_CHOICES}. The costs are read as handed: ComboExecute hands each spell's as the engine prices it, taxes
  * and reductions included (follow-up 2, G3), and so does ComboFetch's win in time under danger (follow-up final review,
  * round 1); ComboSignals' burn reading hands a card's printed cost. Not read: a restriction
- * that lets a source pay one of the costs but not the other (each source is read against {@code sa}). Draws nothing and
- * keeps nothing; its only write is setActivatingPlayer on the mana abilities it reads, as HonestMana does.
+ * that lets a source pay one of the costs but not the other (each source is read against {@code sa}). A null
+ * {@code sa} is a payment that is no spell or ability, ComboSignals' attack taxes (follow-up 3, H2): a source whose mana
+ * carries any spending restriction pays none of it. Draws nothing and keeps nothing; its only write is
+ * setActivatingPlayer on the mana abilities it reads, as HonestMana does (and as ComputerUtilMana's estimate does on
+ * an opponent's, for the opponent's mana that ComboSignals reads).
  */
 final class ComboMana {
     /** The kinds of mana, as ManaAtom's low bits: W, U, B, R, G, and colourless. */
@@ -108,7 +111,7 @@ final class ComboMana {
                 }
                 ma.setActivatingPlayer(ai);
                 if ((!nextTurn && !ma.canPlay()) || ma.getPayCosts().hasManaCost() || !ma.metConditions()
-                        || !mp.meetsManaRestrictions(sa) || instantSpeed(ma)) {
+                        || !spendable(mp, sa) || instantSpeed(ma)) {
                     continue;
                 }
                 final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);
@@ -119,6 +122,16 @@ final class ComboMana {
             m.add(options);
         }
         return m;
+    }
+
+    // whether the mana may be spent on sa (AbilityManaPart.meetsManaRestrictions); with sa null, a payment that is no
+    // spell or ability (an attack tax, ComboSignals' attack: follow-up 3, H2), whether the mana carries no spending
+    // restriction at all, so a restricted source pays none of it (an under-count: a "nonSpell" source could)
+    private static boolean spendable(final AbilityManaPart mp, final SpellAbility sa) {
+        if (sa != null) {
+            return mp.meetsManaRestrictions(sa);
+        }
+        return mp.getManaRestrictions().isEmpty() && mp.getExtraManaRestriction().isEmpty();
     }
 
     // an "activate only as an instant" mana ability (Lion's Eye Diamond, Diamond Lion, Charmed Pendant): playable at
