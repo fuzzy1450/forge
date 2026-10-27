@@ -438,4 +438,49 @@ public class ComboLinesEndToEndAiTest extends AITest {
         // Rhystic's two draws: the one the AI declined to pay for, and the one it had nothing left to pay for
         assertEquals(opp.getCardsIn(ZoneType.Hand).size(), oppHand + 2, "Rhystic's {1} was paid");
     }
+
+    /**
+     * Review Focus 4 (follow-up 3, H4): the opponent's Rhystic Study and a hand of green cards of theirs, and the
+     * second follow-up's Main-1 board (G1): Thassa's Oracle and Demonic Consultation in hand behind the five junk cards,
+     * Island, Island, Swamp and Forest, one land to spare. Rhystic asks {1} of us as the Oracle is cast, and with the
+     * Forest to spare it is paid; the stock payer, keeping the colour the hand it reads needs (the opponent's: Rhystic's
+     * draw is theirs), would pay it with the Swamp, and Consultation could not follow. The Swamp is held for
+     * Consultation while the {1} is paid: the Forest pays it, Consultation answers Oracle's trigger (Rhystic asks again,
+     * and nothing is left to pay it with, so the opponent draws once), and the AI wins the turn it began in.
+     */
+    @Test
+    public void rhysticPaymentKeepsTheEmptiersSource() {
+        start();
+        for (final String name : JUNK) {
+            addCardToZone(name, ai, ZoneType.Hand);
+        }
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        assertEquals(ai.getCardsIn(ZoneType.Hand).size(), 7, "not a full hand");
+        lands("Island", "Island", "Swamp", "Forest");
+        fillLibrary(ai, 20);
+        addCard("Rhystic Study", opp);
+        for (final String name : List.of("Grizzly Bears", "Llanowar Elves", "Giant Growth")) {
+            addCardToZone(name, opp, ZoneType.Hand);
+        }
+        assertEquals(ids(t.deckLines()), List.of("742-1295"));
+        final int turn = game.getPhaseHandler().getTurn();
+        final int oppHand = opp.getCardsIn(ZoneType.Hand).size();
+
+        final List<Event> events = play();
+        assertWonBy(ORACLE, events);
+        assertLibraryEmpty();
+        assertFalse(events.isEmpty());
+        assertEquals(events.get(0).what(), ORACLE, "a junk card went first: " + whats(events));
+        final Event consultation = first(events, CONSULTATION);
+        assertTrue(consultation.stack().contains(ORACLE + " trigger"), "Consultation was not cast in response to "
+                + "Oracle's trigger: " + consultation.stack());
+        assertEquals(game.getPhaseHandler().getPlayerTurn(), ai);
+        assertEquals(game.getPhaseHandler().getTurn(), turn, "the go-off waited a turn");
+        // Rhystic's one draw: the one it asked for at Consultation's cast, with nothing left to pay for it
+        assertEquals(opp.getCardsIn(ZoneType.Hand).size(), oppHand + 1, "Rhystic's first {1} was declined");
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            assertTrue(!c.isLand() || c.isTapped(), c + " untapped: the {1} and the go-off spent less than four lands");
+        }
+    }
 }

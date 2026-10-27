@@ -2,7 +2,9 @@ package forge.ai.combo;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import forge.ai.AiCardMemory;
 import forge.card.MagicColor;
@@ -49,7 +51,9 @@ import forge.game.zone.ZoneType;
  * round 1); ComboSignals' burn reading hands a card's printed cost. Not read: a restriction
  * that lets a source pay one of the costs but not the other (each source is read against {@code sa}). A null
  * {@code sa} is a payment that is no spell or ability, ComboSignals' attack taxes (follow-up 3, H2): a source whose mana
- * carries any spending restriction pays none of it. Draws nothing and keeps nothing; its only write is
+ * carries any spending restriction pays none of it. {@link #hold} names the sources that pay one cost alone while the
+ * rest of the mana pays another (follow-up 3, H4: an opponent's Rhystic Study paid during a go-off, the emptier's
+ * sources held from its payer). Draws nothing and keeps nothing past a reading; its only write is
  * setActivatingPlayer on the mana abilities it reads, as HonestMana does (and as ComputerUtilMana's estimate does on
  * an opponent's, for the opponent's mana that ComboSignals reads).
  */
@@ -65,6 +69,10 @@ final class ComboMana {
     private final int[] units = new int[1 << KINDS];
     // the sources that make more than one mana by some ability, each its options: the masks of the mana it makes
     private final List<List<int[]>> flexible = new ArrayList<>();
+    // the floating pool's share of units (hold gives it to the cost it does not hold for)
+    private final int[] pool = new int[1 << KINDS];
+    // each battlefield source read, in battlefield order, and its options (hold reads them one source at a time)
+    private final Map<Card, List<int[]>> sources = new LinkedHashMap<>();
 
     private ComboMana() {
     }
@@ -95,9 +103,11 @@ final class ComboMana {
             for (int i = 0; i < MagicColor.WUBRG.length; i++) {
                 final int n = pool.getAmountOfColor(MagicColor.WUBRG[i]);
                 m.units[MagicColor.WUBRG[i]] += n;
+                m.pool[MagicColor.WUBRG[i]] += n;
                 coloured += n;
             }
             m.units[COLOURLESS] += Math.max(0, pool.totalMana() - coloured);
+            m.pool[COLOURLESS] += Math.max(0, pool.totalMana() - coloured);
         }
         for (final Card src : ai.getCardsIn(ZoneType.Battlefield)) {
             if (skipHeld && isHeld(ai, src)) {
@@ -118,6 +128,9 @@ final class ComboMana {
                 if (amount > 0) {
                     options.addAll(shapes(ma, mp, amount));
                 }
+            }
+            if (!options.isEmpty()) {
+                m.sources.put(src, options);
             }
             m.add(options);
         }
@@ -178,6 +191,92 @@ final class ComboMana {
             }
         }
         return assign(base, tried, 0, need, generic);
+    }
+
+    /**
+     * The sources to hold so that they alone pay {@code held} while the rest of the mana pays {@code rest} (follow-up
+     * 3, H4: an opponent's Rhystic Study paid during a go-off, the emptier's sources held from its payer), or null when
+     * no such split exists. This reading is the held cost's spell's, {@code others} a reading of the same moment for
+     * {@code rest}'s payment, the two matched source by source. The floating pool goes to {@code rest} alone, since the
+     * AI's payer spends it first (ComputerUtilMana.payManaCost's payManaCostFromPool), and a held source pays
+     * {@code held} alone, any mana it makes past that cost not counted for {@code rest} (an under-count: Sol Ring's
+     * second {C}, which the payer would leave floating). The fewest sources are held (each pays a pip at least, so
+     * never more than {@code held}'s mana value); sources making the same mana under both readings are one kind (two
+     * Islands), and the earliest kinds, then the earliest cards of each, in battlefield order, are held first: one
+     * answer for one board, and nothing drawn.
+     */
+    List<Card> hold(final ManaCost held, final ComboMana others, final ManaCost rest) {
+        final Map<String, List<Card>> byKind = new LinkedHashMap<>();
+        for (final Map.Entry<Card, List<int[]>> e : sources.entrySet()) {
+            final String kind = signature(e.getValue()) + "|" + signature(others.sources.get(e.getKey()));
+            byKind.computeIfAbsent(kind, k -> new ArrayList<>()).add(e.getKey());
+        }
+        final List<List<Card>> kinds = new ArrayList<>(byKind.values());
+        final int[] take = new int[kinds.size()];
+        for (int total = 0; total <= held.getCMC(); total++) {
+            if (choose(kinds, take, 0, total, held, others, rest)) {
+                final List<Card> out = new ArrayList<>(total);
+                for (int k = 0; k < kinds.size(); k++) {
+                    out.addAll(kinds.get(k).subList(0, take[k]));
+                }
+                return out;
+            }
+        }
+        return null;
+    }
+
+    // whether some count of each kind from the k-th on, left cards in all, splits the mana (splits), the earliest
+    // kinds taking the most first; take holds the counts found
+    private boolean choose(final List<List<Card>> kinds, final int[] take, final int k, final int left,
+            final ManaCost held, final ComboMana others, final ManaCost rest) {
+        if (k == kinds.size()) {
+            return left == 0 && splits(kinds, take, held, others, rest);
+        }
+        for (int n = Math.min(left, kinds.get(k).size()); n >= 0; n--) {
+            take[k] = n;
+            if (choose(kinds, take, k + 1, left - n, held, others, rest)) {
+                return true;
+            }
+        }
+        take[k] = 0;
+        return false;
+    }
+
+    // whether the first take[k] cards of each kind pay held alone, as this reading reads them, while every other source
+    // of others' reading and its floating pool pay rest
+    private boolean splits(final List<List<Card>> kinds, final int[] take, final ManaCost held,
+            final ComboMana others, final ManaCost rest) {
+        final ComboMana mine = new ComboMana();
+        final List<Card> chosen = new ArrayList<>();
+        for (int k = 0; k < kinds.size(); k++) {
+            for (final Card c : kinds.get(k).subList(0, take[k])) {
+                chosen.add(c);
+                mine.add(sources.get(c));
+            }
+        }
+        if (!mine.pays(held)) {
+            return false;
+        }
+        final ComboMana theirs = new ComboMana();
+        System.arraycopy(others.pool, 0, theirs.units, 0, theirs.units.length);
+        for (final Map.Entry<Card, List<int[]>> e : others.sources.entrySet()) {
+            if (!chosen.contains(e.getKey())) {
+                theirs.add(e.getValue());
+            }
+        }
+        return theirs.pays(rest);
+    }
+
+    // a source's options as text, the same for two sources making the same mana; empty for no source
+    private static String signature(final List<int[]> options) {
+        if (options == null) {
+            return "";
+        }
+        final StringBuilder out = new StringBuilder();
+        for (final int[] option : options) {
+            out.append(Arrays.toString(option)).append(';');
+        }
+        return out.toString();
     }
 
     // some choice of an option for each tried source, from the i-th on, pays the need

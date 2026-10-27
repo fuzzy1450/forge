@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 import org.testng.annotations.Test;
 
 import forge.ai.AITest;
+import forge.ai.AiCardMemory;
 import forge.ai.AiController;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtilCard;
@@ -26,6 +27,7 @@ import forge.ai.PlayerControllerAi;
 import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
 import forge.card.MagicColor;
+import forge.card.mana.ManaAtom;
 import forge.card.mana.ManaCostShard;
 import forge.game.Game;
 import forge.game.GameEndReason;
@@ -37,6 +39,7 @@ import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
 import forge.game.cost.Cost;
 import forge.game.keyword.Keyword;
+import forge.game.mana.Mana;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -2655,5 +2658,149 @@ public class ComboExecuteAiTest extends AITest {
         game.getStackZone().remove(card);
         ai.getZone(ZoneType.Graveyard).add(card);
         assertTrue(game.getStack().isEmpty());
+    }
+
+    // ---- follow-up 3, H4: Rhystic Study's payment leaves the emptier's mana ----
+
+    /** Green cards in {@code p}'s hand. The stock payer of a generic pip keeps, among sources of equal score, those of
+     *  the colour the hand of the payment's activator needs most (ComputerUtilMana's sort, "keep access to more colors
+     *  longer"); for Rhystic Study's draw that activator is the opponent, so a green hand of theirs keeps our Forest
+     *  and spends our Swamp. */
+    private void greenHand(final Player p) {
+        for (final String name : List.of("Grizzly Bears", "Llanowar Elves", "Giant Growth")) {
+            addCardToZone(name, p, ZoneType.Hand);
+        }
+    }
+
+    private boolean held(final Card c) {
+        return AiCardMemory.isRememberedCard(ai, c, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+    }
+
+    /** Review Focus 4 at the payment itself (follow-up 3, H4; beyond the plan's tests). Our Thassa's Oracle cast and on
+     *  our stack, its {U}{U} paid, Demonic Consultation in hand, the Swamp and a Forest untapped, the opponent's Rhystic
+     *  Study and a hand of green cards. The {1} leaves Consultation's {B} payable, so it is paid. With no line the stock
+     *  payer pays it with the Swamp, keeping the Forest for the green hand it reads, and Consultation's {B} is gone.
+     *  With the line it is paid from the Forest: the Swamp is held for Consultation while the {1} is paid. */
+    @Test
+    public void rhysticsOneIsPaidFromTheSpareLand() {
+        oracleCast("Forest");
+        greenHand(opp);
+        SpellAbility rhystic = rhysticDraw();
+        t.useLines(List.of());
+        assertTrue(paysUnless(rhystic), "stock does not pay: this board tells nothing");
+        assertTrue(t.find("Swamp", ZoneType.Battlefield).isTapped(),
+                "stock kept the Swamp: this board tells nothing");
+        assertFalse(t.find("Forest", ZoneType.Battlefield).isTapped());
+
+        oracleCast("Forest");
+        greenHand(opp);
+        rhystic = rhysticDraw();
+        assertTrue(paysUnless(rhystic), "the {1} was declined");
+        assertFalse(t.find("Swamp", ZoneType.Battlefield).isTapped(), "the {1} took Consultation's Swamp");
+        assertTrue(t.find("Forest", ZoneType.Battlefield).isTapped());
+    }
+
+    /** Review Focus 4 (follow-up 3, H4): the decline reads every line the go-off could take, and declines only when none
+     *  keeps its emptier payable beside the unless cost. Lines 1295-3093 and 742-1295, in either order: our Thassa's
+     *  Oracle's trigger on our stack, Demonic Consultation and Tainted Pact in hand, our Islands tapped, two Swamps
+     *  untapped, a singleton library. Rhystic Study's {1} leaves Pact's {1}{B} unpayable but not Consultation's {B}: it
+     *  is paid, as stock pays it (the answer and the draws), from one Swamp; and played on, Consultation answers the
+     *  trigger from the other and wins the turn, Pact still in hand. */
+    @Test
+    public void aSurvivingLineIsPaidAsStock() {
+        for (final List<String> rows : List.of(List.of(ORACLE_PACT, ORACLE_CONSULTATION),
+                List.of(ORACLE_CONSULTATION, ORACLE_PACT))) {
+            final String why = rows.get(0).equals(ORACLE_PACT) ? "Pact's line first" : "Consultation's line first";
+            assertTrue(assertPaysAsStock(() -> {
+                start(rows.toArray(new String[0]));
+                final Card oracle = hand(ORACLE);
+                hand(CONSULTATION);
+                hand(PACT);
+                tapped("Island", "Island");
+                lands("Swamp", "Swamp");
+                singletonLibrary();
+                enters(oracle);
+                assertEquals(ids(t.executable()).size(), 2, why);
+                return rhysticDraw();
+            }), why + ": the {1} was declined");
+            assertEquals(untapped("Swamp"), 1L, why);
+            playUntilPhase(PhaseType.END_OF_TURN);
+            assertWonThisTurn();
+            assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty(), why);
+            assertNotNull(t.find(PACT, ZoneType.Hand), why + ": Pact was cast");
+        }
+    }
+
+    /** Follow-up 3, H4: the sources held for the emptier are held for the unless payment alone. On
+     *  rhysticsOneIsPaidFromTheSpareLand's board, once the {1} is paid no card of ours is held for the next spell
+     *  (AiCardMemory's HELD_MANA_SOURCES_FOR_NEXT_SPELL), the Swamp the payment left untapped among them. And (beyond the
+     *  plan's tests) a source held before the payment, as Ride the Avalanche holds the sources of the spell it rides in
+     *  front of, is held still after it, untapped: the payment releases only what it held. */
+    @Test
+    public void heldSourcesAreReleased() {
+        oracleCast("Forest");
+        greenHand(opp);
+        assertTrue(paysUnless(rhysticDraw()));
+        final Card swamp = t.find("Swamp", ZoneType.Battlefield);
+        assertFalse(swamp.isTapped(), "the {1} took Consultation's Swamp");
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            assertFalse(held(c), c + " is held after the payment");
+        }
+        assertTrue(AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL));
+
+        oracleCast("Forest", "Plains");
+        greenHand(opp);
+        final Card plains = t.find("Plains", ZoneType.Battlefield);
+        AiCardMemory.rememberCard(ai, plains, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+        assertTrue(paysUnless(rhysticDraw()));
+        assertTrue(held(plains), "the payment released a hold it did not make");
+        assertFalse(plains.isTapped(), "the held Plains paid");
+        assertFalse(t.find("Swamp", ZoneType.Battlefield).isTapped(), "the {1} took Consultation's Swamp");
+        assertFalse(held(t.find("Swamp", ZoneType.Battlefield)), "the Swamp is held after the payment");
+    }
+
+    /** Line 742-1295 mid go-off as {@link #oracleCast} has it, but with an Island untapped in place of the Swamp and
+     *  {B} floating in our pool: Consultation's {B} and the {1} together come to the pool and the Island. */
+    private Card floatingBlack() {
+        start(ORACLE_CONSULTATION);
+        final Card consultation = hand(CONSULTATION);
+        tapped("Island", "Island");
+        lands("Island");
+        fillLibrary(ai, 20);
+        ai.getManaPool().addMana(new Mana((byte) ManaAtom.BLACK, createCard("Swamp", ai), null, ai));
+        castOnStack(ORACLE);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        return consultation;
+    }
+
+    /** Beyond the plan's tests (follow-up 3, H4): the floating pool goes to the unless cost, as the AI's payer spends it
+     *  first (ComputerUtilMana.payManaCost), so held lands cannot keep its mana for the emptier. On floatingBlack's board
+     *  some assignment pays Consultation's {B} and Rhystic Study's {1} together (the pool's {B} and the Island), and
+     *  with no line the {1} is paid from the pool: the Island stays untapped and the {B} is gone. With the line the {1}
+     *  is declined, the {B} kept. */
+    @Test
+    public void floatingManaPaysTheUnlessCostFirst() {
+        final Card consultation = floatingBlack();
+        final SpellAbility rhystic = rhysticDraw();
+        assertTrue(ComboMana.of(ai, castOf(consultation), true).pays(consultation.getManaCost(),
+                ComputerUtilMana.calculateManaCost(AbilityUtils.calculateUnlessCost(rhystic,
+                        rhystic.getParam("UnlessCost"), true), rhystic, ai, true, 0, true).toManaCost()),
+                "no assignment pays both: this board tells nothing");
+        t.useLines(List.of());
+        assertTrue(paysUnless(rhystic), "stock does not pay: this board tells nothing");
+        assertEquals(ai.getManaPool().getAmountOfColor(MagicColor.BLACK), 0,
+                "stock kept the floating {B}: this board tells nothing");
+        assertEquals(untapped("Island"), 1L, "stock tapped the Island");
+
+        floatingBlack();
+        assertFalse(paysUnless(rhysticDraw()), "the {1} took the floating {B}");
+        assertEquals(ai.getManaPool().getAmountOfColor(MagicColor.BLACK), 1);
+        assertEquals(untapped("Island"), 1L);
+    }
+
+    /** How many cards of ours named {@code name} are untapped on our battlefield. */
+    private long untapped(final String name) {
+        return ai.getCardsIn(ZoneType.Battlefield).stream().filter(c -> c.getName().equals(name) && !c.isTapped())
+                .count();
     }
 }

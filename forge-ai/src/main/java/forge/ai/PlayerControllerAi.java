@@ -1369,11 +1369,13 @@ public class PlayerControllerAi extends PlayerController {
             if (!ComputerUtilCost.canPayCost(cost, sa, player, true)) {
                 return false;
             }
-            // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4, follow-up 2, G3): during a
-            // go-off, an opponent's Rhystic Study is not paid when its {1} would leave the emptier unpaid; after the
-            // stock decision and its canPayCost, whose draws stay the stock path's.
-            if (ComboExecute.declinesUnlessCost(player, sa, cost)) {
-                return false;
+            // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4, follow-up 2, G3; follow-up 3,
+            // H4): during a go-off, an opponent's Rhystic Study is not paid when its {1} would leave no line's emptier
+            // payable, and else is paid with the emptier's sources held from the payer; null keeps the stock payment.
+            // After the stock decision and its canPayCost, whose draws stay the stock path's.
+            final Boolean combo = ComboExecute.payUnlessCost(player, sa, cost);
+            if (combo != null) {
+                return combo;
             }
 
             final CostPayment pay = new CostPayment(cost, sa);

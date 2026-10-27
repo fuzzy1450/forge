@@ -6,6 +6,8 @@ import java.util.List;
 import com.google.common.collect.Iterables;
 
 import forge.ai.AiAbilityDecision;
+import forge.ai.AiCardMemory;
+import forge.ai.AiCostDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtilCard;
 import forge.ai.ComputerUtilMana;
@@ -20,6 +22,7 @@ import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.cost.Cost;
 import forge.game.cost.CostAdjustment;
+import forge.game.cost.CostPayment;
 import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
@@ -65,7 +68,8 @@ import forge.game.zone.ZoneType;
  * Underground Sea and Sol Ring, where Oracle's {U}{U} takes the Sea and nothing is left for the {B}. Each of those
  * costs is the spell's own as the engine prices it now ({@link #priced}, follow-up 2, G3: Thalia, Guardian of Thraben,
  * Sphere of Resistance and Grand Arbiter Augustin IV raise it, Helm of Awakening lowers it), and while a go-off is under
- * way an opponent's Rhystic Study is not paid when its {1} would leave the emptier unpaid ({@link #declinesUnlessCost}).
+ * way an opponent's Rhystic Study is not paid when its {1} would leave no line's emptier payable, and else is paid with
+ * the emptier's sources held from its payer ({@link #payUnlessCost}, follow-up 3, H4).
  */
 public final class ComboExecute {
     private ComboExecute() {
@@ -167,30 +171,42 @@ public final class ComboExecute {
     }
 
     /**
-     * Whether we decline an unless cost now (follow-up 2, G3; PlayerControllerAi.payCostToPreventEffect, once the stock
-     * decision would pay it and canPayCost finds it payable): while a go-off is under way, our Thassa's Oracle cast and
-     * still on our stack, or its entering trigger there, a line of {@link #goOffNow}'s (executable, Oracle its winner,
-     * not denied this turn) has its emptier in our hand; the mana we can make now pays that emptier, its cost as the
-     * engine prices it, but not beside the unless cost's mana; and the cost only stops a draw for opponents of ours
-     * ({@link #opponentsDraw}: an opponent's Rhystic Study, "you may draw a card unless that player pays {1}"). Declined,
-     * the opponent draws a card and the emptier is cast: the combo wins. Every other unless cost keeps the stock decision
-     * (the opponent's Mana Leak on our Oracle: declined, the Oracle would be countered), as does any outside a go-off,
-     * one that leaves the emptier's mana whole and one whose emptier the mana cannot pay anyway. False at once for a
-     * deck holding no line that Thassa's Oracle wins. Draws nothing.
+     * Our payment of an unless cost now (follow-up 2, G3; follow-up 3, H4; PlayerControllerAi.payCostToPreventEffect,
+     * once the stock decision would pay it and canPayCost finds it payable), while a go-off is under way (our Thassa's
+     * Oracle cast and still on our stack, or its entering trigger there) and the cost only stops a draw for opponents
+     * of ours ({@link #opponentsDraw}: an opponent's Rhystic Study, "you may draw a card unless that player pays {1}").
+     * Each line of {@link #goOffNow}'s (executable, Oracle its winner, not denied this turn) with its emptier in our
+     * hand, whose engine price the mana we can make now pays alone, is read in turn:
+     * <ul>
+     * <li>kept, when some of our sources pay that emptier alone while the rest and the floating pool pay the unless
+     * cost's mana ({@link ComboMana#hold}): the first kept line's sources are held from the payer (payHolding) and the
+     * cost is paid, TRUE when it is. The stock payer would choose its own sources, and for Rhystic's draw its
+     * tie-break reads the opponent's hand: with a Swamp and a Forest open and a green hand there, it pays the {1} with
+     * the Swamp, and Consultation cannot follow;
+     * <li>broken, otherwise. FALSE, declined, when a line is broken and none is kept: the opponent draws a card, the
+     * emptier is cast and the combo wins. A line broken beside one kept (Tainted Pact's {1}{B} beside Consultation's
+     * {B} on two Swamps) declines nothing.
+     * </ul>
+     * Null, the stock payment, for every other unless cost (the opponent's Mana Leak on our Oracle: declined, the Oracle
+     * would be countered), outside a go-off, and when no line's emptier is payable even alone; null at once for a deck
+     * holding no line that Thassa's Oracle wins. Nothing here draws; the payment draws as the stock one does, but for a
+     * held source, which its payer refuses before it would draw.
      */
-    public static boolean declinesUnlessCost(final Player ai, final SpellAbility sa, final Cost cost) {
-        if (sa == null || cost == null || !cost.hasManaCost() || !opponentsDraw(ai, sa)) {
-            return false;
+    public static Boolean payUnlessCost(final Player ai, final SpellAbility sa, final Cost cost) {
+        if (sa == null || cost == null || !cost.hasManaCost()) {
+            return null;
         }
         final ComboTracker t = ComboTracker.of(ai);
-        if (t == null || !names(t, Winner.ORACLE)) {
-            return false;
+        if (t == null || !names(t, Winner.ORACLE) || !opponentsDraw(ai, sa)) {
+            return null;
         }
         final ComboTracker.View v = t.view();
         if (!v.triggerOnOurStack(Winner.ORACLE.card) && !oracleCastOnOurStack(ai)) {
-            return false;
+            return null;
         }
         ManaCost unless = null;
+        ComboMana payment = null;
+        boolean broken = false;
         for (final ComboLines.Line l : v.executable()) {
             if (l.winner() != Winner.ORACLE || v.deniedThisTurn(l)) {
                 continue;
@@ -205,14 +221,40 @@ public final class ComboExecute {
                 continue;
             }
             if (unless == null) {
-                // the unless cost as the payment prices it (canPayCost's effect-mode reading: no taxes, X counted)
+                // the unless cost as the payment prices it (canPayCost's effect-mode reading: no taxes, X counted),
+                // and the mana that may pay it, read for sa as the payer reads its sources
                 unless = ComputerUtilMana.calculateManaCost(cost, sa, ai, true, 0, true).toManaCost();
+                payment = ComboMana.of(ai, sa, true);
             }
-            if (!mana.pays(emptierCost, unless)) {
-                return true;
+            final List<Card> hold = mana.hold(emptierCost, payment, unless);
+            if (hold != null) {
+                return payHolding(ai, sa, cost, hold);
+            }
+            broken = true;
+        }
+        return broken ? Boolean.FALSE : null;
+    }
+
+    // the stock payment of the unless cost (CostPayment with the AI's own cost decisions, as an effect), the sources in
+    // hold held from its payer for this payment alone: remembered in HELD_MANA_SOURCES_FOR_NEXT_SPELL, which
+    // ComputerUtilMana.isManaSourceReserved refuses before anything else (Ride the Avalanche's hold for the spell it
+    // rides in front of), and forgotten in a finally right after it, so no hold outlives the payment; a source held
+    // there already stays held
+    private static boolean payHolding(final Player ai, final SpellAbility sa, final Cost cost, final List<Card> hold) {
+        final List<Card> added = new ArrayList<>(hold.size());
+        try {
+            for (final Card c : hold) {
+                if (!AiCardMemory.isRememberedCard(ai, c, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)) {
+                    AiCardMemory.rememberCard(ai, c, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+                    added.add(c);
+                }
+            }
+            return new CostPayment(cost, sa).payComputerCosts(new AiCostDecision(ai, sa, true));
+        } finally {
+            for (final Card c : added) {
+                AiCardMemory.forgetCard(ai, c, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
             }
         }
-        return false;
     }
 
     // the cost of our cast of spell as the engine prices it now: test-mode calculateManaCost on the spell's own cost
