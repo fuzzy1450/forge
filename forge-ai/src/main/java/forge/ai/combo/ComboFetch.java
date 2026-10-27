@@ -548,12 +548,16 @@ public final class ComboFetch {
     // - Fblthp, Impossibly Lost wins off its trigger on combat damage to an opponent, which no fetch can count on (none
     //   comes after combat; before it, an attack may not be made, or be blocked): never.
     // The mana of that main phase (ComboMana, each source assigned to one pip: this turn's, the mana we can make now,
-    // the sources isManaSourceReserved holds left out; next turn's, ComboMana.nextTurn) pays together the mana costs of
+    // the sources isManaSourceReserved holds left out; next turn's, ComboMana.nextTurn) pays together the costs of
     // every piece of l still to be cast, ours in our hand, library or command zone (the fetched one, the library's,
-    // counted as in our hand, unless the fetch puts it onto our battlefield), the commander tax on one in our command
-    // zone (ComboSignals.commanderTax) and, for Laboratory Maniac or Jace, the follow-up draw's. The sources are read
-    // against the first such piece's first spell (in Line.names order, the emptier first), else the draw's. A piece on
-    // our battlefield or our stack is cast already
+    // counted as in our hand, unless the fetch puts it onto our battlefield), and, for Laboratory Maniac or Jace, the
+    // follow-up draw spell's. Each is its spell's as the engine prices it now (ComboExecute.priced, as the go-off and
+    // the draw spell's window read it, follow-up 2, G3; follow-up final review, round 1: printed costs let a fetch under
+    // an opposing Sphere of Resistance or Thalia, Guardian of Thraben take the piece for a go-off that goOffNow then
+    // refused): taxes and reductions included, and the commander tax on a commander cast from our command zone, which
+    // the engine adds there (CostAdjustment.adjust). Next turn's are read at today's prices: a tax on this turn's spells
+    // (Damping Sphere's) is counted, the safe side. The sources are read against the first such piece's first spell (in
+    // Line.names order, the emptier first), else the draw's. A piece on our battlefield or our stack is cast already
     private static boolean winsInTime(final ComboTracker.View v, final ComboLines.Line l, final Fit fit,
             final boolean nextTurn) {
         final ComboLines.Winner w = l.winner();
@@ -564,6 +568,7 @@ public final class ComboFetch {
                 : ComboExecute.staged(v, w))) {
             return false;
         }
+        final Player ai = v.ai();
         final List<ManaCost> costs = new ArrayList<>(4);
         SpellAbility spell = null;
         for (final String name : l.names()) {
@@ -576,25 +581,20 @@ public final class ComboFetch {
                 continue;
             }
             final Card c = v.card(name);
-            costs.add(c.getManaCost());
+            final SpellAbility first = Iterables.getFirst(c.getSpells(), null);
+            costs.add(first == null ? c.getManaCost() : ComboExecute.priced(ai, first));
             if (spell == null) {
-                spell = Iterables.getFirst(c.getSpells(), null);
+                spell = first;
             }
         }
-        final int tax = ComboSignals.commanderTax(v, l);
-        if (tax > 0) {
-            costs.add(ManaCost.get(tax));
-        }
-        final Player ai = v.ai();
         if (!ComboExecute.drawsAfter(w)) {
             return spell != null && mana(ai, spell, nextTurn).pays(costs.toArray(new ManaCost[0]));
         }
         final ComboMana mana = spell == null ? null : mana(ai, spell, nextTurn);
-        for (final Card draw : ComboExecute.followUpDraws(ai)) {
-            final ComboMana m = mana != null ? mana
-                    : mana(ai, Iterables.getFirst(draw.getSpells(), null), nextTurn);
+        for (final SpellAbility draw : ComboExecute.followUpDraws(ai)) {
+            final ComboMana m = mana != null ? mana : mana(ai, draw, nextTurn);
             final List<ManaCost> withDraw = new ArrayList<>(costs);
-            withDraw.add(draw.getManaCost());
+            withDraw.add(ComboExecute.priced(ai, draw));
             if (m.pays(withDraw.toArray(new ManaCost[0]))) {
                 return true;
             }

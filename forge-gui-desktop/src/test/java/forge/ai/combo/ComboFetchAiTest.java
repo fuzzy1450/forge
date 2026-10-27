@@ -1924,6 +1924,126 @@ public class ComboFetchAiTest extends AITest {
         return consultation;
     }
 
+    // ---- follow-up final review, round 1: danger's win in time at engine prices ----
+
+    /** The danger board ({@link #dangerBoardAt}) at {@code phase} of our turn ({@code ours}) or of the opponent's,
+     *  under the opponent's {@code tax}, with {@code lands} lands of ours in play: three (Island, Island and Swamp, its
+     *  second Swamp gone), its four, or five (an Island more). Signal 1 reads printed mana values (Oracle's two and
+     *  Consultation's one against next turn's three to five), so DANGER is still line 742-1295's only signal, with no
+     *  surer kill, and no line is one short. Returns the library's Consultation, the top card. */
+    private Card taxedDangerBoardAt(final PhaseType phase, final boolean ours, final String tax, final int lands) {
+        final Card consultation = dangerBoardAt(phase, ours);
+        if (lands == 3) {
+            Card swamp = null;
+            for (final Card land : ai.getLandsInPlay()) {
+                if ("Swamp".equals(land.getName())) {
+                    swamp = land;
+                }
+            }
+            game.getAction().moveTo(ZoneType.Graveyard, swamp, null, AbilityKey.newMap());
+        } else if (lands == 5) {
+            addCard("Island", ai);
+        }
+        addCard(tax, opp);
+        game.getAction().checkStateEffects(true);
+        final String why = tax + ", " + lands + " lands, " + phase.name();
+        assertEquals(ai.getLandsInPlay().size(), lands, why);
+        assertEquals(game.getPhaseHandler().getPhase(), phase, why);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER, why);
+        assertFalse(ComboSignals.surerKillNow(ai), why);
+        assertEquals(t.oneShort(), List.of(), why);
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation, why);
+        return consultation;
+    }
+
+    /** Danger's win in time reads each cost as the engine prices it (follow-up final review, round 1; spec section
+     *  6.5, the line's own window, whose mana section 6.4 reads at engine prices), as the go-off it predicts does
+     *  (ComboExecute.goOffNow): a fetch for a go-off that the tax leaves unpaid would give up the stock pick, the
+     *  AI's play to live, for a win that cannot come. Demonic Tutor in our Main 1 under an opposing Sphere of
+     *  Resistance: Oracle's {1}{U}{U} and Consultation's {1}{B} outrun the danger board's four lands, though the
+     *  printed {U}{U} and {B} do not, so the stock pick, with the stock draws; five lands pay them, and it takes
+     *  Consultation. Under an opposing Thalia, Guardian of Thraben (noncreature spells: Consultation's {1}{B} beside
+     *  Oracle's {U}{U}), three lands the stock pick, four Consultation. With no line each is another card. The draw
+     *  that follows a Laboratory Maniac line is priced the same way (ComboExecute.drawFollows): with Lab in play and
+     *  Opt in hand ({@link #labDangerBoard}) under Thalia, Consultation's {1}{B} and Opt's {1}{U} outrun Island, Island
+     *  and Swamp, though the printed {B} and {U} do not: the stock pick; an Island more pays them: Consultation. */
+    @Test
+    public void dangerReadsEngineCostsForAWinThisTurn() {
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
+        final Object[][] boards = {{"Sphere of Resistance", 4, false}, {"Sphere of Resistance", 5, true},
+                {"Thalia, Guardian of Thraben", 3, false}, {"Thalia, Guardian of Thraben", 4, true}};
+        for (final Object[] board : boards) {
+            final String tax = (String) board[0];
+            final int lands = (Integer) board[1];
+            final String why = tax + ", " + lands + " lands";
+            final Card consultation = taxedDangerBoardAt(PhaseType.MAIN1, true, tax, lands);
+            final SpellAbility tutor = spell("Demonic Tutor");
+            if ((Boolean) board[2]) {
+                t.useLines(List.of());
+                assertNotSame(pick(ZoneType.Hand, tutor), consultation, why);
+                t.useLines(held);
+                assertSame(pick(ZoneType.Hand, tutor), consultation, why);
+            } else {
+                assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), held), consultation, why);
+            }
+        }
+
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+        for (final int lands : List.of(3, 4)) {
+            final String why = "Laboratory Maniac, Thalia, " + lands + " lands";
+            final Card consultation = labDangerBoard();
+            if (lands == 4) {
+                addCard("Island", ai);
+            }
+            addCard("Thalia, Guardian of Thraben", opp);
+            game.getAction().checkStateEffects(true);
+            assertEquals(ai.getLandsInPlay().size(), lands, why);
+            assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER, why);
+            assertFalse(ComboSignals.surerKillNow(ai), why);
+            assertEquals(t.oneShort(), List.of(), why);
+            final SpellAbility tutor = spell("Demonic Tutor");
+            if (lands == 4) {
+                t.useLines(List.of());
+                assertNotSame(pick(ZoneType.Hand, tutor), consultation, why);
+                t.useLines(lab);
+                assertSame(pick(ZoneType.Hand, tutor), consultation, why);
+            } else {
+                assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lab), consultation, why);
+            }
+        }
+    }
+
+    /** The same next turn (follow-up 2, G4: at the end step of the opponent whose turn comes right before ours, the
+     *  piece drawn in our draw step, next turn's untapped mana). Under an opposing Thalia, Guardian of Thraben, on
+     *  Island, Island and Swamp, next turn's mana pays Oracle's {U}{U} and Consultation's printed {B} but not its {1}{B}
+     *  beside them: Vampiric Tutor takes the stock pick, with the stock draws and no known top, and the Vault keeps the
+     *  stock holds and stack ({@link #assertVault}). On the danger board's four lands the tutor takes Consultation, a
+     *  known top, and the Vault stacks it. Under an opposing Sphere of Resistance, four lands the stock rule, five
+     *  Consultation. */
+    @Test
+    public void dangerReadsEngineCostsForAWinNextTurn() {
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
+        final Object[][] boards = {{"Thalia, Guardian of Thraben", 3, false}, {"Thalia, Guardian of Thraben", 4, true},
+                {"Sphere of Resistance", 4, false}, {"Sphere of Resistance", 5, true}};
+        for (final Object[] board : boards) {
+            final String tax = (String) board[0];
+            final int lands = (Integer) board[1];
+            final boolean inTime = (Boolean) board[2];
+            final String why = tax + ", " + lands + " lands";
+            final Card consultation = taxedDangerBoardAt(PhaseType.END_OF_TURN, false, tax, lands);
+            assertSame(game.getPhaseHandler().getNextTurn(), ai, why);
+            if (inTime) {
+                assertEndStepFetch(consultation, held, why);
+            } else {
+                final SpellAbility vampiric = spell("Vampiric Tutor");
+                assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, vampiric), held), consultation, why);
+                assertEquals(t.knownTops(), Set.of(), why);
+            }
+            taxedDangerBoardAt(PhaseType.END_OF_TURN, false, tax, lands);
+            assertVault(held, inTime, why);
+        }
+    }
+
     @Test
     public void aSearchToTheTopMakesAKnownTop() {
         // spec section 6.3, known tops (Evan, 2026-10-24): a piece of ours that a combo hook puts on top of our

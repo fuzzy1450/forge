@@ -45,7 +45,8 @@ import forge.game.zone.ZoneType;
  * A Phyrexian or a {2/C} pip is read as its colour alone and a snow pip as generic; X is none. Under-counts, the safe
  * side for a go-off: those Phyrexian and {2/C} readings, hand sources, mana multipliers and the sources past
  * {@link #MAX_CHOICES}. The costs are read as handed: ComboExecute hands each spell's as the engine prices it, taxes
- * and reductions included (follow-up 2, G3), ComboFetch and ComboSignals a card's printed cost. Not read: a restriction
+ * and reductions included (follow-up 2, G3), and so does ComboFetch's win in time under danger (follow-up final review,
+ * round 1); ComboSignals' burn reading hands a card's printed cost. Not read: a restriction
  * that lets a source pay one of the costs but not the other (each source is read against {@code sa}). Draws nothing and
  * keeps nothing; its only write is setActivatingPlayer on the mana abilities it reads, as HonestMana does.
  */

@@ -522,16 +522,18 @@ public final class ComboExecute {
         return false;
     }
 
-    // the cards of our hand whose spell the AI casts right after the emptier on the emptied library in our own main
-    // phase, as drawFollows reads the hand there (lands left out, followUpSpell): ComboFetch's win in time under danger
-    // pays one of them beside a Laboratory Maniac or Jace line's casts, in the main phase of ours the fetched piece
-    // arrives for, this turn's or our next turn's (follow-up 2, G4: a sorcery-speed draw too, though in our upkeep or
-    // at the opponent's end step none could be cast now)
-    static List<Card> followUpDraws(final Player ai) {
-        final List<Card> out = new ArrayList<>(2);
+    // the spells of our hand that the AI casts right after the emptier on the emptied library in our own main phase, as
+    // drawFollows reads the hand there (lands left out, followUpSpell, each card's first such spell): ComboFetch's win
+    // in time under danger pays one of them, its cost as the engine prices it (priced, as drawFollows prices it), beside
+    // a Laboratory Maniac or Jace line's casts, in the main phase of ours the fetched piece arrives for, this turn's or
+    // our next turn's (follow-up 2, G4: a sorcery-speed draw too, though in our upkeep or at the opponent's end step
+    // none could be cast now)
+    static List<SpellAbility> followUpDraws(final Player ai) {
+        final List<SpellAbility> out = new ArrayList<>(2);
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
-            if (!c.isLand() && followUpSpell(ai, true, c) != null) {
-                out.add(c);
+            final SpellAbility draw = c.isLand() ? null : followUpSpell(ai, true, c);
+            if (draw != null) {
+                out.add(draw);
             }
         }
         return out;

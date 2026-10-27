@@ -580,7 +580,8 @@ public final class ComboSignals {
 
     // Forge's own commander tax (CostAdjustment.adjust) on the pieces of l in our command zone, each cast from there:
     // 2 for each earlier cast of that commander from the command zone (Player.getCommanderCast), on a commander only.
-    // ComboFetch's win this turn under danger adds it to the mana it reads too
+    // ComboFetch's win in time under danger reads it inside the engine's own price instead (ComboExecute.priced, whose
+    // test-mode calculateManaCost casts a card from the zone it is in: follow-up final review, round 1)
     static int commanderTax(final ComboTracker.View v, final ComboLines.Line l) {
         int tax = 0;
         for (final String name : l.names()) {
