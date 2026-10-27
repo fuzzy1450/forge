@@ -88,6 +88,8 @@ public class ComboExecuteAiTest extends AITest {
     private static final String REVERSE_ENGINEER = "Reverse Engineer";
     private static final String TREASURE_CRUISE = "Treasure Cruise";
     private static final String DIVINATION = "Divination";
+    private static final String GREAT_HALL = "Great Hall of the Biblioplex";
+    private static final String ARCANIST = "Vodalian Arcanist";
 
     /** Fifteen distinct names, none a land and none a piece of piece 1's lines: a library Tainted Pact can empty. */
     private static final List<String> SINGLETON = List.of("Runeclaw Bear", "Grizzly Bears", "Hill Giant", "Craw Wurm",
@@ -2818,6 +2820,172 @@ public class ComboExecuteAiTest extends AITest {
         }), "the {1} was declined");
         assertEquals(ai.getManaPool().totalMana(), 0, "the pool did not pay the {1}");
         assertEquals(untapped("Swamp"), 1L, "the {1} took Consultation's Swamp");
+    }
+
+    /** Our untapped lands, by name, in battlefield order (ComboMana reads its sources in that order). */
+    private List<String> untappedLands() {
+        return ai.getCardsIn(ZoneType.Battlefield).stream().filter(c -> c.isLand() && !c.isTapped())
+                .map(Card::getName).collect(Collectors.toList());
+    }
+
+    /** Our first untapped card named {@code name} on our battlefield. */
+    private Card untappedCard(final String name) {
+        return ai.getCardsIn(ZoneType.Battlefield).stream().filter(c -> c.getName().equals(name) && !c.isTapped())
+                .findFirst().orElseThrow(() -> new AssertionError("no untapped " + name));
+    }
+
+    /** Line 742-1295 mid go-off as {@link #oracleCast} has it, but with {@code before} untapped on our battlefield ahead
+     *  of the Swamp. */
+    private void oracleCastBehind(final String... before) {
+        start(ORACLE_CONSULTATION);
+        hand(CONSULTATION);
+        tapped("Island", "Island");
+        lands(before);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        castOnStack(ORACLE);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+    }
+
+    /** Beyond the plan's tests (follow-up 3, H4 review, round 1: with every source one kind, so that a hold could only
+     *  be a prefix of the battlefield, every test above still passed, each listing the emptier's source first). The
+     *  hold is searched by kind, not by battlefield order: rhysticsOneIsPaidFromTheSpareLand's board with the Forest on
+     *  our battlefield before the Swamp. With no line the stock payer still pays Rhystic Study's {1} with the Swamp,
+     *  keeping the Forest for the opponent's green hand. With the line the {1} is paid from the Forest, the Swamp is
+     *  left untapped for Consultation, and after the payment no card of ours is held. */
+    @Test
+    public void rhysticsOneIsPaidFromASpareLandListedFirst() {
+        oracleCastBehind("Forest");
+        greenHand(opp);
+        final SpellAbility rhystic = rhysticDraw();
+        assertEquals(untappedLands(), List.of("Forest", "Swamp"), "not the Forest first");
+        t.useLines(List.of());
+        assertTrue(paysUnless(rhystic), "stock does not pay: this board tells nothing");
+        assertEquals(untappedLands(), List.of("Forest"), "stock kept the Swamp: this board tells nothing");
+
+        oracleCastBehind("Forest");
+        greenHand(opp);
+        assertTrue(paysUnless(rhysticDraw()), "the {1} was declined");
+        assertEquals(untappedLands(), List.of("Swamp"), "the {1} took Consultation's Swamp");
+        assertTrue(AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL),
+                "a card is held after the payment");
+    }
+
+    /** Line 1295-3093 alone, mid go-off: our Thassa's Oracle's trigger on our stack (its {U}{U} paid, our two Islands
+     *  tapped), Tainted Pact in hand, {@code open} untapped on our battlefield in that order, a singleton library, and
+     *  the opponent's Rhystic Study and hand of green cards. Returns Rhystic's draw. */
+    private SpellAbility pactAtTheTrigger(final String... open) {
+        start(ORACLE_PACT);
+        final Card oracle = hand(ORACLE);
+        hand(PACT);
+        tapped("Island", "Island");
+        lands(open);
+        singletonLibrary();
+        greenHand(opp);
+        enters(oracle);
+        assertEquals(ids(t.executable()), List.of("1295-3093"));
+        return rhysticDraw();
+    }
+
+    /** Beyond the plan's tests (follow-up 3, H4 review, round 1: no kept line held more than one source, so a hold
+     *  searched among one source at most, and a payment holding only a hold's first source, passed every test above).
+     *  Line 1295-3093 alone, Tainted Pact's {1}{B} beside Rhystic Study's {1}, three lands open, the opponent's hand
+     *  green (pactAtTheTrigger):
+     *  - an Island, a Swamp and a Forest open in that order: with only the Island held, as a payment holding a hold's
+     *    first source alone would leave it, the payer keeps the Forest for the green hand and spends the Swamp, and
+     *    Pact's {B} is gone. With the line the {1} is paid, as stock pays it (the answer and the draws), from the
+     *    Forest, the Island and the Swamp untapped; no card of ours is held after the payment; and played on, Pact
+     *    answers Oracle's trigger, empties the library and Oracle wins the turn;
+     *  - a Swamp, an Island and a Forest: with no line the stock payer spends the Swamp, and Pact's {B} is gone. With
+     *    the line the Swamp and the Island are held for Pact and the {1} is paid from the Forest. */
+    @Test
+    public void aPactLineHoldsBothOfItsSources() {
+        SpellAbility rhystic = pactAtTheTrigger("Island", "Swamp", "Forest");
+        t.useLines(List.of());
+        AiCardMemory.rememberCard(ai, untappedCard("Island"), AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+        assertTrue(paysUnless(rhystic), "stock does not pay: this board tells nothing");
+        assertEquals(untappedLands(), List.of("Island", "Forest"),
+                "with the Island alone held, the {1} kept the Swamp: this board tells nothing");
+
+        assertTrue(assertPaysAsStock(() -> pactAtTheTrigger("Island", "Swamp", "Forest")), "the {1} was declined");
+        assertEquals(untappedLands(), List.of("Island", "Swamp"), "the {1} took a source of Pact's");
+        assertTrue(AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL),
+                "a card is held after the payment");
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertWonThisTurn();
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+        assertNotNull(t.find(PACT, ZoneType.Graveyard), "Pact was not cast");
+
+        rhystic = pactAtTheTrigger("Swamp", "Island", "Forest");
+        t.useLines(List.of());
+        assertTrue(paysUnless(rhystic), "stock does not pay: this board tells nothing");
+        assertEquals(untappedLands(), List.of("Island", "Forest"), "stock kept the Swamp: this board tells nothing");
+        rhystic = pactAtTheTrigger("Swamp", "Island", "Forest");
+        assertTrue(paysUnless(rhystic), "the {1} was declined");
+        assertEquals(untappedLands(), List.of("Swamp", "Island"), "the {1} took a source of Pact's");
+    }
+
+    /** Beyond the plan's tests (follow-up 3, H4 review, round 1: a hold taking at most one source of a kind passed every
+     *  test above). Line 1295-3093 alone, our Thassa's Oracle cast and on our stack (its {U}{U} paid, our two Islands
+     *  tapped), Tainted Pact in hand, three Swamps open, a singleton library: Rhystic Study's {1} leaves Pact's {1}{B}
+     *  payable from two of the Swamps, so it is paid, as stock pays it (the answer and the draws), from the third; two
+     *  Swamps are left untapped, and no card of ours is held after the payment. */
+    @Test
+    public void aPactLineHoldsTwoSourcesOfOneKind() {
+        assertTrue(assertPaysAsStock(() -> {
+            start(ORACLE_PACT);
+            hand(PACT);
+            tapped("Island", "Island");
+            lands("Swamp", "Swamp", "Swamp");
+            singletonLibrary();
+            castOnStack(ORACLE);
+            assertEquals(ids(t.executable()), List.of("1295-3093"));
+            return rhysticDraw();
+        }), "the {1} was declined");
+        assertEquals(untapped("Swamp"), 2L, "the {1} took one of Pact's Swamps");
+        assertTrue(AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL),
+                "a card is held after the payment");
+    }
+
+    /** Beyond the plan's tests (follow-up 3, H4 review, round 1: a kind read from only one of its two readings passed
+     *  every test above). Sources are one kind only when they make the same mana under both readings, the emptier's and
+     *  the unless payment's, and a restricted source's mana differs between them. Our Thassa's Oracle cast and on our
+     *  stack (its {U}{U} paid, our two Islands tapped):
+     *  - line 742-1295, Demonic Consultation in hand, Wastes, Great Hall of the Biblioplex and a Forest open in that
+     *    order: for Rhystic Study's draw both of the first two make {C} alone, but for Consultation the Great Hall also
+     *    makes {B} (paying 1 life, its mana spent only on an instant or sorcery). The Great Hall is held for
+     *    Consultation, and Rhystic's {1} is paid as stock pays it (the answer and the draws);
+     *  - line 1295-3093, Tainted Pact in hand, a Swamp, Wastes and a Vodalian Arcanist free of summoning sickness open
+     *    in that order, a singleton library: for Pact the Wastes and the Arcanist both make {C}, but the Arcanist's mana
+     *    pays no draw of Rhystic's (instants and sorceries only). The Swamp and the Arcanist are held for Pact, and the
+     *    {1} is paid as stock pays it (the answer and the draws), from the Wastes. */
+    @Test
+    public void aSourcesKindIsReadUnderBothReadings() {
+        assertTrue(assertPaysAsStock(() -> {
+            start(ORACLE_CONSULTATION);
+            hand(CONSULTATION);
+            tapped("Island", "Island");
+            lands("Wastes", GREAT_HALL, "Forest");
+            fillLibrary(ai, 20);
+            castOnStack(ORACLE);
+            assertEquals(ids(t.executable()), List.of("742-1295"));
+            return rhysticDraw();
+        }), "the {1} was declined");
+        assertEquals(untapped(GREAT_HALL), 1L, "the {1} took Consultation's Great Hall");
+
+        assertTrue(assertPaysAsStock(() -> {
+            start(ORACLE_PACT);
+            hand(PACT);
+            tapped("Island", "Island");
+            lands("Swamp", "Wastes");
+            ready(ARCANIST);
+            singletonLibrary();
+            castOnStack(ORACLE);
+            assertEquals(ids(t.executable()), List.of("1295-3093"));
+            return rhysticDraw();
+        }), "the {1} was declined");
+        assertEquals(untappedLands(), List.of("Swamp"), "the {1} took Pact's Swamp");
+        assertEquals(untapped(ARCANIST), 1L, "the {1} took Pact's Arcanist");
     }
 
     /** How many cards of ours named {@code name} are untapped on our battlefield. */
