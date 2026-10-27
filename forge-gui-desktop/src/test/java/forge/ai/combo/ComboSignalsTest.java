@@ -14,6 +14,7 @@ import java.util.stream.Collectors;
 import org.testng.annotations.Test;
 
 import forge.ai.AITest;
+import forge.ai.AiCardMemory;
 import forge.ai.AiController;
 import forge.ai.ComputerUtilCombat;
 import forge.ai.PlayerControllerAi;
@@ -2229,6 +2230,13 @@ public class ComboSignalsTest extends AITest {
         // the mana we can make now: a tapped land pays nothing
         fourth.setTapped(true);
         assertNull(abandon(l), "three untapped lands pay for one attacker");
+
+        // nor does a land held for the AI's next spell (AiCardMemory's HELD_MANA_SOURCES_FOR_NEXT_SPELL), left out as
+        // the burn reading leaves it out
+        fourth.setTapped(false);
+        assertEquals(abandon(l), Signal.SURER_KILL);
+        AiCardMemory.rememberCard(ai, fourth, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
+        assertNull(abandon(l), "a held land pays no tax");
     }
 
     @Test
