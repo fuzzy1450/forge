@@ -2556,4 +2556,158 @@ public class ComboFetchAiTest extends AITest {
             }
         }
     }
+
+    // ---- follow-up 3, H3 review, round 1 ----
+
+    /** A barred draw spell is passed over, not the end of danger's search for one. On the Laboratory Maniac danger
+     *  board with a second Swamp, under the opponent's Iona, Shield of Emeria naming blue ("your opponents can't cast
+     *  spells of the chosen color", {@link #ionaNamingBlueOnTheLabDangerBoard}): Opt, the board's draw spell, can be
+     *  cast at no moment, so no win in time comes of a fetch, and Demonic Tutor in our Main 1 and Vampiric Tutor at the
+     *  end step before our turn each take the stock pick with the stock draws, leaving no known top. Night's Whisper
+     *  put in our hand after Opt, the next draw spell in hand order, can follow Consultation, its {1}{B} and
+     *  Consultation's {B} within the four lands: Demonic Tutor takes Consultation, and Vampiric Tutor puts it on top
+     *  ({@link #assertEndStepFetch}). */
+    @Test
+    public void aBarredDrawSpellPassesDangersWinInTimeToTheNext() {
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+        for (final boolean whisper : List.of(false, true)) {
+            final String why = whisper ? "Night's Whisper after Opt" : "Opt alone";
+            Card consultation = ionaNamingBlueOnTheLabDangerBoard(whisper);
+            final SpellAbility tutor = spell("Demonic Tutor");
+            if (whisper) {
+                assertSame(pick(ZoneType.Hand, tutor), consultation, why + ", our Main 1");
+            } else {
+                assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lab), consultation,
+                        why + ", our Main 1");
+            }
+
+            consultation = ionaNamingBlueOnTheLabDangerBoard(whisper);
+            game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+            assertSame(game.getPhaseHandler().getNextTurn(), ai, why);
+            final ComboLines.Line l = t.deckLines().get(0);
+            assertFalse(ComboSignals.deniedAtMainNextTurn(t.view(), l), why);
+            assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), l), ComboSignals.Signal.DANGER, why);
+            if (whisper) {
+                assertEndStepFetch(consultation, lab, why + ", the end step");
+            } else {
+                final SpellAbility vampiric = spell("Vampiric Tutor");
+                assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, vampiric), lab), consultation,
+                        why + ", the end step");
+                assertEquals(t.knownTops(), Set.of(), why + ", the end step");
+            }
+        }
+    }
+
+    /** The Laboratory Maniac danger board ({@link #labDangerBoard}) in our Main 1 with a second Swamp, Night's Whisper
+     *  put in our hand after Opt when {@code whisper}, and the opponent's Iona, Shield of Emeria naming blue: DANGER
+     *  holds, Consultation can be cast now, and Opt after it cannot, in our Main 1 or at any other moment. Returns the
+     *  library's Consultation. */
+    private Card ionaNamingBlueOnTheLabDangerBoard(final boolean whisper) {
+        final Card consultation = labDangerBoard();
+        addCard("Swamp", ai);
+        if (whisper) {
+            addCardToZone("Night's Whisper", ai, ZoneType.Hand);
+        }
+        final Card iona = addCard("Iona, Shield of Emeria", opp);
+        iona.setChosenColors(new ArrayList<>(List.of("blue")));
+        game.getAction().checkStateEffects(true);
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER);
+        assertFalse(ComboSignals.deniedNow(t.view(), l), "Consultation is castable");
+        final Card opt = t.find(OPT, ZoneType.Hand);
+        final SpellAbility optSpell = opt.getFirstSpellAbility();
+        optSpell.setActivatingPlayer(ai);
+        assertTrue(ComboSignals.drawBarredAt(t.view(), optSpell, ai, PhaseType.MAIN1, true, List.of(consultation)),
+                "Iona bars Opt");
+        if (whisper) {
+            final Card nightsWhisper = t.find("Night's Whisper", ZoneType.Hand);
+            assertTrue(ai.getCardsIn(ZoneType.Hand).indexOf(opt) < ai.getCardsIn(ZoneType.Hand).indexOf(nightsWhisper),
+                    "Opt is read first");
+        }
+        return consultation;
+    }
+
+    /** The main-phase window next turn is read in our Main 1, not in a combat. Under the opponent's Basandra, Battle
+     *  Seraph ("players can't cast spells during combat") or Marisi, Breaker of the Coil ("your opponents can't cast
+     *  spells during combat") Opt after Consultation cannot be cast in our combat damage step, though in our Main 1 it
+     *  can, and neither bars Laboratory Maniac, Consultation or the draw spell there. At the end step before our turn,
+     *  DANGER holding, the line is not denied at that window, and Vampiric Tutor puts Consultation on top
+     *  ({@link #assertEndStepFetch}), with Laboratory Maniac on our battlefield
+     *  ({@link #labDangerAtTheEndStepBeforeOurTurn}) and with Laboratory Maniac in our hand and Night's Whisper the
+     *  draw spell ({@link #labInHandAtTheEndStepBeforeOurTurn}). */
+    @Test
+    public void aCombatCastBarLeavesTheMainPhaseWindowNextTurn() {
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+        for (final String hoser : List.of("Basandra, Battle Seraph", "Marisi, Breaker of the Coil")) {
+            final Card consultation = labDangerAtTheEndStepBeforeOurTurn(hoser);
+            final ComboLines.Line l = t.deckLines().get(0);
+            final SpellAbility opt = t.find(OPT, ZoneType.Hand).getFirstSpellAbility();
+            opt.setActivatingPlayer(ai);
+            assertTrue(ComboSignals.drawBarredAt(t.view(), opt, ai, PhaseType.COMBAT_DAMAGE, false,
+                    List.of(consultation)), hoser + ": in our combat damage step");
+            assertFalse(ComboSignals.drawBarredAt(t.view(), opt, ai, PhaseType.MAIN1, true, List.of(consultation)),
+                    hoser + ": in our Main 1");
+            assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER, hoser);
+            assertFalse(ComboSignals.deniedAtMainNextTurn(t.view(), l), hoser);
+            assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), l), ComboSignals.Signal.DANGER, hoser);
+            assertEndStepFetch(consultation, lab, hoser);
+
+            final String why = hoser + ", Lab in hand";
+            final Card inHand = labInHandAtTheEndStepBeforeOurTurn();
+            opposing(hoser);
+            final ComboLines.Line cast = t.deckLines().get(0);
+            assertFalse(ComboSignals.deniedAtMainNextTurn(t.view(), cast), why);
+            assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), cast), ComboSignals.Signal.DANGER, why);
+            assertEndStepFetch(inHand, lab, why);
+        }
+    }
+
+    /** A Jace, Wielder of Mysteries line's win next turn is read at the main-phase window as a Laboratory Maniac line's
+     *  is ({@link #labDangerUnderAbolisherFetches}): Consultation and then Opt in our Main 1. On the Jace danger board
+     *  ({@link #jaceDangerAtTheEndStepBeforeOurTurn}) with no hoser, Vampiric Tutor puts Consultation on top
+     *  ({@link #assertEndStepFetch}); under the opponent's Grand Abolisher ("during your turn, your opponents can't
+     *  cast spells") or Teferi, Time Raveler ("each opponent can cast spells only any time they could cast a sorcery")
+     *  the line is DENIED at that end step, its own window, but not in our Main 1, and Vampiric Tutor still puts
+     *  Consultation on top. */
+    @Test
+    public void jaceDangerUnderAbolisherFetches() {
+        final List<ComboLines.Line> jace = lines(JACE_CONSULTATION);
+        assertEndStepFetch(jaceDangerAtTheEndStepBeforeOurTurn(), jace, "no hoser");
+        for (final String hoser : List.of("Grand Abolisher", "Teferi, Time Raveler")) {
+            final Card consultation = jaceDangerAtTheEndStepBeforeOurTurn();
+            opposing(hoser);
+            final ComboLines.Line l = t.deckLines().get(0);
+            assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DENIED, hoser);
+            assertFalse(ComboSignals.deniedAtMainNextTurn(t.view(), l), hoser);
+            assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), l), ComboSignals.Signal.DANGER, hoser);
+            assertEndStepFetch(consultation, jace, hoser);
+        }
+    }
+
+    /** Line 742-3096 with Jace, Wielder of Mysteries on our battlefield (four loyalty), Opt in hand, the ten-name
+     *  library, Island, Island and Swamp, at 3 life against an opposing Colossal Dreadmaw, at the end step of the
+     *  opponent, our turn next: DANGER is the line's only signal, with no surer kill and no line one short, and
+     *  Consultation, the top card, its one piece missing. Returns Consultation. */
+    private Card jaceDangerAtTheEndStepBeforeOurTurn() {
+        start(JACE_CONSULTATION);
+        addCard(JACE, ai).setCounters(CounterEnumType.LOYALTY, 4);
+        addCardToZone(OPT, ai, ZoneType.Hand);
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertSame(game.getPhaseHandler().getNextTurn(), ai);
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertEquals(t.where(JACE), ComboTracker.Where.BATTLEFIELD);
+        assertEquals(t.missing(l), List.of(CONSULTATION));
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER);
+        assertTrue(t.view().danger());
+        assertFalse(ComboSignals.surerKillNow(ai));
+        assertEquals(t.oneShort(), List.of());
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation);
+        return consultation;
+    }
 }

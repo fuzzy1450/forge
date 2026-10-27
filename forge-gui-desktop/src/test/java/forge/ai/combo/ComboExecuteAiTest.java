@@ -2618,6 +2618,35 @@ public class ComboExecuteAiTest extends AITest {
         }
     }
 
+    /** Follow-up 3, H3 review, round 1: a barred draw spell is passed over, not the end of the window's search. Line
+     *  742-2836 in our Main 1, Laboratory Maniac on our battlefield, Consultation and Opt in hand, Island, Swamp and
+     *  Swamp, under the opponent's Iona, Shield of Emeria naming blue ("your opponents can't cast spells of the chosen
+     *  color"): Consultation can be cast now, Opt can be cast at no moment, so with Opt the only draw spell
+     *  Consultation is not cast. Night's Whisper put in our hand after Opt, the next draw spell in hand order, can
+     *  follow, its {1}{B} and Consultation's {B} within the three lands: the window opens on it, and Consultation is
+     *  cast, exempt from the own-library floor. */
+    @Test
+    public void aBarredDrawSpellPassesTheWindowToTheNext() {
+        final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp", "Swamp");
+        final Card iona = addCard("Iona, Shield of Emeria", opp);
+        iona.setChosenColors(new ArrayList<>(List.of("blue")));
+        game.getAction().checkStateEffects(true);
+        assertFalse(ComboSignals.deniedNow(t.view(), t.deckLines().get(0)), "Consultation is castable");
+        final Card opt = t.find(OPT, ZoneType.Hand);
+        assertTrue(ComboSignals.drawBarredAt(t.view(), castOf(opt), ai, PhaseType.MAIN1, true, List.of(consultation)),
+                "Iona bars Opt");
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, "Opt alone");
+        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)), "Opt alone");
+
+        final Card whisper = hand("Night's Whisper");
+        assertFalse(ComboSignals.drawBarredAt(t.view(), castOf(whisper), ai, PhaseType.MAIN1, true,
+                List.of(consultation)), "Night's Whisper can follow");
+        assertTrue(ai.getCardsIn(ZoneType.Hand).indexOf(opt) < ai.getCardsIn(ZoneType.Hand).indexOf(whisper),
+                "Opt is read first");
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, "Night's Whisper after Opt");
+        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo", "Night's Whisper after Opt");
+    }
+
     /** Our {@code name} cast this turn and gone from the stack to our graveyard: the turn's record of its casts holds
      *  it (ComboFetchAiTest's castThisTurn). */
     private void castThisTurn(final String name) {
