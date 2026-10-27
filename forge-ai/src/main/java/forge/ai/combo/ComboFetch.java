@@ -477,7 +477,10 @@ public final class ComboFetch {
      * step or in the cleanup of the opponent whose turn comes right before ours (Vampiric Tutor, Mystical Tutor, the
      * Vault: G4), the piece drawn in our draw step. Nothing of this turn's is carried over, so the line's denial is the
      * one at its own window on that turn (abandon's: not DENIED), and next turn's untapped mana pays it
-     * ({@link ComboMana#nextTurn}).
+     * ({@link ComboMana#nextTurn}). A Laboratory Maniac or Jace line's win there is the emptier and a draw spell right
+     * after it in that Main 1, so its denial is read at that main-phase window (follow-up 3, H3:
+     * ComboSignals.abandonAtMainNextTurn), not at the end step before our turn: the opponent's Grand Abolisher, or
+     * Teferi, Time Raveler, bars that end step but not our Main 1.
      * </ul>
      * Every other fetch under danger keeps the one-short lines, as the piles, Gifts Ungiven and Consultation's tutor do:
      * a fetch to the top in our draw step or later in our turn (Imperial Seal in our Main 1: its piece reaches our hand
@@ -497,13 +500,23 @@ public final class ComboFetch {
         final boolean nextTurn = when == Arrival.NEXT_TURN;
         final List<ComboLines.Line> out = new ArrayList<>();
         for (final ComboLines.Line l : v.lines()) {
-            if (v.ready(l) && ComboSignals.abandon(v, l) == ComboSignals.Signal.DANGER
+            if (v.ready(l) && signal(v, l, nextTurn) == ComboSignals.Signal.DANGER
                     && (nextTurn || !v.deniedThisTurn(l)) && v.missing(l).size() == 1
                     && winsInTime(v, l, fit, nextTurn)) {
                 out.add(l);
             }
         }
         return v.ranked(out);
+    }
+
+    // the line's abandon signal for its win in the main phase the fetched piece arrives for: our next turn's, for a
+    // Laboratory Maniac or Jace line, read at that main phase's window, the emptier and a draw spell right after it
+    // (follow-up 3, H3: ComboSignals.abandonAtMainNextTurn), not at the end step before our turn, the line's own
+    // window, which a piece put on top of our library there comes too late for; every other as abandon reads it
+    private static ComboSignals.Signal signal(final ComboTracker.View v, final ComboLines.Line l,
+            final boolean nextTurn) {
+        return nextTurn && ComboExecute.drawsAfter(l.winner()) ? ComboSignals.abandonAtMainNextTurn(v, l)
+                : ComboSignals.abandon(v, l);
     }
 
     // the main phase of ours that a piece fetched now, put fit, reaches our hand for before any opponent attacks again
@@ -541,7 +554,10 @@ public final class ComboFetch {
     // - Laboratory Maniac and Jace win off a draw of ours after the emptier, and in that main phase only a spell of our
     //   hand that the AI casts right after it on the emptied library can be that draw (ComboExecute.followUpDraws, the
     //   draw spell's window, read as of our main phase; the opponent's end step comes after their attack, and their
-    //   end step before our turn before the piece is drawn): one of them, its mana paid with the line's;
+    //   end step before our turn before the piece is drawn): one of them that can be cast there (follow-up 3, H3: its
+    //   own cast bar, after the spells cast before it on that turn, every piece of l still to be cast, after this
+    //   turn's spells so far for this turn's main phase: under Rule of Law Opt after Consultation is barred, and under
+    //   our own Fires of Invention Opt after Laboratory Maniac and Consultation), its mana paid with the line's;
     // - Doctor Doom wins off its own {T}: this turn, it is on our battlefield already, untapped and free of summoning
     //   sickness (ComboExecute.staged); next turn, on our battlefield, which our untap step untaps and has kept since
     //   that turn began. One cast or put there in the main phase cannot tap in it;
@@ -570,6 +586,10 @@ public final class ComboFetch {
         }
         final Player ai = v.ai();
         final List<ManaCost> costs = new ArrayList<>(4);
+        // the spells cast in that main phase's turn before a follow-up draw: this turn's (none carried over to the
+        // next), then each piece still to be cast
+        final List<Card> before = nextTurn ? new ArrayList<>(2)
+                : new ArrayList<>(ai.getGame().getStack().getSpellCardsCastThisTurn());
         SpellAbility spell = null;
         for (final String name : l.names()) {
             final ComboTracker.Where where = v.where(name);
@@ -583,6 +603,7 @@ public final class ComboFetch {
             final Card c = v.card(name);
             final SpellAbility first = Iterables.getFirst(c.getSpells(), null);
             costs.add(first == null ? c.getManaCost() : ComboExecute.priced(ai, first));
+            before.add(c);
             if (spell == null) {
                 spell = first;
             }
@@ -591,7 +612,7 @@ public final class ComboFetch {
             return spell != null && mana(ai, spell, nextTurn).pays(costs.toArray(new ManaCost[0]));
         }
         final ComboMana mana = spell == null ? null : mana(ai, spell, nextTurn);
-        for (final SpellAbility draw : ComboExecute.followUpDraws(ai)) {
+        for (final SpellAbility draw : ComboExecute.followUpDraws(v, before)) {
             final ComboMana m = mana != null ? mana : mana(ai, draw, nextTurn);
             final List<ManaCost> withDraw = new ArrayList<>(costs);
             withDraw.add(ComboExecute.priced(ai, draw));

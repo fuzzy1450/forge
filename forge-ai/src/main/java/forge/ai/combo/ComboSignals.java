@@ -75,7 +75,23 @@ public final class ComboSignals {
 
     /** {@link #abandon} read through the decision's view. */
     static Signal abandon(final ComboTracker.View v, final ComboLines.Line l) {
-        if (v.denied(l)) {
+        return abandon(v, l, v.denied(l));
+    }
+
+    /**
+     * {@link #abandon} for a Laboratory Maniac or Jace line whose win comes in our next turn's main phase, the emptier
+     * and a draw spell right after it there (follow-up 3, H3; ComboFetch's win in time under danger, for a piece put on
+     * top of our library at the end step before our turn): its denial is read at that main-phase window
+     * ({@link #deniedAtMainNextTurn}), not at that end step, the line's own window, which the piece comes too late for.
+     * The other three signals as {@link #abandon} reads them.
+     */
+    static Signal abandonAtMainNextTurn(final ComboTracker.View v, final ComboLines.Line l) {
+        return abandon(v, l, deniedAtMainNextTurn(v, l));
+    }
+
+    // the first signal that holds for l, in Signal order, its denial (signal 2) given
+    private static Signal abandon(final ComboTracker.View v, final ComboLines.Line l, final boolean denied) {
+        if (denied) {
             return Signal.DENIED;
         }
         if (noMana(v, l)) {
@@ -123,6 +139,51 @@ public final class ComboSignals {
             return true;
         }
         return disarmedAtWindow(v, l.winner());
+    }
+
+    /**
+     * Signal 2 for a Laboratory Maniac or Jace line at its main-phase window on our next turn (follow-up 3, H3): the
+     * emptier cast in our Main 1 and a draw spell right after it, the window that a piece put on top of our library at
+     * the end step before our turn opens (ComboFetch's win in time under danger). As {@link #deniedAtWindow}, but each
+     * piece still to be cast is read in our main phase on an empty stack, a sorcery's moment, nothing of this turn's
+     * carried over: the winner still to be cast after no spell, then the emptier after it. So the opponent's Grand
+     * Abolisher (in its owner's turn only) and Teferi, Time Raveler (away from a sorcery's moment) bar neither there,
+     * though both bar that end step. The draw spell's own bar is the win in time's ({@link #drawBarredAt}).
+     */
+    static boolean deniedAtMainNextTurn(final ComboTracker.View v, final ComboLines.Line l) {
+        if (v.cantWin()) {
+            return true;
+        }
+        if (v.everyOpponentCantLose()) {
+            return true;
+        }
+        final ComboLines.Winner w = l.winner();
+        final Player ai = v.ai();
+        final Card winner = unplayed(v, w.card);
+        if (winner != null && barredAt(v, winner, w.card, ai, PhaseType.MAIN1, true, List.of())) {
+            return true;
+        }
+        final String name = l.emptier().card;
+        final Card emptier = unplayed(v, name);
+        if (emptier != null && barredAt(v, emptier, name, ai, PhaseType.MAIN1, true,
+                winner == null ? List.of() : List.of(winner))) {
+            return true;
+        }
+        return disarmedAtWindow(v, w);
+    }
+
+    /**
+     * Whether our follow-up draw spell {@code draw}, a spell of a card in our hand, cannot be cast at its moment
+     * (follow-up 3, H3): right after the emptier, in {@code turn}'s {@code step}, {@code sorcery} whether a sorcery
+     * could be cast then, after {@code castThatTurn}, the spells cast that turn before it, the emptier among them.
+     * The CantBeCast statics are read as at a piece's moment in a line's window (barredAt, barsAt): Rule of Law and
+     * Deafening Silence count the emptier, the opponent's Grand Abolisher bars only its owner's turn, Teferi, Time
+     * Raveler only away from a sorcery's moment. Read on a copy of its cast from our hand, made only while some
+     * CantBeCast static exists (the view's castBarStatics, else the card's own); the card is read, never written.
+     */
+    static boolean drawBarredAt(final ComboTracker.View v, final SpellAbility draw, final Player turn,
+            final PhaseType step, final boolean sorcery, final List<Card> castThatTurn) {
+        return barredAt(v, draw.getHostCard(), draw, false, turn, step, sorcery, castThatTurn);
     }
 
     /** Signal 2 as read now, the moment of a window that is open now (the view keeps it for a deck line): we cannot
@@ -347,7 +408,8 @@ public final class ComboSignals {
      * <li>a Laboratory Maniac or Jace line: the emptier at the end step of the player whose turn comes right before
      * ours, our draw step next (no main phase; that player's turn), after that turn's spells. A draw spell that follows
      * the emptier in our main phase opens a window now, which ComboExecute reads with deniedNow (the view's
-     * executableNow);
+     * executableNow) and the draw spell's own bar ({@link #drawBarredAt}); danger's win in time next turn reads that
+     * main-phase window ({@link #deniedAtMainNextTurn});
      * <li>a Doctor Doom line: the emptier in our main phase on an empty stack, a sorcery's moment, then Doom's {T};
      * <li>a Fblthp line: the emptier in response to Fblthp's combat-damage trigger, in our combat damage step;
      * <li>a winner other than Oracle still to be cast: in our main phase on an empty stack, on a turn of ours before
@@ -440,12 +502,20 @@ public final class ComboSignals {
     // own)
     private static boolean barredAt(final ComboTracker.View v, final Card c, final String name, final Player turn,
             final PhaseType step, final boolean sorcery, final List<Card> castThatTurn) {
-        final SpellAbility spell = Iterables.getFirst(c.getSpells(), null);
+        return barredAt(v, c, Iterables.getFirst(c.getSpells(), null), v.where(name) == Where.COMMAND, turn, step,
+                sorcery, castThatTurn);
+    }
+
+    // barredAt for spell, a spell of our card c (none: false) cast from our command zone (fromCommand) or else our
+    // hand: its first spell for a piece, the follow-up draw's own for a draw spell (drawBarredAt)
+    private static boolean barredAt(final ComboTracker.View v, final Card c, final SpellAbility spell,
+            final boolean fromCommand, final Player turn, final PhaseType step, final boolean sorcery,
+            final List<Card> castThatTurn) {
         if (spell == null || (v.castBarStatics().isEmpty() && !hasCastBar(c))) {
             return false;
         }
         final Player ai = v.ai();
-        final Card cast = castCopy(ai, c, v.where(name) == Where.COMMAND);
+        final Card cast = castCopy(ai, c, fromCommand);
         cast.setCastSA(spell);
         for (final StaticAbility st : v.castBarStatics()) {
             if (barsAt(st, cast, ai, turn, step, sorcery, castThatTurn)) {

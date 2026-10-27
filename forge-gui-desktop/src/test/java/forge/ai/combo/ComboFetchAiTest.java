@@ -2247,4 +2247,193 @@ public class ComboFetchAiTest extends AITest {
             AiCardMemory.rememberCard(ai, lib.get(i), AiCardMemory.MemorySet.LIM_DULS_VAULT_DUG);
         }
     }
+
+    // ---- follow-up 3, H3: the follow-up draw's own cast bar, and its window under danger ----
+
+    /** The Laboratory Maniac danger board ({@link #labDangerBoard}) at the end step of the opponent whose turn comes
+     *  right before ours, under the opponent's {@code hoser} (none for null; a planeswalker with four loyalty): DANGER
+     *  holds, with no surer kill and no line one short. Returns the library's Consultation, the top card. */
+    private Card labDangerAtTheEndStepBeforeOurTurn(final String hoser) {
+        final Card consultation = labDangerBoard();
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertSame(game.getPhaseHandler().getNextTurn(), ai);
+        if (hoser != null) {
+            final Card c = addCard(hoser, opp);
+            if (c.isPlaneswalker()) {
+                c.setCounters(CounterEnumType.LOYALTY, 4);
+            }
+            game.getAction().checkStateEffects(true);
+            assertTrue(c.isInZone(ZoneType.Battlefield), hoser);
+        }
+        assertEquals(game.getPhaseHandler().getPhase(), PhaseType.END_OF_TURN, String.valueOf(hoser));
+        assertTrue(t.view().danger(), String.valueOf(hoser));
+        assertFalse(ComboSignals.surerKillNow(ai), String.valueOf(hoser));
+        assertEquals(t.oneShort(), List.of(), String.valueOf(hoser));
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation, String.valueOf(hoser));
+        return consultation;
+    }
+
+    /** Review Focus 3, under danger: the draw spell after the emptier must itself be castable in the main phase the
+     *  line wins in. On the Laboratory Maniac danger board under the opponent's Rule of Law ("each player can't cast
+     *  more than one spell each turn") Opt would be that main phase's second spell, after Consultation, so no win in
+     *  time comes of the fetch:
+     *  <ul>
+     *  <li>Vampiric Tutor at the end step before our turn (our next turn's Main 1, Consultation its only earlier
+     *  spell): the line's own window, that end step, is open (DANGER its only signal), yet the tutor takes the stock
+     *  pick with the stock draws and leaves no known top, and the Vault keeps the stock holds and stack;
+     *  <li>Demonic Tutor in our Main 1, no spell cast yet (Consultation alone could be cast now): the stock pick.
+     *  </ul>
+     *  With no hoser each takes Consultation. */
+    @Test
+    public void labDangerUnderRuleOfLawKeepsTheStockPick() {
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+        assertEndStepFetch(labDangerAtTheEndStepBeforeOurTurn(null), lab, "no hoser");
+        Card consultation = labDangerAtTheEndStepBeforeOurTurn("Rule of Law");
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertFalse(ComboSignals.deniedAtMainNextTurn(t.view(), t.deckLines().get(0)), "Consultation is castable");
+        final SpellAbility vampiric = spell("Vampiric Tutor");
+        assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, vampiric), lab), consultation);
+        assertEquals(t.knownTops(), Set.of());
+        labDangerAtTheEndStepBeforeOurTurn("Rule of Law");
+        assertVault(lab, false, "Rule of Law");
+
+        // this turn's Main 1
+        consultation = labDangerBoard();
+        assertSame(pick(ZoneType.Hand, spell("Demonic Tutor")), consultation, "no hoser, our Main 1");
+        consultation = labDangerBoard();
+        addCard("Rule of Law", opp);
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of());
+        assertFalse(ComboSignals.deniedNow(t.view(), l), "Consultation alone can be cast now");
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER);
+        final SpellAbility tutor = spell("Demonic Tutor");
+        assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lab), consultation);
+    }
+
+    /** The other side (follow-up 3, H3): a Laboratory Maniac line's win next turn is Consultation and then Opt in our
+     *  Main 1, so its denial there is read at that main phase, not at the end step before our turn, the line's own
+     *  window. Under the opponent's Grand Abolisher ("during your turn, your opponents can't cast spells") or Teferi,
+     *  Time Raveler ("each opponent can cast spells only any time they could cast a sorcery") that end step is barred,
+     *  so the line is DENIED; but in our Main 1 neither bars Consultation nor Opt. On the Laboratory Maniac danger
+     *  board at that end step, Vampiric Tutor puts Consultation on top, a known top ({@link #assertEndStepFetch}), and
+     *  the Vault keeps a five holding it, digs past one missing it and stacks it on top ({@link #assertVault}). */
+    @Test
+    public void labDangerUnderAbolisherFetches() {
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+        for (final String hoser : List.of("Grand Abolisher", "Teferi, Time Raveler")) {
+            final Card consultation = labDangerAtTheEndStepBeforeOurTurn(hoser);
+            final ComboLines.Line l = t.deckLines().get(0);
+            assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DENIED, hoser);
+            assertFalse(ComboSignals.deniedAtMainNextTurn(t.view(), l), hoser);
+            assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), l), ComboSignals.Signal.DANGER, hoser);
+            assertEndStepFetch(consultation, lab, hoser);
+            labDangerAtTheEndStepBeforeOurTurn(hoser);
+            assertVault(lab, true, hoser);
+        }
+    }
+
+    /** Beyond the plan's tests (follow-up 3, H3): only a Laboratory Maniac or Jace line's win next turn is read at the
+     *  main-phase window. A Thassa's Oracle line's is its go-off, the emptier in response to Oracle's trigger, so under
+     *  the opponent's Teferi, Time Raveler it is DENIED there, as at the line's own window: on the danger board
+     *  ({@link #dangerBoardAt}) at the end step before our turn Vampiric Tutor takes the stock pick with the stock
+     *  draws and leaves no known top, though in our Main 1, a sorcery's moment, Oracle and then Consultation could
+     *  each be cast. */
+    @Test
+    public void anOracleLineNextTurnIsStillReadAtItsTrigger() {
+        final List<ComboLines.Line> held = lines(ORACLE_CONSULTATION);
+        final Card consultation = dangerBoardAt(PhaseType.END_OF_TURN, false);
+        final Card teferi = addCard("Teferi, Time Raveler", opp);
+        teferi.setCounters(CounterEnumType.LOYALTY, 4);
+        game.getAction().checkStateEffects(true);
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertTrue(teferi.isInZone(ZoneType.Battlefield));
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DENIED);
+        assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), l), ComboSignals.Signal.DANGER,
+                "in our Main 1 both could be cast");
+        final SpellAbility vampiric = spell("Vampiric Tutor");
+        assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, vampiric), held), consultation);
+        assertEquals(t.knownTops(), Set.of());
+    }
+
+    /** Beyond the plan's tests (follow-up 3, H3): the main-phase window next turn still reads each piece's own bar
+     *  there. Under the opponent's Iona, Shield of Emeria naming black ("your opponents can't cast spells of the chosen
+     *  color") Consultation can be cast at no moment, though Opt can: the line is DENIED at that main-phase window as
+     *  at the end step before our turn, and on the Laboratory Maniac danger board at that end step Vampiric Tutor takes
+     *  the stock pick with the stock draws and leaves no known top. */
+    @Test
+    public void ionaNamingBlackDeniesTheMainPhaseWindowToo() {
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+        final Card consultation = labDangerAtTheEndStepBeforeOurTurn(null);
+        final Card iona = addCard("Iona, Shield of Emeria", opp);
+        iona.setChosenColors(new ArrayList<>(List.of("black")));
+        game.getAction().checkStateEffects(true);
+        final ComboLines.Line l = t.deckLines().get(0);
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DENIED);
+        assertTrue(ComboSignals.deniedAtMainNextTurn(t.view(), l));
+        assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), l), ComboSignals.Signal.DENIED);
+        assertTrue(t.view().danger());
+        final SpellAbility vampiric = spell("Vampiric Tutor");
+        assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, vampiric), lab), consultation);
+        assertEquals(t.knownTops(), Set.of());
+    }
+
+    /** Beyond the plan's tests (follow-up 3, H3): a cap counts every spell cast before the draw in that main phase,
+     *  this turn's and the winner still to be cast among them. Our own Fires of Invention ("you can cast no more than
+     *  two spells each turn"), at 3 life against the opponent's Colossal Dreadmaw in our Main 1. With Laboratory
+     *  Maniac on our battlefield ({@link #labDangerBoard}) and no spell cast yet, Consultation and then Opt are the
+     *  turn's two spells, and Demonic Tutor takes Consultation; with an Opt cast this turn already, Consultation could
+     *  still be cast now, as the second, but the Opt in hand would be the third: the stock pick, with the stock draws.
+     *  With Laboratory Maniac in our hand instead, no spell cast yet, and Island, Island, Island, Island and Swamp to
+     *  cast all three, Opt would be the turn's third, after Lab and Consultation: the stock pick; without Fires the
+     *  tutor takes Consultation. */
+    @Test
+    public void aCapCountsTheWinnerCastBeforeTheDraw() {
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+        Card consultation = labDangerBoard();
+        addCard("Fires of Invention", ai);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertSame(pick(ZoneType.Hand, spell("Demonic Tutor")), consultation, "Lab on our battlefield");
+
+        consultation = labDangerBoard();
+        addCard("Fires of Invention", ai);
+        castThisTurn(OPT);
+        assertEquals(game.getStack().getSpellCardsCastThisTurn().size(), 1);
+        assertNotNull(t.find(OPT, ZoneType.Hand));
+        final ComboLines.Line cast = t.deckLines().get(0);
+        assertFalse(ComboSignals.deniedNow(t.view(), cast), "Consultation would be this turn's second");
+        assertFalse(t.view().deniedThisTurn(cast));
+        assertEquals(ComboSignals.abandon(ai, cast, t), ComboSignals.Signal.DANGER);
+        final SpellAbility third = spell("Demonic Tutor");
+        assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Hand, third), lab), consultation, "an Opt cast");
+
+        for (final boolean fires : List.of(false, true)) {
+            final String why = fires ? "Fires of Invention" : "no cap";
+            start(LAB_CONSULTATION);
+            addCardToZone(LAB, ai, ZoneType.Hand);
+            addCardToZone(OPT, ai, ZoneType.Hand);
+            for (final String name : LIBRARY) {
+                addCardToZone(name, ai, ZoneType.Library);
+            }
+            addCard("Island", ai);
+            addCard("Island", ai);
+            ai.setLife(3, null);
+            addCard("Colossal Dreadmaw", opp).setSickness(false);
+            if (fires) {
+                addCard("Fires of Invention", ai);
+            }
+            final ComboLines.Line l = t.deckLines().get(0);
+            assertEquals(t.where(LAB), ComboTracker.Where.HAND, why);
+            assertEquals(t.missing(l), List.of(CONSULTATION), why);
+            assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DANGER, why);
+            assertFalse(t.view().deniedThisTurn(l), why);
+            assertEquals(t.oneShort(), List.of(), why);
+            consultation = t.find(CONSULTATION, ZoneType.Library);
+            final SpellAbility tutor = spell("Demonic Tutor");
+            if (fires) {
+                assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lab), consultation, why);
+            } else {
+                assertSame(pick(ZoneType.Hand, tutor), consultation, why);
+            }
+        }
+    }
 }

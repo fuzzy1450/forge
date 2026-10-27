@@ -2535,4 +2535,49 @@ public class ComboExecuteAiTest extends AITest {
         final Random r = MyRandom.getRandom();
         return List.of(answer, r.nextInt(), r.nextInt(), r.nextInt());
     }
+
+    // ---- follow-up 3, H3: the follow-up draw's own cast bar ----
+
+    /** Review Focus 3: the draw spell that follows the emptier is cast right after it, so it must be castable there.
+     *  Under the opponent's Rule of Law ("each player can't cast more than one spell each turn") Opt would be our
+     *  turn's second spell, after Demonic Consultation: line 742-2836 in our Main 1 with no spell cast yet, Laboratory
+     *  Maniac on our battlefield, Consultation and Opt in hand, Island and Swamp, a 20-card library. Consultation alone
+     *  could be cast now (the line is not denied now, and it is executable), yet it is not cast, nor exempt from the
+     *  own-library floor, and played through our turn the library is left whole. Without Rule of Law (the control) the
+     *  window opens on Opt and the line wins in our Main 1. */
+    @Test
+    public void ruleOfLawBarsTheFollowUpDraw() {
+        assertTheFollowUpDrawIsBarred("Rule of Law");
+    }
+
+    /** The same under the opponent's Deafening Silence ("each player can't cast more than one noncreature spell each
+     *  turn"): the Laboratory Maniac on our battlefield was no spell of this turn, and Opt would be the turn's second
+     *  noncreature spell, after Consultation. */
+    @Test
+    public void deafeningSilenceBarsTheFollowUpDraw() {
+        assertTheFollowUpDrawIsBarred("Deafening Silence");
+    }
+
+    // ruleOfLawBarsTheFollowUpDraw's board: with no hoser the line wins in our Main 1; under the opponent's hoser
+    // Consultation, castable now, waits, and our turn reaches its end step with the library whole
+    private void assertTheFollowUpDrawIsBarred(final String hoser) {
+        Card consultation = followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp");
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, "no hoser");
+        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo", "no hoser");
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertWonThisTurn();
+
+        consultation = followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp");
+        addCard(hoser, opp);
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(), hoser);
+        assertFalse(ComboSignals.deniedNow(t.view(), t.deckLines().get(0)), hoser + ": Consultation alone is castable");
+        assertEquals(ids(t.executable()), List.of("742-2836"), hoser);
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, hoser);
+        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)), hoser);
+        playUntilPhase(PhaseType.END_OF_TURN);
+        assertFalse(game.isGameOver(), hoser);
+        assertEquals(game.getPhaseHandler().getPlayerTurn(), ai, hoser);
+        assertNotNull(t.find(CONSULTATION, ZoneType.Hand), hoser + ": Consultation was cast");
+        assertFalse(ai.getCardsIn(ZoneType.Library).isEmpty(), hoser);
+    }
 }

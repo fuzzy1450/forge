@@ -208,10 +208,20 @@ public class ComboLinesEndToEndAiTest extends AITest {
      * Consultation at an opponent's end step, its turn next, and wins at its own draw step.
      */
     private void assertWinsAtTheDraw(final String winner, final String line, final String... lands) {
+        winsAtTheDrawUnder(null, winner, line, lands);
+    }
+
+    /** {@link #assertWinsAtTheDraw}, with the opponent's {@code hoser} on their battlefield from the start (none for
+     *  null). Returns our stack items, as {@link #play} saw them. */
+    private List<Event> winsAtTheDrawUnder(final String hoser, final String winner, final String line,
+            final String... lands) {
         start();
         hand(winner, CONSULTATION);
         lands(lands);
         fillLibrary(ai, 20);
+        if (hoser != null) {
+            addCard(hoser, opp);
+        }
         assertEquals(ids(t.deckLines()), List.of(line));
 
         final List<Event> events = play();
@@ -224,6 +234,7 @@ public class ComboLinesEndToEndAiTest extends AITest {
         assertEquals(consultation.turn(), opp, "Consultation's turn");
         assertEquals(consultation.phase(), PhaseType.END_OF_TURN, "Consultation's phase");
         assertEndedInOurTurn(PhaseType.DRAW, consultation.turnNumber() + 1);
+        return events;
     }
 
     private static List<String> ids(final List<ComboLines.Line> lines) {
@@ -241,6 +252,20 @@ public class ComboLinesEndToEndAiTest extends AITest {
     @Test
     public void jaceLineWins() {
         assertWinsAtTheDraw(JACE, "742-3096", "Island", "Island", "Island", "Island", "Swamp", "Swamp");
+    }
+
+    /** Follow-up 3, H3: the window at the opponent's end step, our turn next, needs no draw spell, since our draw step
+     *  is the draw; so a one-spell cap that bars a draw spell after the emptier leaves it open. Under the opponent's
+     *  Rule of Law ("each player can't cast more than one spell each turn"), Laboratory Maniac in hand beside Demonic
+     *  Consultation and the junk (no draw spell): the AI casts Lab in a turn of its own, casts Consultation alone at
+     *  the opponent's end step, its turn next, the one spell of ours that turn, and wins at its own draw. */
+    @Test
+    public void theEndStepWindowStillNeedsNoDrawSpell() {
+        final List<Event> events = winsAtTheDrawUnder("Rule of Law", LAB, "742-2836", "Island", "Island", "Island",
+                "Swamp", "Swamp");
+        final int turn = first(events, CONSULTATION).turnNumber();
+        assertEquals(events.stream().filter(e -> e.turnNumber() == turn).map(Event::what)
+                .collect(Collectors.toList()), List.of(CONSULTATION), "our stack items in Consultation's turn");
     }
 
     /**

@@ -48,8 +48,9 @@ import forge.game.zone.ZoneType;
  * (a Draw, Scry or RearrangeTopOfLibrary root, every part one whose AI approves it there, an untargeted Draw of ours
  * of a fixed number of cards among them, a cost of mana alone, whose price asks the AI's controller nothing: no
  * Convoke, Improvise, Delve, Assist or waterbend, follow-up 3, H1; a sorcery-speed one only in our own main phase; a
- * RemoveDeck-hinted card only on its own readmit row) and the mana for the emptier and that spell together, each
- * one's coloured pips among it.
+ * RemoveDeck-hinted card only on its own readmit row), the mana for the emptier and that spell together, each one's
+ * coloured pips among it, and that spell castable right after the emptier (follow-up 3, H3: its own cast bar, the
+ * emptier counted among the turn's spells, so Rule of Law and Deafening Silence close the window).
  * </ul>
  * Pact's own singleton-library condition is executable's. None of it while we cannot win or every opponent cannot lose
  * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
@@ -467,7 +468,7 @@ public final class ComboExecute {
         }
         for (final ComboLines.Line l : v.executableNow()) {
             if (l.emptier() == e && staged(v, l.winner())
-                    && (!drawsAfter(l.winner()) || drawFollows(ai, sa, unpaid))) {
+                    && (!drawsAfter(l.winner()) || drawFollows(ai, v, sa, unpaid))) {
                 return true;
             }
         }
@@ -498,20 +499,25 @@ public final class ComboExecute {
         return w == Winner.LAB || w == Winner.JACE;
     }
 
-    // a draw of ours follows the emptier: the opponent's end step with our turn next (our draw step), or a spell in our
-    // hand that the AI casts right after the emptier on the emptied library (followUpSpell) and that the mana pays
-    // together with the emptier still to be cast, each source assigned to one pip of the two costs (ComboMana):
-    // Consultation's or Pact's {B} beside Opt's {U} (Review Focus 4: two Swamps pay the two mana values, never Opt;
-    // Command Tower and Sol Ring make three mana, but one coloured). Each cost is its spell's as the engine prices it
-    // now (priced, follow-up 2, G3: under an opponent's Thalia, Guardian of Thraben, Consultation's {1}{B} and Opt's
-    // {1}{U})
-    private static boolean drawFollows(final Player ai, final SpellAbility sa, final boolean unpaid) {
+    // a draw of ours follows the emptier: the opponent's end step with our turn next (our draw step, which no cast bar
+    // stops), or a spell in our hand that the AI casts right after the emptier on the emptied library (followUpSpell),
+    // that the mana pays together with the emptier still to be cast, each source assigned to one pip of the two costs
+    // (ComboMana): Consultation's or Pact's {B} beside Opt's {U} (Review Focus 4: two Swamps pay the two mana values,
+    // never Opt; Command Tower and Sol Ring make three mana, but one coloured), and that can be cast there (follow-up
+    // 3, H3: ComboSignals.drawBarredAt, at now's turn and step, a sorcery's moment in our own main phase, where the
+    // emptier leaves the stack as it found it, after this turn's spells and the emptier still to be cast: under Rule
+    // of Law or Deafening Silence, Opt after Consultation would be the turn's second spell). Each cost is its spell's
+    // as the engine prices it now (priced, follow-up 2, G3: under an opponent's Thalia, Guardian of Thraben,
+    // Consultation's {1}{B} and Opt's {1}{U})
+    private static boolean drawFollows(final Player ai, final ComboTracker.View v, final SpellAbility sa,
+            final boolean unpaid) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         if (ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn())) {
             return true;
         }
         ManaCost emptierCost = null;
         ComboMana mana = null;
+        List<Card> before = null;
         final boolean ourMain = ph.isPlayerTurn(ai) && ph.getPhase() != null && ph.getPhase().isMain();
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
             final SpellAbility draw = c.isLand() ? null : followUpSpell(ai, ourMain, c);
@@ -521,8 +527,15 @@ public final class ComboExecute {
             if (mana == null) {
                 mana = ComboMana.of(ai, sa, true);
                 emptierCost = unpaid ? priced(ai, sa) : ManaCost.ZERO;
+                // the spells cast this turn before the draw: the turn's so far (a resolving Pact among them), then
+                // the emptier still to be cast
+                before = new ArrayList<>(ai.getGame().getStack().getSpellCardsCastThisTurn());
+                if (unpaid) {
+                    before.add(sa.getHostCard());
+                }
             }
-            if (mana.pays(emptierCost, priced(ai, draw))) {
+            if (mana.pays(emptierCost, priced(ai, draw))
+                    && !ComboSignals.drawBarredAt(v, draw, ph.getPlayerTurn(), ph.getPhase(), ourMain, before)) {
                 return true;
             }
         }
@@ -530,16 +543,19 @@ public final class ComboExecute {
     }
 
     // the spells of our hand that the AI casts right after the emptier on the emptied library in our own main phase, as
-    // drawFollows reads the hand there (lands left out, followUpSpell, each card's first such spell): ComboFetch's win
-    // in time under danger pays one of them, its cost as the engine prices it (priced, as drawFollows prices it), beside
-    // a Laboratory Maniac or Jace line's casts, in the main phase of ours the fetched piece arrives for, this turn's or
-    // our next turn's (follow-up 2, G4: a sorcery-speed draw too, though in our upkeep or at the opponent's end step
-    // none could be cast now)
-    static List<SpellAbility> followUpDraws(final Player ai) {
+    // drawFollows reads the hand there (lands left out, followUpSpell, each card's first such spell), that can be cast
+    // there after before, the spells cast in that main phase's turn ahead of the draw, the emptier among them
+    // (follow-up 3, H3: ComboSignals.drawBarredAt, in our Main 1 on an empty stack, a sorcery's moment): ComboFetch's
+    // win in time under danger pays one of them, its cost as the engine prices it (priced, as drawFollows prices it),
+    // beside a Laboratory Maniac or Jace line's casts, in the main phase of ours the fetched piece arrives for, this
+    // turn's or our next turn's (follow-up 2, G4: a sorcery-speed draw too, though in our upkeep or at the opponent's
+    // end step none could be cast now)
+    static List<SpellAbility> followUpDraws(final ComboTracker.View v, final List<Card> before) {
+        final Player ai = v.ai();
         final List<SpellAbility> out = new ArrayList<>(2);
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
             final SpellAbility draw = c.isLand() ? null : followUpSpell(ai, true, c);
-            if (draw != null) {
+            if (draw != null && !ComboSignals.drawBarredAt(v, draw, ai, PhaseType.MAIN1, true, before)) {
                 out.add(draw);
             }
         }
