@@ -2762,12 +2762,19 @@ public class ComboExecuteAiTest extends AITest {
     /** Line 742-1295 mid go-off as {@link #oracleCast} has it, but with an Island untapped in place of the Swamp and
      *  {B} floating in our pool: Consultation's {B} and the {1} together come to the pool and the Island. */
     private Card floatingBlack() {
+        return floating(ManaAtom.BLACK, "Swamp", "Island");
+    }
+
+    /** Line 742-1295 mid go-off: our Thassa's Oracle cast and on our stack, our two Islands tapped, Demonic Consultation
+     *  in hand, {@code land} untapped, one mana of {@code colour} floating in our pool (made by a {@code maker} of
+     *  ours), a 20-card library. Returns Consultation. */
+    private Card floating(final int colour, final String maker, final String land) {
         start(ORACLE_CONSULTATION);
         final Card consultation = hand(CONSULTATION);
         tapped("Island", "Island");
-        lands("Island");
+        lands(land);
         fillLibrary(ai, 20);
-        ai.getManaPool().addMana(new Mana((byte) ManaAtom.BLACK, createCard("Swamp", ai), null, ai));
+        ai.getManaPool().addMana(new Mana((byte) colour, createCard(maker, ai), null, ai));
         castOnStack(ORACLE);
         assertEquals(ids(t.executable()), List.of("742-1295"));
         return consultation;
@@ -2796,6 +2803,21 @@ public class ComboExecuteAiTest extends AITest {
         assertFalse(paysUnless(rhysticDraw()), "the {1} took the floating {B}");
         assertEquals(ai.getManaPool().getAmountOfColor(MagicColor.BLACK), 1);
         assertEquals(untapped("Island"), 1L);
+    }
+
+    /** Beyond the plan's tests (follow-up 3, H4 review of its own mutants: the pool not counted for the unless cost
+     *  survived the tests above): the floating pool pays the unless cost while the emptier's land is held. Our Thassa's
+     *  Oracle cast and on our stack, Demonic Consultation in hand, the Swamp untapped and {U} floating: the Swamp is
+     *  held for Consultation and the pool's {U} pays Rhystic Study's {1}, as stock pays it (the answer and the draws),
+     *  the Swamp left untapped and the pool emptied. */
+    @Test
+    public void floatingManaPaysTheUnlessCostBesideAHeldLand() {
+        assertTrue(assertPaysAsStock(() -> {
+            floating(ManaAtom.BLUE, "Island", "Swamp");
+            return rhysticDraw();
+        }), "the {1} was declined");
+        assertEquals(ai.getManaPool().totalMana(), 0, "the pool did not pay the {1}");
+        assertEquals(untapped("Swamp"), 1L, "the {1} took Consultation's Swamp");
     }
 
     /** How many cards of ours named {@code name} are untapped on our battlefield. */
