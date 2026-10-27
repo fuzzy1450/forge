@@ -25,6 +25,7 @@ import forge.ai.AITest;
 import forge.ai.AiCardMemory;
 import forge.ai.AiController;
 import forge.ai.ComputerUtil;
+import forge.ai.ComputerUtilMana;
 import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
 import forge.ai.SpecialCardAi;
@@ -70,6 +71,7 @@ public class ComboFetchAiTest extends AITest {
     private static final String FBLTHP = "Fblthp, Impossibly Lost";
     private static final String OPT = "Opt";
     private static final String WURM = "Craw Wurm";
+    private static final String MEETING = "Meeting of Minds";
 
     // ten distinct names, Consultation on top and Craw Wurm second (fillLibrary makes ten of one name)
     private static final List<String> LIBRARY = Arrays.asList(CONSULTATION, WURM, "Runeclaw Bear", "Grizzly Bears",
@@ -2010,6 +2012,48 @@ public class ComboFetchAiTest extends AITest {
             } else {
                 assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lab), consultation, why);
             }
+        }
+    }
+
+    /** Follow-up 3, H1 (Review Focus 1): danger's win in time reads the follow-up draws as the Laboratory Maniac window
+     *  does (ComboExecute.followUpDraws), so Meeting of Minds, whose price asks the convoke chooser, is none, and
+     *  pricing draws nothing. Line 742-2836 in our Main 2: Laboratory Maniac on our battlefield, Meeting of Minds in
+     *  hand, the ten-name library (Consultation on top), our life 3 against the opponent's Colossal Dreadmaw (DANGER),
+     *  Island, Island and Swamp and one Island more (one short of Consultation's {B} and Meeting of Minds' {3}{U}
+     *  together, so only the draws could move), or two (the mana for both). There the engine's price of Meeting of
+     *  Minds draws: in our turn after combat began, the convoke chooser holds likely blockers back
+     *  (ComputerUtilCard.getLikelyBlockers, which reaches MyRandom). Demonic Tutor takes the stock pick with the stock
+     *  draws. */
+    @Test
+    public void aConvokeDrawIsNoWinInTimeUnderDanger() {
+        for (final int more : List.of(1, 2)) {
+            final String why = (3 + more) + " lands";
+            start(LAB_CONSULTATION);
+            addCard(LAB, ai);
+            final Card meeting = addCardToZone(MEETING, ai, ZoneType.Hand);
+            for (final String name : LIBRARY) {
+                addCardToZone(name, ai, ZoneType.Library);
+            }
+            for (int i = 0; i < more; i++) {
+                addCard("Island", ai);
+            }
+            ai.setLife(3, null);
+            addCard("Colossal Dreadmaw", opp).setSickness(false);
+            moveToMain2(game, ai);
+            assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER, why);
+            assertEquals(t.oneShort(), List.of(), why);
+
+            final SpellAbility price = meeting.getFirstSpellAbility();
+            price.setActivatingPlayer(ai);
+            MyRandom.setRandom(new Random(7));
+            final long before = MyRandom.callCount();
+            ComputerUtilMana.calculateManaCost(price.getPayCosts(), price, ai, true, 0, false);
+            assertTrue(MyRandom.callCount() > before, why + ": pricing Meeting of Minds draws nothing on this board");
+
+            final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+            final SpellAbility tutor = spell("Demonic Tutor");
+            assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Hand, tutor), lines(LAB_CONSULTATION)),
+                    consultation, why);
         }
     }
 

@@ -36,6 +36,7 @@ import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
 import forge.game.cost.Cost;
+import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -80,6 +81,10 @@ public class ComboExecuteAiTest extends AITest {
     private static final String ANGEL = "Platinum Angel";
     private static final String LINVALA = "Linvala, Keeper of Silence";
     private static final String TEFERI = "Teferi, Time Raveler";
+    private static final String MEETING = "Meeting of Minds";
+    private static final String REVERSE_ENGINEER = "Reverse Engineer";
+    private static final String TREASURE_CRUISE = "Treasure Cruise";
+    private static final String DIVINATION = "Divination";
 
     /** Fifteen distinct names, none a land and none a piece of piece 1's lines: a library Tainted Pact can empty. */
     private static final List<String> SINGLETON = List.of("Runeclaw Bear", "Grizzly Bears", "Hill Giant", "Craw Wurm",
@@ -2358,5 +2363,161 @@ public class ComboExecuteAiTest extends AITest {
             }
             throw new AssertionError("no cast trigger on " + rhystic);
         }), "a draw for us");
+    }
+
+    // ---- follow-up 3, H1: the pricer draws no random number ----
+
+    /** Review Focus 1: a draw spell whose price the engine works out by asking the AI's controller is no follow-up,
+     *  since pricing it (ComboExecute.priced, CostAdjustment.adjust) would ask: Meeting of Minds' convoke reaches
+     *  PlayerControllerAi.chooseCardsForConvokeOrImprovise, which draws MyRandom where it holds likely blockers back.
+     *  Line 742-2836 in our Main 1: Laboratory Maniac on our battlefield, Consultation and Meeting of Minds in hand, a
+     *  Swamp and four Islands, the mana for both. The window does not open on Meeting of Minds: Consultation is not
+     *  cast, nor exempt from the own-library floor. Its convoke gone, the window opens on it. */
+    @Test
+    public void aConvokeDrawIsNotAFollowUp() {
+        final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, MEETING, "Swamp", "Island", "Island", "Island",
+                "Island");
+        final Card meeting = t.find(MEETING, ZoneType.Hand);
+        assertTrue(meeting.hasKeyword(Keyword.CONVOKE));
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)));
+        assertOpensWithout(consultation, meeting, Keyword.CONVOKE);
+    }
+
+    /** The same deck in the opponent's Main 1 (Review Focus 1): Laboratory Maniac, an untapped creature of ours that
+     *  Meeting of Minds' convoke could tap, and the opponent's Hill Giant, which can attack. There the engine's own
+     *  price of Meeting of Minds draws: the convoke chooser holds likely blockers back, and
+     *  ComputerUtilCard.getLikelyBlockers reaches ComputerUtilCombat.lifeInDanger's MyRandom. Evaluating Consultation
+     *  (canPlaySa, on the test thread, inside the seeded block) gives the no-combo control's answer and leaves the next
+     *  MyRandom values the control's, on a Swamp and two Islands (short of Consultation and Meeting of Minds together
+     *  even with Laboratory Maniac convoked, so only the draws could move) and on a Swamp and four Islands (the mana for
+     *  both, unconvoked). */
+    @Test
+    public void aConvokeDrawInHandDrawsNothing() {
+        for (final int islands : List.of(2, 4)) {
+            final String why = islands + " Islands";
+            start(LAB_CONSULTATION);
+            addCard(LAB, ai);
+            final Card consultation = hand(CONSULTATION);
+            final Card meeting = hand(MEETING);
+            lands("Swamp");
+            for (int i = 0; i < islands; i++) {
+                lands("Island");
+            }
+            fillLibrary(ai, 20);
+            addCard("Hill Giant", opp).setSickness(false);
+            game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+            assertEquals(ids(t.executable()), List.of("742-2836"), why);
+
+            final SpellAbility price = castOf(meeting);
+            MyRandom.setRandom(new Random(7));
+            final long before = MyRandom.callCount();
+            ComputerUtilMana.calculateManaCost(price.getPayCosts(), price, ai, true, 0, false);
+            assertTrue(MyRandom.callCount() > before, why + ": pricing Meeting of Minds draws nothing on this board");
+
+            t.useLines(List.of());
+            final List<Object> stock = nextValuesAfter(() -> aiOf(ai).canPlaySa(castOf(consultation)));
+            t.useLines(lines(LAB_CONSULTATION));
+            assertEquals(nextValuesAfter(() -> aiOf(ai).canPlaySa(castOf(consultation))), stock, why);
+        }
+    }
+
+    /** Reverse Engineer's improvise (Review Focus 1), Millstone an untapped artifact of ours with no mana ability that
+     *  it could tap, so its price asks the improvise chooser: line 742-2836 in our Main 1, a Swamp and five Islands, the
+     *  mana for Consultation and Reverse Engineer together even unimprovised. The window does not open on it; its
+     *  improvise gone, it does. */
+    @Test
+    public void anImproviseDrawIsNotAFollowUp() {
+        final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, REVERSE_ENGINEER, "Swamp", "Island", "Island",
+                "Island", "Island", "Island");
+        final Card millstone = addCard("Millstone", ai);
+        assertTrue(millstone.isArtifact() && !millstone.isCreature() && millstone.isUntapped()
+                && millstone.getManaAbilities().isEmpty());
+        final Card engineer = t.find(REVERSE_ENGINEER, ZoneType.Hand);
+        assertTrue(engineer.hasKeyword(Keyword.IMPROVISE));
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)));
+        assertOpensWithout(consultation, engineer, Keyword.IMPROVISE);
+    }
+
+    /** Beyond the plan's tests: Treasure Cruise's delve asks the AI's controller too (chooseCardsToDelve, whose test
+     *  mode also clears the host's delved cards), with a card in our graveyard to delve: line 742-2836 in our Main 1, a
+     *  Swamp and eight Islands, the mana for both undelved. The window does not open on it; its delve gone, it does. */
+    @Test
+    public void aDelveDrawIsNotAFollowUp() {
+        final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, TREASURE_CRUISE, "Swamp", "Island", "Island",
+                "Island", "Island", "Island", "Island", "Island", "Island");
+        addCardToZone("Grizzly Bears", ai, ZoneType.Graveyard);
+        final Card cruise = t.find(TREASURE_CRUISE, ZoneType.Hand);
+        assertTrue(cruise.hasKeyword(Keyword.DELVE));
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi);
+        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)));
+        assertOpensWithout(consultation, cruise, Keyword.DELVE);
+    }
+
+    /** Beyond the plan's tests: every other step of a spell's price that asks the AI's controller, or test-pays, refuses
+     *  the follow-up too, though no card of the follow-up shape carries one today. Line 742-2836 in our Main 1, a Swamp
+     *  and four Islands: Divination is the follow-up the window opens on, until it is given Assist
+     *  (choosePlayerToAssistPayment, asked for its {2}), TapCreaturesForMana (the convoke chooser), an Announce$
+     *  NumTimes (calculateManaCost test-pays it, canPayManaCost) or a RaiseCost static of its own adding waterbend {1}
+     *  as an additional cost (Water Whip's shape: the convoke chooser, waterbend {1} on top of its {2}{U}). */
+    @Test
+    public void aFollowUpWhosePriceAsksTheControllerIsRefused() {
+        for (final String step : List.of("Assist", "TapCreaturesForMana", "NumTimes", "Waterbend")) {
+            final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, DIVINATION, "Swamp", "Island", "Island",
+                    "Island", "Island");
+            final Card divination = t.find(DIVINATION, ZoneType.Hand);
+            assertEquals(consider(consultation), AiPlayDecision.WillPlay, step);
+            final SpellAbility spell = castOf(divination);
+            if ("Assist".equals(step)) {
+                divination.addChangedCardKeywords(List.of("Assist"), null, false, game.getNextTimestamp(), null);
+                assertTrue(divination.hasKeyword(Keyword.ASSIST), step);
+            } else if ("TapCreaturesForMana".equals(step)) {
+                spell.putParam("TapCreaturesForMana", "True");
+            } else if ("NumTimes".equals(step)) {
+                spell.putParam("Announce", "NumTimes");
+            } else {
+                divination.addStaticAbility("Mode$ RaiseCost | ValidCard$ Card.Self | Activator$ You | Type$ Spell"
+                        + " | Cost$ Waterbend<1> | EffectZone$ All | Description$ As an additional cost to cast this"
+                        + " spell, waterbend {1}.");
+            }
+            assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, step);
+        }
+    }
+
+    /** Stock parity (Review Focus 1): a deck holding no line (Laboratory Maniac's, with no Laboratory Maniac) with
+     *  Meeting of Minds in hand, Grizzly Bears of ours to convoke, four Islands and the opponent's Hill Giant, which
+     *  can attack, makes the stock decision with the stock draws: at the opponent's end step it plays Meeting of Minds,
+     *  and in their Main 1, where its price draws, nothing. */
+    @Test
+    public void aDeckWithNoLinePlaysMeetingOfMindsAsStock() {
+        for (final PhaseType phase : List.of(PhaseType.END_OF_TURN, PhaseType.MAIN1)) {
+            start(LAB_CONSULTATION);
+            ready("Grizzly Bears");
+            hand(MEETING);
+            lands("Island", "Island", "Island", "Island");
+            fillLibrary(ai, 20);
+            addCard("Hill Giant", opp).setSickness(false);
+            game.getPhaseHandler().devModeSet(phase, opp);
+            assertEquals(t.deckLines(), List.of(), phase.name());
+            assertEquals(assertStockParity(this::decision, lines(LAB_CONSULTATION)),
+                    phase == PhaseType.END_OF_TURN ? MEETING : null, phase.name());
+        }
+    }
+
+    // spell's keyword taken away, the window opens on it: Consultation is cast, exempt from the own-library floor
+    private void assertOpensWithout(final Card consultation, final Card spell, final Keyword keyword) {
+        spell.addChangedCardKeywords(null, List.of(keyword.toString()), false, game.getNextTimestamp(), null);
+        assertFalse(spell.hasKeyword(keyword), spell + " keeps " + keyword);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, spell + " without " + keyword);
+        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo", spell + " without " + keyword);
+    }
+
+    /** The decision's answer and the next three MyRandom values after it, the stream seeded alike (7). */
+    private static List<Object> nextValuesAfter(final Supplier<?> decision) {
+        MyRandom.setRandom(new Random(7));
+        final Object answer = decision.get();
+        final Random r = MyRandom.getRandom();
+        return List.of(answer, r.nextInt(), r.nextInt(), r.nextInt());
     }
 }

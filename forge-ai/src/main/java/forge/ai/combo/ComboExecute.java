@@ -19,6 +19,8 @@ import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.cost.Cost;
+import forge.game.cost.CostAdjustment;
+import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -44,7 +46,8 @@ import forge.game.zone.ZoneType;
  * loss: Lignify, Humility, a face-down copy), and a draw of ours follows: the opponent's end step with our turn
  * next, or a spell in our hand that the AI casts right after the emptier on the emptied library, read from its shape
  * (a Draw, Scry or RearrangeTopOfLibrary root, every part one whose AI approves it there, an untargeted Draw of ours
- * of a fixed number of cards among them, a cost of mana alone; a sorcery-speed one only in our own main phase; a
+ * of a fixed number of cards among them, a cost of mana alone, whose price asks the AI's controller nothing: no
+ * Convoke, Improvise, Delve, Assist or waterbend, follow-up 3, H1; a sorcery-speed one only in our own main phase; a
  * RemoveDeck-hinted card only on its own readmit row) and the mana for the emptier and that spell together, each
  * one's coloured pips among it.
  * </ul>
@@ -213,8 +216,12 @@ public final class ComboExecute {
 
     // the cost of our cast of spell as the engine prices it now: test-mode calculateManaCost on the spell's own cost
     // (SpecialCardAi.VampiricTutor.consider's precedent), taxes and reductions included (Thalia, Guardian of Thraben;
-    // Sphere of Resistance; Grand Arbiter Augustin IV; Helm of Awakening). Nothing drawn; we are made the spell's
-    // activator first, as the AI's own walk makes us every spell's (ComputerUtilAbility.getOriginalAndAltCostAbilities)
+    // Sphere of Resistance; Grand Arbiter Augustin IV; Helm of Awakening). Nothing drawn: no caller prices a spell whose
+    // price asks the AI's controller or test-pays (pricingAsks, follow-up 3, H1). followUpSpell refuses such a draw, and
+    // the emptiers' and winners' scripts carry no such step (every script that grants Convoke, Improvise, Delve, Assist
+    // or Emerge grants it to a spell on the stack only, while priced reads a card in our hand, library or command zone).
+    // We are made the spell's activator first, as the AI's own walk makes us every spell's
+    // (ComputerUtilAbility.getOriginalAndAltCostAbilities)
     static ManaCost priced(final Player ai, final SpellAbility spell) {
         spell.setActivatingPlayer(ai);
         return ComputerUtilMana.calculateManaCost(spell.getPayCosts(), spell, ai, true, 0, false).toManaCost();
@@ -547,11 +554,15 @@ public final class ComboExecute {
     //   library loses (Serum Visions in the opponent's Main 1, in our combat or at our own end step);
     // - a card the AI is never offered, never: getSpellAbilityToPlay drops a RemoveDeck-hinted card's spell unless its
     //   own row readmits it (SpecialCardAi.RemoveDeckFilter.readmit, asked as that filter asks it; See Beyond and
-    //   Gitaxian Probe have none)
+    //   Gitaxian Probe have none);
+    // - a spell whose price asks the AI's controller or test-pays (pricingAsks), never: priced would ask it, and the
+    //   convoke chooser draws (follow-up 3, H1: Meeting of Minds, Reverse Engineer, Treasure Cruise). Not counted, the
+    //   draw starts no go-off, the safe side
     private static SpellAbility followUpSpell(final Player ai, final boolean ourMain, final Card c) {
         final boolean hinted = ComputerUtilCard.isCardRemAIDeck(c);
         for (final SpellAbility spell : c.getSpells()) {
-            if (!followsUp(c, spell) || (!ourMain && SpellAbilityAi.isSorcerySpeed(spell, ai))) {
+            if (!followsUp(c, spell) || (!ourMain && SpellAbilityAi.isSorcerySpeed(spell, ai))
+                    || pricingAsks(ai, spell)) {
                 continue;
             }
             if (!hinted || SpecialCardAi.RemoveDeckFilter.readmit(ai, spell)) {
@@ -608,6 +619,32 @@ public final class ComboExecute {
             }
         }
         return draws;
+    }
+
+    // whether pricing our spell (priced) would hand a step of its cost to the AI's controller, or test-pay it (follow-up
+    // 3, H1: priced never does either). For a spell, CostAdjustment.adjust asks the PlayerController for:
+    // - Convoke and Improvise (the host's keywords), TapCreaturesForMana (the spell's) and waterbend (a Waterbend part
+    //   of the cost as CostAdjustment raises it, printed or added by a RaiseCost static: Water Whip's own), each
+    //   through chooseCardsForConvokeOrImprovise, whose likely-blocker read (ComputerUtilCard.getLikelyBlockers)
+    //   reaches MyRandom in the opponent's turn before blockers and in ours after combat begins;
+    // - Delve, through chooseCardsToDelve (whose test mode also clears the host's delved cards);
+    // - Assist, through choosePlayerToAssistPayment;
+    // - Offering and Emerge, through choosePermanentsToSacrifice: creature casts only, never the follow-up shape, so not
+    //   read here.
+    // calculateManaCost test-pays an Announce$ NumTimes cost (canPayManaCost), which draws. Every spell's price under a
+    // ReduceCost static also reaches chooseSingleStaticAbility, and under an UpTo one chooseNumberForCostReduction; the
+    // AI answers them with the first static and the most, reading and drawing nothing, and they stay (Helm of
+    // Awakening's reduction). The keywords and params are read first, then the raise, which draws nothing and asks
+    // nobody (the commander tax and the RaiseCost statics: priced's own first step), with us as the spell's activator
+    private static boolean pricingAsks(final Player ai, final SpellAbility spell) {
+        final Card host = spell.getHostCard();
+        if (host.hasKeyword(Keyword.CONVOKE) || host.hasKeyword(Keyword.IMPROVISE) || host.hasKeyword(Keyword.DELVE)
+                || host.hasKeyword(Keyword.ASSIST) || spell.hasParam("TapCreaturesForMana")
+                || "NumTimes".equals(spell.getParam("Announce"))) {
+            return true;
+        }
+        spell.setActivatingPlayer(ai);
+        return CostAdjustment.adjust(spell.getPayCosts(), spell, false).getMaxWaterbend() != null;
     }
 
     // a positive whole number written out (NumCards$ 2), not X nor another count
