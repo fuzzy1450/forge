@@ -2459,11 +2459,16 @@ public class ComboExecuteAiTest extends AITest {
      *  the follow-up too, though no card of the follow-up shape carries one today. Line 742-2836 in our Main 1, a Swamp
      *  and four Islands: Divination is the follow-up the window opens on, until it is given Assist
      *  (choosePlayerToAssistPayment, asked for its {2}), TapCreaturesForMana (the convoke chooser), an Announce$
-     *  NumTimes (calculateManaCost test-pays it, canPayManaCost) or a RaiseCost static of its own adding waterbend {1}
-     *  as an additional cost (Water Whip's shape: the convoke chooser, waterbend {1} on top of its {2}{U}). */
+     *  NumTimes (calculateManaCost test-pays it, canPayManaCost), a RaiseCost static of its own adding waterbend {1}
+     *  as an additional cost (Water Whip's shape: the convoke chooser, waterbend {1} on top of its {2}{U}), or a
+     *  Waterbend part printed in its own cost, which followsUp's mana-only read lets through (a CostWaterbend is a mana
+     *  part), so only pricingAsks's read of the spell's own cost refuses it: waterbend {1} merged into its {2}{U}
+     *  (Cost.add), and a Cost$ of Waterbend<3> alone, the one shape a script's parse keeps (it drops a mana string
+     *  written beside a Waterbend part). */
     @Test
     public void aFollowUpWhosePriceAsksTheControllerIsRefused() {
-        for (final String step : List.of("Assist", "TapCreaturesForMana", "NumTimes", "Waterbend")) {
+        for (final String step : List.of("Assist", "TapCreaturesForMana", "NumTimes", "Waterbend", "PrintedWaterbend",
+                "WaterbendOnly")) {
             final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, DIVINATION, "Swamp", "Island", "Island",
                     "Island", "Island");
             final Card divination = t.find(DIVINATION, ZoneType.Hand);
@@ -2476,10 +2481,20 @@ public class ComboExecuteAiTest extends AITest {
                 spell.putParam("TapCreaturesForMana", "True");
             } else if ("NumTimes".equals(step)) {
                 spell.putParam("Announce", "NumTimes");
-            } else {
+            } else if ("Waterbend".equals(step)) {
                 divination.addStaticAbility("Mode$ RaiseCost | ValidCard$ Card.Self | Activator$ You | Type$ Spell"
                         + " | Cost$ Waterbend<1> | EffectZone$ All | Description$ As an additional cost to cast this"
                         + " spell, waterbend {1}.");
+            } else {
+                if ("PrintedWaterbend".equals(step)) {
+                    spell.getPayCosts().add(new Cost("Waterbend<1>", false));
+                    assertEquals(spell.getPayCosts().getMaxWaterbend(), "1", step);
+                } else {
+                    spell.setPayCosts(new Cost("Waterbend<3>", false));
+                    assertEquals(spell.getPayCosts().getMaxWaterbend(), "3", step);
+                }
+                assertTrue(spell.getPayCosts().isOnlyManaCost(), step);
+                assertTrue(divination.getStaticAbilities().isEmpty(), step);
             }
             assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, step);
         }
