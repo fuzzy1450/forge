@@ -2258,12 +2258,7 @@ public class ComboFetchAiTest extends AITest {
         game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
         assertSame(game.getPhaseHandler().getNextTurn(), ai);
         if (hoser != null) {
-            final Card c = addCard(hoser, opp);
-            if (c.isPlaneswalker()) {
-                c.setCounters(CounterEnumType.LOYALTY, 4);
-            }
-            game.getAction().checkStateEffects(true);
-            assertTrue(c.isInZone(ZoneType.Battlefield), hoser);
+            opposing(hoser);
         }
         assertEquals(game.getPhaseHandler().getPhase(), PhaseType.END_OF_TURN, String.valueOf(hoser));
         assertTrue(t.view().danger(), String.valueOf(hoser));
@@ -2271,6 +2266,16 @@ public class ComboFetchAiTest extends AITest {
         assertEquals(t.oneShort(), List.of(), String.valueOf(hoser));
         assertSame(ai.getZone(ZoneType.Library).get(0), consultation, String.valueOf(hoser));
         return consultation;
+    }
+
+    // the opponent's hoser put on their battlefield (a planeswalker with four loyalty), the state checked
+    private void opposing(final String hoser) {
+        final Card c = addCard(hoser, opp);
+        if (c.isPlaneswalker()) {
+            c.setCounters(CounterEnumType.LOYALTY, 4);
+        }
+        game.getAction().checkStateEffects(true);
+        assertTrue(c.isInZone(ZoneType.Battlefield), hoser);
     }
 
     /** Review Focus 3, under danger: the draw spell after the emptier must itself be castable in the main phase the
@@ -2316,7 +2321,10 @@ public class ComboFetchAiTest extends AITest {
      *  Time Raveler ("each opponent can cast spells only any time they could cast a sorcery") that end step is barred,
      *  so the line is DENIED; but in our Main 1 neither bars Consultation nor Opt. On the Laboratory Maniac danger
      *  board at that end step, Vampiric Tutor puts Consultation on top, a known top ({@link #assertEndStepFetch}), and
-     *  the Vault keeps a five holding it, digs past one missing it and stacks it on top ({@link #assertVault}). */
+     *  the Vault keeps a five holding it, digs past one missing it and stacks it on top ({@link #assertVault}). With
+     *  Laboratory Maniac in our hand instead, and Night's Whisper the draw spell
+     *  ({@link #labInHandAtTheEndStepBeforeOurTurn}), neither bars Lab, Consultation nor Night's Whisper in our Main 1
+     *  either, and Vampiric Tutor puts Consultation on top. */
     @Test
     public void labDangerUnderAbolisherFetches() {
         final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
@@ -2329,6 +2337,14 @@ public class ComboFetchAiTest extends AITest {
             assertEndStepFetch(consultation, lab, hoser);
             labDangerAtTheEndStepBeforeOurTurn(hoser);
             assertVault(lab, true, hoser);
+
+            final String why = hoser + ", Lab in hand";
+            final Card inHand = labInHandAtTheEndStepBeforeOurTurn();
+            opposing(hoser);
+            final ComboLines.Line cast = t.deckLines().get(0);
+            assertEquals(ComboSignals.abandon(ai, cast, t), ComboSignals.Signal.DENIED, why);
+            assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), cast), ComboSignals.Signal.DANGER, why);
+            assertEndStepFetch(inHand, lab, why);
         }
     }
 
@@ -2355,26 +2371,130 @@ public class ComboFetchAiTest extends AITest {
         assertEquals(t.knownTops(), Set.of());
     }
 
-    /** Beyond the plan's tests (follow-up 3, H3): the main-phase window next turn still reads each piece's own bar
-     *  there. Under the opponent's Iona, Shield of Emeria naming black ("your opponents can't cast spells of the chosen
-     *  color") Consultation can be cast at no moment, though Opt can: the line is DENIED at that main-phase window as
-     *  at the end step before our turn, and on the Laboratory Maniac danger board at that end step Vampiric Tutor takes
-     *  the stock pick with the stock draws and leaves no known top. */
+    /** Beyond the plan's tests (follow-up 3, H3): the main-phase window next turn still reads every denial the line's
+     *  own window reads, each piece's bar at its moment there among them. At the end step before our turn, DANGER
+     *  holding, the line is DENIED at that main-phase window as at the end step, and Vampiric Tutor takes the stock
+     *  pick with the stock draws and leaves no known top ({@link #assertDeniedAtMainNextTurn}), on the Laboratory
+     *  Maniac danger board under:
+     *  <ul>
+     *  <li>the opponent's Iona, Shield of Emeria naming black ("your opponents can't cast spells of the chosen color"):
+     *  Consultation can be cast at no moment, though Opt can;
+     *  <li>Iona naming blue, with Laboratory Maniac in our hand and Night's Whisper the draw spell, Island, Island,
+     *  Island, Island, Swamp and Swamp the mana for all three: Lab can be cast at no moment, though Consultation and
+     *  Night's Whisper can (with no Iona the tutor takes Consultation);
+     *  <li>the opponent's Lich's Mastery ("you can't lose the game"): every opponent cannot lose, though we can win;
+     *  <li>three seats, a Platinum Angel of the opponent after us: we cannot win, though the opponent before us, whose
+     *  Dreadmaw is the danger, can lose (with no Angel the tutor takes Consultation);
+     *  <li>Lignify on our Laboratory Maniac, at 2 life (the 0/4 Treefolk blocks, and the Dreadmaw's trample puts 2
+     *  through): Lab has lost its win.
+     *  </ul> */
     @Test
-    public void ionaNamingBlackDeniesTheMainPhaseWindowToo() {
+    public void theMainPhaseWindowNextTurnStillReadsEachDenial() {
         final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
-        final Card consultation = labDangerAtTheEndStepBeforeOurTurn(null);
+        Card consultation = labDangerAtTheEndStepBeforeOurTurn(null);
         final Card iona = addCard("Iona, Shield of Emeria", opp);
         iona.setChosenColors(new ArrayList<>(List.of("black")));
         game.getAction().checkStateEffects(true);
+        assertDeniedAtMainNextTurn(consultation, lab, "Iona naming black");
+
+        assertEndStepFetch(labInHandAtTheEndStepBeforeOurTurn(), lab, "Lab in hand, no Iona");
+        consultation = labInHandAtTheEndStepBeforeOurTurn();
+        final Card blue = addCard("Iona, Shield of Emeria", opp);
+        blue.setChosenColors(new ArrayList<>(List.of("blue")));
+        game.getAction().checkStateEffects(true);
+        assertDeniedAtMainNextTurn(consultation, lab, "Iona naming blue");
+
+        consultation = labDangerAtTheEndStepBeforeOurTurn("Lich's Mastery");
+        assertFalse(ai.cantWin());
+        assertTrue(opp.cantLose());
+        assertDeniedAtMainNextTurn(consultation, lab, "Lich's Mastery");
+
+        assertEndStepFetch(threeSeatLabDangerAtTheEndStepBeforeOurTurn(), lab, "three seats, no Angel");
+        consultation = threeSeatLabDangerAtTheEndStepBeforeOurTurn();
+        addCard("Platinum Angel", game.getPlayers().get(2));
+        assertTrue(ai.cantWin());
+        assertFalse(opp.cantLose());
+        assertDeniedAtMainNextTurn(consultation, lab, "Platinum Angel");
+
+        consultation = labDangerAtTheEndStepBeforeOurTurn(null);
+        final Card maniac = t.find(LAB, ZoneType.Battlefield);
+        addCard("Lignify", opp).attachToEntity(maniac, null);
+        game.getAction().checkStateEffects(true);
+        ai.setLife(2, null);
+        assertFalse(ComboSignals.winsOnDraw(maniac));
+        assertDeniedAtMainNextTurn(consultation, lab, "Lignify");
+    }
+
+    // the line DENIED at the end step before our turn and at the main-phase window next turn, DANGER holding, and
+    // Vampiric Tutor the stock pick, with the stock draws, leaving no known top
+    private void assertDeniedAtMainNextTurn(final Card consultation, final List<ComboLines.Line> lab,
+            final String why) {
         final ComboLines.Line l = t.deckLines().get(0);
-        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DENIED);
-        assertTrue(ComboSignals.deniedAtMainNextTurn(t.view(), l));
-        assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), l), ComboSignals.Signal.DENIED);
-        assertTrue(t.view().danger());
+        assertEquals(game.getPhaseHandler().getPhase(), PhaseType.END_OF_TURN, why);
+        assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DENIED, why);
+        assertTrue(ComboSignals.deniedAtMainNextTurn(t.view(), l), why);
+        assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), l), ComboSignals.Signal.DENIED, why);
+        assertTrue(t.view().danger(), why);
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation, why);
         final SpellAbility vampiric = spell("Vampiric Tutor");
-        assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, vampiric), lab), consultation);
-        assertEquals(t.knownTops(), Set.of());
+        assertNotSame(assertWarmStockParity(() -> pick(ZoneType.Library, vampiric), lab), consultation, why);
+        assertEquals(t.knownTops(), Set.of(), why);
+    }
+
+    /** Line 742-2836 with Laboratory Maniac and Night's Whisper in our hand, the ten-name library, Island, Island,
+     *  Island, Island, Swamp and Swamp, at 3 life against an opposing Colossal Dreadmaw, at the end step of the
+     *  opponent, our turn next: DANGER is the line's only signal (Lab's {2}{U} and Consultation's {B} within next
+     *  turn's six), and Consultation, the top card, its one piece missing. Returns Consultation. */
+    private Card labInHandAtTheEndStepBeforeOurTurn() {
+        start(LAB_CONSULTATION);
+        addCardToZone(LAB, ai, ZoneType.Hand);
+        addCardToZone("Night's Whisper", ai, ZoneType.Hand);
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        for (final String land : List.of("Island", "Island", "Swamp")) {
+            addCard(land, ai);
+        }
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertSame(game.getPhaseHandler().getNextTurn(), ai);
+        assertEquals(t.where(LAB), ComboTracker.Where.HAND);
+        assertEquals(t.missing(t.deckLines().get(0)), List.of(CONSULTATION));
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEquals(t.oneShort(), List.of());
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation);
+        return consultation;
+    }
+
+    /** The Laboratory Maniac danger board in three seats: Laboratory Maniac on our battlefield, Opt in hand, the
+     *  ten-name library, Island, Island and Swamp, at 3 life against a Colossal Dreadmaw of the opponent whose turn
+     *  comes right before ours, at that opponent's end step. Returns the library's Consultation, the top card. */
+    private Card threeSeatLabDangerAtTheEndStepBeforeOurTurn() {
+        game = initAndCreateThreePlayerGame();
+        ai = game.getPlayers().get(1);
+        opp = game.getPlayers().get(0);
+        ((LobbyPlayerAi) ai.getLobbyPlayer()).setAiProfile("Default");
+        t = aiOf(ai).getComboTracker();
+        t.useLines(lines(LAB_CONSULTATION));
+        addCard(LAB, ai);
+        addCardToZone(OPT, ai, ZoneType.Hand);
+        for (final String name : LIBRARY) {
+            addCardToZone(name, ai, ZoneType.Library);
+        }
+        for (final String land : List.of("Island", "Island", "Swamp")) {
+            addCard(land, ai);
+        }
+        ai.setLife(3, null);
+        addCard("Colossal Dreadmaw", opp).setSickness(false);
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertSame(game.getPhaseHandler().getNextTurn(), ai);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER);
+        assertEquals(t.oneShort(), List.of());
+        final Card consultation = t.find(CONSULTATION, ZoneType.Library);
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation);
+        return consultation;
     }
 
     /** Beyond the plan's tests (follow-up 3, H3): a cap counts every spell cast before the draw in that main phase,

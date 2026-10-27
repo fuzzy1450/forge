@@ -2580,4 +2580,51 @@ public class ComboExecuteAiTest extends AITest {
         assertNotNull(t.find(CONSULTATION, ZoneType.Hand), hoser + ": Consultation was cast");
         assertFalse(ai.getCardsIn(ZoneType.Library).isEmpty(), hoser);
     }
+
+    /** Beyond the plan's tests (follow-up 3, H3): the draw's bar counts this turn's spells before it, the emptier
+     *  among them once, still to be cast or cast already. Our own Fires of Invention ("you can cast no more than two
+     *  spells each turn"), line 742-2836 in our Main 1: Laboratory Maniac on our battlefield, Consultation and Opt in
+     *  hand, Island and Swamp. With no spell cast yet Consultation and then Opt are the turn's two, and the window
+     *  opens; with an Opt cast this turn, Consultation could still be cast now, as the second, but the Opt in hand
+     *  would be the third, and Consultation waits. So for Tainted Pact resolving (line 2836-3093, Pact cast this turn
+     *  and on our stack): the Opt after it is the turn's second, and Pact declines the card it exiled; with an Opt cast
+     *  before Pact, the third, and Pact keeps the card. */
+    @Test
+    public void aCapCountsThisTurnsSpellsBeforeTheDraw() {
+        Card consultation = followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp");
+        addCard("Fires of Invention", ai);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, "no spell cast yet");
+
+        consultation = followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp");
+        addCard("Fires of Invention", ai);
+        castThisTurn(OPT);
+        assertFalse(ComboSignals.deniedNow(t.view(), t.deckLines().get(0)), "Consultation would be the second");
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, "an Opt cast");
+
+        for (final boolean optFirst : List.of(false, true)) {
+            final String why = optFirst ? "an Opt cast before Pact" : "Pact the turn's first";
+            start(LAB_PACT);
+            addCard(LAB, ai);
+            hand(OPT);
+            lands("Island", "Swamp", "Swamp");
+            singletonLibrary();
+            addCard("Fires of Invention", ai);
+            if (optFirst) {
+                castThisTurn(OPT);
+            }
+            final Card pact = castOnStack(PACT);
+            assertEquals(game.getStack().getSpellCardsCastThisTurn().size(), optFirst ? 2 : 1, why);
+            assertEquals(ComboExecute.pactDeclines(ai, returnToHand(pact)), !optFirst, why);
+        }
+    }
+
+    /** Our {@code name} cast this turn and gone from the stack to our graveyard: the turn's record of its casts holds
+     *  it (ComboFetchAiTest's castThisTurn). */
+    private void castThisTurn(final String name) {
+        final Card card = castOnStack(name);
+        game.getStack().clear();
+        game.getStackZone().remove(card);
+        ai.getZone(ZoneType.Graveyard).add(card);
+        assertTrue(game.getStack().isEmpty());
+    }
 }
