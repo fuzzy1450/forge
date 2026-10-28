@@ -3525,4 +3525,157 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(ids(t.view().executableNow()), List.of(), why + ": Consultation castable above Swords");
         assertConsultationWindow(consultation, false, why + ", above Swords");
     }
+
+    // ---- follow-up 5, J1 review, round 1: above a stack the window reads the cast caps and the mana for both ----
+
+    /** Review Focus 1 under a cast cap (follow-up 5, J1 review, round 1; ruleOfLawBarsTheFollowUpDraw above a stack):
+     *  an Opt cast right after Demonic Consultation resolves above the opponent's Swords to Plowshares is still the
+     *  turn's spell after Consultation, so the window counts Consultation among the turn's spells there as on the
+     *  empty stack. The probe board (line 742-2836 in our Main 1, Laboratory Maniac on our battlefield, Consultation
+     *  and Opt in hand, Island and Swamp, a 20-card library) with Swords on Lab: with no hoser the window opens (the
+     *  control). Under the opponent's Rule of Law ("each player can't cast more than one spell each turn"), no spell of
+     *  ours cast yet, Consultation alone is castable and the line executable on the empty stack and above Swords, where
+     *  the opponent's Swords is the turn's one spell and no spell of ours: Opt after Swords alone could be cast, but
+     *  after Consultation it would be our second spell. The window is shut on the empty stack and above Swords alike,
+     *  so Consultation does not empty the library for an Opt that cannot be cast. */
+    @Test
+    public void ruleOfLawCountsTheEmptierAboveTheStack() {
+        assertTheCapCountsTheEmptierAboveTheStack("Rule of Law");
+    }
+
+    /** The same under the opponent's Deafening Silence ("each player can't cast more than one noncreature spell each
+     *  turn"): above Swords, Opt after Consultation would be our second noncreature spell. */
+    @Test
+    public void deafeningSilenceCountsTheEmptierAboveTheStack() {
+        assertTheCapCountsTheEmptierAboveTheStack("Deafening Silence");
+    }
+
+    // ruleOfLawCountsTheEmptierAboveTheStack's board: with no hoser the window opens above Swords; under the
+    // opponent's hoser it is shut on the empty stack and above Swords, Consultation castable at both and Opt barred
+    // above Swords only once Consultation is counted
+    private void assertTheCapCountsTheEmptierAboveTheStack(final String hoser) {
+        Card consultation = followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp");
+        swordsOn(t.find(LAB, ZoneType.Battlefield));
+        assertEquals(ids(t.view().executableNow()), List.of("742-2836"), "no hoser, above Swords");
+        assertConsultationWindow(consultation, true, "no hoser, above Swords");
+
+        consultation = followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp");
+        addCard(hoser, opp);
+        String why = hoser + ", the empty stack";
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(), why);
+        assertEquals(ids(t.view().executableNow()), List.of("742-2836"), why + ": Consultation alone is not castable");
+        assertConsultationWindow(consultation, false, why);
+
+        swordsOn(t.find(LAB, ZoneType.Battlefield));
+        why = hoser + " above Swords";
+        final List<Card> cast = game.getStack().getSpellCardsCastThisTurn();
+        assertEquals(cast.size(), 1, why);
+        assertEquals(cast.get(0).getName(), SWORDS, why);
+        assertEquals(cast.get(0).getController(), opp, why + ": the turn's one spell is ours");
+        assertEquals(ids(t.view().executableNow()), List.of("742-2836"), why + ": Consultation alone is not castable");
+        final Card opt = t.find(OPT, ZoneType.Hand);
+        assertFalse(ComboSignals.drawBarredAt(t.view(), castOf(opt), ai, PhaseType.MAIN1, false, cast),
+                why + ": Opt after Swords alone is barred");
+        assertTrue(ComboSignals.drawBarredAt(t.view(), castOf(opt), ai, PhaseType.MAIN1, false,
+                List.of(cast.get(0), consultation)), why + ": Opt after Consultation is castable");
+        assertConsultationWindow(consultation, false, why);
+    }
+
+    /** Beyond the plan's tests, aCapCountsThisTurnsSpellsBeforeTheDraw above a stack (follow-up 5, J1 review, round
+     *  1): above the opponent's Swords to Plowshares on our Laboratory Maniac the draw's bar still counts this turn's
+     *  spells of ours before it, the emptier among them once. Our own Fires of Invention ("you can cast no more than
+     *  two spells each turn"). The probe board (line 742-2836 in our Main 1, Demonic Consultation and Opt in hand,
+     *  Island and Swamp) with Swords on Lab: with no spell of ours cast yet, Consultation and then Opt are the turn's
+     *  two, and the window opens; with an Opt cast this turn, Consultation could still be cast now, as the second, but
+     *  the Opt in hand would be the third, and the window is shut. So for Tainted Pact resolving above Swords (line
+     *  2836-3093, Opt in hand, an Island, a singleton library), its own mana paid: Pact the turn's first spell of ours,
+     *  the Opt after it the second, Pact declines the card it exiled, through the stock route too; with an Opt cast
+     *  before Pact, the third, Pact keeps the card, as stock does. */
+    @Test
+    public void aCapCountsThisTurnsSpellsAboveTheStack() {
+        Card consultation = followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp");
+        addCard("Fires of Invention", ai);
+        swordsOn(t.find(LAB, ZoneType.Battlefield));
+        String why = "no spell of ours cast yet, above Swords";
+        assertEquals(ids(t.view().executableNow()), List.of("742-2836"), why);
+        assertConsultationWindow(consultation, true, why);
+
+        consultation = followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp");
+        addCard("Fires of Invention", ai);
+        castThisTurn(OPT);
+        swordsOn(t.find(LAB, ZoneType.Battlefield));
+        why = "an Opt cast, above Swords";
+        assertEquals(game.getStack().getSpellCardsCastThisTurn().size(), 2, why);
+        assertEquals(ids(t.view().executableNow()), List.of("742-2836"), why + ": Consultation alone is not castable");
+        assertConsultationWindow(consultation, false, why);
+
+        for (final boolean optFirst : List.of(false, true)) {
+            why = (optFirst ? "an Opt cast before Pact" : "Pact the turn's first spell of ours") + ", above Swords";
+            start(LAB_PACT);
+            final Card lab = addCard(LAB, ai);
+            hand(OPT);
+            lands("Island");
+            singletonLibrary();
+            addCard("Fires of Invention", ai);
+            if (optFirst) {
+                castThisTurn(OPT);
+            }
+            swordsOn(lab);
+            final Card pact = castOnStack(PACT);
+            assertEquals(game.getStack().size(), 2, why);
+            assertEquals(game.getStack().peek().getSourceCard(), pact, why + ": Pact is not the stack's top");
+            assertEquals(game.getStack().getSpellCardsCastThisTurn().size(), optFirst ? 3 : 2, why);
+            assertEquals(ids(t.view().executableNow()), List.of("2836-3093"), why + ": the line is not executable");
+            assertEquals(ComboExecute.pactDeclines(ai, returnToHand(pact)), !optFirst, why);
+            assertEquals(aiOf(ai).confirmAction(returnToHand(pact), null, "", null), optFirst, why);
+        }
+    }
+
+    /** Review Focus 1's mana above a stack (follow-up 5, J1 review, round 1; theLabWindowsTwoCostsTakeOneSourceAPip
+     *  above a stack): above the opponent's Swords to Plowshares on our Laboratory Maniac, Opt still needs its own mana
+     *  beside Demonic Consultation's, still to be cast, each source paying one pip of the two costs. Line 742-2836 in
+     *  our Main 1, Lab on our battlefield, Consultation and Opt in hand, a 20-card library and one Underground Sea,
+     *  which pays Consultation's {B} or Opt's {U}, never both: the line is executable, Consultation alone castable, and
+     *  the window is shut on the empty stack and above Swords alike, so Consultation does not empty the library for an
+     *  Opt that cannot be paid. An Island beside the Sea pays Opt: above Swords the window opens. So for Tainted Pact
+     *  resolving above Swords (line 2836-3093, Opt in hand, a singleton library), its own mana paid: with a Swamp
+     *  alone Opt's {U} is unpaid and Pact keeps the card it exiled, as stock does; an Island beside the Swamp, it
+     *  declines, through the stock route too. */
+    @Test
+    public void theManaPaysBothAboveTheStack() {
+        start(LAB_CONSULTATION);
+        final Card lab = addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        hand(OPT);
+        lands("Underground Sea");
+        fillLibrary(ai, 20);
+        String why = "one Underground Sea, the empty stack";
+        assertEquals(ids(t.view().executableNow()), List.of("742-2836"), why);
+        assertConsultationWindow(consultation, false, why);
+        swordsOn(lab);
+        why = "one Underground Sea above Swords";
+        assertEquals(game.getStack().size(), 1, why);
+        assertEquals(ids(t.view().executableNow()), List.of("742-2836"), why + ": the line is not executable");
+        assertConsultationWindow(consultation, false, why);
+        lands("Island");
+        assertConsultationWindow(consultation, true, "an Island beside the Sea, above Swords");
+
+        start(LAB_PACT);
+        final Card labToo = addCard(LAB, ai);
+        hand(OPT);
+        lands("Swamp");
+        singletonLibrary();
+        swordsOn(labToo);
+        final Card pact = castOnStack(PACT);
+        why = "a Swamp alone, Pact above Swords";
+        assertEquals(game.getStack().size(), 2, why);
+        assertEquals(game.getStack().peek().getSourceCard(), pact, why + ": Pact is not the stack's top");
+        assertEquals(ids(t.view().executableNow()), List.of("2836-3093"), why + ": the line is not executable");
+        assertFalse(ComboExecute.pactDeclines(ai, returnToHand(pact)), why);
+        assertTrue(aiOf(ai).confirmAction(returnToHand(pact), null, "", null), why);
+        lands("Island");
+        why = "an Island beside the Swamp, Pact above Swords";
+        assertTrue(ComboExecute.pactDeclines(ai, returnToHand(pact)), why);
+        assertFalse(aiOf(ai).confirmAction(returnToHand(pact), null, "", null), why);
+    }
 }
