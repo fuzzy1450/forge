@@ -24,6 +24,7 @@ import forge.game.card.Card;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.zone.ZoneType;
 import forge.util.MyRandom;
@@ -31,8 +32,9 @@ import forge.util.MyRandom;
 /**
  * Every empty-library line of piece 1 played to a win (follow-up F6, spec 2026-10-22-combo-aware-ai-core-design.md
  * section 6.4), through the real cast path: the game loop gives the AI priority, and the AI casts from its hand,
- * activates and answers its own triggers as it would in a served game. Nothing is put on the stack by hand, and the
- * AI's tracker holds the shipped table's lines, matched against its own cards.
+ * activates and answers its own triggers as it would in a served game. Nothing of ours is put on the stack by hand
+ * (two tests put an opponent's spell there: {@link #theirSpellOn}), and the AI's tracker holds the shipped table's
+ * lines, matched against its own cards.
  *
  * <p>Each game starts in the AI's own Main 1 with a full seven-card hand: the line's pieces and playable junk (cards
  * its lands cast, competing for the line's mana), the lands the line needs on its battlefield, and a library of
@@ -49,6 +51,7 @@ public class ComboLinesEndToEndAiTest extends AITest {
     private static final String JACE = "Jace, Wielder of Mysteries";
     private static final String DOOM = "Doctor Doom, Unrivaled";
     private static final String FBLTHP = "Fblthp, Impossibly Lost";
+    private static final String SWORDS = "Swords to Plowshares";
 
     /** Five junk cards in blue and black, each castable off Islands and Swamps, none a draw spell (a draw spell in
      *  hand would open Laboratory Maniac's and Jace's main-phase window, not their end-step one). */
@@ -482,5 +485,104 @@ public class ComboLinesEndToEndAiTest extends AITest {
         for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
             assertTrue(!c.isLand() || c.isTapped(), c + " untapped: the {1} and the go-off spent less than four lands");
         }
+    }
+
+    /** The opponent's {@code name}, cast at {@code target} and on the stack: put there by hand, nothing paid (the
+     *  opponent's AI is not asked to cast it), the opponent its activator and, as its caster, holding priority. */
+    private Card theirSpellOn(final String name, final Card target) {
+        final Card card = createCard(name, opp);
+        card.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(card);
+        final SpellAbility sa = card.getFirstSpellAbility();
+        sa.setActivatingPlayer(opp);
+        sa.getTargets().add(target);
+        game.getStack().add(sa);
+        assertEquals(game.getStack().size(), 1, name + " is not alone on the stack");
+        assertEquals(game.getPhaseHandler().getPriorityPlayer(), opp, "the opponent does not hold priority");
+        return card;
+    }
+
+    /**
+     * Review Focus 1 (follow-up 4, I1; FOLLOWUP3.md's final review, ComboExecute.java:563), the reviewer's board played
+     * out: Laboratory Maniac (line 742-2836) on our battlefield, Demonic Consultation and Serum Visions in hand beside
+     * the junk, Island and Swamp, a 20-card library, our Main 1, and the opponent's Swords to Plowshares on Lab on the
+     * stack ({@link #theirSpellOn}). The opponent passes, and the game loop hands us priority above Swords. On the base
+     * code Consultation was cast in response, for a Visions that could be cast only once the stack is empty, by when
+     * Swords had exiled Lab: the library gone, we would deck. Now Consultation is not cast: Swords resolves, Lab is
+     * exiled, and our library is whole. Played on to our end step, Consultation stays in our hand.
+     */
+    @Test
+    public void stackedRemovalDoesNotDeckUs() {
+        start();
+        final Card lab = addCard(LAB, ai);
+        hand(CONSULTATION, "Serum Visions");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.deckLines()), List.of("742-2836"));
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        final Card swords = theirSpellOn(SWORDS, lab);
+
+        final List<String> ours = new ArrayList<>();
+        final Map<SpellAbilityStackInstance, Boolean> seen = new IdentityHashMap<>();
+        boolean ourPriority = false;
+        int steps = 0;
+        while (!game.isGameOver() && !game.getStack().isEmpty() && steps++ < MAX_STEPS) {
+            ourPriority |= ai.equals(game.getPhaseHandler().getPriorityPlayer())
+                    && swords.equals(game.getStack().peek().getSourceCard());
+            game.getPhaseHandler().mainLoopStep();
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                if (seen.put(si, Boolean.TRUE) == null && ai.equals(si.getActivatingPlayer())) {
+                    ours.add(label(si));
+                }
+            }
+        }
+        assertTrue(ourPriority, "the game loop never handed us priority above Swords");
+        assertFalse(game.isGameOver(), "the game ended above Swords");
+        assertTrue(game.getStack().isEmpty(), "Swords did not resolve");
+        assertNotNull(t.find(LAB, ZoneType.Exile), "Swords did not exile Lab");
+        assertFalse(ours.contains(CONSULTATION), "Consultation was cast above Swords: " + ours);
+        assertEquals(ai.getCardsIn(ZoneType.Library).size(), 20, "our library is not whole after Swords");
+        assertNotNull(t.find(CONSULTATION, ZoneType.Hand), "Consultation left our hand");
+
+        final PhaseHandler ph = game.getPhaseHandler();
+        while (!game.isGameOver() && !ph.is(PhaseType.END_OF_TURN, ai) && steps++ < MAX_STEPS) {
+            ph.mainLoopStep();
+        }
+        assertTrue(ph.is(PhaseType.END_OF_TURN, ai), "our end step never came: " + ph.getPhase());
+        assertNotNull(t.find(CONSULTATION, ZoneType.Hand), "Consultation was cast after Swords");
+        assertFalse(ai.getCardsIn(ZoneType.Library).isEmpty(), "our library was emptied after Swords");
+    }
+
+    /**
+     * Review Focus 5 (follow-up 4, I1's Doom probe; beyond the plan's tests): Doctor Doom's window is its own {T} draw,
+     * read from the board, and the stack rule leaves it as it was. Doctor Doom, Unrivaled (line x-1) on our
+     * battlefield, untapped and free of summoning sickness, Demonic Consultation in hand beside the junk, three Swamps
+     * and two Islands, a 20-card library, our Main 1, and the opponent's Swords to Plowshares on Doom on the stack
+     * ({@link #theirSpellOn}). The AI casts Consultation in response, and once it has resolved, Swords still beneath,
+     * activates Doom's {T}: its draw on the emptied library wins in that Main 1, before Swords resolves.
+     */
+    @Test
+    public void doctorDoomWinsAboveStackedRemoval() {
+        start();
+        final Card doom = addCard(DOOM, ai);
+        doom.setSickness(false);
+        hand(CONSULTATION, "Runeclaw Bear");
+        lands("Swamp", "Swamp", "Swamp", "Island", "Island");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.deckLines()), List.of("x-1"));
+        final int turn = game.getPhaseHandler().getTurn();
+        theirSpellOn(SWORDS, doom);
+
+        final List<Event> events = play();
+        assertWonBy(DOOM, events);
+        assertLibraryEmpty();
+        final Event consultation = first(events, CONSULTATION);
+        assertEquals(consultation.stack(), List.of(CONSULTATION, SWORDS), "Consultation was not cast above Swords");
+        final Event draw = first(events, DOOM + " ability");
+        assertTrue(events.indexOf(draw) > events.indexOf(consultation), "Doom drew first: " + whats(events));
+        assertEquals(draw.stack(), List.of(DOOM + " ability", SWORDS), "Doom's draw was not activated above Swords");
+        assertEquals(draw.library(), 0, "Doom drew on a library Consultation had not emptied");
+        assertEndedInOurTurn(PhaseType.MAIN1, turn);
+        assertNotNull(t.find(DOOM, ZoneType.Battlefield), "Swords resolved first: Doom left our battlefield");
     }
 }

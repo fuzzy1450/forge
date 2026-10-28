@@ -342,7 +342,9 @@ public final class ComboExecute {
     /**
      * Whether we decline the card Tainted Pact just exiled (ChangeZoneAi.confirmAction): {@code sa} is Pact's
      * DBReturnToHand, an AbilitySub moving a card from exile to our hand, and an ORACLE, LAB or JACE window of a Pact
-     * line holds now. Pact is resolving, so its own mana is paid: a following draw spell needs only its own.
+     * line holds now. Pact is resolving, so its own mana is paid: a following draw spell needs only its own. A LAB or
+     * JACE window holds only while every instance on the stack is Pact's own (follow-up 4, I1): an opponent's spell
+     * beneath it closes the window, and Pact keeps the card, as stock does.
      */
     public static boolean pactDeclines(final Player ai, final SpellAbility sa) {
         if (!(sa instanceof AbilitySub) || sa.getApi() != ApiType.ChangeZone
@@ -541,18 +543,22 @@ public final class ComboExecute {
         return w == Winner.LAB || w == Winner.JACE;
     }
 
-    // a draw of ours follows the emptier: the opponent's end step with our turn next (our draw step, which no cast bar
-    // stops), or a spell in our hand that the AI casts right after the emptier on the emptied library (followUpSpell),
-    // that the mana pays together with the emptier still to be cast, each source assigned to one pip of the two costs
-    // (ComboMana): Consultation's or Pact's {B} beside Opt's {U} (Review Focus 4: two Swamps pay the two mana values,
-    // never Opt; Command Tower and Sol Ring make three mana, but one coloured), and that can be cast there (follow-up
-    // 3, H3: ComboSignals.drawBarredAt, at now's turn and step, a sorcery's moment in our own main phase, where the
-    // emptier leaves the stack as it found it, after this turn's spells and the emptier still to be cast: under Rule
-    // of Law or Deafening Silence, Opt after Consultation would be the turn's second spell). Each cost is its spell's
-    // as the engine prices it now (priced, follow-up 2, G3: under an opponent's Thalia, Guardian of Thraben,
+    // a draw of ours follows the emptier, and only while the stack holds nothing but the emptier's own spell
+    // (onlyTheEmptierOnTheStack, follow-up 4, I1): the opponent's end step with our turn next (our draw step, which no
+    // cast bar stops), or a spell in our hand that the AI casts right after the emptier on the emptied library
+    // (followUpSpell), that the mana pays together with the emptier still to be cast, each source assigned to one pip
+    // of the two costs (ComboMana): Consultation's or Pact's {B} beside Opt's {U} (Review Focus 4: two Swamps pay the
+    // two mana values, never Opt; Command Tower and Sol Ring make three mana, but one coloured), and that can be cast
+    // there (follow-up 3, H3: ComboSignals.drawBarredAt, at now's turn and step, a sorcery's moment in our own main
+    // phase, where the emptier leaves the stack empty, after this turn's spells and the emptier still to be cast: under
+    // Rule of Law or Deafening Silence, Opt after Consultation would be the turn's second spell). Each cost is its
+    // spell's as the engine prices it now (priced, follow-up 2, G3: under an opponent's Thalia, Guardian of Thraben,
     // Consultation's {1}{B} and Opt's {1}{U})
     private static boolean drawFollows(final Player ai, final ComboTracker.View v, final SpellAbility sa,
             final boolean unpaid) {
+        if (!onlyTheEmptierOnTheStack(ai, sa, unpaid)) {
+            return false;
+        }
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         if (ph.is(PhaseType.END_OF_TURN) && ai.equals(ph.getNextTurn())) {
             return true;
@@ -582,6 +588,27 @@ public final class ComboExecute {
             }
         }
         return false;
+    }
+
+    // whether the stack holds nothing but the emptier's own spell (follow-up 4, I1), the Laboratory Maniac and Jace
+    // windows' stack rule: on a cast (unpaid: Consultation's, Pact's, the floor's exemption) the stack is empty; while
+    // Tainted Pact resolves (its decline at each exile) every instance on it is Pact's own spell, still the stack's
+    // top (MagicStack.resolveStack removes the resolving spell only when it finishes). Anything else on it, an
+    // opponent's Swords to Plowshares on our Laboratory Maniac above all, closes the window: an emptier cast in
+    // response would empty our library for a winner that may leave first, and a sorcery-speed draw could not follow
+    // until the stack is empty (in our main phase the draw's moment is a sorcery's). Closed is the safe side: no
+    // emptier is cast, and at the AI's next priority, the stack empty, the window opens if the line still stands
+    private static boolean onlyTheEmptierOnTheStack(final Player ai, final SpellAbility sa, final boolean unpaid) {
+        if (unpaid) {
+            return ai.getGame().getStack().isEmpty();
+        }
+        final Card host = sa.getHostCard();
+        for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+            if (!si.isSpell() || !host.equals(si.getSourceCard())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // the spells of our hand that the AI casts right after the emptier on the emptied library in our own main phase, as
