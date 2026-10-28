@@ -1641,9 +1641,10 @@ public class PlayerControllerAi extends PlayerController {
             // the piece its cast was for, still in our library, unless our Oracle or Fblthp trigger now waits on it.
             final String named = ComboFetch.consultNamed(player, sa);
             if (named != null) { return named; }
-            // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4, follow-up 5, J2): with no
-            // intent, a deck holding a Consultation line names an absent card only while a window of that line holds
-            // now; else a name our library bears, and the library is kept. Null keeps the stock name below.
+            // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4, follow-up 5, J2): when no
+            // intent names a piece (none recorded, its piece gone from our library, or our Oracle or Fblthp trigger
+            // waiting), a deck holding a Consultation line names an absent card only while a window of that line
+            // holds now; else a name our library bears, and the library is kept. Null keeps the stock name below.
             final String kept = ComboExecute.consultationKeeps(player, sa);
             if (kept != null) { return kept; }
             // Name a card provably absent from our library: a hit would stop
