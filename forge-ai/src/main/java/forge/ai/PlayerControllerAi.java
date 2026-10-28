@@ -701,9 +701,12 @@ public class PlayerControllerAi extends PlayerController {
                 }
             }
 
-            // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a live combo line's
-            // piece in our own library goes first, the place meant for the top, before the list is turned for the move;
-            // on a move to the top it is a known top (follow-up F4), the destination read only if a piece moved first.
+            // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.3 and 6.5): a live combo
+            // line's piece in our own library goes first, the place meant for the top, before the list is turned for
+            // the move. On a move to the top, so does the missing piece of a line a fetch to the top takes now under
+            // danger (follow-up 2, G4), which no live line protects, and the cards moved first are known tops
+            // (follow-up F4). The destination is read at most once, and only when a piece of ours from our own library
+            // is in the move.
             ComboFetch.pieceFirst(player, reordered, () -> orderedMoveToTopOfLibrary(destinationZone, source));
             if (orderedMoveToTopOfLibrary(destinationZone, source)) {
                 //Cards going to the top of a deck are returned in reverse order.
