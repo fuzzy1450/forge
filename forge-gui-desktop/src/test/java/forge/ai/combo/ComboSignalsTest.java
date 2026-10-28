@@ -2643,6 +2643,24 @@ public class ComboSignalsTest extends AITest {
         assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "our Bears untapped");
         assertEquals(abandon(l), Signal.DENIED, "our Bears untapped");
 
+        // the opponent's own Grizzly Bears, untapped and free of summoning sickness, beside our summoning-sick Fblthp:
+        // a creature of theirs brings no combat damage of ours to an opponent, so the line is read on our next turn
+        // (follow-up 3, H5 review, round 2: the creatures read are ours, not the battlefield's). CombatUtil.canAttack
+        // reads no controller, so a reading of every creature on the battlefield would find their Bears able to attack
+        // the opponent and deny the line again, on nearly every real board
+        l = fblthpCastThisTurnLine();
+        addCard("Rule of Law", opp);
+        final Card theirs = ready(BEARS, 1, opp).get(0);
+        assertFalse(theirs.isSick() || theirs.isTapped(), "their Bears are untapped and free of summoning sickness");
+        assertTrue(CombatUtil.canAttack(theirs, opp), "CombatUtil.canAttack reads no controller");
+        assertEquals(new ArrayList<>(ai.getCreaturesInPlay()), List.of(t.find(FBLTHP, ZoneType.Battlefield)),
+                "our only creature, summoning sick");
+        draws = MyRandom.callCount();
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "the opponent's ready Bears");
+        assertEquals(MyRandom.callCount(), draws, "the window's reading drew");
+        assertNull(abandon(l), "the opponent's ready Bears");
+        assertEquals(ids(t.live()), List.of("742-8266"), "the opponent's ready Bears");
+
         // our Bears attacking the opponent's planeswalker, not the opponent
         l = fblthpCastThisTurnLine();
         addCard("Rule of Law", opp);
