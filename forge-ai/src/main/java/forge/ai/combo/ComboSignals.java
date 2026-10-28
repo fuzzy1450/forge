@@ -22,6 +22,7 @@ import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCopyService;
 import forge.game.card.CardLists;
+import forge.game.combat.Combat;
 import forge.game.combat.CombatUtil;
 import forge.game.cost.Cost;
 import forge.game.cost.CostPartMana;
@@ -377,7 +378,8 @@ public final class ComboSignals {
     // again as on the next turn the line could run, this turn's spells not carried over: the line waits for that
     // turn, so a tutor resolving under Deafening Silence still fetches for it, and Oracle is held for it. Fblthp's
     // window is not ours to put off: its trigger comes on combat damage, and resolving unanswered it shuffles Fblthp
-    // away, so a trigger this turn is the window (Rule of Law, Fblthp cast this turn)
+    // away, so a trigger that can come this turn is the window (Rule of Law, a hasty Fblthp cast this turn); one that
+    // cannot (a summoning-sick Fblthp, nothing of ours able to attack) leaves the next turn's reading (opensThisTurn)
     private static boolean barredAtWindow(final ComboTracker.View v, final ComboLines.Line l) {
         if (windowNow(v, l)) {
             for (final String name : l.names()) {
@@ -397,8 +399,9 @@ public final class ComboSignals {
      * Signal 2 at the window, on the turn the board opens it (follow-up F3; follow-up 2, G2, for every piece still to
      * be cast and for Doctor Doom's and Fblthp's windows too): whether a piece of {@code l} still to be cast, ours in
      * our hand, library or command zone, cannot be cast at its moment in the line's window, read this turn while the
-     * board can still open the window this turn ({@link #opensThisTurn}: the spells cast this turn count there), else
-     * as on the next turn it could run (none carried over); {@link #deniedNow} reads them now. The CantBeCast statics
+     * board can still open the window this turn ({@link #opensThisTurn}: the spells cast this turn count there; for
+     * Fblthp, while its combat-damage trigger can still come this turn), else as on the next turn it could run (none
+     * carried over); {@link #deniedNow} reads them now. The CantBeCast statics
      * are read as StaticAbilityCantBeCast reads them ({@link #barsAt}), with the moment's turn, step, stack and spells
      * cast:
      * <ul>
@@ -436,7 +439,9 @@ public final class ComboSignals {
     // - Laboratory Maniac, Jace: the turn of the player before us is now;
     // - Doctor Doom: our turn, before our end step, Doom on our battlefield untapped and free of summoning sickness
     //   (ComboExecute.staged);
-    // - Fblthp: our turn, before combat damage, Fblthp on our battlefield
+    // - Fblthp: our turn, before combat damage, Fblthp on our battlefield, and its combat-damage trigger can still come
+    //   this turn (follow-up 3, H5: combatDamageCanCome). A summoning-sick Fblthp with nothing else of ours able to
+    //   attack opens no window this turn: its line is read on the next turn it could run, as every other line is
     private static boolean opensThisTurn(final ComboTracker.View v, final ComboLines.Line l) {
         final ComboLines.Winner w = l.winner();
         final Player ai = v.ai();
@@ -455,7 +460,38 @@ public final class ComboSignals {
         if (w == ComboLines.Winner.DOOM) {
             return phase.isBefore(PhaseType.END_OF_TURN) && ComboExecute.staged(v, w);
         }
-        return phase.isBefore(PhaseType.COMBAT_DAMAGE) && v.where(w.card) == Where.BATTLEFIELD;
+        return phase.isBefore(PhaseType.COMBAT_DAMAGE) && v.where(w.card) == Where.BATTLEFIELD
+                && combatDamageCanCome(ai, phase);
+    }
+
+    // whether combat damage can still reach an opponent of ours this turn, in our turn before combat damage (phase),
+    // read from the board as it is (follow-up 3, H5). Fblthp's trigger is on combat damage dealt to an opponent during
+    // our turn by any source ("Mode$ DamageAll | ValidTarget$ Opponent | CombatDamage$ True"), so Fblthp's own attack
+    // is one way among ours: before attackers are declared, a creature of ours that can attack an opponent
+    // (CombatUtil.canAttack, as the surer kill reads ours: untapped, free of summoning sickness or hasty, nothing such
+    // as defender or a CantAttack static stopping it); from the declare attackers step on, a creature of ours attacking
+    // an opponent, not a planeswalker or a battle. Pure reads: nothing here draws a random number or writes the game
+    private static boolean combatDamageCanCome(final Player ai, final PhaseType phase) {
+        if (phase.isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)) {
+            for (final Card c : ai.getCreaturesInPlay()) {
+                for (final Player opp : ai.getOpponents()) {
+                    if (CombatUtil.canAttack(c, opp)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        final Combat combat = ai.getGame().getCombat();
+        if (combat == null) {
+            return false;
+        }
+        for (final Player opp : ai.getOpponents()) {
+            if (!combat.getAttackersOf(opp).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // whether a piece of l still to be cast cannot be cast at its moment in the line's window on that turn: this

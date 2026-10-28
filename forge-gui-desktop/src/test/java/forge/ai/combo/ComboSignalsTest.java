@@ -20,10 +20,13 @@ import forge.ai.ComputerUtilCombat;
 import forge.ai.PlayerControllerAi;
 import forge.ai.combo.ComboSignals.Signal;
 import forge.game.Game;
+import forge.game.GameEntity;
 import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
+import forge.game.combat.Combat;
 import forge.game.combat.CombatUtil;
+import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -1792,14 +1795,14 @@ public class ComboSignalsTest extends AITest {
         assertEquals(ids(t.live()), List.of("742-8266"));
         assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)));
 
-        // Fblthp cast this turn: before combat damage its trigger comes this turn, Consultation that turn's second
-        // spell, so the line is denied; after combat the trigger comes in a later turn, Fblthp cast on an earlier one
-        start(FBLTHP_CONSULTATION);
-        castOntoTheBattlefield(FBLTHP);
-        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
-        lands("Swamp");
-        l = t.deckLines().get(0);
+        // a spell of ours already cast this turn, in our MAIN1, Fblthp able to attack: before combat damage its
+        // trigger can come this turn, Consultation that turn's second spell, so the line is denied; after combat the
+        // trigger comes in a later turn, this turn's spell not carried over (follow-up 3, H5: this case was built
+        // with a summoning-sick Fblthp cast this turn, whose trigger cannot come this turn)
+        l = fblthpLine();
         addCard("Rule of Law", opp);
+        castThisTurn("Opt", ai);
+        assertTrue(CombatUtil.canAttack(t.find(FBLTHP, ZoneType.Battlefield), opp), "Fblthp can attack this turn");
         assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "the trigger this turn");
         assertEquals(abandon(l), Signal.DENIED, "the trigger this turn");
         assertEquals(t.live(), List.of());
@@ -2450,6 +2453,160 @@ public class ComboSignalsTest extends AITest {
         assertEquals(abandon(l), Signal.DANGER, "two Forests pay for one attacker");
     }
 
+    // ---- follow-up 3, H5: Fblthp's window needs combat damage this turn ----
+
+    @Test
+    public void sickFblthpUnderRuleOfLawIsReadNextTurn() {
+        // Fblthp, Impossibly Lost cast this turn under the opponent's Rule of Law, the turn's one spell so far, is
+        // summoning sick and our only creature: no combat damage of ours can reach an opponent this turn, so its
+        // trigger cannot come this turn, and the line is read on our next turn, Consultation that turn's first spell.
+        // Read now, Consultation would be this turn's second. Before attackers are declared, and after with nothing
+        // attacking: not denied, live, its pieces protected, and the reading draws nothing
+        final ComboLines.Line l = fblthpCastThisTurnLine();
+        addCard("Rule of Law", opp);
+        final Card fblthp = t.find(FBLTHP, ZoneType.Battlefield);
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(fblthp), "the spell already cast this turn");
+        assertEquals(new ArrayList<>(ai.getCreaturesInPlay()), List.of(fblthp), "our only creature");
+        for (final PhaseType step : List.of(PhaseType.MAIN1, PhaseType.COMBAT_BEGIN,
+                PhaseType.COMBAT_DECLARE_BLOCKERS)) {
+            game.getPhaseHandler().devModeSet(step, ai);
+            assertNull(game.getCombat(), step + ": nothing attacking");
+            assertTrue(fblthp.isSick(), step.name());
+            assertFalse(CombatUtil.canAttack(fblthp, opp), step.name());
+            final long draws = MyRandom.callCount();
+            assertTrue(ComboSignals.deniedNow(t.view(), l), step + ": read now, Consultation this turn's second");
+            assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), step + ": the trigger on our next turn");
+            assertNull(abandon(l), step.name());
+            assertEquals(ids(t.live()), List.of("742-8266"), step.name());
+            assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)), step.name());
+            assertTrue(t.protects(fblthp), step.name());
+            assertEquals(MyRandom.callCount(), draws, step + ": the window's reading drew");
+        }
+    }
+
+    @Test
+    public void hastyFblthpUnderRuleOfLawStaysDenied() {
+        // the same Fblthp cast this turn under Rule of Law, with our Fervor ("Creatures you control have haste"): it
+        // can attack this turn, so its trigger can come this turn, Consultation that turn's second spell: denied before
+        // attackers are declared, nothing held or protected for it. After combat damage, in our MAIN2, the trigger
+        // comes on a later turn: live
+        final ComboLines.Line l = fblthpCastThisTurnLine();
+        addCard("Rule of Law", opp);
+        addCard("Fervor", ai);
+        game.getAction().checkStateEffects(true);
+        final Card fblthp = t.find(FBLTHP, ZoneType.Battlefield);
+        assertTrue(fblthp.hasKeyword(Keyword.HASTE), "Fervor's haste");
+        assertTrue(fblthp.isFirstTurnControlled(), "summoning sick but for haste");
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(fblthp), "the spell already cast this turn");
+        for (final PhaseType step : List.of(PhaseType.MAIN1, PhaseType.COMBAT_BEGIN)) {
+            game.getPhaseHandler().devModeSet(step, ai);
+            assertTrue(CombatUtil.canAttack(fblthp, opp), step.name());
+            assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), step + ": the trigger this turn");
+            assertEquals(abandon(l), Signal.DENIED, step.name());
+            assertEquals(t.live(), List.of(), step.name());
+            assertFalse(t.protects(t.find(CONSULTATION, ZoneType.Hand)), step.name());
+            assertFalse(t.protects(fblthp), step.name());
+        }
+        moveToMain2(game, ai);
+        assertTrue(ComboSignals.deniedNow(t.view(), l), "read now, Consultation would be this turn's second");
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "the trigger on a later turn");
+        assertNull(abandon(l), "the trigger on a later turn");
+        assertEquals(ids(t.live()), List.of("742-8266"));
+    }
+
+    @Test
+    public void attackingFblthpOpensItsWindow() {
+        // Fblthp, on our battlefield since an earlier turn, attacking the opponent under Rule of Law, after a spell of
+        // ours this turn: in the declare attackers and the declare blockers step its trigger can come in this combat's
+        // damage step, Consultation that turn's second spell: denied. Fblthp at home in those steps, nothing of ours
+        // attacking: its trigger cannot come this turn, and the line is read on our next turn: live
+        for (final PhaseType step : List.of(PhaseType.COMBAT_DECLARE_ATTACKERS, PhaseType.COMBAT_DECLARE_BLOCKERS)) {
+            ComboLines.Line l = fblthpLine();
+            addCard("Rule of Law", opp);
+            castThisTurn("Opt", ai);
+            final Card fblthp = t.find(FBLTHP, ZoneType.Battlefield);
+            attacking(step, opp, fblthp);
+            assertFalse(CombatUtil.canAttack(fblthp, opp), step + ": attacking, tapped");
+            assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), step + ": the trigger in this combat");
+            assertEquals(abandon(l), Signal.DENIED, step.name());
+            assertEquals(t.live(), List.of(), step.name());
+            assertFalse(t.protects(t.find(CONSULTATION, ZoneType.Hand)), step.name());
+
+            l = fblthpLine();
+            addCard("Rule of Law", opp);
+            castThisTurn("Opt", ai);
+            game.getPhaseHandler().devModeSet(step, ai);
+            assertNull(game.getCombat(), step + ": nothing attacking");
+            assertFalse(t.find(FBLTHP, ZoneType.Battlefield).isTapped(), step + ": Fblthp at home");
+            assertTrue(ComboSignals.deniedNow(t.view(), l), step + ": read now, Consultation this turn's second");
+            assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), step + ": the trigger on our next turn");
+            assertNull(abandon(l), step + ", Fblthp at home");
+            assertEquals(ids(t.live()), List.of("742-8266"), step + ", Fblthp at home");
+        }
+    }
+
+    @Test
+    public void anotherCreaturesCombatDamageOpensFblthpsWindow() {
+        // Fblthp's trigger is on combat damage dealt to an opponent of ours during our turn by any source ("Mode$
+        // DamageAll | ValidTarget$ Opponent | CombatDamage$ True"), not by Fblthp alone: a summoning-sick Fblthp cast
+        // this turn under Rule of Law opens its window this turn while another creature of ours can attack an opponent
+        // (before attackers are declared) or is attacking one (from then on), Consultation that turn's second spell:
+        // denied. Our ready Grizzly Bears, then the Bears attacking the opponent, Fblthp at home
+        ComboLines.Line l = fblthpCastThisTurnLine();
+        addCard("Rule of Law", opp);
+        final Card fblthp = t.find(FBLTHP, ZoneType.Battlefield);
+        final Card bears = ready(BEARS, 1, ai).get(0);
+        assertFalse(CombatUtil.canAttack(fblthp, opp), "Fblthp is summoning sick");
+        assertTrue(CombatUtil.canAttack(bears, opp), "the Bears can attack");
+        long draws = MyRandom.callCount();
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "our ready Bears");
+        assertEquals(MyRandom.callCount(), draws, "the window's reading drew");
+        assertEquals(abandon(l), Signal.DENIED, "our ready Bears");
+        assertEquals(t.live(), List.of(), "our ready Bears");
+        attacking(PhaseType.COMBAT_DECLARE_BLOCKERS, opp, bears);
+        assertFalse(game.getCombat().isAttacking(fblthp), "Fblthp at home");
+        draws = MyRandom.callCount();
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "our Bears attacking");
+        assertEquals(MyRandom.callCount(), draws, "the window's reading drew");
+        assertEquals(abandon(l), Signal.DENIED, "our Bears attacking");
+        assertEquals(t.live(), List.of(), "our Bears attacking");
+
+        // what can bring no combat damage to an opponent leaves the line to our next turn, not denied: our ready Wall
+        // of Wood (defender, it cannot attack: an untapped creature free of summoning sickness is not enough)
+        l = fblthpCastThisTurnLine();
+        addCard("Rule of Law", opp);
+        final Card wall = ready("Wall of Wood", 1, ai).get(0);
+        assertFalse(wall.isTapped() || wall.isSick(), "the Wall is untapped and free of summoning sickness");
+        assertFalse(CombatUtil.canAttack(wall, opp), "the Wall cannot attack");
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "our Wall of Wood");
+        assertNull(abandon(l), "our Wall of Wood");
+        assertEquals(ids(t.live()), List.of("742-8266"), "our Wall of Wood");
+
+        // our Bears attacking the opponent's planeswalker, not the opponent
+        l = fblthpCastThisTurnLine();
+        addCard("Rule of Law", opp);
+        Card walker = planeswalker("Ajani Goldmane", opp);
+        Card bear = ready(BEARS, 1, ai).get(0);
+        attacking(PhaseType.COMBAT_DECLARE_BLOCKERS, walker, bear);
+        assertTrue(game.getCombat().getAttackersOf(opp).isEmpty(), "nothing attacks the opponent");
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "our Bears attacking a planeswalker");
+        assertNull(abandon(l), "our Bears attacking a planeswalker");
+        assertEquals(ids(t.live()), List.of("742-8266"), "our Bears attacking a planeswalker");
+
+        // our ready Bears able to attack only that planeswalker, under the opponent's Blazing Archon ("Creatures can't
+        // attack you")
+        l = fblthpCastThisTurnLine();
+        addCard("Rule of Law", opp);
+        walker = planeswalker("Ajani Goldmane", opp);
+        addCard("Blazing Archon", opp);
+        bear = ready(BEARS, 1, ai).get(0);
+        assertFalse(CombatUtil.canAttack(bear, opp), "the Archon bars attacks on the opponent");
+        assertTrue(CombatUtil.canAttack(bear, walker), "the Bears can attack the planeswalker");
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "our Bears able to attack a planeswalker alone");
+        assertNull(abandon(l), "our Bears able to attack a planeswalker alone");
+        assertEquals(ids(t.live()), List.of("742-8266"), "our Bears able to attack a planeswalker alone");
+    }
+
     /** Line 742-1295 on the 12-against-10 board of follow-up 2's Review Focus 5, our MAIN1: Oracle in hand,
      *  Consultation in the library, the line's mana among seven lands of ours, seven of the opponent's. A handful of
      *  statics are in play: the opponent's Glorious Anthem (+1/+1), Familiar Ground, Champion of Lambholt (a
@@ -2540,6 +2697,41 @@ public class ComboSignalsTest extends AITest {
         assertTrue(game.getStack().isEmpty());
         assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(card));
         return card;
+    }
+
+    /** Line 742-8266 in a fresh two-player game in our MAIN1: Fblthp, Impossibly Lost cast this turn, the turn's one
+     *  spell so far, summoning sick on our battlefield; Consultation in hand, a Swamp. */
+    private ComboLines.Line fblthpCastThisTurnLine() {
+        start(FBLTHP_CONSULTATION);
+        final Card fblthp = castOntoTheBattlefield(FBLTHP);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        lands("Swamp");
+        assertTrue(fblthp.isSick(), "Fblthp cast this turn is summoning sick");
+        assertEquals(ids(t.deckLines()), List.of("742-8266"));
+        return t.deckLines().get(0);
+    }
+
+    /** Our turn's {@code step}, attackers declared: {@code attackers} attacking {@code defender}, tapped as their
+     *  attack taps them. */
+    private void attacking(final PhaseType step, final GameEntity defender, final Card... attackers) {
+        game.getPhaseHandler().devModeSet(step, ai);
+        final Combat combat = new Combat(ai);
+        for (final Card c : attackers) {
+            combat.addAttacker(c, defender);
+            c.setTapped(true);
+        }
+        game.getPhaseHandler().setCombat(combat);
+        for (final Card c : attackers) {
+            assertTrue(game.getCombat().isAttacking(c, defender), c + " attacking " + defender);
+        }
+    }
+
+    /** {@code p}'s planeswalker {@code name}, with four loyalty. */
+    private Card planeswalker(final String name, final Player p) {
+        final Card c = addCard(name, p);
+        c.setCounters(CounterEnumType.LOYALTY, 4);
+        assertTrue(c.isPlaneswalker());
+        return c;
     }
 
     /** Fblthp's combat-damage trigger, copied for us with its trigger set (anImprisonedFblthpsFiredTriggerStillWins'
