@@ -46,14 +46,20 @@ import forge.game.zone.ZoneType;
  * there and not barred (executable's denial reads Linvala, and an ability-removing effect such as Imprisoned in the
  * Moon; Consultation only);
  * <li>LAB, JACE: that winner on our battlefield, holding its Draw replacement that wins (executable's denial reads its
- * loss: Lignify, Humility, a face-down copy), and a draw of ours follows: the opponent's end step with our turn
- * next, or a spell in our hand that the AI casts right after the emptier on the emptied library, read from its shape
- * (a Draw, Scry or RearrangeTopOfLibrary root, every part one whose AI approves it there, an untargeted Draw of ours
- * of a fixed number of cards among them, a cost of mana alone, whose price asks the AI's controller nothing: no
- * Convoke, Improvise, Delve, Assist or waterbend, follow-up 3, H1; a sorcery-speed one only in our own main phase; a
- * RemoveDeck-hinted card only on its own readmit row), the mana for the emptier and that spell together, each one's
- * coloured pips among it, and that spell castable right after the emptier (follow-up 3, H3: its own cast bar, the
- * emptier counted among the turn's spells, so Rule of Law and Deafening Silence close the window).
+ * loss: Lignify, Humility, a face-down copy), nothing on the stack but the emptier's own spell (follow-up 4, I1: at the
+ * emptier's cast an empty stack, and while Tainted Pact resolves only Pact itself, still the stack's top; anything else
+ * on it, ours or an opponent's, closes the window, so no emptier is cast in response to an opponent's Swords to
+ * Plowshares on our Laboratory Maniac, and at the AI's next priority on an empty stack the window opens if the line
+ * still stands; the three windows above read no such rule), and a draw of ours follows: the opponent's end step with
+ * our turn next, or a spell in our hand that the AI casts right after the emptier on the emptied library, read from its
+ * shape (a Draw, Scry or RearrangeTopOfLibrary root, every part one whose AI approves it there, an untargeted Draw of
+ * ours of a fixed number of cards among them, a cost of mana alone, whose pricing neither asks the AI's controller nor
+ * test-pays, follow-up 3, H1: no Convoke, Improvise, Delve, Assist, waterbend or TapCreaturesForMana, each a question
+ * to the controller, and no Announce$ NumTimes, which pricing test-pays, a payment tried rather than a question asked;
+ * a sorcery-speed one only in our own main phase; a RemoveDeck-hinted card only on its own readmit row), the mana for
+ * the emptier and that spell together, each one's coloured pips among it, and that spell castable right after the
+ * emptier (follow-up 3, H3: its own cast bar, the emptier counted among the turn's spells, so Rule of Law and Deafening
+ * Silence close the window).
  * </ul>
  * Pact's own singleton-library condition is executable's. None of it while we cannot win or every opponent cannot lose
  * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
