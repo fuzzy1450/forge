@@ -220,7 +220,9 @@ public final class ComboTracker {
 
     /** Whether a card of ours named {@code name} (by {@link #nameOf}) is a known top ({@link #knownTops}): Demonic
      *  Consultation never tutors for it ({@link ComboFetch#consultTutor}), since the six cards it exiles first would
-     *  take it, and the whole library with it. The memory only ever refuses a tutor, never chooses one. */
+     *  take it, and the whole library with it. The memory never chooses a card. It does two things only: it refuses
+     *  a tutor here, and it declines an optional shuffle of our library (Ponder's, Portent's) while our top card is a
+     *  known top that is still a protected piece ({@link ComboHold#keepsTheStackedTop}, follow-up F5). */
     public boolean knownTop(final String name) {
         prune();
         for (final Card c : knownTops.values()) {
