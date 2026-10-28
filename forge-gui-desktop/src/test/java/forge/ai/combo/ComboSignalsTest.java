@@ -2517,15 +2517,20 @@ public class ComboSignalsTest extends AITest {
     @Test
     public void attackingFblthpOpensItsWindow() {
         // Fblthp, on our battlefield since an earlier turn, attacking the opponent under Rule of Law, after a spell of
-        // ours this turn: in the declare attackers and the declare blockers step its trigger can come in this combat's
-        // damage step, Consultation that turn's second spell: denied. Fblthp at home in those steps, nothing of ours
-        // attacking: its trigger cannot come this turn, and the line is read on our next turn: live
-        for (final PhaseType step : List.of(PhaseType.COMBAT_DECLARE_ATTACKERS, PhaseType.COMBAT_DECLARE_BLOCKERS)) {
+        // ours this turn: in the declare attackers, the declare blockers and the first strike damage step its trigger
+        // can come in this combat's damage step (Fblthp has no first strike: its damage is dealt in the combat damage
+        // step, after the first strike damage step), Consultation that turn's second spell: denied. Fblthp at home in
+        // those steps, nothing of ours attacking: its trigger cannot come this turn, and the line is read on our next
+        // turn: live. From the combat damage step on: fblthpsWindowClosesAtCombatDamage
+        for (final PhaseType step : List.of(PhaseType.COMBAT_DECLARE_ATTACKERS, PhaseType.COMBAT_DECLARE_BLOCKERS,
+                PhaseType.COMBAT_FIRST_STRIKE_DAMAGE)) {
             ComboLines.Line l = fblthpLine();
             addCard("Rule of Law", opp);
             castThisTurn("Opt", ai);
             final Card fblthp = t.find(FBLTHP, ZoneType.Battlefield);
             attacking(step, opp, fblthp);
+            assertFalse(fblthp.hasFirstStrike() || fblthp.hasDoubleStrike(), step + ": no first strike");
+            assertTrue(game.getStack().isEmpty(), step + ": no trigger on our stack");
             assertFalse(CombatUtil.canAttack(fblthp, opp), step + ": attacking, tapped");
             assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), step + ": the trigger in this combat");
             assertEquals(abandon(l), Signal.DENIED, step.name());
@@ -2543,6 +2548,45 @@ public class ComboSignalsTest extends AITest {
             assertNull(abandon(l), step + ", Fblthp at home");
             assertEquals(ids(t.live()), List.of("742-8266"), step + ", Fblthp at home");
         }
+    }
+
+    @Test
+    public void fblthpsWindowClosesAtCombatDamage() {
+        // Fblthp's window opens this turn only until combat damage (follow-up 3, H5 review). Fblthp, on our
+        // battlefield since an earlier turn, still attacking the opponent under Rule of Law after a spell of ours this
+        // turn, in the combat damage and the end of combat step with no trigger of its on our stack: this combat's
+        // damage is dealt (blocked, say) and its trigger did not come, so it cannot come this turn any more. The line
+        // is read on our next turn, Consultation that turn's first spell: not denied, live, its pieces protected, and
+        // the reading draws nothing. Read now, Consultation would be this turn's second
+        for (final PhaseType step : List.of(PhaseType.COMBAT_DAMAGE, PhaseType.COMBAT_END)) {
+            final ComboLines.Line l = fblthpLine();
+            addCard("Rule of Law", opp);
+            castThisTurn("Opt", ai);
+            final Card fblthp = t.find(FBLTHP, ZoneType.Battlefield);
+            attacking(step, opp, fblthp);
+            assertEquals(new ArrayList<>(game.getCombat().getAttackersOf(opp)), List.of(fblthp),
+                    step + ": Fblthp still attacking");
+            assertTrue(game.getStack().isEmpty(), step + ": no trigger on our stack");
+            assertTrue(ComboSignals.deniedNow(t.view(), l), step + ": read now, Consultation this turn's second");
+            final long draws = MyRandom.callCount();
+            assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), step + ": the trigger on our next turn");
+            assertNull(abandon(l), step.name());
+            assertEquals(ids(t.live()), List.of("742-8266"), step.name());
+            assertTrue(t.protects(t.find(CONSULTATION, ZoneType.Hand)), step.name());
+            assertTrue(t.protects(fblthp), step.name());
+            assertEquals(MyRandom.callCount(), draws, step + ": the window's reading drew");
+        }
+
+        // the control: the same board in the combat damage step with Fblthp's trigger on our stack. That window is
+        // now, Consultation this turn's second spell: denied
+        final ComboLines.Line l = fblthpLine();
+        addCard("Rule of Law", opp);
+        castThisTurn("Opt", ai);
+        final Card fblthp = t.find(FBLTHP, ZoneType.Battlefield);
+        attacking(PhaseType.COMBAT_DAMAGE, opp, fblthp);
+        game.getStack().add(fblthpTrigger(fblthp));
+        assertEquals(abandon(l), Signal.DENIED, "the trigger on our stack");
+        assertEquals(t.live(), List.of(), "the trigger on our stack");
     }
 
     @Test
@@ -2581,6 +2625,23 @@ public class ComboSignalsTest extends AITest {
         assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "our Wall of Wood");
         assertNull(abandon(l), "our Wall of Wood");
         assertEquals(ids(t.live()), List.of("742-8266"), "our Wall of Wood");
+
+        // our Grizzly Bears free of summoning sickness but tapped (for mana in our MAIN1, say): it cannot attack this
+        // turn (follow-up 3, H5 review: untapped is part of the reading before attackers are declared). Untapped, the
+        // same Bears deny the line
+        l = fblthpCastThisTurnLine();
+        addCard("Rule of Law", opp);
+        final Card tapped = ready(BEARS, 1, ai).get(0);
+        tapped.setTapped(true);
+        assertFalse(tapped.isSick(), "the Bears are free of summoning sickness");
+        assertFalse(CombatUtil.canAttack(tapped, opp), "the tapped Bears cannot attack");
+        assertFalse(ComboSignals.barredAtWindowNow(t.view(), l), "our tapped Bears");
+        assertNull(abandon(l), "our tapped Bears");
+        assertEquals(ids(t.live()), List.of("742-8266"), "our tapped Bears");
+        tapped.setTapped(false);
+        assertTrue(CombatUtil.canAttack(tapped, opp), "the untapped Bears can attack");
+        assertTrue(ComboSignals.barredAtWindowNow(t.view(), l), "our Bears untapped");
+        assertEquals(abandon(l), Signal.DENIED, "our Bears untapped");
 
         // our Bears attacking the opponent's planeswalker, not the opponent
         l = fblthpCastThisTurnLine();
