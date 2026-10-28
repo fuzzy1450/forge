@@ -469,8 +469,9 @@ public final class ComboSignals {
     // our turn by any source ("Mode$ DamageAll | ValidTarget$ Opponent | CombatDamage$ True"), so Fblthp's own attack
     // is one way among ours: before attackers are declared, a creature of ours that can attack an opponent
     // (CombatUtil.canAttack, as the surer kill reads ours: untapped, free of summoning sickness or hasty, nothing such
-    // as defender or a CantAttack static stopping it); from the declare attackers step on, a creature of ours attacking
-    // an opponent, not a planeswalker or a battle. Pure reads: nothing here draws a random number or writes the game
+    // as defender or a CantAttack static stopping it), and from the declare attackers step on, a creature of ours
+    // attacking an opponent, not a planeswalker or a battle. Pure reads: nothing here draws a random number or writes
+    // the game
     private static boolean combatDamageCanCome(final Player ai, final PhaseType phase) {
         if (phase.isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)) {
             for (final Card c : ai.getCreaturesInPlay()) {

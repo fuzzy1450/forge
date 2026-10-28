@@ -690,7 +690,7 @@ public final class ComboExecute {
     // - Offering and Emerge, through choosePermanentsToSacrifice: creature casts only, never the follow-up shape, so not
     //   read here.
     // calculateManaCost test-pays an Announce$ NumTimes cost (canPayManaCost), which draws. Every spell's price under a
-    // ReduceCost static also reaches chooseSingleStaticAbility, and under an UpTo one chooseNumberForCostReduction; the
+    // ReduceCost static also reaches chooseSingleStaticAbility, and under an UpTo one chooseNumberForCostReduction. The
     // AI answers them with the first static and the most, reading and drawing nothing, and they stay (Helm of
     // Awakening's reduction). The keywords and params are read first, then the raise, which draws nothing and asks
     // nobody (the commander tax and the RaiseCost statics: priced's own first step), with us as the spell's activator
