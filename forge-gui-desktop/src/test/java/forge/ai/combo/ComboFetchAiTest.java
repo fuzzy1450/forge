@@ -918,6 +918,79 @@ public class ComboFetchAiTest extends AITest {
         assertSame(pick(ZoneType.Hand, tutor), consultation);
     }
 
+    /** The opponent's {@code name}, cast and on the stack, nothing paid or resolved, aimed at nothing, the opponent its
+     *  activator (ComboExecuteAiTest's theirSpell). */
+    private void theirSpell(final String name) {
+        final Card card = createCard(name, opp);
+        card.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(card);
+        final SpellAbility sa = card.getFirstSpellAbility();
+        sa.setActivatingPlayer(opp);
+        game.getStack().add(sa);
+        assertSame(game.getStack().peek().getSourceCard(), card, name + " is not on the stack");
+        assertSame(game.getStack().peek().getActivatingPlayer(), opp);
+    }
+
+    /** Follow-up 4, I1 review, round 1 (the plan's "followUpDraws is unchanged"): danger's win in time reads the main
+     *  phase of ours the fetched piece arrives for, so no stack closes it, though the Laboratory Maniac window now
+     *  opens only on an empty one. A tutor resolves on the stack: MagicStack.resolveStack leaves its spell there until
+     *  it finishes. On the Laboratory Maniac danger board ({@link #labDangerBoard}: our Main 1, Opt to follow),
+     *  Demonic Tutor on our stack alone, then above the opponent's Opt; and at the opponent's end step, our turn next,
+     *  Vampiric Tutor on our stack, with Divination, a sorcery, to follow in our next Main 1 and every land tapped now.
+     *  Each time the follow-up draws (ComboExecute.followUpDraws) still hold that draw spell, and the tutor takes
+     *  Consultation, as on the empty stack (dangerDoesNotRecountAPieceAlreadyInPlay,
+     *  dangerAtTheEndStepBeforeOurTurnReadsEachWinnersWindowNextTurn); with no line, another card. */
+    @Test
+    public void dangersWinInTimeReadsNoStack() {
+        final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
+        for (final boolean theirs : List.of(false, true)) {
+            final String why = theirs ? "Demonic Tutor above the opponent's Opt" : "Demonic Tutor alone";
+            final Card consultation = labDangerBoard();
+            if (theirs) {
+                theirSpell(OPT);
+            }
+            final SpellAbility tutor = castOnStack("Demonic Tutor").getFirstSpellAbility();
+            assertEquals(game.getStack().size(), theirs ? 2 : 1, why);
+            assertSame(game.getStack().peek().getSourceCard(), tutor.getHostCard(), why);
+            assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER, why);
+            assertEquals(t.oneShort(), List.of(), why);
+            assertFollowUpDraw(OPT, why);
+            t.useLines(List.of());
+            assertNotSame(pick(ZoneType.Hand, tutor), consultation, why);
+            t.useLines(lab);
+            assertSame(pick(ZoneType.Hand, tutor), consultation, why);
+        }
+
+        final String why = "Vampiric Tutor at the end step before our turn";
+        final Card consultation = labDangerBoard();
+        game.getAction().moveTo(ZoneType.Graveyard, t.find(OPT, ZoneType.Hand), null, AbilityKey.newMap());
+        addCardToZone("Divination", ai, ZoneType.Hand);
+        addCard("Island", ai);
+        for (final Card land : ai.getLandsInPlay()) {
+            land.setTapped(true);
+        }
+        game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        assertSame(game.getPhaseHandler().getNextTurn(), ai, why);
+        final SpellAbility vampiric = castOnStack("Vampiric Tutor").getFirstSpellAbility();
+        assertEquals(game.getStack().size(), 1, why);
+        assertEquals(ComboSignals.abandon(ai, t.deckLines().get(0), t), ComboSignals.Signal.DANGER, why);
+        assertFollowUpDraw("Divination", why);
+        t.useLines(List.of());
+        assertNotSame(pick(ZoneType.Library, vampiric), consultation, why);
+        t.useLines(lab);
+        assertSame(pick(ZoneType.Library, vampiric), consultation, why);
+        assertEquals(t.knownTops(), Set.of(consultation.getId()), why);
+    }
+
+    // the follow-up draws as danger's win in time reads them (ComboExecute.followUpDraws, this turn's spells before):
+    // one, the spell of our hand's card of that name
+    private void assertFollowUpDraw(final String name, final String why) {
+        final List<SpellAbility> draws = ComboExecute.followUpDraws(t.view(),
+                new ArrayList<>(game.getStack().getSpellCardsCastThisTurn()));
+        assertEquals(draws.size(), 1, why + ": " + draws);
+        assertSame(draws.get(0).getHostCard(), t.find(name, ZoneType.Hand), why);
+    }
+
     @Test
     public void dangerWithoutTheManaToWinTakesTheStockPick() {
         // the danger board on one land: Oracle's two and Consultation's one outrun next turn's one, so NO_MANA holds

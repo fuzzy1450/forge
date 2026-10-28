@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -92,6 +93,9 @@ public class ComboExecuteAiTest extends AITest {
     private static final String ARCANIST = "Vodalian Arcanist";
     private static final String SWORDS = "Swords to Plowshares";
     private static final String VISIONS = "Serum Visions";
+    private static final String BANISHER = "Banisher Priest";
+    private static final String VISARA = "Visara the Dreadful";
+    private static final String DOWNFALL = "Hero's Downfall";
 
     /** Fifteen distinct names, none a land and none a piece of piece 1's lines: a library Tainted Pact can empty. */
     private static final List<String> SINGLETON = List.of("Runeclaw Bear", "Grizzly Bears", "Hill Giant", "Craw Wurm",
@@ -3049,26 +3053,108 @@ public class ComboExecuteAiTest extends AITest {
 
     // aSorceryFollowUpWaitsForTheStack's board, with spell (a sorcery or not) as the draw that follows
     private void assertTheFollowUpWaitsForTheStack(final String spell, final boolean sorcery) {
-        final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, spell, "Island", "Swamp");
-        final Card lab = t.find(LAB, ZoneType.Battlefield);
+        assertTheFollowUpWaitsFor(LAB_CONSULTATION, LAB, spell, PhaseType.MAIN1, true, this::swordsOn);
         assertEquals(SpellAbilityAi.isSorcerySpeed(castOf(t.find(spell, ZoneType.Hand)), ai), sorcery, spell);
-        assertEquals(game.getPhaseHandler().getPhase(), PhaseType.MAIN1);
-        assertEquals(game.getPhaseHandler().getPlayerTurn(), ai);
-        assertTrue(game.getStack().isEmpty());
+    }
+
+    // followUpBoard for line row with winner on our battlefield and spell the draw that follows, at phase of our turn
+    // (ours) or the opponent's: on the empty stack the window opens (the control). Then object puts one object on the
+    // stack (given our winner; it returns the instance): with it there, the same line still executable, Consultation is
+    // not cast as the emptier: no window's WillPlay, nor a tutor's (the stock refusal), and no floor exemption. That
+    // object gone, the stack empty, the window opens again
+    private void assertTheFollowUpWaitsFor(final String row, final String winner, final String spell,
+            final PhaseType phase, final boolean ours, final Function<Card, SpellAbilityStackInstance> object) {
+        final Card consultation = followUpBoard(row, winner, spell, "Island", "Swamp");
+        final Card w = t.find(winner, ZoneType.Battlefield);
+        final PhaseHandler ph = game.getPhaseHandler();
+        ph.devModeSet(phase, ours ? ai : opp);
+        String why = spell + " at " + (ours ? "our " : "the opponent's ") + phase;
+        assertEquals(ph.getPhase(), phase, why);
+        assertEquals(ph.getPlayerTurn(), ours ? ai : opp, why);
+        assertTrue(game.getStack().isEmpty(), why);
+        final List<String> line = ids(t.executable());
+        assertEquals(line.size(), 1, why);
         assertEquals(ComboExecute.consultation(ai, castOf(consultation)).decision(), AiPlayDecision.WillPlay,
-                spell + ": no window on the empty stack");
-        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo", spell + ", the empty stack");
+                why + ": no window on the empty stack");
+        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo", why + ", the empty stack");
 
-        final SpellAbilityStackInstance swords = theirSpell(SWORDS, lab);
-        assertEquals(ids(t.executable()), List.of("742-2836"), spell + ": the line is not executable above Swords");
-        assertNull(ComboExecute.consultation(ai, castOf(consultation)), spell + ": Consultation approved above Swords");
-        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, spell + " above Swords");
-        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)), spell + " above Swords");
+        final SpellAbilityStackInstance si = object.apply(w);
+        why += " above " + named(si);
+        assertEquals(game.getStack().size(), 1, why);
+        assertEquals(ids(t.executable()), line, why + ": the line is not executable");
+        assertNull(ComboExecute.consultation(ai, castOf(consultation)), why + ": Consultation approved");
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, why);
+        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)), why);
 
-        game.getStack().remove(swords);
-        assertTrue(game.getStack().isEmpty());
-        assertEquals(consider(consultation), AiPlayDecision.WillPlay, spell + ": the stack empty again");
-        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo", spell + ", the stack empty again");
+        game.getStack().remove(si);
+        assertTrue(game.getStack().isEmpty(), why);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, why + ": the stack empty again");
+        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo", why + ", the stack empty again");
+    }
+
+    // a stack object as the messages name it: whose, its source's name, and its kind
+    private String named(final SpellAbilityStackInstance si) {
+        return (ai.equals(si.getActivatingPlayer()) ? "our " : "the opponent's ") + si.getSourceCard().getName()
+                + (si.isSpell() ? "" : si.isTrigger() ? "'s trigger" : "'s ability");
+    }
+
+    // the stack objects the tests below put on the stack, each given our winner and returning its instance, the stack's
+    // top: the opponent's Swords to Plowshares aimed at it
+    private SpellAbilityStackInstance swordsOn(final Card winner) {
+        return theirSpell(SWORDS, winner);
+    }
+
+    // the opponent's Hero's Downfall aimed at it (a creature or a planeswalker: Jace too)
+    private SpellAbilityStackInstance downfallOn(final Card winner) {
+        return theirSpell(DOWNFALL, winner);
+    }
+
+    // the opponent's Opt, aimed at nothing
+    private SpellAbilityStackInstance theirOpt(final Card winner) {
+        return theirSpell(OPT, null);
+    }
+
+    // the opponent's triggered ability: Banisher Priest enters for the opponent, and its entering trigger, the
+    // O-Ring-style removal that is no spell, exiles "target creature an opponent controls", our winner, which the
+    // opponent's AI aims it at (the only one)
+    private SpellAbilityStackInstance theirTrigger(final Card winner) {
+        final SpellAbilityStackInstance top = enters(addCardToZone(BANISHER, opp, ZoneType.Hand));
+        assertEquals(top.getActivatingPlayer(), opp);
+        assertTrue(top.getTargetChoices().contains(winner), "Banisher Priest's trigger aims elsewhere");
+        return top;
+    }
+
+    // the opponent's activated ability: Visara the Dreadful's {T}, "destroy target creature", aimed at our winner,
+    // activated by the opponent (on the stack, nothing paid)
+    private SpellAbilityStackInstance theirActivation(final Card winner) {
+        final Card visara = addCard(VISARA, opp);
+        visara.setSickness(false);
+        SpellAbility destroy = null;
+        for (final SpellAbility sa : visara.getSpellAbilities()) {
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.Destroy) {
+                destroy = sa;
+            }
+        }
+        assertNotNull(destroy, "no destroy ability on Visara");
+        destroy.setActivatingPlayer(opp);
+        destroy.getTargets().add(winner);
+        game.getStack().add(destroy);
+        final SpellAbilityStackInstance top = game.getStack().peek();
+        assertEquals(top.getSourceCard(), visara, "Visara's ability is not on the stack");
+        assertTrue(top.getSpellAbility().isActivatedAbility() && !top.isTrigger() && !top.isSpell());
+        assertEquals(top.getActivatingPlayer(), opp);
+        assertTrue(top.getTargetChoices().contains(winner), "Visara's ability aims elsewhere");
+        return top;
+    }
+
+    // our own spell: our Opt cast (castOnStack), not the hand's
+    private SpellAbilityStackInstance ourSpell(final Card winner) {
+        final Card opt = castOnStack(OPT);
+        final SpellAbilityStackInstance top = game.getStack().peek();
+        assertEquals(top.getSourceCard(), opt, "our Opt is not on the stack");
+        assertTrue(top.isSpell());
+        assertEquals(top.getActivatingPlayer(), ai);
+        return top;
     }
 
     /** Review Focus 2 (follow-up 4, I1): at the opponent's end step, our turn next, the window needs no draw spell
@@ -3079,14 +3165,14 @@ public class ComboExecuteAiTest extends AITest {
      *  floor; on the empty stack, before and after, the window opens. */
     @Test
     public void theEndStepWindowWaitsForTheStack() {
-        assertTheEndStepWaits(LAB_CONSULTATION, LAB, "742-2836", SWORDS, true);
-        assertTheEndStepWaits(JACE_CONSULTATION, JACE, "742-3096", OPT, false);
+        assertTheEndStepWaits(LAB_CONSULTATION, LAB, "742-2836", this::swordsOn);
+        assertTheEndStepWaits(JACE_CONSULTATION, JACE, "742-3096", this::theirOpt);
     }
 
-    // theEndStepWindowWaitsForTheStack's board for one winner, with the opponent's spell on the stack, aimed at that
-    // winner or at nothing
-    private void assertTheEndStepWaits(final String row, final String winner, final String id, final String theirs,
-            final boolean aimed) {
+    // theEndStepWindowWaitsForTheStack's board for one winner, with the one object that object puts on the stack
+    // (given that winner; it returns the instance)
+    private void assertTheEndStepWaits(final String row, final String winner, final String id,
+            final Function<Card, SpellAbilityStackInstance> object) {
         start(row);
         final Card w = addCard(winner, ai);
         final Card consultation = hand(CONSULTATION);
@@ -3096,16 +3182,18 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(consider(consultation), AiPlayDecision.WillPlay, winner + ": no window on the empty stack");
         assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo", winner + ", the empty stack");
 
-        final SpellAbilityStackInstance spell = theirSpell(theirs, aimed ? w : null);
-        assertEquals(ids(t.executable()), List.of(id), winner + ": the line is not executable above " + theirs);
-        assertNull(ComboExecute.consultation(ai, castOf(consultation)), winner + ": Consultation approved above "
-                + theirs);
-        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, winner + " above " + theirs);
-        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)), winner + " above " + theirs);
+        final SpellAbilityStackInstance si = object.apply(w);
+        final String why = winner + " above " + named(si);
+        assertEquals(game.getStack().size(), 1, why);
+        assertEquals(ids(t.executable()), List.of(id), why + ": the line is not executable");
+        assertNull(ComboExecute.consultation(ai, castOf(consultation)), why + ": Consultation approved");
+        assertEquals(consider(consultation), AiPlayDecision.CantPlayAi, why);
+        assertNull(ComboExecute.floorExemption(ai, castOf(consultation)), why);
 
-        game.getStack().remove(spell);
+        game.getStack().remove(si);
         assertTrue(game.getStack().isEmpty());
-        assertEquals(consider(consultation), AiPlayDecision.WillPlay, winner + ": the stack empty again");
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, why + ": the stack empty again");
+        assertEquals(ComboExecute.floorExemption(ai, castOf(consultation)), "combo", why + ", the stack empty again");
     }
 
     /** Review Focus 1 for Tainted Pact (follow-up 4, I1): line 2836-3093 in our Main 1, Laboratory Maniac on our
@@ -3115,6 +3203,12 @@ public class ComboExecuteAiTest extends AITest {
      *  cast, and not exempt. On the empty stack again it is cast. */
     @Test
     public void pactWaitsForTheStack() {
+        assertPactWaits(this::swordsOn);
+    }
+
+    // pactWaitsForTheStack's board, with the one object that object puts on the stack (given our Laboratory Maniac; it
+    // returns the instance)
+    private void assertPactWaits(final Function<Card, SpellAbilityStackInstance> object) {
         start(LAB_PACT);
         final Card lab = addCard(LAB, ai);
         final Card pact = hand(PACT);
@@ -3125,15 +3219,18 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.TRUE, "no window on the empty stack");
         assertEquals(ComboExecute.floorExemption(ai, castOf(pact)), "combo", "the empty stack");
 
-        final SpellAbilityStackInstance swords = theirSpell(SWORDS, lab);
-        assertEquals(ids(t.executable()), List.of("2836-3093"), "the line is not executable above Swords");
-        assertEquals(ids(t.live()), List.of("2836-3093"));
-        assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.FALSE, "Pact cast above Swords");
-        assertNull(ComboExecute.floorExemption(ai, castOf(pact)), "above Swords");
+        final SpellAbilityStackInstance si = object.apply(lab);
+        final String why = "above " + named(si);
+        assertEquals(game.getStack().size(), 1, why);
+        assertEquals(ids(t.executable()), List.of("2836-3093"), why + ": the line is not executable");
+        assertEquals(ids(t.live()), List.of("2836-3093"), why);
+        assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.FALSE, why + ": Pact cast");
+        assertNull(ComboExecute.floorExemption(ai, castOf(pact)), why);
 
-        game.getStack().remove(swords);
+        game.getStack().remove(si);
         assertTrue(game.getStack().isEmpty());
-        assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.TRUE, "the stack empty again");
+        assertEquals(ComboExecute.pactCast(ai, castOf(pact)), Boolean.TRUE, why + ": the stack empty again");
+        assertEquals(ComboExecute.floorExemption(ai, castOf(pact)), "combo", why + ", the stack empty again");
     }
 
     /** Review Focus 3 (follow-up 4, I1): Tainted Pact resolving is still the stack's top (MagicStack.resolveStack
@@ -3153,22 +3250,30 @@ public class ComboExecuteAiTest extends AITest {
         assertTrue(ComboExecute.pactDeclines(ai, returnToHand(pact)), "Pact alone on the stack");
         assertFalse(aiOf(ai).confirmAction(returnToHand(pact), null, "", null), "Pact alone on the stack");
 
+        assertResolvingPactKeepsTheCard(this::swordsOn);
+    }
+
+    // resolvingPactStillDeclines's second board: with the one object that object puts on the stack first (given our
+    // Laboratory Maniac; it returns the instance) beneath the resolving Pact, Pact keeps the card it exiled, as stock
+    // does; that object gone, Pact alone again, it declines
+    private void assertResolvingPactKeepsTheCard(final Function<Card, SpellAbilityStackInstance> object) {
         start(LAB_PACT);
         final Card lab = addCard(LAB, ai);
         hand(OPT);
         lands("Island");
         singletonLibrary();
-        final SpellAbilityStackInstance swords = theirSpell(SWORDS, lab);
-        pact = castOnStack(PACT);
-        assertEquals(game.getStack().size(), 2);
-        assertEquals(game.getStack().peek().getSourceCard(), pact, "Pact is not the stack's top");
-        assertEquals(ids(t.executable()), List.of("2836-3093"), "the line is not executable above Swords");
-        assertFalse(ComboExecute.pactDeclines(ai, returnToHand(pact)), "Swords beneath Pact");
-        assertTrue(aiOf(ai).confirmAction(returnToHand(pact), null, "", null), "Swords beneath Pact");
+        final SpellAbilityStackInstance beneath = object.apply(lab);
+        final String why = named(beneath) + " beneath Pact";
+        final Card pact = castOnStack(PACT);
+        assertEquals(game.getStack().size(), 2, why);
+        assertEquals(game.getStack().peek().getSourceCard(), pact, why + ": Pact is not the stack's top");
+        assertEquals(ids(t.executable()), List.of("2836-3093"), why + ": the line is not executable");
+        assertFalse(ComboExecute.pactDeclines(ai, returnToHand(pact)), why);
+        assertTrue(aiOf(ai).confirmAction(returnToHand(pact), null, "", null), why);
 
-        game.getStack().remove(swords);
-        assertEquals(game.getStack().size(), 1);
-        assertTrue(ComboExecute.pactDeclines(ai, returnToHand(pact)), "Pact alone again");
+        game.getStack().remove(beneath);
+        assertEquals(game.getStack().size(), 1, why);
+        assertTrue(ComboExecute.pactDeclines(ai, returnToHand(pact)), why + ": Pact alone again");
     }
 
     /** Stock parity (follow-up 4, I1): the reviewer's board with Opt (Laboratory Maniac on our battlefield, Demonic
@@ -3184,5 +3289,72 @@ public class ComboExecuteAiTest extends AITest {
         assertEquals(assertStockParity(() -> consider(consultation), lines(ORACLE_PACT)), AiPlayDecision.CantPlayAi);
         assertEquals(assertStockParity(() -> consider(consultation), lines(LAB_CONSULTATION)),
                 AiPlayDecision.CantPlayAi);
+    }
+
+    // ---- follow-up 4, I1 review, round 1: every object, every phase, and Jace ----
+
+    /** Review Focus 2's "any spell or ability" (follow-up 4, I1 review, round 1): every object on the stack closes the
+     *  Laboratory Maniac windows, not only an opponent's spell, since nothing but the emptier's own spell may be there.
+     *  Each of these alone on the stack: the opponent's triggered ability (Banisher Priest's entering trigger, aimed at
+     *  our Lab: the O-Ring-style removal that is no spell), the opponent's activated ability (Visara the Dreadful's
+     *  {T}, destroying Lab), and our own spell (an Opt of ours cast). Demonic Consultation in our Main 1 with Opt to
+     *  follow, Consultation at the opponent's end step with our turn next, and Tainted Pact in our Main 1 with Opt: on
+     *  the empty stack each window opens (the controls); with the object on the stack, the line still executable,
+     *  neither emptier is cast nor exempt from the floor, and Pact is held; that object gone, each opens again. */
+    @Test
+    public void everyStackObjectClosesTheLabWindows() {
+        final List<Function<Card, SpellAbilityStackInstance>> objects = List.of(this::theirTrigger,
+                this::theirActivation, this::ourSpell);
+        for (final Function<Card, SpellAbilityStackInstance> object : objects) {
+            assertTheFollowUpWaitsFor(LAB_CONSULTATION, LAB, OPT, PhaseType.MAIN1, true, object);
+            assertTheEndStepWaits(LAB_CONSULTATION, LAB, "742-2836", object);
+            assertPactWaits(object);
+        }
+    }
+
+    /** Review Focus 3's other side, for every kind of object (follow-up 4, I1 review, round 1): beneath a resolving
+     *  Tainted Pact (an instant), our own spell (an Opt of ours, cast before Pact), the opponent's triggered ability
+     *  (Banisher Priest's, aimed at our Laboratory Maniac) or the opponent's activated ability (Visara the Dreadful's,
+     *  aimed at Lab) closes the window as the opponent's Swords to Plowshares does: Pact keeps the card it exiled, as
+     *  stock does; that object gone, Pact alone on the stack, it declines. */
+    @Test
+    public void resolvingPactKeepsTheCardAboveAnyObject() {
+        final List<Function<Card, SpellAbilityStackInstance>> objects = List.of(this::ourSpell, this::theirTrigger,
+                this::theirActivation);
+        for (final Function<Card, SpellAbilityStackInstance> object : objects) {
+            assertResolvingPactKeepsTheCard(object);
+        }
+    }
+
+    /** Review Focus 1 in every phase a window opens (follow-up 4, I1 review, round 1): the stack rule reads no phase.
+     *  The reviewer's board ({@link #followUpBoard}: Laboratory Maniac on our battlefield, Demonic Consultation in
+     *  hand, Island and Swamp, a 20-card library) with Opt, an instant, in the opponent's upkeep, Main 1 and combat
+     *  (the opponent's own turn, where removal on our winner most often arrives, Consultation and Opt held at instant
+     *  speed), in our combat, our Main 2 and at our own end step; and with Serum Visions, a sorcery, in our Main 2.
+     *  Each window opens on the empty stack (anInstantOrAFlashedSorceryFollowsInAnyPhase and
+     *  aSorceryDrawFollowsOnlyInOurOwnMainPhase open them there too), and the opponent's Swords to Plowshares on Lab on
+     *  the stack shuts it: Consultation is not cast, nor exempt from the floor; Swords gone, it opens again. */
+    @Test
+    public void theFollowUpWaitsForTheStackInEveryPhase() {
+        final Object[][] boards = {{OPT, PhaseType.UPKEEP, false}, {OPT, PhaseType.MAIN1, false},
+                {OPT, PhaseType.COMBAT_DECLARE_ATTACKERS, false}, {OPT, PhaseType.COMBAT_DECLARE_ATTACKERS, true},
+                {OPT, PhaseType.MAIN2, true}, {OPT, PhaseType.END_OF_TURN, true}, {VISIONS, PhaseType.MAIN2, true}};
+        for (final Object[] board : boards) {
+            assertTheFollowUpWaitsFor(LAB_CONSULTATION, LAB, (String) board[0], (PhaseType) board[1],
+                    (Boolean) board[2], this::swordsOn);
+        }
+    }
+
+    /** Jace's follow-up draw waits for the stack as Laboratory Maniac's does (follow-up 4, I1 review, round 1;
+     *  jacesWindowIsLabsWindow): line 742-3096 in our Main 1, Jace, Wielder of Mysteries on our battlefield, Demonic
+     *  Consultation and Opt in hand, Island and Swamp, a 20-card library. The window opens on the empty stack; the
+     *  opponent's Hero's Downfall aimed at Jace, or the opponent's Opt aimed at nothing, on the stack shuts it; that
+     *  spell gone, it opens again. */
+    @Test
+    public void jacesFollowUpWaitsForTheStack() {
+        final List<Function<Card, SpellAbilityStackInstance>> objects = List.of(this::downfallOn, this::theirOpt);
+        for (final Function<Card, SpellAbilityStackInstance> object : objects) {
+            assertTheFollowUpWaitsFor(JACE_CONSULTATION, JACE, OPT, PhaseType.MAIN1, true, object);
+        }
     }
 }
