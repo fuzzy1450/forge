@@ -33,7 +33,7 @@ import forge.util.MyRandom;
  * Every empty-library line of piece 1 played to a win (follow-up F6, spec 2026-10-22-combo-aware-ai-core-design.md
  * section 6.4), through the real cast path: the game loop gives the AI priority, and the AI casts from its hand,
  * activates and answers its own triggers as it would in a served game. Nothing of ours is put on the stack by hand
- * (two tests put an opponent's spell there: {@link #theirSpellOn}), and the AI's tracker holds the shipped table's
+ * (three tests put an opponent's spell there: {@link #theirSpellOn}), and the AI's tracker holds the shipped table's
  * lines, matched against its own cards.
  *
  * <p>Each game starts in the AI's own Main 1 with a full seven-card hand: the line's pieces and playable junk (cards
@@ -551,6 +551,41 @@ public class ComboLinesEndToEndAiTest extends AITest {
         assertTrue(ph.is(PhaseType.END_OF_TURN, ai), "our end step never came: " + ph.getPhase());
         assertNotNull(t.find(CONSULTATION, ZoneType.Hand), "Consultation was cast after Swords");
         assertFalse(ai.getCardsIn(ZoneType.Library).isEmpty(), "our library was emptied after Swords");
+    }
+
+    /**
+     * Review Focus 1 (follow-up 5, J1; the fourth follow-up's probe board, played out): stackedRemovalDoesNotDeckUs's
+     * board with Opt, an instant, for Serum Visions. Laboratory Maniac (line 742-2836) on our battlefield, Demonic
+     * Consultation and Opt in hand beside the junk, Island and Swamp, a 20-card library, our Main 1, and the opponent's
+     * Swords to Plowshares on Lab on the stack ({@link #theirSpellOn}). The opponent passes, and the game loop hands us
+     * priority above Swords. Opt can follow Consultation above Swords: the AI casts Consultation in response, and once
+     * it has resolved, Swords still beneath, casts Opt, whose draw on the emptied library wins in that Main 1, as the
+     * base f36b31a96f3 won. Swords never resolves, and Lab never leaves our battlefield.
+     */
+    @Test
+    public void instantFollowUpWinsAboveStackedRemoval() {
+        start();
+        final Card lab = addCard(LAB, ai);
+        hand(CONSULTATION, "Opt");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.deckLines()), List.of("742-2836"));
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        final int turn = game.getPhaseHandler().getTurn();
+        theirSpellOn(SWORDS, lab);
+
+        final List<Event> events = play();
+        assertWonBy(LAB, events);
+        assertLibraryEmpty();
+        final Event consultation = first(events, CONSULTATION);
+        assertEquals(consultation.stack(), List.of(CONSULTATION, SWORDS), "Consultation was not cast above Swords");
+        assertEquals(consultation.library(), 20, "our library was not whole at Consultation's cast");
+        final Event opt = first(events, "Opt");
+        assertTrue(events.indexOf(opt) > events.indexOf(consultation), "Opt went first: " + whats(events));
+        assertEquals(opt.stack(), List.of("Opt", SWORDS), "Opt was not cast above Swords");
+        assertEquals(opt.library(), 0, "Opt was cast on a library Consultation had not emptied");
+        assertEndedInOurTurn(PhaseType.MAIN1, turn);
+        assertNotNull(t.find(LAB, ZoneType.Battlefield), "Swords resolved first: Lab left our battlefield");
     }
 
     /**
