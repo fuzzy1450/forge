@@ -4094,6 +4094,62 @@ public class ComboExecuteAiTest extends AITest {
         assertKeeps(labGone, FILLER, "Lab gone, Lab's line");
     }
 
+    // ---- follow-up 5, J2 review, round 1: a controlled player's namer has no tracker ----
+
+    /** A mind-slave turn at Consultation's resolution (follow-up 5, J2 review, round 1; aControlledPlayerHasNoGoOff's
+     *  idiom; Mindslaver, and Opposition Agent's search runs the same way): a fresh PlayerControllerAi decides for us
+     *  and ComboTracker.of(ai) is null, so consultationKeeps has no tracker to read, and the namer throws nothing and
+     *  names as stock does. The probe board's mirror: line 742-2836 in our Main 1, Laboratory Maniac on our
+     *  battlefield, Opt in hand, Island and Swamp, a 20-card library, Demonic Consultation resolving. With Lab there
+     *  and Opt to follow, the stock absent name, controlled or not. Once the opponent's Swords to Plowshares cast above
+     *  Consultation has exiled Lab, the library is kept (the control); controlled, the stock absent name, with the
+     *  stock draws, whatever lines the master's fresh tracker holds; once control ends, the library is kept again. */
+    @Test
+    public void aControlledPlayerNamesAsStock() {
+        final Card consultation = labWithOptBoard();
+        final Card lab = t.find(LAB, ZoneType.Battlefield);
+        final SpellAbility sa = resolving(consultation);
+        assertEmpties(sa, "Lab on our battlefield, Opt to follow");
+        assertControlledNamesAsStock(sa, "Lab on our battlefield, Opt to follow");
+
+        swordsResolves(swordsOn(lab), lab);
+        assertEquals(t.where(LAB), ComboTracker.Where.GONE);
+        assertEquals(game.getStack().size(), 1);
+        assertEquals(game.getStack().peek().getSourceCard(), sa.getHostCard());
+        assertKeeps(sa, FILLER, "Lab exiled by Swords");
+        assertControlledNamesAsStock(sa, "Lab exiled by Swords");
+        assertKeeps(sa, FILLER, "Lab exiled by Swords, control ended");
+    }
+
+    // on a mind-slave turn (the opponent controls us: a fresh PlayerControllerAi decides for us, and
+    // ComboTracker.of(ai) is null) Consultation's resolution, sa, names the stock absent name, throwing nothing, with
+    // the same answer and the same draws whether the master's fresh tracker holds no line or Lab's; control ends
+    // after it, whatever it throws
+    private void assertControlledNamesAsStock(final SpellAbility sa, final String why) {
+        final long timestamp = game.getNextTimestamp();
+        ai.addController(timestamp, opp);
+        try {
+            assertTrue(ai.isControlled(), why);
+            assertNull(ComboTracker.of(ai), why);
+            final ComboTracker fresh = aiOf(ai).getComboTracker();
+            assertNotNull(fresh, why + ": the master's controller has no tracker");
+            fresh.useLines(List.of());
+            MyRandom.setRandom(new Random(7));
+            long before = MyRandom.callCount();
+            final String stock = nameAt(sa);
+            final long stockDraws = MyRandom.callCount() - before;
+            assertEquals(stock, stockName(), why + ": a controlled player's namer");
+            fresh.useLines(lines(LAB_CONSULTATION));
+            MyRandom.setRandom(new Random(7));
+            before = MyRandom.callCount();
+            assertEquals(nameAt(sa), stock, why + ": the answer moved with the fresh tracker's lines");
+            assertEquals(MyRandom.callCount() - before, stockDraws, why + ": the draws moved");
+        } finally {
+            ai.removeController(timestamp);
+        }
+        assertFalse(ai.isControlled(), why);
+    }
+
     // ---- the boards above: each returns our Demonic Consultation, in hand, with a 20-card library ----
 
     // line 742-1295 in our Main 1: Island, Island and Swamp, and our Thassa's Oracle entered, its trigger on our stack
