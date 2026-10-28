@@ -3118,16 +3118,44 @@ public class ComboExecuteAiTest extends AITest {
     // O-Ring-style removal that is no spell, exiles "target creature an opponent controls", our winner, which the
     // opponent's AI aims it at (the only one)
     private SpellAbilityStackInstance theirTrigger(final Card winner) {
-        final SpellAbilityStackInstance top = enters(addCardToZone(BANISHER, opp, ZoneType.Hand));
-        assertEquals(top.getActivatingPlayer(), opp);
-        assertTrue(top.getTargetChoices().contains(winner), "Banisher Priest's trigger aims elsewhere");
-        return top;
+        return banisherEnters(opp, winner);
     }
 
     // the opponent's activated ability: Visara the Dreadful's {T}, "destroy target creature", aimed at our winner,
     // activated by the opponent (on the stack, nothing paid)
     private SpellAbilityStackInstance theirActivation(final Card winner) {
-        final Card visara = addCard(VISARA, opp);
+        return visaraDestroys(opp, winner);
+    }
+
+    // our own triggered ability (follow-up 4, I1 review, round 2): Banisher Priest enters for us, and its entering
+    // trigger exiles "target creature an opponent controls", the opponent's Grizzly Bears, put on the opponent's
+    // battlefield for it, which our AI aims it at (the opponent's only creature). Our winner stays where it is
+    private SpellAbilityStackInstance ourTrigger(final Card winner) {
+        return banisherEnters(ai, addCard("Grizzly Bears", opp));
+    }
+
+    // our own activated ability (follow-up 4, I1 review, round 2): Visara the Dreadful on our battlefield, its {T},
+    // "destroy target creature", aimed at the opponent's Grizzly Bears, put on the opponent's battlefield for it, and
+    // activated by us (on the stack, nothing paid). Our winner stays where it is
+    private SpellAbilityStackInstance ourActivation(final Card winner) {
+        return visaraDestroys(ai, addCard("Grizzly Bears", opp));
+    }
+
+    // Banisher Priest enters for p (from p's hand), and its entering trigger goes on the stack, aimed at target by p's
+    // AI: the stack's top, a trigger and no spell, p its controller, which it returns
+    private SpellAbilityStackInstance banisherEnters(final Player p, final Card target) {
+        final SpellAbilityStackInstance top = enters(addCardToZone(BANISHER, p, ZoneType.Hand));
+        assertEquals(top.getActivatingPlayer(), p);
+        assertFalse(top.isSpell());
+        assertTrue(top.getTargetChoices().contains(target), "Banisher Priest's trigger aims elsewhere");
+        return top;
+    }
+
+    // Visara the Dreadful on p's battlefield, free of summoning sickness, and its {T}, "destroy target creature",
+    // aimed at target and activated by p, on the stack, nothing paid: the stack's top, an activated ability and
+    // neither a spell nor a trigger, p its activator, which it returns
+    private SpellAbilityStackInstance visaraDestroys(final Player p, final Card target) {
+        final Card visara = addCard(VISARA, p);
         visara.setSickness(false);
         SpellAbility destroy = null;
         for (final SpellAbility sa : visara.getSpellAbilities()) {
@@ -3136,14 +3164,14 @@ public class ComboExecuteAiTest extends AITest {
             }
         }
         assertNotNull(destroy, "no destroy ability on Visara");
-        destroy.setActivatingPlayer(opp);
-        destroy.getTargets().add(winner);
+        destroy.setActivatingPlayer(p);
+        destroy.getTargets().add(target);
         game.getStack().add(destroy);
         final SpellAbilityStackInstance top = game.getStack().peek();
         assertEquals(top.getSourceCard(), visara, "Visara's ability is not on the stack");
         assertTrue(top.getSpellAbility().isActivatedAbility() && !top.isTrigger() && !top.isSpell());
-        assertEquals(top.getActivatingPlayer(), opp);
-        assertTrue(top.getTargetChoices().contains(winner), "Visara's ability aims elsewhere");
+        assertEquals(top.getActivatingPlayer(), p);
+        assertTrue(top.getTargetChoices().contains(target), "Visara's ability aims elsewhere");
         return top;
     }
 
@@ -3293,18 +3321,20 @@ public class ComboExecuteAiTest extends AITest {
 
     // ---- follow-up 4, I1 review, round 1: every object, every phase, and Jace ----
 
-    /** Review Focus 2's "any spell or ability" (follow-up 4, I1 review, round 1): every object on the stack closes the
-     *  Laboratory Maniac windows, not only an opponent's spell, since nothing but the emptier's own spell may be there.
-     *  Each of these alone on the stack: the opponent's triggered ability (Banisher Priest's entering trigger, aimed at
-     *  our Lab: the O-Ring-style removal that is no spell), the opponent's activated ability (Visara the Dreadful's
-     *  {T}, destroying Lab), and our own spell (an Opt of ours cast). Demonic Consultation in our Main 1 with Opt to
-     *  follow, Consultation at the opponent's end step with our turn next, and Tainted Pact in our Main 1 with Opt: on
-     *  the empty stack each window opens (the controls); with the object on the stack, the line still executable,
-     *  neither emptier is cast nor exempt from the floor, and Pact is held; that object gone, each opens again. */
+    /** Review Focus 2's "any spell or ability" (follow-up 4, I1 review, rounds 1 and 2): every object on the stack
+     *  closes the Laboratory Maniac windows, not only an opponent's spell, since nothing but the emptier's own spell
+     *  may be there. Each of these alone on the stack: the opponent's triggered ability (Banisher Priest's entering
+     *  trigger, aimed at our Lab: the O-Ring-style removal that is no spell), the opponent's activated ability (Visara
+     *  the Dreadful's {T}, destroying Lab), our own spell (an Opt of ours cast), our own triggered ability (our
+     *  Banisher Priest's entering trigger, aimed at the opponent's Grizzly Bears) and our own activated ability (our
+     *  Visara's {T}, destroying the opponent's Grizzly Bears). Demonic Consultation in our Main 1 with Opt to follow,
+     *  Consultation at the opponent's end step with our turn next, and Tainted Pact in our Main 1 with Opt: on the
+     *  empty stack each window opens (the controls); with the object on the stack, the line still executable, neither
+     *  emptier is cast nor exempt from the floor, and Pact is held; that object gone, each opens again. */
     @Test
     public void everyStackObjectClosesTheLabWindows() {
         final List<Function<Card, SpellAbilityStackInstance>> objects = List.of(this::theirTrigger,
-                this::theirActivation, this::ourSpell);
+                this::theirActivation, this::ourSpell, this::ourTrigger, this::ourActivation);
         for (final Function<Card, SpellAbilityStackInstance> object : objects) {
             assertTheFollowUpWaitsFor(LAB_CONSULTATION, LAB, OPT, PhaseType.MAIN1, true, object);
             assertTheEndStepWaits(LAB_CONSULTATION, LAB, "742-2836", object);
@@ -3312,15 +3342,17 @@ public class ComboExecuteAiTest extends AITest {
         }
     }
 
-    /** Review Focus 3's other side, for every kind of object (follow-up 4, I1 review, round 1): beneath a resolving
-     *  Tainted Pact (an instant), our own spell (an Opt of ours, cast before Pact), the opponent's triggered ability
-     *  (Banisher Priest's, aimed at our Laboratory Maniac) or the opponent's activated ability (Visara the Dreadful's,
-     *  aimed at Lab) closes the window as the opponent's Swords to Plowshares does: Pact keeps the card it exiled, as
-     *  stock does; that object gone, Pact alone on the stack, it declines. */
+    /** Review Focus 3's other side, for every kind of object (follow-up 4, I1 review, rounds 1 and 2): beneath a
+     *  resolving Tainted Pact (an instant), our own spell (an Opt of ours, cast before Pact), the opponent's triggered
+     *  ability (Banisher Priest's, aimed at our Laboratory Maniac), the opponent's activated ability (Visara the
+     *  Dreadful's, aimed at Lab), our own triggered ability (our Banisher Priest's, aimed at the opponent's Grizzly
+     *  Bears) or our own activated ability (our Visara's, aimed at the Bears) closes the window as the opponent's
+     *  Swords to Plowshares does: Pact keeps the card it exiled, as stock does; that object gone, Pact alone on the
+     *  stack, it declines. */
     @Test
     public void resolvingPactKeepsTheCardAboveAnyObject() {
         final List<Function<Card, SpellAbilityStackInstance>> objects = List.of(this::ourSpell, this::theirTrigger,
-                this::theirActivation);
+                this::theirActivation, this::ourTrigger, this::ourActivation);
         for (final Function<Card, SpellAbilityStackInstance> object : objects) {
             assertResolvingPactKeepsTheCard(object);
         }
