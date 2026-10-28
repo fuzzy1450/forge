@@ -369,6 +369,9 @@ public class ComboConsultTutorAiTest extends AITest {
         assertNull(t.takeConsultIntent(8));
     }
 
+    /** The deck holds no Consultation line here (1295-3093 alone, a test-only set): the stock path of the resolution's
+     *  name (follow-up 5, J2), which exiles the library. aGoneTutorPieceLeavesTheLibrary is the same board with the
+     *  Consultation row every shipped winner has. */
     @Test
     public void aPieceThatLeftTheLibraryIsNotNamed() {
         final Card consultation = board(FILLERS, ORACLE_PACT);
@@ -599,7 +602,9 @@ public class ComboConsultTutorAiTest extends AITest {
         game.getPhaseHandler().devModeSet(PhaseType.UPKEEP, ai);
         final SpellAbility sa = castOf(consultation);
         assertEquals(consider(sa), AiPlayDecision.CantPlayAi);
-        assertEquals(named(sa), stockName(), "an intent was recorded");
+        // read directly: with line 742-1295 held and no window of it open, the resolution's name with no intent is one
+        // in our library (follow-up 5, J2), no longer the stock name this assertion once compared it with
+        assertNull(t.takeConsultIntent(consultation.getId()), "an intent was recorded");
 
         // the same board without the assembled line: Consultation tutors Pact (theMissingEmptierIsNamedToo)
         t.useLines(lines(ORACLE_PACT));
@@ -816,5 +821,42 @@ public class ComboConsultTutorAiTest extends AITest {
         final SpellAbility sa = castOf(consultation);
         assertEquals(consider(sa), AiPlayDecision.WillPlay);
         assertEquals(named(sa), LAB);
+    }
+
+    // ---- follow-up 5, J2: with no win standing, the resolution keeps the library ----
+
+    /** Follow-up 5, J2 (FOLLOWUP4.md's final review, PlayerControllerAi.java:1642): a tutor intent whose piece left our
+     *  library before the resolution. The plan's Pact board with line 742-1295 beside 1295-3093: every shipped winner
+     *  has a Consultation row, so a deck that tutors with Consultation for a line holds a Consultation line too, and
+     *  Consultation, which 742-1295 names, still tutors Thassa's Oracle for 1295-3093. Oracle drawn before the
+     *  resolution: no intent names a card still in our library, and no window of a Consultation line holds (no Oracle
+     *  trigger of ours on the stack), so the name is one our library bears, the first by name of its singletons, where
+     *  the reveal stops; the stock absent name would exile all 81 cards. The same board with an Oracle of ours entering
+     *  instead, its trigger on our stack: 742-1295's window holds, and the name is the stock one. */
+    @Test
+    public void aGoneTutorPieceLeavesTheLibrary() {
+        Card consultation = board(FILLERS, ORACLE_PACT, ORACLE_CONSULTATION);
+        assertEquals(ids(t.oneShort()), List.of("742-1295", "1295-3093"));
+        final SpellAbility sa = castOf(consultation);
+        assertEquals(consider(sa), AiPlayDecision.WillPlay);
+
+        game.getAction().moveTo(ZoneType.Hand, t.find(ORACLE, ZoneType.Library), null, AbilityKey.newMap());
+        final String first = ai.getCardsIn(ZoneType.Library).stream().map(Card::getName).min(String::compareTo)
+                .orElseThrow();
+        final String name = named(sa);
+        assertNotEquals(name, ORACLE);
+        assertNotEquals(name, stockName());
+        assertEquals(name, first);
+        assertTrue(ai.getCardsIn(ZoneType.Library).stream().anyMatch(c -> c.getName().equals(name)),
+                name + " is not in our library");
+
+        consultation = board(FILLERS, ORACLE_PACT, ORACLE_CONSULTATION);
+        final SpellAbility again = castOf(consultation);
+        assertEquals(consider(again), AiPlayDecision.WillPlay);
+        enters(hand(ORACLE));
+        assertNotNull(t.find(ORACLE, ZoneType.Library), "the library's Oracle stays");
+        final String stock = named(again);
+        assertNotInLibrary(stock);
+        assertEquals(stock, stockName());
     }
 }

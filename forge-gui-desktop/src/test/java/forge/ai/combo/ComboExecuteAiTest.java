@@ -9,14 +9,18 @@ import static org.testng.Assert.assertTrue;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import org.testng.annotations.Test;
 
+import forge.StaticData;
 import forge.ai.AITest;
 import forge.ai.AiCardMemory;
 import forge.ai.AiController;
@@ -51,6 +55,7 @@ import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
+import forge.item.PaperCard;
 import forge.util.MyRandom;
 
 /**
@@ -96,6 +101,8 @@ public class ComboExecuteAiTest extends AITest {
     private static final String BANISHER = "Banisher Priest";
     private static final String VISARA = "Visara the Dreadful";
     private static final String DOWNFALL = "Hero's Downfall";
+    /** fillLibrary's card: a 20-card library is twenty of it. */
+    private static final String FILLER = "Runeclaw Bear";
 
     /** Fifteen distinct names, none a land and none a piece of piece 1's lines: a library Tainted Pact can empty. */
     private static final List<String> SINGLETON = List.of("Runeclaw Bear", "Grizzly Bears", "Hill Giant", "Craw Wurm",
@@ -3677,5 +3684,480 @@ public class ComboExecuteAiTest extends AITest {
         why = "an Island beside the Swamp, Pact above Swords";
         assertTrue(ComboExecute.pactDeclines(ai, returnToHand(pact)), why);
         assertFalse(aiOf(ai).confirmAction(returnToHand(pact), null, "", null), why);
+    }
+
+    // ---- follow-up 5, J2: Consultation's resolution names a missing card only while a win stands ----
+
+    /** Our Demonic Consultation {@code consultation} cast from our hand: off the hand and on our stack, nothing paid or
+     *  resolved (castOnStack, so the turn's record of its casts holds it), the stack's top. Returns the spell on the
+     *  stack, the one its resolution's namer is asked for (ChooseCardNameEffect's, its root NameCard). */
+    private SpellAbility resolving(final Card consultation) {
+        ai.getZone(ZoneType.Hand).remove(consultation);
+        final Card cast = castOnStack(CONSULTATION);
+        final SpellAbilityStackInstance top = game.getStack().peek();
+        assertEquals(top.getSourceCard(), cast, "Consultation is not the stack's top");
+        assertEquals(t.where(CONSULTATION), ComboTracker.Where.STACK);
+        return top.getSpellAbility();
+    }
+
+    /** The name the AI chooses at Consultation's resolution, {@code sa} on the stack (ChooseCardNameEffect's call:
+     *  ComboConsultTutorAiTest's named). */
+    private String nameAt(final SpellAbility sa) {
+        return ((PlayerControllerAi) ai.getController()).chooseCardName(sa, null, null, "");
+    }
+
+    /** The stock namer's answer (PlayerControllerAi.chooseCardName's Consultation loop): the first unique card name
+     *  that no card of our library bears (ComboConsultTutorAiTest's stockName). */
+    private String stockName() {
+        final Set<String> library = new HashSet<>();
+        for (final Card c : ai.getCardsIn(ZoneType.Library)) {
+            library.add(c.getName());
+        }
+        for (final PaperCard pc : StaticData.instance().getCommonCards().getUniqueCards()) {
+            if (!library.contains(pc.getName())) {
+                return pc.getName();
+            }
+        }
+        throw new AssertionError("every card name is in the library");
+    }
+
+    // at sa's resolution the AI names the stock name, absent from our library, so the whole library is exiled: the
+    // same answer and the same draws as for a deck holding no line (assertStockParity's idiom, the board's own lines
+    // the others)
+    private void assertEmpties(final SpellAbility sa, final String why) {
+        final List<ComboLines.Line> held = t.deckLines();
+        assertFalse(held.isEmpty(), why + ": the deck holds no line");
+        t.useLines(List.of());
+        MyRandom.setRandom(new Random(7));
+        long before = MyRandom.callCount();
+        final String stock = nameAt(sa);
+        final long stockDraws = MyRandom.callCount() - before;
+        t.useLines(held);
+        assertEquals(t.deckLines(), held, why + ": the deck's lines moved");
+        MyRandom.setRandom(new Random(7));
+        before = MyRandom.callCount();
+        assertEquals(nameAt(sa), stock, why + ": not the stock name");
+        assertEquals(MyRandom.callCount() - before, stockDraws, why + ": the draws moved");
+        assertEquals(stock, stockName(), why);
+        for (final Card c : ai.getCardsIn(ZoneType.Library)) {
+            assertNotEquals(c.getName(), stock, why + ": the stock name is in our library");
+        }
+    }
+
+    // at sa's resolution the AI names expected, a name cards of our library bear, so the reveal stops at one of them
+    // and the library is kept: not the stock name, and the namer draws nothing
+    private void assertKeeps(final SpellAbility sa, final String expected, final String why) {
+        final long before = MyRandom.callCount();
+        final String name = nameAt(sa);
+        assertEquals(MyRandom.callCount() - before, 0L, why + ": the namer drew");
+        assertEquals(name, expected, why);
+        assertTrue(ai.getCardsIn(ZoneType.Library).stream().anyMatch(c -> c.getName().equals(name)),
+                why + ": " + name + " is not in our library");
+        assertNotEquals(name, stockName(), why);
+    }
+
+    // the opponent's spell si, aimed at target, resolves: off the stack and into its owner's graveyard, target exiled
+    // (Swords to Plowshares; its life gain is not read)
+    private void swordsResolves(final SpellAbilityStackInstance si, final Card target) {
+        final Card swords = si.getSourceCard();
+        game.getStack().remove(si);
+        game.getAction().moveTo(ZoneType.Graveyard, swords, null, AbilityKey.newMap());
+        game.getAction().moveTo(ZoneType.Exile, target, null, AbilityKey.newMap());
+    }
+
+    // every card of our library exiled
+    private void exileLibrary() {
+        for (final Card c : new ArrayList<>(ai.getCardsIn(ZoneType.Library))) {
+            game.getAction().moveTo(ZoneType.Exile, c, null, AbilityKey.newMap());
+        }
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
+    }
+
+    /** Review Focus 2 (follow-up 5, J2; FOLLOWUP4.md's final review, PlayerControllerAi.java:1642), the probe board's
+     *  mirror: line 742-2836 in our Main 1, Laboratory Maniac on our battlefield, Demonic Consultation and Opt in hand,
+     *  Island and Swamp, a 20-card library of Runeclaw Bears. On the empty stack Consultation's window opens (the
+     *  control), and resolving alone on the stack, Lab still there and Opt to follow, it names a card absent from our
+     *  library, as stock does, so the library is exiled for Opt's winning draw. The opponent's Swords to Plowshares on
+     *  Lab goes above it and resolves first, exiling Lab: the window no longer holds, and Consultation names Runeclaw
+     *  Bear, the name most cards of our library bear, so the reveal stops at the seventh card and the library is kept.
+     *  On an empty library it names as stock does. */
+    @Test
+    public void aRemovedLabLeavesTheLibrary() {
+        final Card consultation = followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp");
+        final Card lab = t.find(LAB, ZoneType.Battlefield);
+        assertConsultationWindow(consultation, true, "the cast on the empty stack");
+        final SpellAbility sa = resolving(consultation);
+        assertEmpties(sa, "Lab on our battlefield, Opt to follow");
+
+        final SpellAbilityStackInstance swords = swordsOn(lab);
+        assertEquals(game.getStack().size(), 2);
+        swordsResolves(swords, lab);
+        assertEquals(t.where(LAB), ComboTracker.Where.GONE);
+        assertEquals(game.getStack().size(), 1);
+        assertEquals(game.getStack().peek().getSourceCard(), sa.getHostCard());
+        assertKeeps(sa, FILLER, "Lab exiled by Swords");
+
+        exileLibrary();
+        assertEquals(nameAt(sa), stockName(), "an empty library");
+    }
+
+    /** The same with Doctor Doom, Unrivaled (line x-1, our Main 1): Doom untapped and free of summoning sickness, its
+     *  {T} draw can follow, and Consultation resolving names the stock absent name. Doom tapped before the resolution
+     *  (an opponent's tapper in response), its {T} cannot follow and the library is kept; untapped again, it empties;
+     *  Doom exiled by the opponent's Swords to Plowshares cast above Consultation, the library is kept. */
+    @Test
+    public void aRemovedDoomLeavesTheLibrary() {
+        final Card consultation = doomBoard();
+        final Card doom = t.find(DOOM, ZoneType.Battlefield);
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, "Doom's window at the cast");
+        final SpellAbility sa = resolving(consultation);
+        assertEmpties(sa, "Doom untapped");
+
+        doom.setTapped(true);
+        assertKeeps(sa, FILLER, "Doom tapped");
+        doom.setTapped(false);
+        assertEmpties(sa, "Doom untapped again");
+
+        swordsResolves(swordsOn(doom), doom);
+        assertEquals(t.where(DOOM), ComboTracker.Where.GONE);
+        assertKeeps(sa, FILLER, "Doom exiled by Swords");
+    }
+
+    /** Review Focus 3 (follow-up 5, J2): a library-out win that still stands at the resolution, the window of a
+     *  Consultation line holding there as at the cast, keeps the stock absent name, so the library is exiled whole:
+     *  our Thassa's Oracle trigger beneath Consultation; our Fblthp, Impossibly Lost trigger beneath it; our Doctor
+     *  Doom, Unrivaled untapped and free of summoning sickness; Laboratory Maniac with Opt to follow, in our Main 1;
+     *  Lab at the opponent's end step, our turn next, no draw spell; Jace, Wielder of Mysteries with Opt to follow. At
+     *  each the window opens at the cast (the control), and at the resolution the answer and the draws are stock's. */
+    @Test
+    public void aStandingWinStillEmptiesTheLibrary() {
+        assertStandingWin(this::oracleBoard, "our Oracle's trigger");
+        assertStandingWin(this::fblthpBoard, "our Fblthp's trigger");
+        assertStandingWin(this::doomBoard, "our Doom, untapped");
+        assertStandingWin(this::labWithOptBoard, "Lab with Opt, our Main 1");
+        assertStandingWin(this::labAtTheEndStepBoard, "Lab at the opponent's end step");
+        assertStandingWin(this::jaceWithOptBoard, "Jace with Opt, our Main 1");
+    }
+
+    // board's Consultation, in our hand: its window opens at the cast; resolving, it empties the library
+    private void assertStandingWin(final Supplier<Card> board, final String why) {
+        final Card consultation = board.get();
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, why + ": no window at the cast");
+        assertEmpties(resolving(consultation), why);
+    }
+
+    /** Review Focus 3 under a cast cap (follow-up 5, J2): the opponent's Deafening Silence ("each player can't cast
+     *  more than one noncreature spell each turn"). A board where Consultation's cast was allowed, its window open:
+     *  our Thassa's Oracle trigger (Oracle a creature), our Doctor Doom untapped, Laboratory Maniac at the opponent's
+     *  end step (our draw step the draw). Resolving, Consultation is this turn's noncreature spell, but it is a piece
+     *  cast already, on our stack, so its own cast denies its line nothing, and the name is the stock absent one. A Lab
+     *  line with Opt is no standing win here: Opt after Consultation would be the turn's second noncreature spell, so
+     *  the window is shut at the cast, and at the resolution, Consultation counted once among the turn's spells, the
+     *  library is kept. */
+    @Test
+    public void aStandingWinUnderDeafeningSilence() {
+        assertStandingWinUnder("Deafening Silence", this::oracleBoard, "our Oracle's trigger");
+        assertStandingWinUnder("Deafening Silence", this::doomBoard, "our Doom, untapped");
+        assertStandingWinUnder("Deafening Silence", this::labAtTheEndStepBoard, "Lab at the opponent's end step");
+        assertNoStandingWinUnder("Deafening Silence");
+    }
+
+    /** The same under the opponent's Rule of Law ("each player can't cast more than one spell each turn"), on boards
+     *  where Consultation is the turn's one spell of ours: our Fblthp, Impossibly Lost trigger, our Doctor Doom
+     *  untapped, Laboratory Maniac at the opponent's end step. A Lab line needs that end step here: with Opt in our
+     *  Main 1, Opt would be our second spell. */
+    @Test
+    public void aStandingWinUnderRuleOfLaw() {
+        assertStandingWinUnder("Rule of Law", this::fblthpBoard, "our Fblthp's trigger");
+        assertStandingWinUnder("Rule of Law", this::doomBoard, "our Doom, untapped");
+        assertStandingWinUnder("Rule of Law", this::labAtTheEndStepBoard, "Lab at the opponent's end step");
+        assertNoStandingWinUnder("Rule of Law");
+    }
+
+    // board, with the opponent's hoser: no spell of ours cast this turn, Consultation's line executable now and its
+    // window open at the cast; resolving, Consultation the turn's spell and its line still executable now, the stock
+    // name
+    private void assertStandingWinUnder(final String hoser, final Supplier<Card> board, final String what) {
+        final Card consultation = board.get();
+        addCard(hoser, opp);
+        final String why = what + " under " + hoser;
+        assertTrue(game.getStack().getSpellCardsCastThisTurn().isEmpty(), why + ": a spell cast this turn");
+        assertEquals(t.view().executableNow().size(), 1, why + ": Consultation's cast is barred");
+        assertEquals(consider(consultation), AiPlayDecision.WillPlay, why + ": no window at the cast");
+        final SpellAbility sa = resolving(consultation);
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(sa.getHostCard()),
+                why + ": Consultation is not the turn's one spell");
+        assertEquals(t.view().executableNow().size(), 1, why + ": Consultation's own cast denies its line");
+        assertEmpties(sa, why);
+    }
+
+    /** Tainted Pact's decline reads the same way (follow-up 5, J2, beyond the plan's tests: the check the plan asks of
+     *  pactDeclines). A board where Pact's cast was allowed under a cap, its window open: line 2836-3093 at the
+     *  opponent's end step, our turn next, Laboratory Maniac on our battlefield, Pact the turn's one spell of ours,
+     *  under the opponent's Rule of Law and then Deafening Silence; and line 1295-3093 with our Thassa's Oracle trigger
+     *  on our stack under Deafening Silence (Oracle a creature). Resolving, Pact is this turn's spell, but a piece cast
+     *  already, on our stack, so its own cast denies its line nothing, and it declines the card it exiled, through the
+     *  stock route too. */
+    @Test
+    public void aResolvingPactStillDeclinesUnderACap() {
+        for (final String hoser : List.of("Rule of Law", "Deafening Silence")) {
+            start(LAB_PACT);
+            addCard(LAB, ai);
+            assertResolvingPactDeclinesUnder(hoser, "Lab at the opponent's end step", true);
+        }
+        start(ORACLE_PACT);
+        lands("Island", "Island");
+        assertResolvingPactDeclinesUnder("Deafening Silence", "our Oracle's trigger", false);
+    }
+
+    // the board start began, with Tainted Pact in hand, Swamp and Swamp, a singleton library, and then the opponent's
+    // end step (endStep) or our Thassa's Oracle entered, its trigger on our stack; under the opponent's hoser: Pact's
+    // cast in its window, then Pact resolving, the turn's one spell of ours, declining the card it exiled
+    private void assertResolvingPactDeclinesUnder(final String hoser, final String what, final boolean endStep) {
+        final Card inHand = hand(PACT);
+        lands("Swamp", "Swamp");
+        singletonLibrary();
+        if (endStep) {
+            opponentsEndStep();
+        } else {
+            enters(hand(ORACLE));
+        }
+        addCard(hoser, opp);
+        final String why = what + " under " + hoser;
+        assertTrue(game.getStack().getSpellCardsCastThisTurn().isEmpty(), why + ": a spell cast this turn");
+        assertEquals(ComboExecute.pactCast(ai, castOf(inHand)), Boolean.TRUE, why + ": no window at the cast");
+        ai.getZone(ZoneType.Hand).remove(inHand);
+        final Card pact = castOnStack(PACT);
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(pact), why + ": Pact is not the turn's spell");
+        assertEquals(t.where(PACT), ComboTracker.Where.STACK, why);
+        assertEquals(t.view().executableNow().size(), 1, why + ": Pact's own cast denies its line");
+        assertTrue(ComboExecute.pactDeclines(ai, returnToHand(pact)), why);
+        assertFalse(aiOf(ai).confirmAction(returnToHand(pact), null, "", null), why);
+    }
+
+    // a Lab line with Opt in our Main 1 under the opponent's hoser: the window is shut at the cast, Opt after
+    // Consultation the turn's second spell, and resolving, Consultation the turn's spell, the library is kept
+    private void assertNoStandingWinUnder(final String hoser) {
+        final Card consultation = labWithOptBoard();
+        addCard(hoser, opp);
+        final String why = "Lab with Opt under " + hoser;
+        assertConsultationWindow(consultation, false, why + ", the cast");
+        final SpellAbility sa = resolving(consultation);
+        assertEquals(ids(t.view().executableNow()), List.of("742-2836"), why + ": the line is not executable");
+        assertKeeps(sa, FILLER, why + ", the resolution");
+    }
+
+    /** Review Focus 4 at the resolution (follow-up 5, J2; the preflight's Teferi pin): above a stack no follow-up has a
+     *  sorcery's moment, so the opponent's Teferi, Time Raveler bars Opt there. Line 742-2836 in our Main 1,
+     *  Laboratory Maniac on our battlefield, Opt in hand, Island and Swamp, a 20-card library, Teferi. Demonic
+     *  Consultation resolving alone on the stack (the control) leaves the stack empty in our Main 1, Opt has a
+     *  sorcery's moment there, and the name is the stock absent one. Consultation resolving above the opponent's Swords
+     *  to Plowshares on Lab: Opt could follow only at instant speed, which Teferi bars, so the library is kept; Teferi
+     *  gone, Opt follows above Swords (follow-up 5, J1) and the name is the stock one again. */
+    @Test
+    public void teferiBarsTheInstantAtTheResolution() {
+        Card consultation = labWithOptBoard();
+        teferi();
+        SpellAbility sa = resolving(consultation);
+        assertEquals(ids(t.view().executableNow()), List.of("742-2836"), "Consultation alone under Teferi");
+        assertEmpties(sa, "Consultation alone on the stack under Teferi");
+
+        consultation = labWithOptBoard();
+        final Card teferi = teferi();
+        swordsOn(t.find(LAB, ZoneType.Battlefield));
+        sa = resolving(consultation);
+        String why = "Consultation above Swords under Teferi";
+        assertEquals(game.getStack().size(), 2, why);
+        assertEquals(ids(t.view().executableNow()), List.of("742-2836"), why + ": the line is not executable");
+        assertKeeps(sa, FILLER, why);
+        game.getAction().moveTo(ZoneType.Graveyard, teferi, null, AbilityKey.newMap());
+        assertEmpties(sa, "Consultation above Swords, Teferi gone");
+    }
+
+    /** The follow-up's mana is read again at the resolution (follow-up 5, J2; the preflight's mana pin): the probe
+     *  board (line 742-2836 in our Main 1, Laboratory Maniac on our battlefield, Opt in hand, Island and Swamp, a
+     *  20-card library) with Demonic Consultation resolving above the opponent's Swords to Plowshares on Lab, its {B}
+     *  paid from the Swamp. The Island untapped pays Opt above Swords: the stock absent name. The Island tapped
+     *  before the resolution (Rhystic Study's {1}, say), Opt cannot follow, so the library is kept; untapped again, the
+     *  stock name. Swords gone, Consultation alone on the stack, the Island tapped: the library is kept there too. */
+    @Test
+    public void theFollowUpsManaIsReadAtTheResolution() {
+        final Card consultation = labWithOptBoard();
+        final Card lab = t.find(LAB, ZoneType.Battlefield);
+        final SpellAbilityStackInstance swords = swordsOn(lab);
+        final SpellAbility sa = resolving(consultation);
+        untappedCard("Swamp").setTapped(true);
+        final Card island = untappedCard("Island");
+        assertEmpties(sa, "the Island untapped, above Swords");
+
+        island.setTapped(true);
+        assertKeeps(sa, FILLER, "the Island tapped, above Swords");
+        island.setTapped(false);
+        assertEmpties(sa, "the Island untapped again, above Swords");
+
+        game.getStack().remove(swords);
+        assertEquals(game.getStack().size(), 1);
+        island.setTapped(true);
+        assertKeeps(sa, FILLER, "the Island tapped, Consultation alone");
+    }
+
+    /** The kept name (follow-up 5, J2): the name most cards of our library bear, ties going to the first by
+     *  String.compareTo, read from the library's contents, never its order. Line 742-2836, Laboratory Maniac in our
+     *  graveyard, Demonic Consultation resolving. Island x10, Swamp x5 and three singletons (Air Elemental, Coral
+     *  Merfolk and Wind Drake, one of them first by name): Island. Island x3 and Swamp x3: Island, the tie broken by
+     *  name. Swamp x4, Island x3 and the singletons: Swamp, the most copies, not the first name. Each library in its
+     *  order, reversed and shuffled: the same name. Five cards with a blank name beside one Island: Island, a blank
+     *  name never kept. */
+    @Test
+    public void theKeptNameIsTheMostCopied() {
+        start(LAB_CONSULTATION);
+        addCardToZone(LAB, ai, ZoneType.Graveyard);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Swamp");
+        assertEquals(ids(t.deckLines()), List.of("742-2836"));
+        final SpellAbility sa = resolving(consultation);
+        final List<String> singletons = List.of("Air Elemental", "Coral Merfolk", "Wind Drake");
+
+        List<String> names = new ArrayList<>(Collections.nCopies(10, "Island"));
+        names.addAll(Collections.nCopies(5, "Swamp"));
+        names.addAll(singletons);
+        assertKeepsInAnyOrder(sa, names, "Island", "Island x10, Swamp x5, singletons");
+
+        names = new ArrayList<>(Collections.nCopies(3, "Island"));
+        names.addAll(Collections.nCopies(3, "Swamp"));
+        assertKeepsInAnyOrder(sa, names, "Island", "Island x3, Swamp x3");
+
+        names = new ArrayList<>(Collections.nCopies(4, "Swamp"));
+        names.addAll(Collections.nCopies(3, "Island"));
+        names.addAll(singletons);
+        assertKeepsInAnyOrder(sa, names, "Swamp", "Swamp x4, Island x3, singletons");
+
+        // a blank name is never the kept one, however many cards bear it: named, it would name nothing, and the reveal
+        // would exile the whole library. Five cards given a blank name (Card.setName) beside one Island: Island
+        for (final Card c : new ArrayList<>(ai.getCardsIn(ZoneType.Library))) {
+            ai.getZone(ZoneType.Library).remove(c);
+        }
+        library("Grizzly Bears", "Grizzly Bears", "Grizzly Bears", "Grizzly Bears", "Grizzly Bears", "Island");
+        for (final Card c : ai.getCardsIn(ZoneType.Library)) {
+            if (!c.getName().equals("Island")) {
+                c.setName("");
+            }
+        }
+        assertEquals(ai.getCardsIn(ZoneType.Library).stream().filter(c -> c.getName().isEmpty()).count(), 5L);
+        assertKeeps(sa, "Island", "five blank names, one Island");
+    }
+
+    // our library rebuilt from names in that order, then reversed, then shuffled (a seeded shuffle of the test's own):
+    // three different orders, and in each, Consultation resolving keeps expected
+    private void assertKeepsInAnyOrder(final SpellAbility sa, final List<String> names, final String expected,
+            final String why) {
+        final List<String> reversed = new ArrayList<>(names);
+        Collections.reverse(reversed);
+        final List<String> shuffled = new ArrayList<>(names);
+        Collections.shuffle(shuffled, new Random(7));
+        final List<List<String>> seen = new ArrayList<>(3);
+        for (final List<String> order : List.of(names, reversed, shuffled)) {
+            for (final Card c : new ArrayList<>(ai.getCardsIn(ZoneType.Library))) {
+                ai.getZone(ZoneType.Library).remove(c);
+            }
+            library(order.toArray(new String[0]));
+            final List<String> library = ai.getCardsIn(ZoneType.Library).stream().map(Card::getName)
+                    .collect(Collectors.toList());
+            assertFalse(seen.contains(library), why + ": an order read twice, " + library);
+            seen.add(library);
+            assertKeeps(sa, expected, why + ", " + library);
+        }
+    }
+
+    /** Stock parity (follow-up 5, J2; Review Focus 5): a deck holding no line (line 1295-3093's Tainted Pact is not
+     *  ours) names as stock does, answer and draws: Demonic Consultation resolving above our Thassa's Oracle trigger,
+     *  the stock absent name; and resolving with Laboratory Maniac exiled, where a deck holding Lab's line would keep
+     *  the library, the stock absent name too. */
+    @Test
+    public void aDeckWithNoLineNamesAsStock() {
+        Card consultation = oracleBoard(ORACLE_PACT);
+        assertEquals(t.deckLines(), List.of());
+        final SpellAbility atTheTrigger = resolving(consultation);
+        assertEquals(assertStockParity(() -> nameAt(atTheTrigger), lines(ORACLE_PACT)), stockName(),
+                "Oracle's trigger, no line");
+
+        start(ORACLE_PACT);
+        addCardToZone(LAB, ai, ZoneType.Exile);
+        consultation = hand(CONSULTATION);
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(t.deckLines(), List.of());
+        final SpellAbility labGone = resolving(consultation);
+        assertEquals(assertStockParity(() -> nameAt(labGone), lines(ORACLE_PACT)), stockName(), "Lab gone, no line");
+        t.useLines(lines(LAB_CONSULTATION));
+        assertEquals(ids(t.deckLines()), List.of("742-2836"));
+        assertKeeps(labGone, FILLER, "Lab gone, Lab's line");
+    }
+
+    // ---- the boards above: each returns our Demonic Consultation, in hand, with a 20-card library ----
+
+    // line 742-1295 in our Main 1: Island, Island and Swamp, and our Thassa's Oracle entered, its trigger on our stack
+    private Card oracleBoard() {
+        return oracleBoard(ORACLE_CONSULTATION);
+    }
+
+    // oracleBoard with row's lines
+    private Card oracleBoard(final String row) {
+        start(row);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        enters(hand(ORACLE));
+        return consultation;
+    }
+
+    // line 742-8266 in our Main 1: our Fblthp, Impossibly Lost on our battlefield, a Swamp, and Fblthp's combat-damage
+    // trigger on our stack
+    private Card fblthpBoard() {
+        start(FBLTHP_CONSULTATION);
+        final Card fblthp = ready(FBLTHP);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        game.getStack().add(fblthpTrigger(fblthp));
+        assertTrue(game.getStack().peekAbility().isTrigger());
+        return consultation;
+    }
+
+    // line x-1 in our Main 1: our Doctor Doom, Unrivaled on our battlefield, untapped and free of summoning sickness,
+    // and a Swamp
+    private Card doomBoard() {
+        start(DOOM_CONSULTATION);
+        ready(DOOM);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("x-1"));
+        return consultation;
+    }
+
+    // line 742-2836 in our Main 1: Laboratory Maniac on our battlefield, Opt in hand, Island and Swamp
+    private Card labWithOptBoard() {
+        return followUpBoard(LAB_CONSULTATION, LAB, OPT, "Island", "Swamp");
+    }
+
+    // line 742-2836 at the opponent's end step, our turn next: Laboratory Maniac on our battlefield, a Swamp, no draw
+    // spell
+    private Card labAtTheEndStepBoard() {
+        start(LAB_CONSULTATION);
+        addCard(LAB, ai);
+        final Card consultation = hand(CONSULTATION);
+        lands("Swamp");
+        fillLibrary(ai, 20);
+        opponentsEndStep();
+        return consultation;
+    }
+
+    // line 742-3096 in our Main 1: Jace, Wielder of Mysteries on our battlefield with its printed four loyalty, Opt in
+    // hand, Island and Swamp
+    private Card jaceWithOptBoard() {
+        final Card consultation = followUpBoard(JACE_CONSULTATION, JACE, OPT, "Island", "Swamp");
+        t.find(JACE, ZoneType.Battlefield).setCounters(CounterEnumType.LOYALTY, 4);
+        return consultation;
     }
 }

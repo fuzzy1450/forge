@@ -429,10 +429,11 @@ public final class ComboFetch {
 
     /**
      * The name Demonic Consultation's resolution chooses (PlayerControllerAi.chooseCardName, ahead of the stock
-     * absent-name loop), or null for the stock namer: the intent {@link #consultTutor} recorded for {@code sa}'s host,
-     * taken (removed) whatever the answer, while no trigger of ours hosted by Thassa's Oracle or Fblthp, Impossibly
-     * Lost is on the stack (Consultation is that trigger's emptier now, and must exile the whole library) and that
-     * piece is still in our library.
+     * absent-name loop), or null for ComboExecute.consultationKeeps, then the stock namer (follow-up 5, J2: with no
+     * window of a Consultation line open, a card our library bears): the intent {@link #consultTutor} recorded for
+     * {@code sa}'s host, taken (removed) whatever the answer, while no trigger of ours hosted by Thassa's Oracle or
+     * Fblthp, Impossibly Lost is on the stack (Consultation is that trigger's emptier now, and must exile the whole
+     * library) and that piece is still in our library.
      */
     public static String consultNamed(final Player ai, final SpellAbility sa) {
         final Card host = sa.getHostCard();

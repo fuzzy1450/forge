@@ -2,6 +2,8 @@ package forge.ai.combo;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 import com.google.common.collect.Iterables;
 
@@ -65,9 +67,11 @@ import forge.game.zone.ZoneType;
  * </ul>
  * Pact's own singleton-library condition is executable's. None of it while we cannot win or every opponent cannot lose
  * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
- * The go-off reads {@link ComboTracker#executable}, whose denial reads the emptier at the moment Oracle's trigger will
- * be on the stack (follow-up F3), and that same moment this turn (follow-up 2, G2: a line live for a later turn goes
- * off in none this turn): Oracle is cast before its window opens.
+ * Consultation's resolution reads its windows again ({@link #consultationKeeps}, follow-up 5, J2): with none open (the
+ * opponent's Swords to Plowshares on our Laboratory Maniac, cast above it, has exiled Lab), it names a card our library
+ * bears, and the library is kept. The go-off reads {@link ComboTracker#executable}, whose denial reads the emptier at
+ * the moment Oracle's trigger will be on the stack (follow-up F3), and that same moment this turn (follow-up 2, G2: a
+ * line live for a later turn goes off in none this turn): Oracle is cast before its window opens.
  *
  * <p>Nothing here draws a random number, keeps any state of its own (Consultation's tutor intent lives on the
  * tracker) or reads the library's order. The mana for two casts together, Oracle's and its emptier's or an emptier's and
@@ -393,6 +397,54 @@ public final class ComboExecute {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
         return ComboFetch.consultTutor(ai, sa, v);
+    }
+
+    /**
+     * The name Demonic Consultation's resolution chooses when no tutor intent names one (follow-up 5, J2;
+     * PlayerControllerAi.chooseCardName, after {@link ComboFetch#consultNamed} and ahead of the stock loop, which names
+     * a card absent from our library and so exiles all of it), {@code sa} the resolving spell, its host Consultation
+     * (the caller's own test): null, the stock name, for a deck holding no Consultation line, while a window of one
+     * holds now, at the resolution, or on an empty library; otherwise the name most cards of our library bear, ties
+     * going to the first by String.compareTo, read from the library's contents, never its order. The most copies give
+     * the best chance that one lies past the six cards exiled first, so the reveal stops and the library is kept. The
+     * window is read as {@link #pactDeclines} reads Pact's: the emptier paid already and still the stack's top while it
+     * resolves, so above an opponent's spell only an instant follow-up counts, at no sorcery's moment (follow-up 5,
+     * J1). So once the opponent's Swords to Plowshares on our Laboratory Maniac, cast above Consultation, has exiled
+     * Lab, or our Doctor Doom is gone or tapped, the library is kept, while our Oracle's or Fblthp's trigger beneath
+     * it, an untapped Doom, or Lab or Jace with a draw to follow still empties it. A resolving emptier is a piece cast
+     * already (ComboTracker.Where.STACK), which no cast bar reads, so its own cast this turn denies its line nothing
+     * under Deafening Silence or Rule of Law; the follow-up's bar counts it among the turn's spells once. Draws
+     * nothing.
+     */
+    public static String consultationKeeps(final Player ai, final SpellAbility sa) {
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null || !holds(t, Emptier.CONSULTATION) || window(ai, t.view(), Emptier.CONSULTATION, sa, false)) {
+            return null;
+        }
+        return mostCopied(ai.getCardsIn(ZoneType.Library));
+    }
+
+    // the name most cards of library bear, by Card.getName (the name the reveal matches: Card.sharesNameWith), ties
+    // going to the first by String.compareTo (the TreeMap's order); null when none bears one, an empty library among
+    // them. A blank name is never counted: named, it names nothing (ChooseCardNameEffect records no name), and the
+    // reveal exiles the whole library. Counted by name, so the library's order is never read
+    private static String mostCopied(final Iterable<Card> library) {
+        final Map<String, Integer> copies = new TreeMap<>();
+        for (final Card c : library) {
+            final String name = c.getName();
+            if (!name.isEmpty()) {
+                copies.put(name, copies.getOrDefault(name, 0) + 1);
+            }
+        }
+        String most = null;
+        int count = 0;
+        for (final Map.Entry<String, Integer> e : copies.entrySet()) {
+            if (e.getValue() > count) {
+                most = e.getKey();
+                count = e.getValue();
+            }
+        }
+        return most;
     }
 
     /**

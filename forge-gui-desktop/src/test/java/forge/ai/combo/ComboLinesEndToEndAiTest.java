@@ -33,8 +33,8 @@ import forge.util.MyRandom;
  * Every empty-library line of piece 1 played to a win (follow-up F6, spec 2026-10-22-combo-aware-ai-core-design.md
  * section 6.4), through the real cast path: the game loop gives the AI priority, and the AI casts from its hand,
  * activates and answers its own triggers as it would in a served game. Nothing of ours is put on the stack by hand
- * (three tests put an opponent's spell there: {@link #theirSpellOn}), and the AI's tracker holds the shipped table's
- * lines, matched against its own cards.
+ * (four tests put an opponent's spell there: {@link #theirSpellOn}, {@link #theirResponse}), and the AI's tracker
+ * holds the shipped table's lines, matched against its own cards.
  *
  * <p>Each game starts in the AI's own Main 1 with a full seven-card hand: the line's pieces and playable junk (cards
  * its lands cast, competing for the line's mana), the lands the line needs on its battlefield, and a library of
@@ -490,6 +490,15 @@ public class ComboLinesEndToEndAiTest extends AITest {
     /** The opponent's {@code name}, cast at {@code target} and on the stack: put there by hand, nothing paid (the
      *  opponent's AI is not asked to cast it), the opponent its activator and, as its caster, holding priority. */
     private Card theirSpellOn(final String name, final Card target) {
+        final Card card = theirResponse(name, target);
+        assertEquals(game.getStack().size(), 1, name + " is not alone on the stack");
+        return card;
+    }
+
+    /** {@link #theirSpellOn} above whatever the stack holds (follow-up 5, J2): the opponent's {@code name}, cast at
+     *  {@code target} in response, put on the stack by hand, nothing paid, its top, the opponent its activator and
+     *  holding priority. */
+    private Card theirResponse(final String name, final Card target) {
         final Card card = createCard(name, opp);
         card.setGameTimestamp(game.getNextTimestamp());
         game.getStackZone().add(card);
@@ -497,7 +506,7 @@ public class ComboLinesEndToEndAiTest extends AITest {
         sa.setActivatingPlayer(opp);
         sa.getTargets().add(target);
         game.getStack().add(sa);
-        assertEquals(game.getStack().size(), 1, name + " is not alone on the stack");
+        assertEquals(game.getStack().peek().getSourceCard(), card, name + " is not the stack's top");
         assertEquals(game.getPhaseHandler().getPriorityPlayer(), opp, "the opponent does not hold priority");
         return card;
     }
@@ -619,5 +628,78 @@ public class ComboLinesEndToEndAiTest extends AITest {
         assertEquals(draw.library(), 0, "Doom drew on a library Consultation had not emptied");
         assertEndedInOurTurn(PhaseType.MAIN1, turn);
         assertNotNull(t.find(DOOM, ZoneType.Battlefield), "Swords resolved first: Doom left our battlefield");
+    }
+
+    /**
+     * Review Focus 2 (follow-up 5, J2; FOLLOWUP4.md's final review, PlayerControllerAi.java:1642), the mirror of
+     * {@link #instantFollowUpWinsAboveStackedRemoval}: the same board on an empty stack. Laboratory Maniac (line
+     * 742-2836) on our battlefield, Demonic Consultation and Opt in hand beside the junk, Island and Swamp, a 20-card
+     * library of Runeclaw Bears, our Main 1. The AI casts Consultation on the empty stack, its window open; the
+     * opponent's Swords to Plowshares on Lab is put above it by hand ({@link #theirResponse}), before anything else, and
+     * resolves first, exiling Lab. Consultation then resolves with no win standing: it names a card our library bears,
+     * so the reveal stops and our library is not emptied, and played on past our next draw step, we have not lost. On
+     * the base code it named a card absent from our library, exiled all of it, and we lost at that draw.
+     */
+    @Test
+    public void removalInResponseToConsultationLeavesTheLibrary() {
+        start();
+        final Card lab = addCard(LAB, ai);
+        hand(CONSULTATION, "Opt");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.deckLines()), List.of("742-2836"));
+        assertEquals(ids(t.executable()), List.of("742-2836"));
+        assertTrue(game.getStack().isEmpty());
+        final PhaseHandler ph = game.getPhaseHandler();
+        final int turn = ph.getTurn();
+
+        int steps = 0;
+        while (!game.isGameOver() && ourConsultation() == null && steps++ < MAX_STEPS) {
+            ph.mainLoopStep();
+        }
+        assertNotNull(ourConsultation(), "Consultation was never cast");
+        assertEquals(stackNames(), List.of(CONSULTATION), "Consultation was not cast alone on an empty stack");
+        assertTrue(ph.is(PhaseType.MAIN1, ai), "Consultation's phase: " + ph.getPhase());
+        assertEquals(ph.getTurn(), turn, "Consultation's turn");
+        assertEquals(ai.getCardsIn(ZoneType.Library).size(), 20, "our library was not whole at Consultation's cast");
+        theirResponse(SWORDS, lab);
+        assertEquals(stackNames(), List.of(SWORDS, CONSULTATION));
+
+        while (!game.isGameOver() && !game.getStack().isEmpty() && steps++ < MAX_STEPS) {
+            ph.mainLoopStep();
+        }
+        assertFalse(game.isGameOver(), "the game ended on the stack: " + game.getOutcome());
+        assertTrue(game.getStack().isEmpty(), "the stack never emptied: " + stackNames());
+        assertNotNull(t.find(LAB, ZoneType.Exile), "Swords did not exile Lab");
+        assertNotNull(t.find(CONSULTATION, ZoneType.Graveyard), "Consultation did not resolve");
+        assertFalse(ai.getCardsIn(ZoneType.Library).isEmpty(), "Consultation exiled our whole library");
+
+        while (!game.isGameOver() && !(ph.is(PhaseType.MAIN1, ai) && ph.getTurn() > turn) && steps++ < MAX_STEPS) {
+            ph.mainLoopStep();
+        }
+        assertFalse(game.isGameOver(), "the game ended: " + game.getOutcome());
+        assertTrue(ph.is(PhaseType.MAIN1, ai) && ph.getTurn() > turn, "our next Main 1 never came: " + ph.getPhase());
+        assertFalse(ai.hasLost(), "we lost");
+        assertFalse(ai.getCardsIn(ZoneType.Library).isEmpty(), "our library is empty past our draw step");
+    }
+
+    /** Our Demonic Consultation spell on the stack, or null. */
+    private SpellAbilityStackInstance ourConsultation() {
+        for (final SpellAbilityStackInstance si : game.getStack()) {
+            if (si.isSpell() && ai.equals(si.getActivatingPlayer())
+                    && CONSULTATION.equals(ComboTracker.nameOf(si.getSourceCard()))) {
+                return si;
+            }
+        }
+        return null;
+    }
+
+    /** The names of the stack's items' sources, the top first. */
+    private List<String> stackNames() {
+        final List<String> out = new ArrayList<>();
+        for (final SpellAbilityStackInstance si : game.getStack()) {
+            out.add(ComboTracker.nameOf(si.getSourceCard()));
+        }
+        return out;
     }
 }
