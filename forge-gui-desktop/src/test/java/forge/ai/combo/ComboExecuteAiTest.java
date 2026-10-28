@@ -4286,6 +4286,67 @@ public class ComboExecuteAiTest extends AITest {
         assertKeeps(sa, FILLER, "the opponent's copy of their Oracle, its trigger theirs");
     }
 
+    /** Beyond the plan's tests (follow-up 6, K1 review, round 1: with the shared trigger test's name test dropped,
+     *  every test above still passed): a trigger of ours whose host is not named Thassa's Oracle is no window. Line
+     *  742-1295 in our Main 1, our printed Thassa's Oracle in our library, Demonic Consultation in hand, Island, Island
+     *  and Swamp, and a 20-card library besides; our Banisher Priest enters, its entering trigger, ours, on our stack,
+     *  aimed at the opponent's Grizzly Bears (ourTrigger). Consultation resolving above it: no window of ours and no
+     *  trigger of ours whose host is named Thassa's Oracle, so the most-copied name, Runeclaw Bear, keeps the library;
+     *  the stock absent name would exile it with no win to follow. */
+    @Test
+    public void anotherTriggerOfOursIsNoWindow() {
+        start(ORACLE_CONSULTATION);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        library(ORACLE);
+        final SpellAbilityStackInstance trigger = ourTrigger(t.find(ORACLE, ZoneType.Library));
+        final String why = "our Banisher Priest's trigger beneath Consultation";
+        assertTrue(trigger.isTrigger(), why);
+        assertTrue(trigger.getSpellAbility().isTrigger(), why);
+        assertEquals(trigger.getActivatingPlayer(), ai, why);
+        assertEquals(trigger.getSpellAbility().getHostCard().getName(), BANISHER, why);
+        assertEquals(ids(t.deckLines()), List.of("742-1295"), why);
+        assertEquals(t.where(ORACLE), ComboTracker.Where.LIBRARY, why);
+        final SpellAbility sa = resolving(consultation);
+        assertEquals(game.getStack().size(), 2, why);
+        assertFalse(t.triggerOnOurStack(ORACLE), why + ": an Oracle trigger of ours");
+        assertKeeps(sa, FILLER, why);
+    }
+
+    /** Beyond the plan's tests (follow-up 6, K1 review, round 1: with the shared trigger test's isTrigger dropped,
+     *  every test above still passed): our Thassa's Oracle's spell is no window. Line 742-1295 in our Main 1, Demonic
+     *  Consultation in hand, Island, Island and Swamp, a 20-card library, and our printed Thassa's Oracle cast and on
+     *  our stack as a spell, nothing paid or resolved (castOnStack): its host is named Thassa's Oracle and we cast it,
+     *  but it is no trigger. Consultation resolving above it, the line executable: the Oracle window waits for
+     *  Oracle's trigger, a fired trigger that nothing after it can stop, as the stock cast's own test reads a trigger
+     *  (SpecialCardAi.DemonicConsultation.consider), while a spell can still be countered before Oracle enters. So no
+     *  window holds and the stock cast's clause does not fire: the most-copied name, Runeclaw Bear, keeps the
+     *  library. */
+    @Test
+    public void ourOracleSpellIsNoWindow() {
+        start(ORACLE_CONSULTATION);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        final Card oracle = castOnStack(ORACLE);
+        final SpellAbilityStackInstance spell = game.getStack().peek();
+        final String why = "our Thassa's Oracle's spell beneath Consultation";
+        assertEquals(spell.getSourceCard(), oracle, why);
+        assertTrue(spell.isSpell(), why);
+        assertFalse(spell.isTrigger(), why);
+        assertFalse(spell.getSpellAbility().isTrigger(), why);
+        assertEquals(spell.getActivatingPlayer(), ai, why);
+        assertEquals(spell.getSpellAbility().getHostCard().getName(), ORACLE, why);
+        assertEquals(ids(t.deckLines()), List.of("742-1295"), why);
+        assertEquals(t.where(ORACLE), ComboTracker.Where.STACK, why);
+        final SpellAbility sa = resolving(consultation);
+        assertEquals(game.getStack().size(), 2, why);
+        assertEquals(ids(t.view().executableNow()), List.of("742-1295"), why + ": the line is not executable");
+        assertFalse(t.triggerOnOurStack(ORACLE), why + ": an Oracle trigger of ours");
+        assertKeeps(sa, FILLER, why);
+    }
+
     // p's copy of Thassa's Oracle (follow-up 6, K1; ruling P4): p's clone put onto p's battlefield and made a copy of
     // oracle in place, a clone state as its entering replacement makes one (a zone move would drop it), and its
     // entering trigger, the copied Oracle's, on the stack with p its activator (fblthpTrigger's idiom). The trigger's

@@ -891,6 +891,28 @@ public class ComboConsultTutorAiTest extends AITest {
         assertNull(t.takeConsultIntent(consultation.getId()), "the intent was not taken");
     }
 
+    /** Beyond the plan's tests (follow-up 6, K1 review, round 1: with the shared trigger test's name test dropped,
+     *  every test still passed): a trigger of ours whose host is not named Thassa's Oracle keeps the intent, as the
+     *  opponent's Oracle trigger does (anOpponentsOracleTriggerKeepsTheIntent). The plan's Pact board (1295-3093
+     *  alone), the intent recorded at the cast decision; then our Banisher Priest enters, its entering trigger on our
+     *  stack, aimed at the opponent's Grizzly Bears: Consultation is no emptier there, and its resolution names the
+     *  piece, the library's Oracle. */
+    @Test
+    public void anotherTriggerOfOursKeepsTheIntent() {
+        final Card consultation = board(FILLERS, ORACLE_PACT);
+        final SpellAbility sa = castOf(consultation);
+        assertEquals(consider(sa), AiPlayDecision.WillPlay);
+
+        final Card bears = addCard("Grizzly Bears", opp);
+        final SpellAbilityStackInstance top = enters(hand("Banisher Priest"));
+        assertEquals(top.getActivatingPlayer(), ai);
+        assertEquals(top.getSpellAbility().getHostCard().getName(), "Banisher Priest");
+        assertTrue(top.getTargetChoices().contains(bears), "Banisher Priest's trigger aims elsewhere");
+        assertFalse(t.triggerOnOurStack(ORACLE), "an Oracle trigger of ours");
+        assertNotNull(t.find(ORACLE, ZoneType.Library), "the library's Oracle left");
+        assertEquals(named(sa), ORACLE);
+    }
+
     /** Our Spark Double put onto our battlefield and made a copy of {@code oracle} in place (a clone state, as its
      *  entering replacement makes one), and its entering trigger, the copied Oracle's, on our stack (fblthpTrigger's
      *  idiom; ComboExecuteAiTest's copiedOracleTrigger): its host answers getName() "Thassa's Oracle", the stock cast's
