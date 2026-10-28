@@ -1,6 +1,7 @@
 package forge.ai.combo;
 
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNotSame;
@@ -32,6 +33,7 @@ import forge.game.GameEndReason;
 import forge.game.ability.AbilityKey;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
+import forge.game.card.CardFactory;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -49,7 +51,8 @@ import forge.util.MyRandom;
  * {@link ComboFetch#CONSULT_TUTOR_MIN_LIBRARY} cards, while no live line is assembled already and our mana pays
  * Consultation now, its resolution names that piece; the namer re-checks the intent
  * there, and names a card absent from our library (the stock namer, the emptier's) once our Thassa's Oracle or Fblthp
- * trigger is on the stack or the piece has left the library. Unless a test says otherwise the AI plays the Default
+ * trigger is on the stack (a copy of Oracle's among them, follow-up 6, K1) or the piece has left the library. Unless a
+ * test says otherwise the AI plays the Default
  * profile in its own MAIN1, with Tainted Pact and Demonic Consultation in hand, Island, Island, Swamp and Swamp in
  * play, and the plan's library: the first 80 unique card names that are neither lands nor piece-1 cards, plus
  * Thassa's Oracle after the first forty.
@@ -858,5 +861,75 @@ public class ComboConsultTutorAiTest extends AITest {
         final String stock = named(again);
         assertNotInLibrary(stock);
         assertEquals(stock, stockName());
+    }
+
+    // ---- follow-up 6, K1: a copy of Thassa's Oracle keeps the stock name at Consultation's resolution ----
+
+    /** Follow-up 6, K1 (ruling P3): a tutor intent yields to a copy of Thassa's Oracle.
+     *  aGoneTutorPieceLeavesTheLibrary's board (lines 742-1295 and 1295-3093, Thassa's Oracle in our library), with a
+     *  second printed Oracle of ours on our battlefield and our Spark Double there, a copy of it, whose entering
+     *  trigger is on our stack. The stock cast decision casts Consultation at that trigger (its loop reads the host's
+     *  current name), so it never reaches
+     *  ComboExecute.consultation, which drops an earlier intent: an intent an approved tutor cast never paid left for
+     *  the library's Oracle stands (setConsultIntent). Consultation resolving above the trigger names the stock absent
+     *  name, not Oracle, so the library is exiled and the trigger wins, as on a4d2a245fc4: consultNamed yields at a
+     *  trigger of ours whose host is named Thassa's Oracle now, and consultationKeeps names the stock name while we can
+     *  win. The intent is taken whatever the answer. */
+    @Test
+    public void aStaleIntentYieldsToACopiedOracle() {
+        final Card consultation = board(FILLERS, ORACLE_PACT, ORACLE_CONSULTATION);
+        sparkDoubleCopies(addCard(ORACLE, ai));
+        assertEquals(consider(castOf(consultation)), AiPlayDecision.WillPlay, "the stock cast at the copy's trigger");
+        t.setConsultIntent(consultation.getId(), ORACLE);
+        final SpellAbility sa = onOurStack(consultation);
+        assertEquals(t.where(CONSULTATION), ComboTracker.Where.STACK);
+        assertNotNull(t.find(ORACLE, ZoneType.Library), "the library's Oracle left");
+        final String name = named(sa);
+        assertNotEquals(name, ORACLE);
+        assertNotInLibrary(name);
+        assertEquals(name, stockName());
+        assertNull(t.takeConsultIntent(consultation.getId()), "the intent was not taken");
+    }
+
+    /** Our Spark Double put onto our battlefield and made a copy of {@code oracle} in place (a clone state, as its
+     *  entering replacement makes one), and its entering trigger, the copied Oracle's, on our stack (fblthpTrigger's
+     *  idiom; ComboExecuteAiTest's copiedOracleTrigger): its host answers getName() "Thassa's Oracle", the stock cast's
+     *  test, and ComboTracker.nameOf "Spark Double", the tracker's. */
+    private void sparkDoubleCopies(final Card oracle) {
+        final Card copy = addCard("Spark Double", ai);
+        copy.addCloneState(CardFactory.getCloneStates(oracle, copy, oracle.getFirstSpellAbility()),
+                game.getNextTimestamp());
+        for (final Trigger tr : copy.getTriggers()) {
+            if (tr.getMode() == TriggerType.ChangesZone) {
+                final SpellAbility sa = tr.ensureAbility().copy(ai);
+                sa.setTrigger(tr);
+                game.getStack().add(sa);
+                final SpellAbilityStackInstance top = game.getStack().peek();
+                assertTrue(top.isTrigger());
+                assertEquals(top.getActivatingPlayer(), ai);
+                assertEquals(top.getSpellAbility().getHostCard().getName(), ORACLE,
+                        "Spark Double is no copy of Oracle");
+                assertEquals(ComboTracker.nameOf(top.getSpellAbility().getHostCard()), "Spark Double");
+                assertTrue(t.triggerOnOurStack("Spark Double"));
+                assertFalse(t.triggerOnOurStack(ORACLE), "an Oracle trigger of ours by the printed name");
+                return;
+            }
+        }
+        throw new AssertionError("no entering trigger on Spark Double's copy of " + oracle);
+    }
+
+    /** Our {@code consultation}, from our hand, cast: the same card (its id keys its intent) on our stack, nothing paid
+     *  or resolved, the stack's top (ComboExecuteAiTest's castOnStack). Returns its spell there, the one its
+     *  resolution's namer is asked for. */
+    private SpellAbility onOurStack(final Card consultation) {
+        ai.getZone(ZoneType.Hand).remove(consultation);
+        consultation.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(consultation);
+        final SpellAbility sa = consultation.getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+        game.getStack().add(sa);
+        final SpellAbilityStackInstance top = game.getStack().peek();
+        assertSame(top.getSourceCard(), consultation, "Consultation is not the stack's top");
+        return top.getSpellAbility();
     }
 }

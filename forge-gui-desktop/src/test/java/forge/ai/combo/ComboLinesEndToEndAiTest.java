@@ -20,6 +20,7 @@ import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
 import forge.game.Game;
 import forge.game.GameEndReason;
+import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
@@ -34,7 +35,9 @@ import forge.util.MyRandom;
  * section 6.4), through the real cast path: the game loop gives the AI priority, and the AI casts from its hand,
  * activates and answers its own triggers as it would in a served game. Nothing of ours is put on the stack by hand
  * (four tests put an opponent's spell there: {@link #theirSpellOn}, {@link #theirResponse}), and the AI's tracker
- * holds the shipped table's lines, matched against its own cards.
+ * holds the shipped table's lines, matched against its own cards. One test moves a card of ours from our hand onto
+ * the battlefield by hand, uncast: our Spark Double ({@link #aCopiedOracleWinsThroughConsultation}), whose own
+ * entering replacement asks the AI what to copy and whose entering trigger the engine puts on our stack.
  *
  * <p>Each game starts in the AI's own Main 1 with a full seven-card hand: the line's pieces and playable junk (cards
  * its lands cast, competing for the line's mana), the lands the line needs on its battlefield, and a library of
@@ -52,6 +55,7 @@ public class ComboLinesEndToEndAiTest extends AITest {
     private static final String DOOM = "Doctor Doom, Unrivaled";
     private static final String FBLTHP = "Fblthp, Impossibly Lost";
     private static final String SWORDS = "Swords to Plowshares";
+    private static final String SPARK = "Spark Double";
 
     /** Five junk cards in blue and black, each castable off Islands and Swamps, none a draw spell (a draw spell in
      *  hand would open Laboratory Maniac's and Jace's main-phase window, not their end-step one). */
@@ -681,6 +685,57 @@ public class ComboLinesEndToEndAiTest extends AITest {
         assertTrue(ph.is(PhaseType.MAIN1, ai) && ph.getTurn() > turn, "our next Main 1 never came: " + ph.getPhase());
         assertFalse(ai.hasLost(), "we lost");
         assertFalse(ai.getCardsIn(ZoneType.Library).isEmpty(), "our library is empty past our draw step");
+    }
+
+    /**
+     * Review Focus 1 (follow-up 6, K1; FOLLOWUP5.md's final review, ComboExecute.java:421), played out: our printed
+     * Thassa's Oracle (line 742-1295) on our battlefield, spent, Spark Double and Demonic Consultation in hand beside
+     * the junk, Island, Island and Swamp, a 20-card library, our Main 1. Spark Double is moved from our hand onto our
+     * battlefield ({@link #enters}), the game's last-known battlefield taken first as the priority loop takes it after
+     * every play (Clone's choices are read from it): its entering replacement asks the AI, which copies our Oracle,
+     * and the copy's entering trigger goes on our stack, priority ours. The AI casts Consultation in response (the
+     * stock cast, which reads the trigger's host by its current name), Consultation names a card absent from our
+     * library, the library is exiled, and the copy's trigger resolves: we win in that Main 1, as on a4d2a245fc4. Since
+     * the fifth follow-up's J2, Consultation had named a card of our library there, and the trigger found it.
+     */
+    @Test
+    public void aCopiedOracleWinsThroughConsultation() {
+        start();
+        addCard(ORACLE, ai);
+        hand(SPARK, CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.deckLines()), List.of("742-1295"));
+        final int turn = game.getPhaseHandler().getTurn();
+
+        game.copyLastState();
+        final SpellAbilityStackInstance trigger = enters(t.find(SPARK, ZoneType.Hand));
+        assertEquals(label(trigger), SPARK + " trigger");
+        assertEquals(trigger.getSpellAbility().getHostCard().getName(), ORACLE, "Spark Double did not copy our Oracle");
+        assertEquals(trigger.getActivatingPlayer(), ai, "the copy's trigger is not ours");
+        assertEquals(stackNames(), List.of(SPARK), "the copy's trigger is not alone on the stack");
+        assertEquals(game.getPhaseHandler().getPriorityPlayer(), ai, "priority is not ours");
+
+        final List<Event> events = play();
+        assertWonBy(ORACLE, events);
+        assertLibraryEmpty();
+        final Event consultation = first(events, CONSULTATION);
+        assertEquals(consultation.stack(), List.of(CONSULTATION, SPARK + " trigger"),
+                "Consultation was not cast in response to the copy's trigger");
+        assertEquals(consultation.library(), 20, "our library was not whole at Consultation's cast");
+        assertEndedInOurTurn(PhaseType.MAIN1, turn);
+    }
+
+    /** {@code c} enters the battlefield and its entering trigger goes on the stack (the move holds the trigger as
+     *  waiting; the state check runs it): the stack's top, that trigger (ComboExecuteAiTest's enters). */
+    private SpellAbilityStackInstance enters(final Card c) {
+        game.getAction().moveTo(ZoneType.Battlefield, c, null, AbilityKey.newMap());
+        game.getAction().checkStateEffects(true);
+        game.getStack().addAllTriggeredAbilitiesToStack();
+        final SpellAbilityStackInstance top = game.getStack().peek();
+        assertTrue(top.isTrigger());
+        assertEquals(ComboTracker.nameOf(top.getSourceCard()), ComboTracker.nameOf(c));
+        return top;
     }
 
     /** Our Demonic Consultation spell on the stack, or null. */

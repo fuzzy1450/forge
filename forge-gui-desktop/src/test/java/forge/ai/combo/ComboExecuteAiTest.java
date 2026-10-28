@@ -41,6 +41,7 @@ import forge.game.ability.AbilityKey;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
+import forge.game.card.CardFactory;
 import forge.game.card.CounterEnumType;
 import forge.game.cost.Cost;
 import forge.game.keyword.Keyword;
@@ -101,6 +102,12 @@ public class ComboExecuteAiTest extends AITest {
     private static final String BANISHER = "Banisher Priest";
     private static final String VISARA = "Visara the Dreadful";
     private static final String DOWNFALL = "Hero's Downfall";
+    private static final String LICH = "Lich's Mastery";
+    /** The clones that copy a creature as they enter (follow-up 6, K1): Evan's Spark Double, Mockingbird and
+     *  Sakashima's Student. */
+    private static final String SPARK = "Spark Double";
+    private static final String MOCKINGBIRD = "Mockingbird";
+    private static final String STUDENT = "Sakashima's Student";
     /** fillLibrary's card: a 20-card library is twenty of it. */
     private static final String FILLER = "Runeclaw Bear";
 
@@ -4007,7 +4014,8 @@ public class ComboExecuteAiTest extends AITest {
      *  Merfolk and Wind Drake, one of them first by name): Island. Island x3 and Swamp x3: Island, the tie broken by
      *  name. Swamp x4, Island x3 and the singletons: Swamp, the most copies, not the first name. Each library in its
      *  order, reversed and shuffled: the same name. Five cards with a blank name beside one Island: Island, a blank
-     *  name never kept. */
+     *  name never kept. Crown of the Ages and Crown of Vigor, one each, in both orders: Crown of Vigor, the tie broken
+     *  by String.compareTo, case-sensitive ('V' before 't'; follow-up 6, K1: FOLLOWUP5.md's C05). */
     @Test
     public void theKeptNameIsTheMostCopied() {
         start(LAB_CONSULTATION);
@@ -4045,6 +4053,26 @@ public class ComboExecuteAiTest extends AITest {
         }
         assertEquals(ai.getCardsIn(ZoneType.Library).stream().filter(c -> c.getName().isEmpty()).count(), 5L);
         assertKeeps(sa, "Island", "five blank names, one Island");
+
+        // a tie that the case-sensitive and the case-insensitive orders split (follow-up 6, K1: FOLLOWUP5.md's C05, a
+        // Tainted Pact deck's library is all singletons): Crown of the Ages and Crown of Vigor, one each, the library's
+        // only cards. String.compareTo puts Crown of Vigor first ('V' before 't'), a case-insensitive order Crown of
+        // the Ages. Each of the two orders is built by hand (assertKeepsInAnyOrder's reversed and shuffled orders of
+        // two cards repeat one)
+        final List<List<String>> seen = new ArrayList<>(2);
+        for (final List<String> order : List.of(List.of("Crown of the Ages", "Crown of Vigor"),
+                List.of("Crown of Vigor", "Crown of the Ages"))) {
+            for (final Card c : new ArrayList<>(ai.getCardsIn(ZoneType.Library))) {
+                ai.getZone(ZoneType.Library).remove(c);
+            }
+            library(order.toArray(new String[0]));
+            final List<String> library = ai.getCardsIn(ZoneType.Library).stream().map(Card::getName)
+                    .collect(Collectors.toList());
+            assertEquals(library.size(), 2, "the Crowns, " + library);
+            assertFalse(seen.contains(library), "the Crowns: an order read twice, " + library);
+            seen.add(library);
+            assertKeeps(sa, "Crown of Vigor", "Crown of the Ages and Crown of Vigor, " + library);
+        }
     }
 
     // our library rebuilt from names in that order, then reversed, then shuffled (a seeded shuffle of the test's own):
@@ -4103,7 +4131,8 @@ public class ComboExecuteAiTest extends AITest {
      *  battlefield, Opt in hand, Island and Swamp, a 20-card library, Demonic Consultation resolving. With Lab there
      *  and Opt to follow, the stock absent name, controlled or not. Once the opponent's Swords to Plowshares cast above
      *  Consultation has exiled Lab, the library is kept (the control); controlled, the stock absent name, with the
-     *  stock draws, whatever lines the master's fresh tracker holds; once control ends, the library is kept again. */
+     *  stock draws, whatever lines the master's fresh tracker holds; once control ends, the library is kept again. The
+     *  controlled namer draws what the stock absent-name loop draws, none (follow-up 6, K1: FOLLOWUP5.md's R05). */
     @Test
     public void aControlledPlayerNamesAsStock() {
         final Card consultation = labWithOptBoard();
@@ -4123,8 +4152,9 @@ public class ComboExecuteAiTest extends AITest {
 
     // on a mind-slave turn (the opponent controls us: a fresh PlayerControllerAi decides for us, and
     // ComboTracker.of(ai) is null) Consultation's resolution, sa, names the stock absent name, throwing nothing, with
-    // the same answer and the same draws whether the master's fresh tracker holds no line or Lab's; control ends
-    // after it, whatever it throws
+    // the same answer and the same draws whether the master's fresh tracker holds no line or Lab's, and those draws
+    // the stock absent-name loop's, none (follow-up 6, K1: FOLLOWUP5.md's R05, a random draw on the tracker-less path,
+    // which two controlled calls alike would not show); control ends after it, whatever it throws
     private void assertControlledNamesAsStock(final SpellAbility sa, final String why) {
         final long timestamp = game.getNextTimestamp();
         ai.addController(timestamp, opp);
@@ -4139,6 +4169,12 @@ public class ComboExecuteAiTest extends AITest {
             final String stock = nameAt(sa);
             final long stockDraws = MyRandom.callCount() - before;
             assertEquals(stock, stockName(), why + ": a controlled player's namer");
+            // the stock absent-name loop (stockName, its copy) draws nothing: the controlled namer draws as much
+            before = MyRandom.callCount();
+            stockName();
+            final long loopDraws = MyRandom.callCount() - before;
+            assertEquals(loopDraws, 0L, why + ": the stock absent-name loop drew");
+            assertEquals(stockDraws, loopDraws, why + ": the controlled namer drew");
             fresh.useLines(lines(LAB_CONSULTATION));
             MyRandom.setRandom(new Random(7));
             before = MyRandom.callCount();
@@ -4148,6 +4184,149 @@ public class ComboExecuteAiTest extends AITest {
             ai.removeController(timestamp);
         }
         assertFalse(ai.isControlled(), why);
+    }
+
+    // ---- follow-up 6, K1: a copy of Thassa's Oracle keeps the stock name at Consultation's resolution ----
+
+    /** Review Focus 1 (follow-up 6, K1; FOLLOWUP5.md's final review, ComboExecute.java:421): our Spark Double, a copy
+     *  of our Thassa's Oracle, its entering trigger on our stack (copiedOracleBoard; Evan's All the World's Power
+     *  holds the three cards). The stock cast decision casts Demonic Consultation there, its loop reading the trigger's
+     *  host by its current name, "Thassa's Oracle". Resolving above the trigger, Consultation names the stock absent
+     *  name, with stock parity of the answer and the draws, so the library is exiled and the trigger wins, as on
+     *  a4d2a245fc4. No window of ours holds there (the tracker keys that trigger by the printed name, Spark Double):
+     *  the clause gives the name, not the window. The same with Mockingbird and with Sakashima's Student as the copy
+     *  (Evan's Yuriko holds both). */
+    @Test
+    public void aCopiedOracleStillEmptiesTheLibrary() {
+        for (final String clone : List.of(SPARK, MOCKINGBIRD, STUDENT)) {
+            final Card consultation = copiedOracleBoard(clone);
+            final String why = clone + "'s copy of our Oracle";
+            assertEquals(consider(consultation), AiPlayDecision.WillPlay, why + ": the stock cast");
+            final SpellAbility sa = resolving(consultation);
+            assertFalse(ComboExecute.staged(t.view(), ComboLines.Winner.ORACLE), why + ": an Oracle window of ours");
+            assertEmpties(sa, why);
+        }
+    }
+
+    /** Review Focus 2 (follow-up 6, K1; ruling P5): the clause holds only while we can win. copiedOracleBoard with
+     *  Spark Double, and the opponent's Platinum Angel (we cannot win, the opponent cannot lose): Consultation
+     *  resolving keeps the library, naming Runeclaw Bear, the most-copied name, as the fifth follow-up keeps it for a
+     *  printed Oracle. With the opponent's Lich's Mastery instead (the opponent cannot lose, but we can win): the stock absent
+     *  name, as on a4d2a245fc4, since Forge's win check reads only the winner's cantWin (Player.altWinBySpellEffect;
+     *  ruling P1), so the clause reads no "every opponent cannot lose". */
+    @Test
+    public void aCopiedOracleKeepsTheLibraryOnlyWhenWeCannotWin() {
+        Card consultation = copiedOracleBoard(SPARK);
+        addCard(ANGEL, opp);
+        String why = "the opponent's Platinum Angel";
+        assertTrue(ai.cantWin(), why + ": we can win");
+        assertTrue(t.view().cantWin(), why + ": the view reads we can win");
+        assertTrue(opp.cantLose(), why + ": the opponent can lose");
+        assertKeeps(resolving(consultation), FILLER, why);
+
+        consultation = copiedOracleBoard(SPARK);
+        addCard(LICH, opp);
+        why = "the opponent's Lich's Mastery";
+        assertFalse(ai.cantWin(), why + ": we cannot win");
+        assertFalse(t.view().cantWin(), why + ": the view reads we cannot win");
+        assertTrue(opp.cantLose(), why + ": the opponent can lose");
+        assertTrue(t.view().everyOpponentCantLose(), why + ": an opponent can lose");
+        assertEmpties(resolving(consultation), why);
+    }
+
+    /** Review Focus 4 (follow-up 6, K1; ruling P2): our printed Thassa's Oracle's trigger on our stack, Demonic
+     *  Consultation resolving above it (oracleBoard), its window shut for another reason, follows stock too: the stock
+     *  absent name. Under the opponent's Deafening Silence, Consultation this turn's noncreature spell, the line
+     *  executable at the resolution (the control) until a second Consultation comes to our hand: the tracker reads
+     *  Consultation there before the stack, as a piece still to be cast, which Silence bars, so the line is denied
+     *  and its window shut. And under the opponent's Lich's Mastery, which denies the line (signal 2's "every
+     *  opponent cannot lose"), though we can win. */
+    @Test
+    public void aPrintedOracleShutWindowFollowsStock() {
+        Card consultation = oracleBoard();
+        addCard("Deafening Silence", opp);
+        SpellAbility sa = resolving(consultation);
+        String why = "a second Consultation in hand under Deafening Silence";
+        assertEquals(game.getStack().getSpellCardsCastThisTurn(), List.of(sa.getHostCard()),
+                why + ": Consultation is not this turn's spell");
+        assertEquals(ids(t.view().executableNow()), List.of("742-1295"), why + ": the line, before the second copy");
+        hand(CONSULTATION);
+        assertEquals(t.where(CONSULTATION), ComboTracker.Where.HAND, why);
+        assertTrue(t.triggerOnOurStack(ORACLE), why + ": no Oracle trigger of ours");
+        assertFalse(ids(t.view().executableNow()).contains("742-1295"), why + ": the window is open");
+        assertEmpties(sa, why);
+
+        consultation = oracleBoard();
+        addCard(LICH, opp);
+        sa = resolving(consultation);
+        why = "the opponent's Lich's Mastery";
+        assertFalse(ai.cantWin(), why + ": we cannot win");
+        assertTrue(opp.cantLose(), why + ": the opponent can lose");
+        assertTrue(t.triggerOnOurStack(ORACLE), why + ": no Oracle trigger of ours");
+        assertFalse(ids(t.view().executableNow()).contains("742-1295"), why + ": the window is open");
+        assertEmpties(sa, why);
+    }
+
+    /** Review Focus 3 (follow-up 6, K1): the opponent's copy of Oracle is no window of ours. Line 742-1295, our
+     *  printed Thassa's Oracle in our library, Demonic Consultation in hand, Island, Island and Swamp, and a 20-card
+     *  library besides; the opponent's printed Oracle on their battlefield and their Spark Double, a copy of it, whose
+     *  entering trigger, theirs, is on the stack. Our Consultation resolving above it: no window of ours, no trigger of
+     *  ours, and the most-copied name, Runeclaw Bear, keeps the library. */
+    @Test
+    public void anOpponentsCopiedOracleIsNoWindow() {
+        start(ORACLE_CONSULTATION);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        library(ORACLE);
+        copiedOracleTrigger(opp, SPARK, addCard(ORACLE, opp));
+        assertEquals(ids(t.deckLines()), List.of("742-1295"));
+        assertEquals(t.where(ORACLE), ComboTracker.Where.LIBRARY);
+        final SpellAbility sa = resolving(consultation);
+        assertKeeps(sa, FILLER, "the opponent's copy of their Oracle, its trigger theirs");
+    }
+
+    // p's copy of Thassa's Oracle (follow-up 6, K1; ruling P4): p's clone put onto p's battlefield and made a copy of
+    // oracle in place, a clone state as its entering replacement makes one (a zone move would drop it), and its
+    // entering trigger, the copied Oracle's, on the stack with p its activator (fblthpTrigger's idiom). The trigger's
+    // host answers getName() "Thassa's Oracle", the stock cast's test, and ComboTracker.nameOf the clone's printed
+    // name, the tracker's. Returns the stack's top, that trigger
+    private SpellAbilityStackInstance copiedOracleTrigger(final Player p, final String clone, final Card oracle) {
+        final Card copy = addCard(clone, p);
+        copy.addCloneState(CardFactory.getCloneStates(oracle, copy, oracle.getFirstSpellAbility()),
+                game.getNextTimestamp());
+        for (final Trigger tr : copy.getTriggers()) {
+            if (tr.getMode() == TriggerType.ChangesZone) {
+                final SpellAbility sa = tr.ensureAbility().copy(p);
+                sa.setTrigger(tr);
+                game.getStack().add(sa);
+                final SpellAbilityStackInstance top = game.getStack().peek();
+                assertTrue(top.isTrigger(), clone);
+                assertEquals(top.getActivatingPlayer(), p, clone);
+                final Card host = top.getSpellAbility().getHostCard();
+                assertEquals(host, copy, clone);
+                assertEquals(host.getName(), ORACLE, clone + " is no copy of Oracle");
+                assertEquals(ComboTracker.nameOf(host), clone, clone + ": the tracker's name");
+                return top;
+            }
+        }
+        throw new AssertionError("no entering trigger on " + clone + "'s copy of " + oracle);
+    }
+
+    // line 742-1295 in our Main 1: Island, Island and Swamp, a 20-card library, our printed Thassa's Oracle on our
+    // battlefield (spent: its own trigger resolved) and our clone there, a copy of it, whose entering trigger is on our
+    // stack (copiedOracleTrigger). The tracker keys that trigger by the printed name, the clone's: no Oracle trigger of
+    // ours, by its reading. Returns our Demonic Consultation, in hand
+    private Card copiedOracleBoard(final String clone) {
+        start(ORACLE_CONSULTATION);
+        final Card consultation = hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        copiedOracleTrigger(ai, clone, addCard(ORACLE, ai));
+        assertEquals(ids(t.deckLines()), List.of("742-1295"), clone);
+        assertFalse(t.triggerOnOurStack(ORACLE), clone + ": an Oracle trigger of ours by the printed name");
+        assertTrue(t.triggerOnOurStack(clone), clone + ": no trigger of ours by the clone's name");
+        return consultation;
     }
 
     // ---- the boards above: each returns our Demonic Consultation, in hand, with a 20-card library ----

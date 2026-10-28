@@ -430,10 +430,14 @@ public final class ComboFetch {
     /**
      * The name Demonic Consultation's resolution chooses (PlayerControllerAi.chooseCardName, ahead of the stock
      * absent-name loop), or null for ComboExecute.consultationKeeps, then the stock namer (follow-up 5, J2: with no
-     * window of a Consultation line open, a card our library bears): the intent {@link #consultTutor} recorded for
-     * {@code sa}'s host, taken (removed) whatever the answer, while no trigger of ours hosted by Thassa's Oracle or
-     * Fblthp, Impossibly Lost is on the stack (Consultation is that trigger's emptier now, and must exile the whole
-     * library) and that piece is still in our library.
+     * window of a Consultation line open, a card our library bears, but the stock absent card while a trigger of ours
+     * whose host is named Thassa's Oracle now waits and we can win, follow-up 6, K1): the intent {@link #consultTutor}
+     * recorded for {@code sa}'s host, taken (removed) whatever the answer, while no trigger of ours hosted by Thassa's
+     * Oracle or Fblthp, Impossibly Lost is on the stack, by the printed name the tracker reads, nor one whose host is
+     * named Thassa's Oracle now, the stock cast's test (follow-up 6, K1: a Spark Double copying our Oracle, at whose
+     * trigger the stock cast casts Consultation without dropping an earlier intent; ComboExecute.consultationKeeps then
+     * reads whether we can win), since Consultation is that trigger's emptier now, and must exile the whole library;
+     * and while that piece is still in our library.
      */
     public static String consultNamed(final Player ai, final SpellAbility sa) {
         final Card host = sa.getHostCard();
@@ -443,7 +447,8 @@ public final class ComboFetch {
         }
         final String name = t.takeConsultIntent(host.getId());
         if (name == null || t.triggerOnOurStack(ComboLines.Winner.ORACLE.card)
-                || t.triggerOnOurStack(ComboLines.Winner.FBLTHP.card)) {
+                || t.triggerOnOurStack(ComboLines.Winner.FBLTHP.card)
+                || ComboExecute.oracleNamedTriggerOnOurStack(ai)) {
             return null;
         }
         return t.find(name, ZoneType.Library) != null ? name : null;

@@ -69,7 +69,10 @@ import forge.game.zone.ZoneType;
  * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
  * Consultation's resolution reads its windows again ({@link #consultationKeeps}, follow-up 5, J2): with none open (the
  * opponent's Swords to Plowshares on our Laboratory Maniac, cast above it, has exiled Lab), it names a card our library
- * bears, and the library is kept. The go-off reads {@link ComboTracker#executable}, whose denial reads the emptier at
+ * bears, and the library is kept, unless a trigger of ours whose host is named Thassa's Oracle now is on the stack and
+ * we can win, the stock cast's own window, where it names the stock absent card (follow-up 6, K1: a Spark Double
+ * copying our Oracle, whose trigger the Oracle window, keyed by the printed name, does not read, wins as stock does).
+ * The go-off reads {@link ComboTracker#executable}, whose denial reads the emptier at
  * the moment Oracle's trigger will be on the stack (follow-up F3), and that same moment this turn (follow-up 2, G2: a
  * line live for a later turn goes off in none this turn): Oracle is cast before its window opens.
  *
@@ -404,24 +407,57 @@ public final class ComboExecute {
      * PlayerControllerAi.chooseCardName, after {@link ComboFetch#consultNamed} and ahead of the stock loop, which names
      * a card absent from our library and so exiles all of it), {@code sa} the resolving spell, its host Consultation
      * (the caller's own test): null, the stock name, for a deck holding no Consultation line, while a window of one
-     * holds now, at the resolution, or on an empty library; otherwise the name most cards of our library bear, ties
-     * going to the first by String.compareTo, read from the library's contents, never its order. The most copies give
-     * the best chance that one lies past the six cards exiled first, so the reveal stops and the library is kept. The
+     * holds now, at the resolution, then while the stock cast's own window holds and we can win (follow-up 6, K1: a
+     * trigger of ours on the stack whose host is named Thassa's Oracle now, {@link #oracleNamedTriggerOnOurStack}, and
+     * the view's cantWin false), or on an empty library; otherwise the name most cards of our library bear, ties going
+     * to the first by String.compareTo, read from the library's contents, never its order. The most copies give the
+     * best chance that one lies past the six cards exiled first, so the reveal stops and the library is kept. The
      * window is read as {@link #pactDeclines} reads Pact's: the emptier paid already and still the stack's top while it
      * resolves, so above an opponent's spell only an instant follow-up counts, at no sorcery's moment (follow-up 5,
      * J1). So once the opponent's Swords to Plowshares on our Laboratory Maniac, cast above Consultation, has exiled
      * Lab, or our Doctor Doom is gone or tapped, the library is kept, while our Oracle's or Fblthp's trigger beneath
      * it, an untapped Doom, or Lab or Jace with a draw to follow still empties it. A resolving emptier is a piece cast
      * already (ComboTracker.Where.STACK), which no cast bar reads, so its own cast this turn denies its line nothing
-     * under Deafening Silence or Rule of Law; the follow-up's bar counts it among the turn's spells once. Draws
-     * nothing.
+     * under Deafening Silence or Rule of Law; the follow-up's bar counts it among the turn's spells once. The stock
+     * cast's window follows stock where the Oracle window does not open: a Spark Double, Mockingbird or Sakashima's
+     * Student copying our Oracle, whose trigger the window, keyed by the printed name, does not read; and our printed
+     * Oracle's trigger under a window shut for another reason, a cast cap with a second Consultation in our hand or
+     * the command zone (or Oracle bounced to our hand), or every opponent unable to lose (the opponent's Lich's
+     * Mastery). Only cantWin is read there: Forge's win check reads only the winner's (Player.altWinBySpellEffect), so
+     * an opponent's can't-lose effect stops no win; while we cannot win (the opponent's Platinum Angel) the library is
+     * kept. Draws nothing.
      */
     public static String consultationKeeps(final Player ai, final SpellAbility sa) {
         final ComboTracker t = ComboTracker.of(ai);
-        if (t == null || !holds(t, Emptier.CONSULTATION) || window(ai, t.view(), Emptier.CONSULTATION, sa, false)) {
+        if (t == null || !holds(t, Emptier.CONSULTATION)) {
+            return null;
+        }
+        final ComboTracker.View v = t.view();
+        if (window(ai, v, Emptier.CONSULTATION, sa, false)) {
+            return null;
+        }
+        // the stock cast's own window (follow-up 6, K1): a trigger of ours whose host is named Thassa's Oracle now, a
+        // copy of Oracle's among them, while we can win; Forge's win check reads only the winner's cantWin
+        if (oracleNamedTriggerOnOurStack(ai) && !v.cantWin()) {
             return null;
         }
         return mostCopied(ai.getCardsIn(ZoneType.Library));
+    }
+
+    // a copy of the stock test (DemonicConsultation.consider's loop, as OwnLibraryFloor.oracleOnStack is another): a
+    // triggered ability on the stack that we activated, whose host is named Thassa's Oracle now, by Card.getName, so a
+    // Spark Double, Mockingbird or Sakashima's Student copying Oracle counts, where the tracker's reading
+    // (triggerOnOurStack) keys a trigger by its host's printed name. Read by Consultation's resolution
+    // (consultationKeeps) and by the tutor intent's namer (ComboFetch.consultNamed), follow-up 6, K1
+    static boolean oracleNamedTriggerOnOurStack(final Player ai) {
+        for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+            final SpellAbility stackSa = si.getSpellAbility();
+            if (stackSa != null && stackSa.isTrigger() && ai.equals(stackSa.getActivatingPlayer())
+                    && stackSa.getHostCard() != null && Winner.ORACLE.card.equals(stackSa.getHostCard().getName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // the name most cards of library bear, by Card.getName (the name the reveal matches: Card.sharesNameWith), ties
