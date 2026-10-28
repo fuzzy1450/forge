@@ -49,8 +49,9 @@ import forge.game.zone.ZoneType;
  * Moon; Consultation only);
  * <li>LAB, JACE: that winner on our battlefield, holding its Draw replacement that wins (executable's denial reads its
  * loss: Lignify, Humility, a face-down copy), and a draw of ours follows. While nothing but the emptier's own spell is
- * on the stack (follow-up 4, I1: at the emptier's cast an empty stack, and while Tainted Pact resolves only Pact
- * itself, still the stack's top), that draw is the opponent's end step with our turn next, or a spell in our hand that
+ * on the stack (follow-up 4, I1: at the emptier's cast an empty stack, and, while the emptier resolves, only its own
+ * spell, still the stack's top: Tainted Pact at its decline, and Demonic Consultation at its namer, follow-up 5, J2,
+ * {@link #consultationKeeps}), that draw is the opponent's end step with our turn next, or a spell in our hand that
  * the AI casts right after the emptier on the emptied library. Above anything else on the stack, ours or an opponent's,
  * it is only such a spell cast at instant speed right after the emptier resolves, above what remains, at no sorcery's
  * moment (follow-up 5, J1: so the opponent's Teferi, Time Raveler bars Opt there): no emptier is cast in response to an
@@ -677,8 +678,9 @@ public final class ComboExecute {
             if (mana == null) {
                 mana = ComboMana.of(ai, sa, true);
                 emptierCost = unpaid ? priced(ai, sa) : ManaCost.ZERO;
-                // the spells cast this turn before the draw: the turn's so far (a resolving Pact among them), then
-                // the emptier still to be cast
+                // the spells cast this turn before the draw: the turn's so far (a resolving emptier among them, Pact
+                // at its decline or Consultation at its namer, consultationKeeps), then, on a cast, the emptier still
+                // to be cast
                 before = new ArrayList<>(ai.getGame().getStack().getSpellCardsCastThisTurn());
                 if (unpaid) {
                     before.add(sa.getHostCard());
@@ -694,8 +696,9 @@ public final class ComboExecute {
 
     // whether the stack holds nothing but the emptier's own spell (follow-up 4, I1), the Laboratory Maniac and Jace
     // windows' stack rule: on a cast (unpaid: Consultation's, Pact's, the floor's exemption) the stack is empty; while
-    // Tainted Pact resolves (its decline at each exile) every instance on it is Pact's own spell, still the stack's
-    // top (MagicStack.resolveStack removes the resolving spell only when it finishes). Anything else on it, an
+    // the emptier resolves (Tainted Pact's decline at each exile, Demonic Consultation's namer, consultationKeeps,
+    // follow-up 5, J2) every instance on it is that emptier's own spell, still the stack's top
+    // (MagicStack.resolveStack removes the resolving spell only when it finishes). Anything else on it, an
     // opponent's Swords to Plowshares on our Laboratory Maniac above all, leaves the window only an instant-speed draw
     // spell cast right after the emptier resolves, above what remains (drawFollows, follow-up 5, J1): our draw step
     // lies past it, and a sorcery-speed draw could not follow until the stack is empty, by when Swords has exiled Lab
