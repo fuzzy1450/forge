@@ -4213,7 +4213,7 @@ public class ComboExecuteAiTest extends AITest {
      *  resolving keeps the library, naming Runeclaw Bear, the most-copied name, as the fifth follow-up keeps it for a
      *  printed Oracle. With the opponent's Lich's Mastery instead (the opponent cannot lose, but we can win): the stock absent
      *  name, as on a4d2a245fc4, since Forge's win check reads only the winner's cantWin (Player.altWinBySpellEffect;
-     *  ruling P1), so the clause reads no "every opponent cannot lose". */
+     *  ruling P1), so the clause reads no "every opponent cannot lose", nor, since follow-up 7's L1, does signal 2. */
     @Test
     public void aCopiedOracleKeepsTheLibraryOnlyWhenWeCannotWin() {
         Card consultation = copiedOracleBoard(SPARK);
@@ -4230,7 +4230,6 @@ public class ComboExecuteAiTest extends AITest {
         assertFalse(ai.cantWin(), why + ": we cannot win");
         assertFalse(t.view().cantWin(), why + ": the view reads we cannot win");
         assertTrue(opp.cantLose(), why + ": the opponent can lose");
-        assertTrue(t.view().everyOpponentCantLose(), why + ": an opponent can lose");
         assertEmpties(resolving(consultation), why);
     }
 
@@ -4239,8 +4238,10 @@ public class ComboExecuteAiTest extends AITest {
      *  absent name. Under the opponent's Deafening Silence, Consultation this turn's noncreature spell, the line
      *  executable at the resolution (the control) until a second Consultation comes to our hand: the tracker reads
      *  Consultation there before the stack, as a piece still to be cast, which Silence bars, so the line is denied
-     *  and its window shut. And under the opponent's Lich's Mastery, which denies the line (signal 2's "every
-     *  opponent cannot lose"), though we can win. */
+     *  and its window shut. And under the opponent's Lich's Mastery, which since follow-up 7's L1 denies the line
+     *  nothing (Evan's decision of 2026-10-28: a library-out win ignores an opponent's can't-lose effect), though no
+     *  opponent can lose: the window is open there, so the answer, the stock name still, now comes through it. At
+     *  d2c86593647 signal 2's "every opponent cannot lose" shut the window, and K1's clause gave the stock name. */
     @Test
     public void aPrintedOracleShutWindowFollowsStock() {
         Card consultation = oracleBoard();
@@ -4263,7 +4264,7 @@ public class ComboExecuteAiTest extends AITest {
         assertFalse(ai.cantWin(), why + ": we cannot win");
         assertTrue(opp.cantLose(), why + ": the opponent can lose");
         assertTrue(t.triggerOnOurStack(ORACLE), why + ": no Oracle trigger of ours");
-        assertFalse(ids(t.view().executableNow()).contains("742-1295"), why + ": the window is open");
+        assertTrue(ids(t.view().executableNow()).contains("742-1295"), why + ": the window is shut");
         assertEmpties(sa, why);
     }
 

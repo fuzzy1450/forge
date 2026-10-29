@@ -638,6 +638,22 @@ public class ComboPilesAiTest extends AITest {
         assertPiledAgain(l);
     }
 
+    @Test
+    public void lichsMasteryLeavesTheCompleters() {
+        // follow-up 7, L1 (Review Focus 5), aDeniedLineHasNoCompleters' twin: the opponent's Lich's Mastery ("you can't
+        // lose the game") denies nothing (Evan's decision of 2026-10-28: a library-out win ignores it), so the line,
+        // one short, is executable and chased, and Intuition still piles Oracle. At d2c86593647 signal 2's "every
+        // opponent cannot lose" denied it, and the stock pile stood
+        final ComboLines.Line l = liveOracleLine();
+        addCard("Lich's Mastery", opp);
+        game.getAction().checkStateEffects(true);
+        assertFalse(ai.cantWin());
+        assertTrue(opp.cantLose());
+        assertFalse(ComboSignals.denied(ai, l, t));
+        assertEquals(t.executable(), List.of(l));
+        assertPiledAgain(l);
+    }
+
     // ---- follow-up F4: fillers spare mana sources; Gifts respects punishers ----
 
     /** Line 1295-3093, Tainted Pact in hand, over a singleton library of {@code names} and Thassa's Oracle, one short

@@ -66,8 +66,9 @@ import forge.game.zone.ZoneType;
  * coloured pips among it, and that spell castable right after the emptier (follow-up 3, H3: its own cast bar, the
  * emptier counted among the turn's spells, so Rule of Law and Deafening Silence close the window).
  * </ul>
- * Pact's own singleton-library condition is executable's. None of it while we cannot win or every opponent cannot lose
- * (executable's denial). Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
+ * Pact's own singleton-library condition is executable's. None of it while we cannot win (executable's denial); an
+ * opponent's can't-lose effect denies none of it (follow-up 7, L1: a library-out win ignores it, ComboSignals.denied).
+ * Then the draw on the emptied library that finishes the line ({@link #finishesLine}) is played.
  * Consultation's resolution reads its windows again ({@link #consultationKeeps}, follow-up 5, J2): with none open (the
  * opponent's Swords to Plowshares on our Laboratory Maniac, cast above it, has exiled Lab), it names a card our library
  * bears, and the library is kept, unless a trigger of ours whose host is named Thassa's Oracle now is on the stack and
@@ -423,10 +424,12 @@ public final class ComboExecute {
      * cast's window follows stock where the Oracle window does not open: a Spark Double, Mockingbird or Sakashima's
      * Student copying our Oracle, whose trigger the window, keyed by the printed name, does not read; and our printed
      * Oracle's trigger under a window shut for another reason, a cast cap with a second Consultation in our hand or
-     * the command zone (or Oracle bounced to our hand), or every opponent unable to lose (the opponent's Lich's
-     * Mastery). Only cantWin is read there: Forge's win check reads only the winner's (Player.altWinBySpellEffect), so
-     * an opponent's can't-lose effect stops no win; while we cannot win (the opponent's Platinum Angel) the library is
-     * kept. Draws nothing.
+     * the command zone (or Oracle bounced to our hand). Only cantWin is read there, as signal 2 reads no "every
+     * opponent cannot lose" either since follow-up 7's L1 (under the opponent's Lich's Mastery the Oracle window is
+     * open now, and gives the stock name itself): Forge's win check reads only the winner's
+     * (Player.altWinBySpellEffect), and the opponents then lose for OpponentWon, for which Player.loseConditionMet
+     * runs no GameLoss replacement (ComboSignals.denied), so an opponent's can't-lose effect stops no win; while we
+     * cannot win (the opponent's Platinum Angel) the library is kept. Draws nothing.
      */
     public static String consultationKeeps(final Player ai, final SpellAbility sa) {
         final ComboTracker t = ComboTracker.of(ai);

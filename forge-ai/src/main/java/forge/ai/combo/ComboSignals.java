@@ -48,7 +48,7 @@ import forge.game.zone.ZoneType;
  * not chased. Nothing is held, protected or fetched for it, and it is live again once the signal clears.
  *
  * <p>Each signal is read from what a player can see, at the moment it is asked, through the decision's
- * {@link ComboTracker.View}: the inputs no line changes (whether we can win, whether every opponent cannot lose, the
+ * {@link ComboTracker.View}: the inputs no line changes (whether we can win, the
  * danger, the surer kill, next turn's mana, the CantBeCast statics on the board and whether one is in force) are read
  * once for every line the decision asks about, and nothing outlives the decision. A denial is read at the line's own
  * window ({@link #deniedAtWindow}: each piece still to be cast at its moment there, on the turn the line would go off,
@@ -109,10 +109,21 @@ public final class ComboSignals {
 
     /**
      * Signal 2, the opponents can deny the line, read from visible state at the line's own window
-     * ({@link #deniedAtWindow}): we cannot win, every opponent cannot lose, a piece still to be cast cannot be cast at
-     * its moment in the window (Teferi, Time Raveler or Rule of Law against the go-off in response to Oracle's
-     * trigger, the opponent's Grand Abolisher against the opponent's end step, Teferi against Fblthp's trigger),
-     * Oracle's entering trigger is disabled, a winner of ours in play has lost its win.
+     * ({@link #deniedAtWindow}): we cannot win, a piece still to be cast cannot be cast at its moment in the window
+     * (Teferi, Time Raveler or Rule of Law against the go-off in response to Oracle's trigger, the opponent's Grand
+     * Abolisher against the opponent's end step, Teferi against Fblthp's trigger), Oracle's entering trigger is
+     * disabled, a winner of ours in play has lost its win.
+     *
+     * <p>Every opponent unable to lose denies nothing (follow-up 7, L1, Evan's decision of 2026-10-28: spec section
+     * 6.5's "opponents cannot lose" struck). Every winner of piece 1 wins through WinsGame, whose
+     * Player.altWinBySpellEffect reads only the winner's cantWin; the opponents then lose for
+     * GameLossReason.OpponentWon, for which Player.loseConditionMet runs no GameLoss replacement (its guard,
+     * {@code state != GameLossReason.OpponentWon}, Player.java:1990). So the opponent's Lich's Mastery stops no such
+     * win, and the game ends at once (CR 104.1). Two engine comments still say that a player who cannot lose keeps the
+     * game going, GameAction.checkGameOverCondition's "they cannot lose!" and Player.hasWon's "the game appears to
+     * continue": that guard has made both dead. A card with both halves (Platinum Angel, Angel's Grace) still denies,
+     * through our cantWin. The other two cantLose reads stay, where a loss of life is what kills: the danger's (we
+     * cannot die while we cannot lose) and the surer kill's (lethal combat or burn kills no opponent who cannot lose).
      */
     public static boolean denied(final Player ai, final ComboLines.Line l, final ComboTracker t) {
         return t.view().denied(l);
@@ -121,16 +132,13 @@ public final class ComboSignals {
     /**
      * Signal 2 at the line's own window (follow-up 2, G2; spec section 6.5, "Denial at the line's own window"), the
      * denial that live and executable read, so that holding, fetching and protection follow the moment the line would
-     * fire, never this instant: we cannot win; every opponent cannot lose; a piece of the line still to be cast cannot
-     * be cast at its moment in the window ({@link #barredAtWindow}); Thassa's Oracle's entering trigger is disabled; a
-     * winner of ours on the battlefield has lost its win, Doctor Doom's {T} draw read at Doom's window, our turn
-     * ({@link #disarmedAtWindow}).
+     * fire, never this instant: we cannot win (every opponent unable to lose is no denial: {@link #denied}); a piece of
+     * the line still to be cast cannot be cast at its moment in the window ({@link #barredAtWindow}); Thassa's Oracle's
+     * entering trigger is disabled; a winner of ours on the battlefield has lost its win, Doctor Doom's {T} draw read
+     * at Doom's window, our turn ({@link #disarmedAtWindow}).
      */
     static boolean deniedAtWindow(final ComboTracker.View v, final ComboLines.Line l) {
         if (v.cantWin()) {
-            return true;
-        }
-        if (v.everyOpponentCantLose()) {
             return true;
         }
         if (barredAtWindow(v, l)) {
@@ -153,9 +161,6 @@ public final class ComboSignals {
      */
     static boolean deniedAtMainNextTurn(final ComboTracker.View v, final ComboLines.Line l) {
         if (v.cantWin()) {
-            return true;
-        }
-        if (v.everyOpponentCantLose()) {
             return true;
         }
         final ComboLines.Winner w = l.winner();
@@ -188,16 +193,13 @@ public final class ComboSignals {
     }
 
     /** Signal 2 as read now, the moment of a window that is open now (the view keeps it for a deck line): we cannot
-     *  win; every opponent cannot lose; a piece we have not yet put on the battlefield cannot be cast now, its first
-     *  spell barred by a CantBeCast static (Void Winnower's even mana values); Thassa's Oracle's entering trigger is
-     *  disabled (Torpor Orb, Hushbringer); a winner of ours on the battlefield has lost its win ({@link #disarmed}:
-     *  Imprisoned in the Moon, Lignify, Humility, a face-down copy), or Doctor Doom's {T} draw cannot be activated
-     *  (Linvala, Keeper of Silence). */
+     *  win (every opponent unable to lose is no denial: {@link #denied}); a piece we have not yet put on the
+     *  battlefield cannot be cast now, its first spell barred by a CantBeCast static (Void Winnower's even mana
+     *  values); Thassa's Oracle's entering trigger is disabled (Torpor Orb, Hushbringer); a winner of ours on the
+     *  battlefield has lost its win ({@link #disarmed}: Imprisoned in the Moon, Lignify, Humility, a face-down copy),
+     *  or Doctor Doom's {T} draw cannot be activated (Linvala, Keeper of Silence). */
     static boolean deniedNow(final ComboTracker.View v, final ComboLines.Line l) {
         if (v.cantWin()) {
-            return true;
-        }
-        if (v.everyOpponentCantLose()) {
             return true;
         }
         for (final String name : l.names()) {
@@ -303,15 +305,6 @@ public final class ComboSignals {
             }
         }
         return false;
-    }
-
-    static boolean everyOpponentCantLose(final Player ai) {
-        for (final Player opp : ai.getOpponents()) {
-            if (!opp.cantLose()) {
-                return false;
-            }
-        }
-        return true;
     }
 
     // a piece in our hand, library or command zone whose first spell a CantBeCast static bars, read as the cast reads

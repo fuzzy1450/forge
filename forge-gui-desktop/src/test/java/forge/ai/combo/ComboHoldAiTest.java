@@ -264,6 +264,24 @@ public class ComboHoldAiTest extends AITest {
         assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
     }
 
+    /** Follow-up 7, L1 (Review Focus 5), abandonReleasesTheHold's twin: the opponent's Lich's Mastery ("you can't lose
+     *  the game") abandons nothing (Evan's decision of 2026-10-28: a library-out win ignores it), so the line stays
+     *  live, the Oracle stays protected and held, and nothing is cast. At d2c86593647 signal 2's "every opponent cannot
+     *  lose" emptied live() and released the hold. */
+    @Test
+    public void lichsMasteryKeepsTheHold() {
+        final Card oracle = heldBoard();
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+
+        addCard("Lich's Mastery", opp);
+        assertFalse(ai.cantWin());
+        assertTrue(opp.cantLose());
+        assertEquals(ids(t.live()), List.of("742-1295"));
+        assertTrue(t.protects(oracle), "the Oracle is not protected");
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)), "the hold was released");
+        assertNull(aiOf(ai).chooseSpellAbilityToPlay());
+    }
+
     @Test
     public void discardSparesThePiece() {
         start(ORACLE_CONSULTATION);
@@ -1115,6 +1133,31 @@ public class ComboHoldAiTest extends AITest {
         t.useLines(List.of());
         assertFalse(ComboHold.keepsTheStackedTop(ai, ai));
         assertTrue(pc.confirmAction(stacked, null, "", null));
+    }
+
+    /** Follow-up 7, L1 (Review Focus 5), the Platinum Angel half of ponderDeclinesTheShuffleOnlyOverAKnownTop, twinned:
+     *  under the opponent's Lich's Mastery ("you can't lose the game") the stacked Consultation's line stays live
+     *  (Evan's decision of 2026-10-28: a library-out win ignores it), so the known top is still a protected piece and
+     *  Ponder's shuffle is declined. At d2c86593647 signal 2's "every opponent cannot lose" emptied live(), and the
+     *  stock confirm shuffled it away. */
+    @Test
+    public void lichsMasteryKeepsTheStackedTop() {
+        final SpellAbility stacked = ponderBoard();
+        final PlayerControllerAi pc = (PlayerControllerAi) ai.getController();
+        for (final Card c : pc.orderMoveToZoneList(ai.getTopXCardsFromLibrary(3), ZoneType.Library, stacked)) {
+            game.getAction().moveToLibrary(c, 0, stacked);
+        }
+        final Card top = ai.getCardsIn(ZoneType.Library).get(0);
+        assertEquals(ComboTracker.nameOf(top), CONSULTATION);
+        assertEquals(t.knownTops(), Set.of(top.getId()));
+
+        addCard("Lich's Mastery", opp);
+        assertFalse(ai.cantWin());
+        assertTrue(opp.cantLose());
+        assertEquals(ids(t.live()), List.of("742-2836"));
+        assertTrue(t.protects(top), "the stacked Consultation is not protected");
+        assertTrue(ComboHold.keepsTheStackedTop(ai, ai), "a live line's piece was not kept on top");
+        assertFalse(pc.confirmAction(stacked, null, "", null), "the stacked Consultation was shuffled away");
     }
 
     /** Laboratory Maniac in play, no land in play, line 742-2836 live on next turn's land; Grizzly Bears, Demonic

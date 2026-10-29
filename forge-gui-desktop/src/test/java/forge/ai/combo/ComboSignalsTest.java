@@ -414,16 +414,18 @@ public class ComboSignalsTest extends AITest {
     }
 
     @Test
-    public void everyOpponentMustBeUnableToLose() {
+    public void everyOpponentUnableToLoseIsNoDenial() {
+        // follow-up 7, L1 (Evan's decision of 2026-10-28): the opponent cannot lose, yet nothing stops us winning, and
+        // a library-out win ignores that (the opponents lose for OpponentWon, which no GameLoss replacement reads), so
+        // the line is chased: before L1 the every-opponent clause denied it alone
         final ComboLines.Line l = oracleLine();
         manaForTheLine();
-        // the opponent cannot lose, yet nothing stops us winning: denied by the every-opponent clause alone
         addCard("Lich's Mastery", opp);
         assertFalse(ai.cantWin());
         assertTrue(opp.cantLose());
-        assertEquals(abandon(l), Signal.DENIED);
+        assertNull(abandon(l));
 
-        // three seats: one opponent who cannot lose and one who can is not a denial
+        // three seats: neither one opponent who cannot lose beside one who can, nor both unable to lose, is a denial
         game = initAndCreateThreePlayerGame();
         ai = game.getPlayers().get(1);
         t = aiOf(ai).getComboTracker();
@@ -435,7 +437,117 @@ public class ComboSignalsTest extends AITest {
         addCard("Lich's Mastery", game.getPlayers().get(0));
         assertFalse(ComboSignals.denied(ai, three, t));
         addCard("Lich's Mastery", game.getPlayers().get(2));
-        assertTrue(ComboSignals.denied(ai, three, t));
+        assertTrue(game.getPlayers().get(0).cantLose() && game.getPlayers().get(2).cantLose());
+        assertFalse(ai.cantWin());
+        assertFalse(ComboSignals.denied(ai, three, t));
+    }
+
+    /** Follow-up 7, L1 (Evan's decision of 2026-10-28; Review Focus 1): the opponent's Lich's Mastery ("you can't lose
+     *  the game") denies no line. Every winner of piece 1 wins through WinsGame, which reads only our cantWin
+     *  (Player.altWinBySpellEffect), and the opponents then lose for OpponentWon, for which Player.loseConditionMet
+     *  runs no GameLoss replacement, so it stops no such win. Each winner's line assembled at its window
+     *  ({@link #atItsWindow}): deniedNow, deniedAtWindow and deniedAtMainNextTurn each read false, while we can win and
+     *  the opponent cannot lose (asserted, so the board reads what it pins), and the line is executable, at its window
+     *  and now. At d2c86593647 signal 2's "every opponent cannot lose" denied it at all three. */
+    @Test
+    public void lichsMasteryDeniesNoLine() {
+        for (final ComboLines.Winner w : ComboLines.Winner.values()) {
+            final ComboLines.Line l = atItsWindow(w, false);
+            addCard("Lich's Mastery", opp);
+            final String why = w.card + " under the opponent's Lich's Mastery";
+            assertFalse(ai.cantWin(), why + ": we cannot win");
+            assertTrue(opp.cantLose(), why + ": the opponent can lose");
+            final ComboTracker.View v = t.view();
+            assertFalse(ComboSignals.deniedNow(v, l), why + ", read now");
+            assertFalse(ComboSignals.deniedAtWindow(v, l), why + ", at the line's window");
+            assertFalse(ComboSignals.deniedAtMainNextTurn(v, l), why + ", at our next turn's main phase");
+            assertEquals(ids(v.executable()), List.of(l.variant().id()), why + ", at the line's window");
+            assertEquals(ids(v.executableNow()), List.of(l.variant().id()), why + ", now");
+        }
+    }
+
+    /** Follow-up 7, L1 (Review Focus 2 and 3): a card with both halves still denies, by our cantWin. The opponent's
+     *  Platinum Angel ("you can't lose the game and your opponents can't win the game"), each winner's line at its
+     *  window ({@link #atItsWindow}): deniedNow, deniedAtWindow and deniedAtMainNextTurn each read true. The same in
+     *  three seats, the Platinum Angel of the opponent after us and the Lich's Mastery of the one before us: denied, by
+     *  the Angel's cantWin. */
+    @Test
+    public void platinumAngelStillDenies() {
+        for (final ComboLines.Winner w : ComboLines.Winner.values()) {
+            ComboLines.Line l = atItsWindow(w, false);
+            addCard("Platinum Angel", opp);
+            String why = w.card + " under the opponent's Platinum Angel";
+            assertTrue(ai.cantWin(), why + ": we can win");
+            assertDeniedByEachReader(l, why);
+
+            l = atItsWindow(w, true);
+            addCard("Platinum Angel", game.getPlayers().get(2));
+            addCard("Lich's Mastery", opp);
+            why = w.card + ", three seats, one opponent's Platinum Angel and the other's Lich's Mastery";
+            assertTrue(ai.cantWin(), why + ": we can win");
+            assertTrue(opp.cantLose(), why + ": Lich's Mastery's controller can lose");
+            assertDeniedByEachReader(l, why);
+        }
+    }
+
+    // l denied by each of signal 2's readers, now, at its window and at our next turn's main phase, and so neither
+    // executable at its window nor now
+    private void assertDeniedByEachReader(final ComboLines.Line l, final String why) {
+        final ComboTracker.View v = t.view();
+        assertTrue(ComboSignals.deniedNow(v, l), why + ", read now");
+        assertTrue(ComboSignals.deniedAtWindow(v, l), why + ", at the line's window");
+        assertTrue(ComboSignals.deniedAtMainNextTurn(v, l), why + ", at our next turn's main phase");
+        assertEquals(v.executable(), List.of(), why + ", at the line's window");
+        assertEquals(v.executableNow(), List.of(), why + ", now");
+    }
+
+    /** {@code w}'s line with Demonic Consultation (follow-up 7, L1), assembled at its window, in a fresh game of three
+     *  seats or of two whose AI is player 1, the opponent {@code opp} player 0, whose turn comes right before ours;
+     *  Consultation in our hand:
+     *  <ul>
+     *  <li>Thassa's Oracle: its entering trigger on our stack, Island, Island and Swamp, our MAIN1;
+     *  <li>Laboratory Maniac, Jace, Wielder of Mysteries: ready on our battlefield (Jace with four loyalty), a Swamp,
+     *  at the opponent's end step, our turn next;
+     *  <li>Doctor Doom, Unrivaled: ready on our battlefield, a Swamp, our MAIN1;
+     *  <li>Fblthp, Impossibly Lost: ready, attacking the opponent in our combat damage step, its combat-damage trigger
+     *  on our stack, a Swamp.
+     *  </ul>
+     *  Returns the line, the deck's one. */
+    private ComboLines.Line atItsWindow(final ComboLines.Winner w, final boolean threeSeats) {
+        final String row = switch (w) {
+            case ORACLE -> ORACLE_CONSULTATION;
+            case LAB -> LAB_CONSULTATION;
+            case JACE -> JACE_CONSULTATION;
+            case DOOM -> DOOM_CONSULTATION;
+            case FBLTHP -> FBLTHP_CONSULTATION;
+        };
+        game = threeSeats ? initAndCreateThreePlayerGame() : initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        opp = game.getPlayers().get(0);
+        t = aiOf(ai).getComboTracker();
+        t.useLines(lines(row));
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        if (w == ComboLines.Winner.ORACLE) {
+            manaForTheLine();
+            enters(addCardToZone(ORACLE, ai, ZoneType.Hand));
+            assertTrue(t.triggerOnOurStack(ORACLE), w.card);
+        } else {
+            lands("Swamp");
+            final Card winner = ready(w.card, 1, ai).get(0);
+            if (winner.isPlaneswalker()) {
+                winner.setCounters(CounterEnumType.LOYALTY, 4);
+            }
+            if (w == ComboLines.Winner.LAB || w == ComboLines.Winner.JACE) {
+                game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+                assertSame(game.getPhaseHandler().getNextTurn(), ai, w.card);
+            } else if (w == ComboLines.Winner.FBLTHP) {
+                attacking(PhaseType.COMBAT_DAMAGE, opp, winner);
+                game.getStack().add(fblthpTrigger(winner));
+                assertTrue(t.triggerOnOurStack(FBLTHP), w.card);
+            }
+        }
+        assertEquals(t.deckLines().size(), 1, w.card);
+        return t.deckLines().get(0);
     }
 
     @Test
@@ -1248,9 +1360,10 @@ public class ComboSignalsTest extends AITest {
         assertSame(ai.getOpponents().get(0), first);
         assertEquals(abandon(l), Signal.SURER_KILL);
 
-        // an opponent who cannot lose is not killable (read alone: the abandon order denies the line first)
+        // an opponent who cannot lose is not killable: abandon reads the surer kill's own opp.cantLose() now, since the
+        // line is no longer denied for it (follow-up 7, L1)
         addCard("Lich's Mastery", first);
-        assertEquals(abandon(l), Signal.DENIED);
+        assertNull(abandon(l));
         assertFalse(ComboSignals.surerKillNow(ai));
     }
 

@@ -2455,12 +2455,16 @@ public class ComboFetchAiTest extends AITest {
      *  <li>Iona naming blue, with Laboratory Maniac in our hand and Night's Whisper the draw spell, Island, Island,
      *  Island, Island, Swamp and Swamp the mana for all three: Lab can be cast at no moment, though Consultation and
      *  Night's Whisper can (with no Iona the tutor takes Consultation);
-     *  <li>the opponent's Lich's Mastery ("you can't lose the game"): every opponent cannot lose, though we can win;
      *  <li>three seats, a Platinum Angel of the opponent after us: we cannot win, though the opponent before us, whose
      *  Dreadmaw is the danger, can lose (with no Angel the tutor takes Consultation);
      *  <li>Lignify on our Laboratory Maniac, at 2 life (the 0/4 Treefolk blocks, and the Dreadmaw's trample puts 2
      *  through): Lab has lost its win.
-     *  </ul> */
+     *  </ul>
+     *  The opponent's Lich's Mastery ("you can't lose the game") is no such denial (follow-up 7, L1, Evan's decision of
+     *  2026-10-28: every opponent unable to lose stops no library-out win, which the opponents lose for OpponentWon):
+     *  under it, though no opponent can lose, the line is not denied at that main-phase window, DANGER is its one
+     *  signal, and Vampiric Tutor puts Consultation on top, a known top ({@link #assertEndStepFetch}); at d2c86593647
+     *  the line was denied there as under the hosers above. */
     @Test
     public void theMainPhaseWindowNextTurnStillReadsEachDenial() {
         final List<ComboLines.Line> lab = lines(LAB_CONSULTATION);
@@ -2480,7 +2484,14 @@ public class ComboFetchAiTest extends AITest {
         consultation = labDangerAtTheEndStepBeforeOurTurn("Lich's Mastery");
         assertFalse(ai.cantWin());
         assertTrue(opp.cantLose());
-        assertDeniedAtMainNextTurn(consultation, lab, "Lich's Mastery");
+        final ComboLines.Line lich = t.deckLines().get(0);
+        assertEquals(game.getPhaseHandler().getPhase(), PhaseType.END_OF_TURN, "Lich's Mastery");
+        assertEquals(ComboSignals.abandon(ai, lich, t), ComboSignals.Signal.DANGER, "Lich's Mastery");
+        assertFalse(ComboSignals.deniedAtMainNextTurn(t.view(), lich), "Lich's Mastery");
+        assertEquals(ComboSignals.abandonAtMainNextTurn(t.view(), lich), ComboSignals.Signal.DANGER, "Lich's Mastery");
+        assertTrue(t.view().danger(), "Lich's Mastery");
+        assertSame(ai.getZone(ZoneType.Library).get(0), consultation, "Lich's Mastery");
+        assertEndStepFetch(consultation, lab, "Lich's Mastery");
 
         assertEndStepFetch(threeSeatLabDangerAtTheEndStepBeforeOurTurn(), lab, "three seats, no Angel");
         consultation = threeSeatLabDangerAtTheEndStepBeforeOurTurn();

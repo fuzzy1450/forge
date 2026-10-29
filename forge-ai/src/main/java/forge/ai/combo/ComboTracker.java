@@ -410,7 +410,7 @@ public final class ComboTracker {
      * every piece name at once), whether our library is singleton, each deck line's standing prerequisites, its denial
      * now and at its window and its window's bars on the turn the board opens it, the live, executable, executable-now
      * and one-short lines, and the abandon signals'
-     * inputs that no line changes (whether we can win, whether every opponent cannot lose, the danger, the surer kill,
+     * inputs that no line changes (whether we can win, the danger, the surer kill,
      * next turn's mana, the CantBeCast statics on the board and whether one is in force) with the cast bar by piece and
      * each winner's own reading. So a decision asking for the executable lines, then the live ones, then the one-short
      * ones reads the board once, where each query alone read it again for every line. A view is the local of the
@@ -442,7 +442,6 @@ public final class ComboTracker {
         private List<ComboLines.Line> oneShort;
         // the abandon signals' inputs (ComboSignals reads them through the accessors below)
         private Boolean cantWin;
-        private Boolean everyOpponentCantLose;
         private Boolean danger;
         private Boolean surerKill;
         private List<StaticAbility> castBarStatics;
@@ -747,13 +746,6 @@ public final class ComboTracker {
                 cantWin = ai.cantWin();
             }
             return cantWin;
-        }
-
-        boolean everyOpponentCantLose() {
-            if (everyOpponentCantLose == null) {
-                everyOpponentCantLose = ComboSignals.everyOpponentCantLose(ai);
-            }
-            return everyOpponentCantLose;
         }
 
         // signal 3, read once a view and only when asked: the block matrices it builds are built once a view

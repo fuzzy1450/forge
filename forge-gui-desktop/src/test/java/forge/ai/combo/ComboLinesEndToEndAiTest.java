@@ -56,6 +56,7 @@ public class ComboLinesEndToEndAiTest extends AITest {
     private static final String FBLTHP = "Fblthp, Impossibly Lost";
     private static final String SWORDS = "Swords to Plowshares";
     private static final String SPARK = "Spark Double";
+    private static final String LICH = "Lich's Mastery";
 
     /** Five junk cards in blue and black, each castable off Islands and Swamps, none a draw spell (a draw spell in
      *  hand would open Laboratory Maniac's and Jace's main-phase window, not their end-step one). */
@@ -724,6 +725,137 @@ public class ComboLinesEndToEndAiTest extends AITest {
                 "Consultation was not cast in response to the copy's trigger");
         assertEquals(consultation.library(), 20, "our library was not whole at Consultation's cast");
         assertEndedInOurTurn(PhaseType.MAIN1, turn);
+    }
+
+    // ---- follow-up 7, L1: signal 2 drops "opponents cannot lose" (Evan's decision of 2026-10-28) ----
+
+    /**
+     * Review Focus 1 (follow-up 7, L1), played out: the opponent's Lich's Mastery ("you can't lose the game") stops no
+     * library-out win, so the AI goes off as it does for any live line. Laboratory Maniac (line 742-2836) on our
+     * battlefield, Demonic Consultation and Opt in hand beside the junk, Island and Swamp, a 20-card library, our Main
+     * 1, and the opponent's Lich's Mastery, put on their battlefield once our board is built. The AI casts Consultation
+     * on the empty stack, then Opt, whose draw on the emptied library wins in that Main 1: Lab's WinsGame reads only
+     * our cantWin (Player.altWinBySpellEffect), and the opponent then loses for OpponentWon, for which
+     * Player.loseConditionMet runs no GameLoss replacement. At d2c86593647 signal 2's "every opponent cannot lose"
+     * denied the line, and the AI won only by the stock play: a junk card first, then Consultation above the
+     * opponent's Lich's Mastery trigger, then Opt.
+     */
+    @Test
+    public void aLabWinsUnderLichsMastery() {
+        start();
+        addCard(LAB, ai);
+        hand(CONSULTATION, "Opt");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.deckLines()), List.of("742-2836"));
+        addCard(LICH, opp);
+        assertFalse(ai.cantWin(), "we cannot win");
+        assertTrue(opp.cantLose(), "the opponent can lose");
+        final int turn = game.getPhaseHandler().getTurn();
+
+        final List<Event> events = play();
+        assertWonBy(LAB, events);
+        assertLibraryEmpty();
+        final Event consultation = first(events, CONSULTATION);
+        assertEquals(consultation.stack(), List.of(CONSULTATION), "Consultation was not cast on an empty stack: "
+                + consultation.stack() + "; our stack items: " + whats(events));
+        assertEquals(consultation.library(), 20, "our library was not whole at Consultation's cast");
+        final Event opt = first(events, "Opt");
+        assertTrue(events.indexOf(opt) > events.indexOf(consultation), "Opt went first: " + whats(events));
+        assertEquals(opt.stack(), List.of("Opt"), "Opt was not cast on an empty stack: " + opt.stack());
+        assertEquals(opt.library(), 0, "Opt was cast on a library Consultation had not emptied");
+        assertEndedInOurTurn(PhaseType.MAIN1, turn);
+        assertTrue(opp.hasLost(), "the opponent did not lose");
+    }
+
+    /**
+     * Beyond the plan's tests (follow-up 7, L1; its rules preflight's optional play-outs): Thassa's Oracle's entering
+     * trigger wins under the opponent's Lich's Mastery too. Oracle and Demonic Consultation in hand behind the five
+     * junk cards, Island, Island and Swamp (the go-off's whole mana), a 20-card library, our Main 1, the opponent's
+     * Lich's Mastery put on their battlefield once our board is built: Oracle is the first spell the AI casts,
+     * Consultation answers its trigger, and the AI wins the turn it began in.
+     */
+    @Test
+    public void anOracleWinsUnderLichsMastery() {
+        start();
+        for (final String name : JUNK) {
+            addCardToZone(name, ai, ZoneType.Hand);
+        }
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        assertEquals(ai.getCardsIn(ZoneType.Hand).size(), 7, "not a full hand");
+        lands("Island", "Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.deckLines()), List.of("742-1295"));
+        addCard(LICH, opp);
+        assertFalse(ai.cantWin(), "we cannot win");
+        assertTrue(opp.cantLose(), "the opponent can lose");
+        final int turn = game.getPhaseHandler().getTurn();
+
+        final List<Event> events = play();
+        assertWonBy(ORACLE, events);
+        assertLibraryEmpty();
+        assertFalse(events.isEmpty());
+        assertEquals(events.get(0).what(), ORACLE, "a junk card went first: " + whats(events));
+        final Event consultation = first(events, CONSULTATION);
+        assertTrue(consultation.stack().contains(ORACLE + " trigger"), "Consultation was not cast in response to "
+                + "Oracle's trigger: " + consultation.stack());
+        assertEndedInOurTurn(PhaseType.MAIN1, turn);
+        assertTrue(opp.hasLost(), "the opponent did not lose");
+    }
+
+    /**
+     * Beyond the plan's tests (follow-up 7, L1; its rules preflight's optional play-outs): a pod. Three seats, the
+     * Lich's Mastery of the opponent before us, none for the one after us; aLabWinsUnderLichsMastery's board otherwise.
+     * The AI casts Consultation, then Opt, and wins in that Main 1: the game is over, and both opponents lost, the one
+     * who cannot lose among them.
+     */
+    @Test
+    public void aLabWinsAPodUnderOneLichsMastery() {
+        final Player third = startThreeSeats();
+        addCard(LAB, ai);
+        hand(CONSULTATION, "Opt");
+        lands("Island", "Swamp");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.deckLines()), List.of("742-2836"));
+        addCard(LICH, opp);
+        assertTrue(opp.cantLose(), "the opponent before us can lose");
+        assertFalse(third.cantLose(), "the opponent after us cannot lose");
+        assertFalse(ai.cantWin(), "we cannot win");
+        final int turn = game.getPhaseHandler().getTurn();
+
+        final List<Event> events = play();
+        assertWonBy(LAB, events);
+        assertLibraryEmpty();
+        final Event consultation = first(events, CONSULTATION);
+        assertEquals(consultation.library(), 20, "our library was not whole at Consultation's cast");
+        final Event opt = first(events, "Opt");
+        assertTrue(events.indexOf(opt) > events.indexOf(consultation), "Opt went first: " + whats(events));
+        assertEquals(opt.library(), 0, "Opt was cast on a library Consultation had not emptied");
+        assertEndedInOurTurn(PhaseType.MAIN1, turn);
+        assertTrue(opp.hasLost(), "the opponent with Lich's Mastery did not lose");
+        assertTrue(third.hasLost(), "the opponent after us did not lose");
+    }
+
+    /** {@link #start} in three seats: the AI player 1, {@code opp} player 0, the opponent whose turn comes right before
+     *  ours, and the opponent after us, returned; every player on the Default profile, each opponent at 40 life with a
+     *  40-card library, the random stream seeded. */
+    private Player startThreeSeats() {
+        game = initAndCreateThreePlayerGame();
+        ai = game.getPlayers().get(1);
+        opp = game.getPlayers().get(0);
+        final Player third = game.getPlayers().get(2);
+        for (final Player p : game.getPlayers()) {
+            ((LobbyPlayerAi) p.getLobbyPlayer()).setAiProfile("Default");
+        }
+        t = aiOf(ai).getComboTracker();
+        for (final Player p : List.of(opp, third)) {
+            p.setLife(40, null);
+            fillLibrary(p, 40);
+        }
+        assertEquals(ai.getOpponents().size(), 2);
+        MyRandom.setRandom(new Random(SEED));
+        return third;
     }
 
     /** {@code c} enters the battlefield and its entering trigger goes on the stack (the move holds the trigger as
