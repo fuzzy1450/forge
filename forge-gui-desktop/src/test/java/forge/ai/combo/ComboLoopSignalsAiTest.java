@@ -16,6 +16,7 @@ import org.testng.annotations.Test;
 import forge.ai.AITest;
 import forge.ai.combo.ComboSignals.Signal;
 import forge.game.Game;
+import forge.game.GameEntity;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardFactory;
@@ -175,9 +176,10 @@ public class ComboLoopSignalsAiTest extends AITest {
         return false;
     }
 
-    /** The opponent's {@code name} cast at {@code target} (none when null) and resolved at once: put on the stack by
-     *  hand, nothing paid (ComboLinesEndToEndAiTest.theirResponse's idiom), then resolved, no one given priority. */
-    private void theirSpellResolvesOn(final String name, final Card target) {
+    /** The opponent's {@code name} cast at {@code target}, a card or a player (none when null), and resolved at once:
+     *  put on the stack by hand, nothing paid (ComboLinesEndToEndAiTest.theirResponse's idiom), then resolved, no one
+     *  given priority. */
+    private void theirSpellResolvesOn(final String name, final GameEntity target) {
         final Card card = createCard(name, opp);
         card.setGameTimestamp(game.getNextTimestamp());
         game.getStackZone().add(card);
@@ -612,6 +614,24 @@ public class ComboLoopSignalsAiTest extends AITest {
     }
 
     @Test
+    public void anEffectsActivationBarDeniesTheStepsItRefuses() {
+        // the opponent's Abeyance on us: until end of turn we cannot activate abilities that aren't mana abilities.
+        // That static is an effect's, in the command zone, not a permanent's: it refuses Basalt Monolith's {3} untap
+        // and Palinchron's return, and no mana ability. Abeyance draws its caster a card: their library is filled
+        start();
+        otherPiecesInLibrary();
+        fillLibrary(opp, 5);
+        for (final String id : List.of("129-4131", "3430-4131", "1409-3542", "3430-3542", "x-2")) {
+            assertFalse(denied(line(id)), id);
+        }
+        theirSpellResolvesOn("Abeyance", ai);
+        for (final String id : List.of("129-4131", "3430-4131", "1409-3542", "3430-3542")) {
+            assertEquals(abandon(line(id)), Signal.DENIED, id);
+        }
+        assertFalse(denied(line("x-2")));
+    }
+
+    @Test
     public void ionaNamingBlueDeniesTheRecastAlone() {
         // the opponent's Iona naming blue: Palinchron, blue, cannot be cast again; the bounce rows cast colourless
         // artifacts and never Hullbreaker, blue too, which stays on our battlefield; nor Kinnan, green and blue
@@ -680,6 +700,20 @@ public class ComboLoopSignalsAiTest extends AITest {
     }
 
     @Test
+    public void aCombatOnlyCastBarDeniesNoRowTheCycleCastsInTheMainPhase() {
+        // the opponent's Basandra, Battle Seraph (players can't cast spells during combat) and Marisi, Breaker of the
+        // Coil (its controller's opponents can't): the bounce and the recast cast in our main phase, so no row is
+        // denied
+        start();
+        otherPiecesInLibrary();
+        addCard("Basandra, Battle Seraph", opp);
+        addCard("Marisi, Breaker of the Coil", opp);
+        for (final ComboLines.Line l : t.deckLines()) {
+            assertFalse(denied(l), l.variant().id());
+        }
+    }
+
+    @Test
     public void deafeningSilenceDeniesTheBounceButNotTheRecast() {
         // one noncreature spell a turn: the bounce casts artifacts again and again, the recast a creature
         start();
@@ -714,6 +748,34 @@ public class ComboLoopSignalsAiTest extends AITest {
         assertFalse(denied(line("3430-3542")));
         // assembling a line is no step of its cycle: Grim Monolith, 2, still in our library, bars no rock untap
         assertFalse(denied(line("2585-3430")));
+    }
+
+    @Test
+    public void aBarOnTheCycleCastDeniesABounceRowWhoseRocksAreOnOurBattlefield() {
+        // the bounce loop in its steady state, row x-2: Hullbreaker, Sol Ring and Mana Vault on our battlefield. Each
+        // cycle casts a rock again from our hand, so Rule of Law (one spell a turn) bars it
+        start();
+        addCard(HULLBREAKER, ai);
+        addCard("Sol Ring", ai);
+        addCard("Mana Vault", ai);
+        final ComboLines.Line bounce = line("x-2");
+        assertFalse(denied(bounce));
+        addCard("Rule of Law", opp);
+        assertEquals(abandon(bounce), Signal.DENIED);
+    }
+
+    @Test
+    public void nullRodDeniesABounceRowWhoseRocksAreOnOurBattlefield() {
+        // the steady state again, row x-2: Hullbreaker, Sol Ring and Mana Vault on our battlefield, and the opponent's
+        // Null Rod: the rocks the cycle taps make no mana
+        start();
+        addCard(HULLBREAKER, ai);
+        addCard("Sol Ring", ai);
+        addCard("Mana Vault", ai);
+        final ComboLines.Line bounce = line("x-2");
+        assertFalse(denied(bounce));
+        addCard("Null Rod", opp);
+        assertEquals(abandon(bounce), Signal.DENIED);
     }
 
     @Test
