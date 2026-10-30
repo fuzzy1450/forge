@@ -493,6 +493,40 @@ public class ComboLoopSignalsAiTest extends AITest {
     }
 
     @Test
+    public void everyDenialReadingFreesTheWinWithABallista() {
+        // the Ballista's exception to "we cannot win" holds at every moment a loop line is read, not at its window
+        // alone: an opposing Platinum Angel, and a Walking Ballista in our hand
+        start();
+        addCard(ANGEL, opp);
+        addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        final ComboLines.Line rock = line("129-4131");
+        final ComboTracker.View v = t.view();
+        assertFalse(v.denied(rock));
+        assertFalse(v.deniedNow(rock));
+        assertFalse(v.deniedThisTurn(rock));
+        assertFalse(ComboSignals.deniedAtMainNextTurn(v, rock));
+        assertTrue(v.executable().contains(rock));
+        assertTrue(v.executableNow().contains(rock));
+        assertNull(ComboSignals.abandonAtMainNextTurn(v, rock));
+    }
+
+    @Test
+    public void everyDenialReadingDeniesAnUnfreedAngel() {
+        // and with no Ballista of ours, the Angel denies the line at every moment
+        start();
+        addCard(ANGEL, opp);
+        final ComboLines.Line rock = line("129-4131");
+        final ComboTracker.View v = t.view();
+        assertTrue(v.denied(rock));
+        assertTrue(v.deniedNow(rock));
+        assertTrue(v.deniedThisTurn(rock));
+        assertTrue(ComboSignals.deniedAtMainNextTurn(v, rock));
+        assertFalse(v.executable().contains(rock));
+        assertFalse(v.executableNow().contains(rock));
+        assertEquals(ComboSignals.abandonAtMainNextTurn(v, rock), Signal.DENIED);
+    }
+
+    @Test
     public void cursedTotemDeniesTheFlickerBeforeThePair() {
         // Palinchron in our hand and Deadeye unpaired on our battlefield: no flicker is granted yet, and Palinchron's
         // own return stands in for it, read on Palinchron as it would be on our battlefield (R17)
@@ -529,6 +563,21 @@ public class ComboLoopSignalsAiTest extends AITest {
     }
 
     @Test
+    public void anActivationHoserThatTouchesNoPieceDeniesNoBounceRow() {
+        // Cursed Totem (creatures only) and a Pithing Needle naming a card that is no piece: activation statics are on
+        // the board, and no bounce row (artifacts, cast again and again) has an activation they refuse
+        start();
+        otherPiecesInLibrary();
+        addCard("Cursed Totem", opp);
+        addCard("Pithing Needle", opp).setNamedCards(List.of("Island"));
+        for (final ComboLines.Line l : kind(LoopKind.BOUNCE)) {
+            assertFalse(denied(l), l.variant().id());
+        }
+        assertFalse(denied(line("129-4131")));
+        assertFalse(denied(line("2585-3430")));
+    }
+
+    @Test
     public void ionaNamingBlueDeniesTheRecastAlone() {
         // the opponent's Iona naming blue: Palinchron, blue, cannot be cast again; the bounce rows cast colourless
         // artifacts and never Hullbreaker, blue too, which stays on our battlefield; nor Kinnan, green and blue
@@ -546,6 +595,17 @@ public class ComboLoopSignalsAiTest extends AITest {
     }
 
     @Test
+    public void ionaNamingGreenLeavesTheRecastAlone() {
+        // the recast casts Palinchron (blue) again, never Nyxbloom Ancient (green), which only has to be on the
+        // battlefield
+        start();
+        otherPiecesInLibrary();
+        addCard("Iona, Shield of Emeria", opp).setChosenColors(List.of("green"));
+        assertFalse(denied(line("3430-3542")));
+        assertFalse(denied(line("1409-3542")));
+    }
+
+    @Test
     public void teferiDeniesNoLoopOnOurTurnOrTheirs() {
         // the opponent's Teferi, Time Raveler: we cast only when we could cast a sorcery. The recast and the bounce
         // cast in our main phase on an empty stack, a sorcery's moment, whatever the turn the reading is made in
@@ -556,6 +616,18 @@ public class ComboLoopSignalsAiTest extends AITest {
             assertFalse(denied(l), l.variant().id());
         }
         game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
+        for (final ComboLines.Line l : t.deckLines()) {
+            assertFalse(denied(l), l.variant().id());
+        }
+    }
+
+    @Test
+    public void grandAbolisherOnOurTurnDeniesNoRow() {
+        // the opponent's Grand Abolisher bars the casts and the activations of our cards in its controller's turn
+        // only: on ours it bars no step of any cycle
+        start();
+        otherPiecesInLibrary();
+        addCard("Grand Abolisher", opp);
         for (final ComboLines.Line l : t.deckLines()) {
             assertFalse(denied(l), l.variant().id());
         }
@@ -625,6 +697,26 @@ public class ComboLoopSignalsAiTest extends AITest {
     }
 
     @Test
+    public void aKinnanWithoutHisBonusDeniesTheBounceRowsThatNameHim() {
+        // x-4, x-12 and x-14 name Kinnan: without his bonus they deny as the rock rows do (R26)
+        start();
+        addCard(HULLBREAKER, ai);
+        addCard("Sol Ring", ai);
+        addCard("Mana Vault", ai);
+        for (final String name : List.of("Sensei's Divining Top", "Scroll Rack", "Mox Amber", "Mox Opal")) {
+            addCardToZone(name, ai, ZoneType.Hand);
+        }
+        final List<ComboLines.Line> named = List.of(line("x-4"), line("x-12"), line("x-14"));
+        for (final ComboLines.Line l : named) {
+            assertFalse(denied(l), l.variant().id());
+        }
+        theirSpellResolvesOn("Turn to Frog", kinnan);
+        for (final ComboLines.Line l : named) {
+            assertEquals(abandon(l), Signal.DENIED, l.variant().id());
+        }
+    }
+
+    @Test
     public void lossBlockersAreTheCreaturesThatStopOurKill() {
         // our own Platinum Angel stops no kill of ours: no loss blocker, and we can win
         start();
@@ -648,5 +740,72 @@ public class ComboLoopSignalsAiTest extends AITest {
         addCardToZone(BALLISTA, ai, ZoneType.Hand);
         assertFalse(ai.cantWin());
         assertNull(LoopSinks.lossBlocker(ai));
+    }
+
+    @Test
+    public void aKillableAngelBesideAnUnkillableSourceStillDenies() {
+        // every source of "we cannot win" must be a creature the ping can kill: the Angel is, Angel's Grace (an effect
+        // in their command zone) is not
+        start();
+        addCard(ANGEL, opp);
+        addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        final ComboLines.Line rock = line("129-4131");
+        assertNull(abandon(rock));
+        theirSpellResolvesOn("Angel's Grace", null);
+        assertTrue(ai.cantWin());
+        assertEquals(abandon(rock), Signal.DENIED);
+        assertFalse(t.executable().contains(rock));
+    }
+
+    @Test
+    public void aKillableAngelBesideAHexproofOneStillDenies() {
+        // two opposing Platinum Angels, one of them hexproof: the ping can kill the other, and the hexproof one still
+        // stops our win
+        start();
+        final Card angel = addCard(ANGEL, opp);
+        final Card shielded = addCard(ANGEL, opp);
+        addCard("Swiftfoot Boots", opp).attachToEntity(shielded, null);
+        game.getAction().checkStateEffects(true);
+        assertTrue(shielded.hasKeyword(Keyword.HEXPROOF));
+        addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        assertEquals(LoopSinks.lossBlockers(ai), List.of(angel));
+        assertEquals(abandon(line("129-4131")), Signal.DENIED);
+    }
+
+    @Test
+    public void anAngelOutsideTheBattlefieldIsNoSourceOfTheLoss() {
+        // Platinum Angel's effects are active on the battlefield only: one in a graveyard or a hand stops nothing
+        start();
+        final Card angel = addCard(ANGEL, opp);
+        addCardToZone(ANGEL, opp, ZoneType.Graveyard);
+        addCardToZone(ANGEL, opp, ZoneType.Hand);
+        addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        assertTrue(ai.cantWin());
+        assertEquals(LoopSinks.lossBlockers(ai), List.of(angel));
+        assertNull(abandon(line("129-4131")));
+    }
+
+    @Test
+    public void aBallistaOutsideHandAndBattlefieldFreesNothing() {
+        // a Walking Ballista of ours in our graveyard or in exile has no ping to aim
+        start();
+        addCard(ANGEL, opp);
+        addCardToZone(BALLISTA, ai, ZoneType.Graveyard);
+        addCardToZone(BALLISTA, ai, ZoneType.Exile);
+        assertEquals(abandon(line("129-4131")), Signal.DENIED);
+        assertNull(LoopSinks.lossBlocker(ai));
+        assertEquals(LoopSinks.lossBlockers(ai), List.of());
+    }
+
+    @Test
+    public void aReplacementIsNoLossBlocker() {
+        // only a "can't happen" effect blocks: an opposing Exquisite Archangel replaces the loss (it is exiled
+        // instead), so it is no loss blocker and the Ballista has nothing to kill first
+        start();
+        addCard("Exquisite Archangel", opp);
+        addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        assertFalse(ai.cantWin());
+        assertNull(LoopSinks.lossBlocker(ai));
+        assertEquals(LoopSinks.lossBlockers(ai), List.of());
     }
 }
