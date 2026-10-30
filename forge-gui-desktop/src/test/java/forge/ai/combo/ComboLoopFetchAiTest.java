@@ -569,6 +569,22 @@ public class ComboLoopFetchAiTest extends AITest {
     }
 
     @Test
+    public void thePilesKeepPieceOnesCompletersBehindALoopLineRankedFirst() {
+        // the mixed tracker of consultationPassesOverALoopLineRankedFirst: 129-4131 (Basalt Monolith's 3 to cast) ranks
+        // before the Oracle line (Oracle's 2 and Tainted Pact's 2), so the completers pass over the loop line they meet
+        // first and keep piece 1's: Tainted Pact alone
+        kinnansBoard(ORACLE, PACT);
+        t.useLines(mixed());
+        lands("Island", "Island", "Swamp", "Swamp", "Forest");
+        hand(ORACLE);
+        deepLibrary(PACT, BASALT);
+        assertTrue(t.singletonLibrary());
+        assertEquals(ids(t.oneShort()), List.of("129-4131", ORACLE_PACT));
+
+        assertEquals(ComboFetch.completers(ai), List.of(PACT));
+    }
+
+    @Test
     public void aLoopOnlyDeckRefusesTheTutorBeforeReadingAnySignal() {
         // consultTutor's board gates come before any line's signals: a loop-only deck holds no line of piece 1's that
         // does not name Consultation, so the tutor is refused before DANGER is read (the view counts its block matrix)
@@ -585,5 +601,56 @@ public class ComboLoopFetchAiTest extends AITest {
         // the danger is real: read, it builds the Dreadmaw's matrix
         assertTrue(v.danger());
         assertEquals(v.blockMatrixBuilds(), 1);
+    }
+
+    @Test
+    public void dangerStillFetchesPieceOnesWinThisTurnBesideLoopLines() {
+        // the shipped Consultation + Oracle line beside the 19 loop lines: at 3 life against the Dreadmaw DANGER is
+        // 742-1295's only signal, and Consultation fetched now wins this turn (Oracle's {U}{U} and Consultation's {B}
+        // on the four lands open now), so the danger branch still fetches for it: a deck's loop lines do not stop it
+        kinnansBoard(ORACLE, CONSULTATION);
+        final List<String> rows = new ArrayList<>(List.of("742-1295"));
+        rows.addAll(LoopRows.ids());
+        t.useLines(ComboLoopBoards.shippedLoopLines(rows.toArray(new String[0])));
+        lands("Island", "Island", "Swamp", "Swamp");
+        hand(ORACLE);
+        final Card consultation = library(CONSULTATION);
+        library(BEARS);
+        library("Divination");
+        ai.setLife(3, null);
+        ComboLoopBoards.ready(addCard(DREADMAW, opp));
+        assertEquals(ComboSignals.abandon(ai, line("742-1295"), t), ComboSignals.Signal.DANGER);
+        assertEquals(t.oneShort(), List.of());
+
+        final SpellAbility tutor = spell("Demonic Tutor");
+        assertSame(ComboFetch.searchPick(tutor, ZoneType.Hand, searchable(tutor), ai, ai), consultation);
+    }
+
+    @Test
+    public void kinnansDigUnderDangerTakesNothingForALoopLine() {
+        // the dig of kinnansDigTakesAMissingCreaturePiece at 3 life against the Dreadmaw: DANGER is the only signal of
+        // Nyxbloom's two lines, so no line is one short, and the dig to the battlefield takes nothing for them (a loop
+        // line has no win in time to read)
+        kinnansBoard();
+        addCard(BASALT, ai);
+        addCard(GRIM, ai);
+        lands("Forest");
+        library(NYXBLOOM);
+        library(ULAMOG);
+        library("Forest");
+        library("Brainstorm");
+        library("Opt");
+        ai.setLife(3, null);
+        ComboLoopBoards.ready(addCard(DREADMAW, opp));
+        for (final String id : List.of("2585-3430", "3430-4131")) {
+            assertEquals(ComboSignals.abandon(ai, line(id), t), ComboSignals.Signal.DANGER, id);
+        }
+        assertEquals(t.oneShort(), List.of());
+
+        final SpellAbility dig = digOf(kinnan);
+        final List<Card> five = new ArrayList<>(ai.getCardsIn(ZoneType.Library)).subList(0, 5);
+        final CardCollection valid = CardLists.getValidCards(five, dig.getParam("ChangeValid"), ai, kinnan, dig);
+        assertEquals(names(valid), List.of(NYXBLOOM, ULAMOG));
+        assertNull(ComboFetch.digPick(ai, dig, valid, ai));
     }
 }
