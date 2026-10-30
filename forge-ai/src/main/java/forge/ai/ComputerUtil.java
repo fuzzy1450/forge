@@ -24,6 +24,7 @@ import forge.ai.ability.ProtectAi;
 import forge.ai.ability.TokenAi;
 import forge.ai.combo.ComboFetch;
 import forge.ai.combo.ComboHold;
+import forge.ai.combo.LoopDriver;
 import forge.card.CardStateName;
 import forge.card.CardType;
 import forge.card.ColorSet;
@@ -1596,6 +1597,14 @@ public class ComputerUtil {
 
         //10 activations should still be acceptable
         if (activations < 10) {
+            return false;
+        }
+
+        // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.8): lifted for the rest of
+        // a turn in which the activating player's loop driver acted, whose own activations count here, so Ballista's
+        // {4}, Thrasios and Kinnan's dig meet no random refusal; no draw then, a deliberate change of the random
+        // stream. Untouched on every other turn and for every player whose driver did not act
+        if (LoopDriver.liftsThrottleFor(sa.getActivatingPlayer())) {
             return false;
         }
 

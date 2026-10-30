@@ -28,6 +28,7 @@ import forge.ai.combo.ComboExecute;
 import forge.ai.combo.ComboHold;
 import forge.ai.combo.ComboLines;
 import forge.ai.combo.ComboTracker;
+import forge.ai.combo.LoopDriver;
 import forge.ai.simulation.GameStateEvaluator;
 import forge.ai.simulation.OnePlaySafetyChecker;
 import forge.ai.simulation.SpellAbilityPicker;
@@ -111,12 +112,17 @@ public class AiController {
     // would be shared by every concurrent game of a serve JVM. Read only by
     // SpecialCardAi.DramaticReversal.
     private final List<SpecialCardAi.DramaticReversal.Refused> approvedUnaffordable = new ArrayList<>();
-    // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.2): which of piece 1's
-    // empty-library lines this AI's own deck holds, and where each of their pieces is. It reads nothing until its
-    // first query, because this constructor runs before the player is registered with its game. An instance field:
-    // a static would be shared by every concurrent game of a serve JVM. Read by forge.ai.combo, through
-    // ComboTracker.of.
+    // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.2): which combo lines (piece
+    // 1's empty-library lines, piece 2's loop lines) this AI's own deck holds, and where each of their pieces is. It
+    // reads nothing until its first query, because this constructor runs before the player is registered with its game.
+    // An instance field: a static would be shared by every concurrent game of a serve JVM. Read by forge.ai.combo,
+    // through ComboTracker.of.
     private final ComboTracker combos;
+    // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md sections 6.2-6.5): this AI's loop
+    // driver, which runs the loop lines its deck holds through getSpellAbilityToPlay's slots. Like the tracker it reads
+    // nothing until its first decision. An instance field, for the same reason. Read by forge.ai.combo, through
+    // LoopDriver.of.
+    private final LoopDriver loopDriver;
 
     public AiController(final Player computerPlayer, final Game game0) {
         player = computerPlayer;
@@ -124,6 +130,7 @@ public class AiController {
         memory = new AiCardMemory();
         loops = new LoopTracker();
         combos = new ComboTracker(player, ComboLines.shipped());
+        loopDriver = new LoopDriver(player);
         simPicker = new SpellAbilityPicker(player);
     }
 
@@ -167,9 +174,14 @@ public class AiController {
         return loops;
     }
 
-    /** Which of piece 1's combo lines this AI's deck holds, and where their pieces are: read by forge.ai.combo. */
+    /** Which combo lines this AI's deck holds, and where their pieces are: read by forge.ai.combo. */
     public ComboTracker getComboTracker() {
         return combos;
+    }
+
+    /** This AI's loop driver (combo-aware AI, piece 2): read by forge.ai.combo, through LoopDriver.of. */
+    public LoopDriver getLoopDriver() {
+        return loopDriver;
     }
 
     public Combat getPredictedCombat() {
@@ -2017,6 +2029,16 @@ public class AiController {
             return goOff;
         }
 
+        // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md sections 6.2-6.5): a loop line's
+        // go-off, after piece 1's and ahead of the walk. While one runs, each pass returns its cycle's next step,
+        // played as any pick is, until the pool holds what the walk could spend; the driver's own check stands in for
+        // canPlayAndPayFor, whose throttle and stock judges would refuse the steps. Null at once for a deck holding no
+        // loop line, outside our main phase and above a stack; draws nothing.
+        final SpellAbility loopPick = loopDriver.mainPhaseAction(saList);
+        if (loopPick != null) {
+            return loopPick;
+        }
+
         SpellAbility chosenSa = chooseSpellAbilityToPlayFromList(saList, true);
 
         if (topOwnedByAI && !mustRespond && chosenSa != ComputerUtilAbility.getFirstCopySASpell(saList)) {
@@ -2103,6 +2125,15 @@ public class AiController {
                     SpecialCardAi.HighTide.PENDING.remove();
                 }
             }
+        }
+
+        // Combo-aware AI, piece 2: when the loop driver passed this decision to the walk at its pool's target, it hears
+        // what the walk returned (a round of its go-off), or, the walk having chosen nothing, ends the go-off
+        // (LoopDriver.afterStockWalk, where the driver's own sinks are to play). Inert otherwise; draws nothing.
+        if (chosenSa == null) {
+            chosenSa = loopDriver.afterStockWalk();
+        } else {
+            loopDriver.noteStockPlay(chosenSa);
         }
 
         return chosenSa;

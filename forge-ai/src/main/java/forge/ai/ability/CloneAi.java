@@ -6,6 +6,7 @@ import forge.ai.ComputerUtilAbility;
 import forge.ai.ComputerUtilCard;
 import forge.ai.SpecialCardAi;
 import forge.ai.SpellAbilityAi;
+import forge.ai.combo.LoopDriver;
 import forge.game.Game;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.*;
@@ -226,6 +227,15 @@ public class CloneAi extends SpellAbilityAi {
     @Override
     protected Card chooseSingleCard(Player ai, SpellAbility sa, Iterable<Card> options, boolean isOptional,
             Player targetedPlayer, Map<String, Object> params) {
+        // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.1): Sakashima of a Thousand
+        // Faces enters as our Kinnan, Bonder Prodigy when that completes the Grim Monolith loop line the deck holds
+        // (LoopDriver.copyChoice); the stock pick below prefers a nonlegendary creature of ours. Null, so stock, for
+        // every other clone and deck
+        final LoopDriver loops = LoopDriver.of(ai);
+        final Card loopCopy = loops == null ? null : loops.copyChoice(sa, options);
+        if (loopCopy != null) {
+            return loopCopy;
+        }
         if ("TheMasterFormedAnew".equals(sa.getParam("AILogic"))) {
             // Exiled cards are controlled by their owners, so the filter below would pass
             // over the legendary body Body Thief just exiled for an opponent's or a stale
