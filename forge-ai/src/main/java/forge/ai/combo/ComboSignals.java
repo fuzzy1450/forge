@@ -57,14 +57,24 @@ import forge.game.zone.ZoneType;
  * reads the library's order: the stock danger and lethal readers both draw (aiLifeInDanger through the blocker's
  * lifeInDanger roll, doAssault and possibleNonCombatDamage through canPayCost's test payments), so DANGER and
  * SURER_KILL are private floors in the AdNauseam.floor idiom, damageIfUnblocked without abilities.
+ *
+ * <p>A loop line (piece 2, spec 2026-10-29-combo-aware-ai-loops-design.md section 6.7) has no window: its denial is its
+ * own ({@link #loopDenied}), the same now, at its window and at our next main phase, and no window bar is read for it.
+ * The other three signals read it as they read piece 1's lines (NO_MANA its pieces' cast costs only).
  */
 public final class ComboSignals {
     /** Why a line is not chased, in the order {@link #abandon} reads them. DENIED, read at the line's own window
-     *  ({@link #deniedAtWindow}), stops holding, protecting and fetching, and keeps the line from the executable ones;
-     *  each execution reads its own moment besides (a window open now the denial now, the go-off its window this
-     *  turn). The other three stop holding, protecting and fetching, never execution (a win now beats surviving, and
-     *  each execution window checks its own mana). */
+     *  ({@link #deniedAtWindow}; a loop line's own, {@link #loopDenied}), stops holding, protecting and fetching, and
+     *  keeps the line from the executable ones; each execution reads its own moment besides (a window open now the
+     *  denial now, the go-off its window this turn). The other three stop holding, protecting and fetching, never
+     *  execution (a win now beats surviving, and each execution window checks its own mana). */
     public enum Signal { DENIED, NO_MANA, DANGER, SURER_KILL }
+
+    // piece 2's loop pieces whose steps signal 2 reads by name: the rows name them (spec 2026-10-29 section 6.1)
+    private static final String KINNAN = "Kinnan, Bonder Prodigy";
+    private static final String SAKASHIMA = "Sakashima of a Thousand Faces";
+    private static final String PALINCHRON = "Palinchron";
+    private static final String HULLBREAKER = "Hullbreaker Horror";
 
     private ComboSignals() {
     }
@@ -135,9 +145,12 @@ public final class ComboSignals {
      * fire, never this instant: we cannot win (every opponent unable to lose is no denial: {@link #denied}); a piece of
      * the line still to be cast cannot be cast at its moment in the window ({@link #barredAtWindow}); Thassa's Oracle's
      * entering trigger is disabled; a winner of ours on the battlefield has lost its win, Doctor Doom's {T} draw read
-     * at Doom's window, our turn ({@link #disarmedAtWindow}).
+     * at Doom's window, our turn ({@link #disarmedAtWindow}). A loop line's is its own ({@link #loopDenied}).
      */
     static boolean deniedAtWindow(final ComboTracker.View v, final ComboLines.Line l) {
+        if (l.isLoop()) {
+            return loopDenied(v, l);
+        }
         if (v.cantWin()) {
             return true;
         }
@@ -157,9 +170,14 @@ public final class ComboSignals {
      * piece still to be cast is read in our main phase on an empty stack, a sorcery's moment, nothing of this turn's
      * carried over: the winner still to be cast after no spell, then the emptier after it. So the opponent's Grand
      * Abolisher (in its owner's turn only) and Teferi, Time Raveler (away from a sorcery's moment) bar neither there,
-     * though both bar that end step. The draw spell's own bar is the win in time's ({@link #drawBarredAt}).
+     * though both bar that end step. The draw spell's own bar is the win in time's ({@link #drawBarredAt}). A loop
+     * line's is its own ({@link #loopDenied}).
      */
     static boolean deniedAtMainNextTurn(final ComboTracker.View v, final ComboLines.Line l) {
+        if (l.isLoop()) {
+            return loopDenied(v, l);
+        }
+        assert l.winner() != null : "a line with no winner reached its window's denial";
         if (v.cantWin()) {
             return true;
         }
@@ -197,8 +215,12 @@ public final class ComboSignals {
      *  battlefield cannot be cast now, its first spell barred by a CantBeCast static (Void Winnower's even mana
      *  values); Thassa's Oracle's entering trigger is disabled (Torpor Orb, Hushbringer); a winner of ours on the
      *  battlefield has lost its win ({@link #disarmed}: Imprisoned in the Moon, Lignify, Humility, a face-down copy),
-     *  or Doctor Doom's {T} draw cannot be activated (Linvala, Keeper of Silence). */
+     *  or Doctor Doom's {T} draw cannot be activated (Linvala, Keeper of Silence). A loop line's is its own
+     *  ({@link #loopDenied}). */
     static boolean deniedNow(final ComboTracker.View v, final ComboLines.Line l) {
+        if (l.isLoop()) {
+            return loopDenied(v, l);
+        }
         if (v.cantWin()) {
             return true;
         }
@@ -240,6 +262,7 @@ public final class ComboSignals {
     // in its controller's turn (the opponent's Grand Abolisher, Myrel) or only in combat does not reach it there. What
     // the other winners have no turn changes. A bar not in force now is in force at the window in no card of the tree
     static boolean disarmedAtWindow(final ComboTracker.View v, final ComboLines.Winner w) {
+        assert w != null : "a line with no winner reached its winner's disarming";
         if (w != ComboLines.Winner.DOOM || !v.disarmed(w)) {
             return v.disarmed(w);
         }
@@ -412,12 +435,13 @@ public final class ComboSignals {
      * its window's, after no spell (Laboratory Maniac before that end step, Doctor Doom free of summoning sickness by
      * its window, Fblthp on our battlefield before combat damage).
      * </ul>
-     * False while the window is now (our Oracle's or Fblthp's trigger on our stack: the reading now), and with no piece
-     * still to be cast. A copy of a cast is made only while some CantBeCast static exists (the view's castBarStatics,
-     * else the piece's own); nothing here draws a random number, and the cards are read, never written.
+     * False while the window is now (our Oracle's or Fblthp's trigger on our stack: the reading now), with no piece
+     * still to be cast, and for a loop line, which has no window (piece 2: {@link #loopDenied} reads its cycle). A
+     * copy of a cast is made only while some CantBeCast static exists (the view's castBarStatics, else the piece's
+     * own); nothing here draws a random number, and the cards are read, never written.
      */
     static boolean barredAtWindowNow(final ComboTracker.View v, final ComboLines.Line l) {
-        return !windowNow(v, l) && barredOn(v, l, opensThisTurn(v, l));
+        return !l.isLoop() && !windowNow(v, l) && barredOn(v, l, opensThisTurn(v, l));
     }
 
     // the line's window is now: our trigger of Thassa's Oracle or of Fblthp is on our stack, fired already
@@ -436,6 +460,7 @@ public final class ComboSignals {
     //   this turn (follow-up 3, H5: combatDamageCanCome). A summoning-sick Fblthp with nothing else of ours able to
     //   attack opens no window this turn: its line is read on the next turn it could run, as every other line is
     private static boolean opensThisTurn(final ComboTracker.View v, final ComboLines.Line l) {
+        assert l.winner() != null : "a line with no winner reached its window";
         final ComboLines.Winner w = l.winner();
         final Player ai = v.ai();
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
@@ -492,6 +517,7 @@ public final class ComboSignals {
     // turn's (thisTurn: the spells cast this turn count) or the next turn the line could run (none carried over).
     // Nothing more is read while no CantBeCast static exists (the view's castBarStatics, else a piece's own)
     private static boolean barredOn(final ComboTracker.View v, final ComboLines.Line l, final boolean thisTurn) {
+        assert l.winner() != null : "a line with no winner reached its window's bars";
         final ComboLines.Winner w = l.winner();
         final Card winner = unplayed(v, w.card);
         final String name = l.emptier().card;
@@ -653,15 +679,17 @@ public final class ComboSignals {
     // A trigger of our Oracle already on the stack has fired: nothing can disable it now.
     static boolean oracleTriggerDisabledNow(final ComboTracker.View v) {
         final String name = ComboLines.Winner.ORACLE.card;
-        final Game game = v.ai().getGame();
         if (v.triggerOnOurStack(name)) {
             return false;
         }
         final Card oracle = v.card(name);
-        if (oracle == null) {
-            return false;
-        }
-        for (final Trigger tr : oracle.getTriggers()) {
+        return oracle != null && entersDisabled(v.ai().getGame(), oracle);
+    }
+
+    // whether a static disables an entering trigger of the card (Torpor Orb, Hushbringer): each of its ChangesZone
+    // triggers whose destination is the battlefield, read for the card itself moving there
+    private static boolean entersDisabled(final Game game, final Card c) {
+        for (final Trigger tr : c.getTriggers()) {
             if (tr.getMode() != TriggerType.ChangesZone
                     || !ZoneType.Battlefield.toString().equals(tr.getParam("Destination"))) {
                 continue;
@@ -670,6 +698,174 @@ public final class ComboSignals {
             runParams.put(AbilityKey.Destination, ZoneType.Battlefield.name());
             if (StaticAbilityDisableTriggers.disabled(game, tr, runParams)) {
                 return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Signal 2 for a loop line (piece 2; spec 2026-10-29-combo-aware-ai-loops-design.md section 6.7, the plan's Calls):
+     * a loop has no window, so this one reading answers now, at its window and at our next main phase. The line is
+     * denied while we cannot win, unless Walking Ballista can free the win ({@link LoopSinks#freesTheWin}: every
+     * source of it is a creature the ping can target, and a Ballista of ours is on our battlefield or in our hand);
+     * or while the engine bars a step of the line's cycle now ({@link #cycleBarred}). Every opponent unable to lose
+     * denies nothing (the driver's start reads that: an opposing Lich's Mastery leaves the pieces held). Read from what
+     * a player can see; nothing here draws a random number, and the cards are read, never written: what is placed on
+     * our battlefield or cast to be read is an LKI copy.
+     */
+    static boolean loopDenied(final ComboTracker.View v, final ComboLines.Line l) {
+        if (v.cantWin() && !LoopSinks.freesTheWin(v.ai())) {
+            return true;
+        }
+        return cycleBarred(v, l);
+    }
+
+    // whether the engine bars a step of the loop line's cycle now, read through the engine's own restriction checks,
+    // so no card-name list of hosers is kept (the plan's Calls; R17, R24, R26):
+    // - any kind: a Kinnan the line names, on our battlefield, with no TapsForMana trigger (R26: Turn to Frog, Lignify;
+    //   a static trigger is never disabled by Torpor Orb), and so Sakashima beside him, the second Kinnan of row
+    //   129-2585-2719. One elsewhere is not read: it has its bonus, or (Sakashima) becomes a Kinnan, as it enters;
+    // - a rock untap: a piece's own untap, or every one of its mana abilities, that checkRestrictions refuses (Null
+    //   Rod, Collector Ouphe, Stony Silence; Pithing Needle on the untap);
+    // - the flicker: Palinchron's flicker refused (Cursed Totem, Linvala, Keeper of Silence), or its entering trigger
+    //   disabled (Torpor Orb, Hushbringer);
+    // - the return and recast: Palinchron's return refused, its cast barred (cycleCastBarred, R24), or its entering
+    //   trigger disabled;
+    // - the cast and bounce: a piece the cycle casts again and again, every piece but Hullbreaker and Kinnan, whose
+    //   cast is barred (R24) or every one of whose mana abilities is refused.
+    // Kinnan's dig is no step and is never read, nor is the first cast of a piece not yet on our battlefield, which
+    // assembles the line. A piece off our battlefield is read on an LKI copy placed there (R17: Null Rod's and Cursed
+    // Totem's AffectedZone$ Battlefield skip a card in hand), made only while a CantBeActivated static exists; a piece
+    // gone is not read. If chains, not an enum switch: javac would add a synthetic switch-map class
+    private static boolean cycleBarred(final ComboTracker.View v, final ComboLines.Line l) {
+        final Player ai = v.ai();
+        final boolean activations = hasStatic(ai.getGame(), StaticAbilityMode.CantBeActivated);
+        final LoopKind kind = l.loop();
+        for (final String name : l.names()) {
+            final Card c = v.card(name);
+            if (c == null) {
+                continue;
+            }
+            final boolean here = v.where(name) == Where.BATTLEFIELD;
+            if (here && (KINNAN.equals(name) || (SAKASHIMA.equals(name) && l.names().contains(KINNAN)))
+                    && !amplifies(c)) {
+                return true;
+            }
+            if (kind == LoopKind.ROCK_UNTAP) {
+                if (activations && rockRefused(onOurBattlefield(ai, c, here), ai)) {
+                    return true;
+                }
+            } else if (kind == LoopKind.BOUNCE) {
+                if (!HULLBREAKER.equals(name) && !KINNAN.equals(name) && (cycleCastBarred(v, c)
+                        || (activations && manaRefused(onOurBattlefield(ai, c, here), ai)))) {
+                    return true;
+                }
+            } else if (PALINCHRON.equals(name)) {
+                final boolean recast = kind == LoopKind.RECAST;
+                if ((activations && moveRefused(onOurBattlefield(ai, c, here), recast, ai))
+                        || entersDisabled(ai.getGame(), c) || (recast && cycleCastBarred(v, c))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // whether the card has a TapsForMana trigger that no effect suppresses: Kinnan's bonus, or a copy of it
+    private static boolean amplifies(final Card c) {
+        for (final Trigger tr : c.getTriggers()) {
+            if (tr.getMode() == TriggerType.TapsForMana && !tr.isSuppressed()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // our card c as it would be on our battlefield: c itself there, else an LKI copy last known there (R17)
+    private static Card onOurBattlefield(final Player ai, final Card c, final boolean here) {
+        if (here) {
+            return c;
+        }
+        final Card copy = CardCopyService.getLKICopy(c);
+        copy.setLastKnownZone(ai.getZone(ZoneType.Battlefield));
+        return copy;
+    }
+
+    // a rock untap's step refused on the card: its own untap (an activated Untap ability), or every mana ability of it
+    private static boolean rockRefused(final Card c, final Player ai) {
+        for (final SpellAbility sa : c.getNonManaAbilities()) {
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.Untap && !sa.checkRestrictions(ai)) {
+                return true;
+            }
+        }
+        return manaRefused(c, ai);
+    }
+
+    // every mana ability of the card refused, so it can tap for no mana (none at all: false)
+    private static boolean manaRefused(final Card c, final Player ai) {
+        boolean any = false;
+        for (final SpellAbility sa : c.getManaAbilities()) {
+            if (sa.checkRestrictions(ai)) {
+                return false;
+            }
+            any = true;
+        }
+        return any;
+    }
+
+    // Palinchron's move off our battlefield, the one its cycle makes, refused on the card: for the recast its return to
+    // our hand; for the flicker Deadeye Navigator's granted {1}{U} flicker, or, before the pair is made (Palinchron
+    // unpaired, or off our battlefield), its own return in the flicker's stead, an activated non-mana ability of the
+    // same creature, which every CantBeActivated static of the card pool reads as it reads the flicker (they tell
+    // apart mana, loyalty, cycling and power-up abilities and the cards they name, never two such abilities of one
+    // creature). With neither ability (Palinchron lost its abilities) nothing is read
+    private static boolean moveRefused(final Card palinchron, final boolean recast, final Player ai) {
+        SpellAbility flicker = null;
+        SpellAbility back = null;
+        for (final SpellAbility sa : palinchron.getNonManaAbilities()) {
+            if (!sa.isActivatedAbility() || sa.getApi() != ApiType.ChangeZone) {
+                continue;
+            }
+            if (sa.getGrantorStatic() != null && "Exile".equals(sa.getParam("Destination"))) {
+                if (flicker == null) {
+                    flicker = sa;
+                }
+            } else if (back == null && "Hand".equals(sa.getParam("Destination"))) {
+                back = sa;
+            }
+        }
+        final SpellAbility move = recast || flicker == null ? back : flicker;
+        return move != null && !move.checkRestrictions(ai);
+    }
+
+    // whether a CantBeCast static bars our card c's cast in its loop's cycle (R24), which casts it again and again
+    // from our hand in our main phase on an empty stack: read as barredAt reads a piece's cast at its moment, after
+    // this turn's spells while it is our turn and one more cast of c, the cycle's last. So a one-spell-a-turn static
+    // (Rule of Law, Archon of Emeria, Eidolon of Rhetoric; Deafening Silence for a noncreature spell) bars the cycle
+    // however few spells this turn has seen, and so does a static barring the cast outright (Void Winnower's even mana
+    // values). The copy is made only while some CantBeCast static exists (the view's castBarStatics, else c's own)
+    private static boolean cycleCastBarred(final ComboTracker.View v, final Card c) {
+        final SpellAbility spell = Iterables.getFirst(c.getSpells(), null);
+        if (spell == null || (v.castBarStatics().isEmpty() && !hasCastBar(c))) {
+            return false;
+        }
+        final Player ai = v.ai();
+        final Game game = ai.getGame();
+        final List<Card> before = new ArrayList<>();
+        if (game.getPhaseHandler().isPlayerTurn(ai)) {
+            before.addAll(game.getStack().getSpellCardsCastThisTurn());
+        }
+        before.add(c);
+        return barredAt(v, c, spell, false, ai, PhaseType.MAIN1, true, before);
+    }
+
+    // whether a static of that mode is on a card of a static-ability source zone, whatever its conditions
+    private static boolean hasStatic(final Game game, final StaticAbilityMode mode) {
+        for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
+            for (final StaticAbility st : ca.getStaticAbilities()) {
+                if (st.checkMode(mode)) {
+                    return true;
+                }
             }
         }
         return false;

@@ -88,10 +88,18 @@ public class ComboLinesTest {
 
     @Test
     public void shippedLinesAreThePieceOneLinesReadOnce() {
-        // the shipped table claims exactly piece 1's eight lines, in its file order, and the list is held, not rebuilt
+        // the shipped table claims piece 1's eight lines and piece 2's 19 loop lines, each family in its file order,
+        // which sorts the ids as strings (R12), and the list is held, not rebuilt
         final List<Line> shipped = ComboLines.shipped();
-        assertEquals(ids(shipped), List.of("1295-3093", "2836-3093", "3093-3096", "742-1295", "742-2836", "742-3096",
-                "742-8266", "x-1"));
+        assertEquals(ids(shipped.stream().filter(l -> !l.isLoop()).collect(Collectors.toList())), List.of("1295-3093",
+                "2836-3093", "3093-3096", "742-1295", "742-2836", "742-3096", "742-8266", "x-1"));
+        assertEquals(ids(shipped.stream().filter(Line::isLoop).collect(Collectors.toList())), List.of("129-2585-2719",
+                "129-4131", "1409-3542", "2585-3430", "3430-3542", "3430-4131", "x-10", "x-11", "x-12", "x-13", "x-14",
+                "x-2", "x-3", "x-4", "x-5", "x-6", "x-7", "x-8", "x-9"));
+        // the two families interleaved, as the file holds them
+        assertEquals(ids(shipped), List.of("129-2585-2719", "129-4131", "1295-3093", "1409-3542", "2585-3430",
+                "2836-3093", "3093-3096", "3430-3542", "3430-4131", "742-1295", "742-2836", "742-3096", "742-8266",
+                "x-1", "x-10", "x-11", "x-12", "x-13", "x-14", "x-2", "x-3", "x-4", "x-5", "x-6", "x-7", "x-8", "x-9"));
         assertSame(ComboLines.shipped(), shipped);
         assertEquals(shipped, ComboLines.claimed(ComboTable.shipped()));
         expectThrows(UnsupportedOperationException.class, () -> shipped.add(shipped.get(0)));

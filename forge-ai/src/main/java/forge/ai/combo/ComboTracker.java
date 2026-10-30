@@ -693,7 +693,8 @@ public final class ComboTracker {
         }
 
         /** {@link ComboSignals#denied} (kept for a deck line): denied at the line's own window
-         *  ({@link ComboSignals#deniedAtWindow}, follow-up 2, G2), the denial that live and executable read. */
+         *  ({@link ComboSignals#deniedAtWindow}, follow-up 2, G2), the denial that live and executable read; a loop
+         *  line's, which has no window, its own ({@link ComboSignals#loopDenied}). */
         boolean denied(final ComboLines.Line l) {
             final int i = indexOf(l);
             if (i < 0) {
@@ -706,7 +707,8 @@ public final class ComboTracker {
         }
 
         /** {@link ComboSignals#barredAtWindowNow} (kept for a deck line): a piece still to be cast barred at the
-         *  line's window on the turn the board opens it, this turn while it can still open this turn. */
+         *  line's window on the turn the board opens it, this turn while it can still open this turn. Never for a loop
+         *  line, which has no window. */
         boolean windowBarred(final ComboLines.Line l) {
             final int i = indexOf(l);
             if (i < 0) {
@@ -722,7 +724,8 @@ public final class ComboTracker {
          *  ({@link ComboSignals#deniedNow}), or a piece barred at its window this turn while the board can still open
          *  it this turn ({@link #windowBarred}). The go-off reads it (ComboExecute.goOffNow), and the win this turn
          *  under danger (ComboFetch): a line whose window this turn is barred waits for a later turn, and is held for
-         *  it, but goes off in none this turn. */
+         *  it, but goes off in none this turn. A loop line's is its own denial ({@link ComboSignals#loopDenied}),
+         *  the same now as at any moment. */
         boolean deniedThisTurn(final ComboLines.Line l) {
             return deniedNow(l) || windowBarred(l);
         }
@@ -813,7 +816,9 @@ public final class ComboTracker {
             return oracleTriggerDisabled;
         }
 
+        // a winner of ours read once (ComboSignals.disarmedNow); never asked for a loop line, which has none
         boolean disarmed(final ComboLines.Winner w) {
+            assert w != null : "a line with no winner reached the disarming of its winner";
             if (disarmed[w.ordinal()] == 0) {
                 disarmed[w.ordinal()] = (byte) (ComboSignals.disarmedNow(this, w) ? 2 : 1);
             }
