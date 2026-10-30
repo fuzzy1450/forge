@@ -82,6 +82,13 @@ public class ComboLoopRowsTest {
         assertSame(LoopRows.ids(), LoopRows.ids());
         expectThrows(UnsupportedOperationException.class, () -> LoopRows.ids().add("513-3682"));
         expectThrows(UnsupportedOperationException.class, () -> LoopRows.ids().remove(0));
+        // nor rewritten in place: a fixed-size list such as Arrays.asList refuses add and remove alone, while a set, a
+        // sort or a replaceAll on the one list every caller shares would reorder Calls' order for every game in the JVM
+        final List<String> ids = LoopRows.ids();
+        expectThrows(UnsupportedOperationException.class, () -> ids.set(0, "x-2"));
+        expectThrows(UnsupportedOperationException.class, () -> ids.sort(null));
+        expectThrows(UnsupportedOperationException.class, ids::clear);
+        expectThrows(UnsupportedOperationException.class, () -> ids.replaceAll(s -> s));
         assertEquals(LoopRows.ids().size(), 19);
     }
 
@@ -140,6 +147,56 @@ public class ComboLoopRowsTest {
                     assertEquals(hullbreakers.get(0).zones(), "B", id);
                 }
             }
+        }
+    }
+
+    @Test
+    public void theShippedLoopRowsAreTheBuildsLetterForLetter() {
+        // every field of the 19 rows as the build writes them, in Calls' order: Spellbook's six from the pinned dump,
+        // then x-2 to x-14 from sim/combos/extras.txt in the templates' form (mana value 0, mana blank, Hullbreaker
+        // and the named rock on the battlefield, the fills in hand). The test above pins each row's engine; this pins
+        // the rest, among it what the plan's Calls decide: among the bounce rows Kinnan is a piece of x-4, x-12 and
+        // x-14 alone, the loops that net mana only with his bonus; no fill is Mox Diamond; no row names a sink. A
+        // parsed Variant compares the id, the mana value, the mana, the feature ids and every piece's name, zones and
+        // commander flag, in order
+        final ComboTable expected = ComboTable.parse(List.of(
+                "F|3|H|Infinite creature LTB",
+                "F|4|H|Infinite creature ETB",
+                "F|5|S|Infinite colored mana",
+                "F|11|S|Infinite colorless mana",
+                "F|17|H|Infinite storm count",
+                "F|28|S|Infinite mana lands you control can produce",
+                "F|87|H|Infinite blinking",
+                "F|173|C|Infinite untap of lands you control",
+                "V|129-4131|0||11|B:Kinnan, Bonder Prodigy|B:Basalt Monolith",
+                "V|3430-4131|0||11|B:Basalt Monolith|B:Nyxbloom Ancient",
+                "V|2585-3430|0||11|B:Grim Monolith|B:Nyxbloom Ancient",
+                "V|129-2585-2719|0||11|B:Kinnan, Bonder Prodigy|B:Grim Monolith|B:Sakashima of a Thousand Faces",
+                "V|1409-3542|0||3,4,28,87,173|B:Palinchron|B:Deadeye Navigator",
+                "V|3430-3542|7|{5}{U}{U}|3,4,17,28|B:Palinchron|B:Nyxbloom Ancient",
+                "V|x-2|0||11,17|B:Hullbreaker Horror|B:Sol Ring|H:Mana Vault",
+                "V|x-3|0||11,17|B:Hullbreaker Horror|B:Sol Ring|H:Mox Opal",
+                "V|x-4|0||11,17|B:Hullbreaker Horror|B:Sol Ring|H:Sensei's Divining Top|B:Kinnan, Bonder Prodigy",
+                "V|x-5|0||11,17|B:Hullbreaker Horror|B:Sol Ring|H:Mox Amber",
+                "V|x-6|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Sensei's Divining Top",
+                "V|x-7|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Mox Opal",
+                "V|x-8|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Grim Monolith",
+                "V|x-9|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Arcane Signet",
+                "V|x-10|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Simic Signet",
+                "V|x-11|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Talisman of Curiosity",
+                "V|x-12|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Scroll Rack|B:Kinnan, Bonder Prodigy",
+                "V|x-13|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Mox Amber",
+                "V|x-14|0||5,17|B:Hullbreaker Horror|H:Mox Amber|H:Mox Opal|B:Kinnan, Bonder Prodigy"));
+        assertEquals(expected.size(), 19);
+        assertEquals(LoopRows.ids(), expected.variants().stream().map(Variant::id).collect(Collectors.toList()));
+        final ComboTable shipped = ComboTable.shipped();
+        for (final Variant row : expected.variants()) {
+            assertEquals(shipped.variant(row.id()), row, row.id());
+        }
+        // and each is found by its whole id only: no proper prefix or suffix of a loop row's id finds a row or a kind
+        for (final String part : List.of("x-", "129", "129-", "129-413", "3430-41", "4131", "3542", "-4131")) {
+            assertNull(shipped.variant(part), part);
+            assertNull(LoopRows.kindOf(part), part);
         }
     }
 
