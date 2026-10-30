@@ -8,11 +8,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.regex.Pattern;
 
@@ -66,10 +64,14 @@ public final class ComboTable {
 
     private final List<Variant> variants;
     private final Map<Integer, Feature> features;
+    /** Every line by its id, built with {@link #variants} by {@link #parse}; only ever looked up, never iterated. */
+    private final Map<String, Variant> byId;
 
-    private ComboTable(final List<Variant> variants, final Map<Integer, Feature> features) {
+    private ComboTable(final List<Variant> variants, final Map<Integer, Feature> features,
+                       final Map<String, Variant> byId) {
         this.variants = variants;
         this.features = features;
+        this.byId = byId;
     }
 
     /** The table these lines hold (a file's lines, in order: line N of the message is {@code lines.get(N - 1)}).
@@ -79,7 +81,7 @@ public final class ComboTable {
         final Map<Object, Object> pool = new HashMap<>();
         final Map<Integer, Feature> features = new TreeMap<>();
         final List<Variant> variants = new ArrayList<>();
-        final Set<String> ids = new HashSet<>();
+        final Map<String, Variant> byId = new HashMap<>();
         for (int i = 0; i < lines.size(); i++) {
             String line = lines.get(i);
             if (line.endsWith("\r")) {
@@ -99,7 +101,7 @@ public final class ComboTable {
                 }
                 case "V" -> {
                     final Variant variant = variant(f, n, features, pool);
-                    if (!ids.add(variant.id())) {
+                    if (byId.putIfAbsent(variant.id(), variant) != null) {
                         throw bad(n, "variant " + variant.id() + " appears twice");
                     }
                     variants.add(variant);
@@ -107,7 +109,8 @@ public final class ComboTable {
                 default -> throw bad(n, "the record type '" + f[0] + "' is neither F nor V");
             }
         }
-        return new ComboTable(List.copyOf(variants), Collections.unmodifiableMap(new LinkedHashMap<>(features)));
+        return new ComboTable(List.copyOf(variants), Collections.unmodifiableMap(new LinkedHashMap<>(features)),
+                Collections.unmodifiableMap(byId));
     }
 
     /** The table shipped in forge-ai's jar, read on first use and held for the JVM's life. A missing, unreadable
@@ -123,6 +126,12 @@ public final class ComboTable {
     /** Every line, in file order. */
     public List<Variant> variants() {
         return variants;
+    }
+
+    /** The line whose id is {@code id} (ids are unique: the parse refuses a second), or null when the table holds
+     *  none; the very object {@link #variants} holds. */
+    public Variant variant(final String id) {
+        return byId.get(id);
     }
 
     /** Every feature, in id order. */

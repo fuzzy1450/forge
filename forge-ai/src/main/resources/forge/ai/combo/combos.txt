@@ -80348,3 +80348,16 @@ V|997-7124-7358|0||3,4,6,7,8,13,19|B:Bruce Banner|B:Maestros Diabolist|B:Woe Str
 V|998-1080-1494-5261|2|{2}|42,2617|B:Scute Mob|E:Bioshift|B:Sage of Hours|B:Isochron Scepter
 V|999-3718|4|{3}{G}|77,1016|H:Chain of Acid|B:Leonin Lightscribe
 V|x-1|1|{B}|2,88|H:Demonic Consultation|B:Doctor Doom, Unrivaled
+V|x-10|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Simic Signet
+V|x-11|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Talisman of Curiosity
+V|x-12|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Scroll Rack|B:Kinnan, Bonder Prodigy
+V|x-13|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Mox Amber
+V|x-14|0||5,17|B:Hullbreaker Horror|H:Mox Amber|H:Mox Opal|B:Kinnan, Bonder Prodigy
+V|x-2|0||11,17|B:Hullbreaker Horror|B:Sol Ring|H:Mana Vault
+V|x-3|0||11,17|B:Hullbreaker Horror|B:Sol Ring|H:Mox Opal
+V|x-4|0||11,17|B:Hullbreaker Horror|B:Sol Ring|H:Sensei's Divining Top|B:Kinnan, Bonder Prodigy
+V|x-5|0||11,17|B:Hullbreaker Horror|B:Sol Ring|H:Mox Amber
+V|x-6|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Sensei's Divining Top
+V|x-7|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Mox Opal
+V|x-8|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Grim Monolith
+V|x-9|0||11,17|B:Hullbreaker Horror|B:Mana Vault|H:Arcane Signet
