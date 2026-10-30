@@ -25,18 +25,22 @@ import forge.game.zone.ZoneType;
 /**
  * The fetch rules (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a decision that picks cards from our
  * library, or orders its top, takes the missing piece of a combo line exactly one piece short when that is a legal
- * choice, and keeps every piece of a live line on top; otherwise it is today's decision, unchanged. A fetch also takes
- * the missing piece of a line whose only signal is DANGER when that piece reaches our hand in time and the line's win
- * comes in the main phase it arrives for, read from its winner's own window ({@link #fetchable}: section 6.5, "A win in
- * time beats danger"): a search or a dig to our hand (or, for a piece that may start there, the battlefield) in our
- * turn, and a search or a dig to the top of our library, or the Vault's stack, in our upkeep or at the end step right
- * before our turn (follow-up 2, G4). Intuition's and Gifts Ungiven's piles are built from the
- * completers, the missing pieces of the lines one piece short. Demonic Consultation is cast as a tutor from a deep
- * library, and its resolution names the piece it was cast for; it never tutors for a known top, a piece one of these
- * hooks put on top of our library (Evan, 2026-10-24).
+ * choice, and keeps every piece of a live line on top; otherwise it is today's decision, unchanged. Piece 2's loop
+ * lines are combo lines here as piece 1's are (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.7). A fetch
+ * also takes the missing piece of a line of piece 1's whose only signal is DANGER when that piece reaches our hand in
+ * time and the line's win comes in the main phase it arrives for, read from its winner's own window
+ * ({@link #fetchable}: section 6.5, "A win in time beats danger"): a search or a dig to our hand (or, for a piece that
+ * may start there, the battlefield) in our turn, and a search or a dig to the top of our library, or the Vault's stack,
+ * in our upkeep or at the end step right before our turn (follow-up 2, G4). Intuition's and Gifts Ungiven's piles are
+ * built from the completers, the missing pieces of piece 1's lines one piece short. Demonic Consultation is cast as a
+ * tutor from a deep library for a line of piece 1's, and its resolution names the piece it was cast for; it never
+ * tutors for a known top, a piece one of these hooks put on top of our library (Evan, 2026-10-24). These three,
+ * danger's win in time, the piles and Consultation's tutor, are the empty-library family's own: a loop line neither
+ * switches them on nor stops them (the loops' section 6.7), and it wins only with a sink, which no row names, so it has
+ * no win in time to read.
  *
  * <p>Each method answers for one hook beside the stock code, and answers "the stock decision" (null, false, an empty
- * list, or a list left as it was) at once for a deck holding none of piece 1's lines. Nothing here draws a random
+ * list, or a list left as it was) at once for a deck holding no combo line. Nothing here draws a random
  * number, keeps any state of its own or reads the library's order: a piece is fetched for by name, from the cards the
  * decision is already allowed to choose among (the search's list or library, the dig's or the Vault's cards in view,
  * the library Consultation reveals), and the tracker reads our library as contents only. Consultation's tutor intent
@@ -251,9 +255,10 @@ public final class ComboFetch {
     }
 
     /**
-     * The completers the piles are built from (section 6.3): the distinct missing pieces of the
+     * The completers the piles are built from (section 6.3): the distinct missing pieces of piece 1's
      * {@link ComboTracker#oneShort} lines, in their rank order. Each is in our library, a missing piece's only place,
-     * so a search can take it. Empty for a deck holding none of piece 1's lines.
+     * so a search can take it. Empty for a deck holding none of piece 1's lines: the piles stay with the empty-library
+     * family, so a loop line completes none (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.7).
      */
     public static List<String> completers(final Player ai) {
         final ComboTracker t = ComboTracker.of(ai);
@@ -263,10 +268,13 @@ public final class ComboFetch {
         return completers(t.view());
     }
 
-    // completers, read through the decision's view
+    // completers, read through the decision's view: piece 1's one-short lines alone
     private static List<String> completers(final ComboTracker.View v) {
         final List<String> out = new ArrayList<>();
         for (final ComboLines.Line l : v.oneShort()) {
+            if (l.isLoop()) {
+                continue;
+            }
             final String name = v.missing(l).get(0);
             if (!out.contains(name)) {
                 out.add(name);
@@ -380,7 +388,9 @@ public final class ComboFetch {
      * other live pieces the exile may take. An approval the mana cannot pay would go on to canPayCost's test payment,
      * whose isManaSourceReserved rolls draw MyRandom at every priority with no cast, where the stock refusal draws
      * nothing. WillPlay(100), with that piece recorded as the cast's intent for its resolution's namer
-     * ({@link #consultNamed}).
+     * ({@link #consultNamed}). The lines read are piece 1's alone: a loop line is never tutored for and stops no tutor,
+     * assembled or not, since Consultation as a tutor stays with the empty-library family (spec
+     * 2026-10-29-combo-aware-ai-loops-design.md section 6.7).
      */
     public static AiAbilityDecision consultTutor(final Player ai, final SpellAbility sa) {
         final ComboTracker t = ComboTracker.of(ai);
@@ -388,8 +398,9 @@ public final class ComboFetch {
     }
 
     /** {@link #consultTutor}, read through the decision's view (ComboExecute.consultation's, which read its
-     *  executable lines). The board's gates come first: our own hand cast, the library's size, and a deck line that
-     *  does not name Consultation (Sauron's three all do), before any line's signals. */
+     *  executable lines). The board's gates come first: our own hand cast, the library's size, and a deck line of
+     *  piece 1's that does not name Consultation (Sauron's three all do, and a deck of loop lines holds none), before
+     *  any line's signals. */
     static AiAbilityDecision consultTutor(final Player ai, final SpellAbility sa, final ComboTracker.View v) {
         if (!ComboExecute.ownHandCast(ai, sa, ComboLines.Emptier.CONSULTATION) || v.lines().isEmpty()
                 || ai.getCardsIn(ZoneType.Library).size() < CONSULT_TUTOR_MIN_LIBRARY || !tutorsFor(v)) {
@@ -397,12 +408,12 @@ public final class ComboFetch {
         }
         final ComboTracker t = v.tracker();
         for (final ComboLines.Line l : v.live()) {
-            if (v.missing(l).isEmpty()) {
+            if (!l.isLoop() && v.missing(l).isEmpty()) {
                 return null;
             }
         }
         for (final ComboLines.Line l : v.oneShort()) {
-            if (l.names().contains(ComboLines.Emptier.CONSULTATION.card)) {
+            if (l.isLoop() || l.names().contains(ComboLines.Emptier.CONSULTATION.card)) {
                 continue;
             }
             final String name = v.missing(l).get(0);
@@ -417,10 +428,11 @@ public final class ComboFetch {
         return null;
     }
 
-    // whether a deck line does not name Demonic Consultation: one Consultation can tutor for
+    // whether a deck line of piece 1's does not name Demonic Consultation: one Consultation can tutor for (no loop line
+    // is one: spec 2026-10-29-combo-aware-ai-loops-design.md section 6.7)
     private static boolean tutorsFor(final ComboTracker.View v) {
         for (final ComboLines.Line l : v.lines()) {
-            if (!l.names().contains(ComboLines.Emptier.CONSULTATION.card)) {
+            if (!l.isLoop() && !l.names().contains(ComboLines.Emptier.CONSULTATION.card)) {
                 return true;
             }
         }
@@ -469,7 +481,7 @@ public final class ComboFetch {
     /**
      * The lines a fetch putting its card {@code fit} fetches for, in {@link ComboTracker#oneShort}'s rank order: the
      * one-short lines; and, while DANGER holds (follow-up F4; spec section 6.5, "A win in time beats danger": a combo
-     * that wins before we die beats surviving, so no line is one short), the deck's lines exactly one piece short whose
+     * that wins before we die beats surviving, so no line is one short), piece 1's lines exactly one piece short whose
      * only signal DANGER is (neither denied nor NO_MANA, and no surer kill) when the fetched piece reaches our hand
      * before a main phase of ours that comes before any opponent attacks again ({@link #arrival}) and the line wins in
      * it ({@link #winsInTime}, each winner's own window there):
@@ -491,7 +503,9 @@ public final class ComboFetch {
      * Every other fetch under danger keeps the one-short lines, as the piles, Gifts Ungiven and Consultation's tutor do:
      * a fetch to the top in our draw step or later in our turn (Imperial Seal in our Main 1: its piece reaches our hand
      * only next turn, after the opponent's attack), any fetch at our end step, and in an opponent's turn any fetch but
-     * one to the top at that end step (follow-up final review, round 1).
+     * one to the top at that end step (follow-up final review, round 1). A loop line (piece 2) is fetched for only one
+     * short, never under danger (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.7, the plan's Calls): a loop
+     * wins only with a sink, which no row names, so it has no win in time to read.
      */
     private static List<ComboLines.Line> fetchable(final ComboTracker.View v, final Fit fit) {
         final List<ComboLines.Line> oneShort = v.oneShort();
@@ -506,7 +520,7 @@ public final class ComboFetch {
         final boolean nextTurn = when == Arrival.NEXT_TURN;
         final List<ComboLines.Line> out = new ArrayList<>();
         for (final ComboLines.Line l : v.lines()) {
-            if (v.ready(l) && signal(v, l, nextTurn) == ComboSignals.Signal.DANGER
+            if (!l.isLoop() && v.ready(l) && signal(v, l, nextTurn) == ComboSignals.Signal.DANGER
                     && (nextTurn || !v.deniedThisTurn(l)) && v.missing(l).size() == 1
                     && winsInTime(v, l, fit, nextTurn)) {
                 out.add(l);
@@ -579,9 +593,11 @@ public final class ComboFetch {
     // refused): taxes and reductions included, and the commander tax on a commander cast from our command zone, which
     // the engine adds there (CostAdjustment.adjust). Next turn's are read at today's prices: a tax on this turn's spells
     // (Damping Sphere's) is counted, the safe side. The sources are read against the first such piece's first spell (in
-    // Line.names order, the emptier first), else the draw's. A piece on our battlefield or our stack is cast already
+    // Line.names order, the emptier first), else the draw's. A piece on our battlefield or our stack is cast already.
+    // Never asked for a loop line, which has no winner: fetchable reads piece 1's lines alone under danger
     private static boolean winsInTime(final ComboTracker.View v, final ComboLines.Line l, final Fit fit,
             final boolean nextTurn) {
+        assert l.winner() != null : "a line with no winner reached danger's win in time";
         final ComboLines.Winner w = l.winner();
         if (w == ComboLines.Winner.FBLTHP) {
             return false;

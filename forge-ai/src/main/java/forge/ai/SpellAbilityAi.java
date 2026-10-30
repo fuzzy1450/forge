@@ -403,8 +403,8 @@ public abstract class SpellAbilityAi extends SpellAbilityEffect {
         }
         // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.2 and 6.4): an exile
         // from our hand whose only fodder is a live combo line's piece is refused (ComboHold.vetoesPitch); otherwise
-        // the payment's chooser, ComputerUtil.chooseExileFromList, spares the pieces. Inert for a deck holding none
-        // of piece 1's lines. Draws nothing.
+        // the payment's chooser, ComputerUtil.chooseExileFromList, spares the pieces. Inert for a deck holding no
+        // combo line. Draws nothing.
         if (ComboHold.vetoesPitch(payer, sa, cost)) {
             return false;
         }

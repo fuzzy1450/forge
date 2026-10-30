@@ -103,8 +103,8 @@ public class RearrangeTopOfLibraryAi extends SpellAbilityAi {
 
         // Combo-aware AI (follow-up F5, spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): a live combo line's
         // piece that our ordering has just put on top of our own library (a known top) stays there: no shuffle
-        // (ComboHold.keepsTheStackedTop). Inert for a deck holding none of piece 1's lines and for another player's
-        // library. Draws nothing.
+        // (ComboHold.keepsTheStackedTop). Inert for a deck holding no combo line and for another player's library.
+        // Draws nothing.
         if (ComboHold.keepsTheStackedTop(player, p)) {
             return false;
         }

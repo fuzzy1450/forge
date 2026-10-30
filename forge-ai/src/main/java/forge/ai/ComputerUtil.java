@@ -824,8 +824,8 @@ public class ComputerUtil {
         }
         // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.2 and 6.4): a live
         // combo line's pieces leave the choice while more than amount cards stay (ComboHold.spare);
-        // SpellAbilityAi.willPayCosts refused the cost whose only fodder is a piece. Inert for a deck holding none of
-        // piece 1's lines. Draws nothing.
+        // SpellAbilityAi.willPayCosts refused the cost whose only fodder is a piece. Inert for a deck holding no combo
+        // line. Draws nothing.
         typeList = ComboHold.spare(ai, typeList, amount);
 
         if (SpecialCardAi.SkeletalScrying.handles(activate) && ai.equals(activate.getOwner())) {

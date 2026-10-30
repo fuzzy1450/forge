@@ -22,10 +22,12 @@ import forge.game.zone.ZoneType;
  * live line ({@link ComboTracker#protects}) is neither discarded nor exiled to pay a cost while another card can go
  * instead, nor put into the graveyard or exile with our whole hand by a wheel of ours (follow-up F5), nor shuffled away
  * from the top of our library where our ordering has just put it. The emptiers keep their own gates (their executor),
- * and a winner that wins from the battlefield is cast freely: casting it is progress.
+ * and a winner that wins from the battlefield is cast freely: casting it is progress. A piece of a live loop line
+ * (piece 2, spec 2026-10-29-combo-aware-ai-loops-design.md section 6.7) is protected as piece 1's pieces are, and its
+ * own cast is never held: the loop needs it on the battlefield.
  *
  * <p>Each method answers for one hook beside the stock code, and answers the stock decision (false, or the list it was
- * given) at once for a deck holding none of piece 1's lines. Nothing here draws a random number or keeps any state, and
+ * given) at once for a deck holding no combo line. Nothing here draws a random number or keeps any state, and
  * nothing reads the library's order but the one known top card our own ordering has just put there; a hold ends when
  * its line is dead or a signal abandons it (section 6.5), never by a turn count.
  */
@@ -185,7 +187,7 @@ public final class ComboHold {
      * library is a known top ({@link ComboTracker#knownTops}: the card our ordering has just put there,
      * ComboFetch.pieceFirst) that is a piece {@link ComboTracker#protects} protects. A shuffle would lose the piece we
      * stacked. The top card is read only to see that it is the card we put there, as the stock confirm reads that same
-     * card; false at once for a deck holding none of piece 1's lines, or another player's library.
+     * card; false at once for a deck holding no combo line, or another player's library.
      */
     public static boolean keepsTheStackedTop(final Player ai, final Player owner) {
         if (ai == null || !ai.equals(owner)) {

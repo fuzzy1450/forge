@@ -1132,7 +1132,7 @@ public class AiController {
         // hand cast of Thassa's Oracle waits while a live line needs it and the go-off is not ready, and our own cast
         // of a wheel waits while it would put a live line's piece from our hand into the graveyard or exile (follow-up
         // F5) (ComboHold.vetoesCast). canPlaySa and canPayCost above ran A's path, draws included, so this veto changes
-        // only the cast A was about to make. Inert for a deck holding none of piece 1's lines. Draws nothing.
+        // only the cast A was about to make. Inert for a deck holding no combo line. Draws nothing.
         if (ComboHold.vetoesCast(player, sa)) {
             return AiPlayDecision.AnotherTime;
         }
@@ -1355,7 +1355,7 @@ public class AiController {
         }
         // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.2 and 6.4): a live
         // combo line's pieces leave the choice while more than min cards stay (ComboHold.spare: a new list when it
-        // drops any, so the caller's is never changed). Inert for a deck holding none of piece 1's lines. Draws
+        // drops any, so the caller's is never changed). Inert for a deck holding no combo line. Draws
         // nothing.
         validCards = ComboHold.spare(player, validCards, min);
 
