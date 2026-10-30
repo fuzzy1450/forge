@@ -27,6 +27,7 @@ import forge.game.spellability.SpellAbility;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
+import forge.util.MyRandom;
 
 /**
  * Signal 2 for piece 2's loop lines (spec 2026-10-29-combo-aware-ai-loops-design.md sections 6.2 and 6.7; the plan's
@@ -527,6 +528,23 @@ public class ComboLoopSignalsAiTest extends AITest {
     }
 
     @Test
+    public void theSignalsDrawNoRandomNumber() {
+        // spec section 7: no new random draw where the stock path drew none. Every loop line's denial is read now and
+        // at its window, on a board that reads each clause: Null Rod's bars, an opposing Angel and our Ballista
+        start();
+        otherPiecesInLibrary();
+        addCard("Null Rod", opp);
+        addCard(ANGEL, opp);
+        addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        final long before = MyRandom.callCount();
+        for (final ComboLines.Line l : t.deckLines()) {
+            denied(l);
+            t.view().deniedNow(l);
+        }
+        assertEquals(MyRandom.callCount(), before);
+    }
+
+    @Test
     public void cursedTotemDeniesTheFlickerBeforeThePair() {
         // Palinchron in our hand and Deadeye unpaired on our battlefield: no flicker is granted yet, and Palinchron's
         // own return stands in for it, read on Palinchron as it would be on our battlefield (R17)
@@ -542,6 +560,22 @@ public class ComboLoopSignalsAiTest extends AITest {
         // in our hand its return passes: Cursed Totem's AffectedZone$ Battlefield skips it there
         assertNotNull(returnOf(palinchron));
         assertTrue(returnOf(palinchron).checkRestrictions(ai));
+    }
+
+    @Test
+    public void aPalinchronThatLostItsAbilitiesIsReadWithoutThrowing() {
+        // the opponent's Turn to Frog on Palinchron: until end of turn a 1/1 Frog with no abilities, so there is no
+        // return and no flicker to read; a Pithing Needle on the board makes the reads of the pieces run
+        start();
+        final Card palinchron = ComboLoopBoards.ready(addCard(PALINCHRON, ai));
+        ComboLoopBoards.ready(addCard(DEADEYE, ai));
+        addCard(NYXBLOOM, ai);
+        addCard("Pithing Needle", opp).setNamedCards(List.of("Island"));
+        theirSpellResolvesOn("Turn to Frog", palinchron);
+        assertNull(returnOf(palinchron));
+        assertNull(flickerOf(palinchron));
+        denied(line("3430-3542"));
+        denied(line("1409-3542"));
     }
 
     @Test
@@ -628,6 +662,18 @@ public class ComboLoopSignalsAiTest extends AITest {
         start();
         otherPiecesInLibrary();
         addCard("Grand Abolisher", opp);
+        for (final ComboLines.Line l : t.deckLines()) {
+            assertFalse(denied(l), l.variant().id());
+        }
+    }
+
+    @Test
+    public void drannithMagistrateDeniesNoRowTheCyclesCastFromOurHand() {
+        // the opponent's Drannith Magistrate bars casts from anywhere but a hand: the bounce and the recast cast their
+        // pieces again from our hand, so no row is denied
+        start();
+        otherPiecesInLibrary();
+        addCard("Drannith Magistrate", opp);
         for (final ComboLines.Line l : t.deckLines()) {
             assertFalse(denied(l), l.variant().id());
         }
@@ -770,6 +816,38 @@ public class ComboLoopSignalsAiTest extends AITest {
         addCardToZone(BALLISTA, ai, ZoneType.Hand);
         assertEquals(LoopSinks.lossBlockers(ai), List.of(angel));
         assertEquals(abandon(line("129-4131")), Signal.DENIED);
+    }
+
+    @Test
+    public void aKillableAngelAfterAHexproofOneStillDenies() {
+        // the order of the sources does not matter: the unkillable one comes first here (the game's cards are read in
+        // the battlefield's order), the killable one last, and the hexproof Angel still stops our win
+        start();
+        final Card shielded = addCard(ANGEL, opp);
+        addCard("Swiftfoot Boots", opp).attachToEntity(shielded, null);
+        final Card angel = addCard(ANGEL, opp);
+        game.getAction().checkStateEffects(true);
+        assertTrue(shielded.hasKeyword(Keyword.HEXPROOF));
+        addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        assertEquals(LoopSinks.lossBlockers(ai), List.of(angel));
+        assertEquals(abandon(line("129-4131")), Signal.DENIED);
+    }
+
+    @Test
+    public void threeKillableAngelsAreAllLossBlockersAndTheBallistaFreesTheWin() {
+        // every creature that stops our win and that the ping can target is a loss blocker, in the battlefield's order,
+        // and a Ballista that can kill each source of "we cannot win" frees the win, however many there are
+        start();
+        final Card first = addCard(ANGEL, opp);
+        final Card second = addCard(ANGEL, opp);
+        final Card third = addCard(ANGEL, opp);
+        addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        final ComboLines.Line rock = line("129-4131");
+        assertTrue(ai.cantWin());
+        assertEquals(LoopSinks.lossBlockers(ai), List.of(first, second, third));
+        assertSame(LoopSinks.lossBlocker(ai), first);
+        assertNull(abandon(rock));
+        assertTrue(t.executable().contains(rock));
     }
 
     @Test
