@@ -800,6 +800,25 @@ public class ComboLoopDriverAiTest extends AITest {
         assertSame(driver.mainPhaseAction(List.of()), untapOf(basalt), "a new phase");
     }
 
+    // R21, a cycle that loses mana: each completed cycle must raise the pool by at least 1, as measured, from a pool
+    // above 0 too. The opponent's Suppression Field arrives after four good cycles (the pool at 4): the next untap
+    // costs 5, so the cycle leaves 3, and the line is failed for the phase after that one cycle, not run on until the
+    // pool is spent.
+    @Test
+    public void aTaxArrivingMidGoOffStopsTheLineThatLosesMana() {
+        start();
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        endlessOne();
+        assertEquals(drive(8).size(), 8, "four good cycles");
+        assertEquals(pool(), 4);
+        addCard(SUPPRESSION_FIELD, opp);
+        assertEquals(ComboExecute.priced(ai, untapOf(basalt)).getCMC(), 5, "the untap as the engine prices it");
+        assertEquals(drive(50).size(), 2, "one more cycle, which lost a mana: the line is failed");
+        assertEquals(pool(), 3, "the pool fell by one");
+        assertTrue(basalt.isUntapped());
+    }
+
     // A go-off's phase is its turn's too: a go-off that ended in Main 1 (the opponent's Null Rod denied its line) stays
     // over once the Rod is gone, and Main 1 of a later turn, a phase of the same name, starts afresh.
     @Test
@@ -1025,6 +1044,57 @@ public class ComboLoopDriverAiTest extends AITest {
         addCard("Mana Confluence", ai);
         assertTrue(LoopPool.payable(ai, growth, l), "Mana Confluence makes any colour");
         assertEquals(LoopPool.stockTarget(ai, l), 1);
+    }
+
+    // A land with two mana abilities (a typed dual: Breeding Pool is a Forest and an Island) makes either colour, and
+    // the kinds of all its abilities count: {G} for Giant Growth and {U} for Opt, each paid by the one land.
+    @Test
+    public void aLandWithTwoManaAbilitiesMakesEitherColour() {
+        start();
+        kinnan();
+        addCard(BASALT, ai);
+        final ComboLines.Line l = line(KINNAN_BASALT);
+        final Card growth = addCardToZone("Giant Growth", ai, ZoneType.Hand);
+        final Card opt = addCardToZone("Opt", ai, ZoneType.Hand);
+        assertFalse(LoopPool.payable(ai, growth, l), "{G}: no land");
+        ComboLoopBoards.ready(addCard("Breeding Pool", ai));
+        assertTrue(LoopPool.payable(ai, growth, l), "Breeding Pool's {G}");
+        assertTrue(LoopPool.payable(ai, opt, l), "Breeding Pool's {U}");
+    }
+
+    // A land that makes one mana of a colour in our commander's identity (Command Tower, a combination mana ability)
+    // pays a coloured pip of that colour: with Kinnan, green and blue, as our commander it pays Giant Growth's {G},
+    // which the loop's colourless cannot, and Giant Growth's 1 is the stock target.
+    @Test
+    public void aCommandTowerPaysAColouredPipOfTheCommandersColours() {
+        start();
+        final Card kinnan = kinnan();
+        ai.addCommander(kinnan);
+        addCard(BASALT, ai);
+        final ComboLines.Line l = line(KINNAN_BASALT);
+        final Card growth = addCardToZone("Giant Growth", ai, ZoneType.Hand);
+        assertFalse(LoopPool.payable(ai, growth, l), "{G}: no land");
+        assertEquals(LoopPool.stockTarget(ai, l), 0, "nothing to spend on");
+        ComboLoopBoards.ready(addCard("Command Tower", ai));
+        assertTrue(LoopPool.payable(ai, growth, l), "Command Tower makes {G} or {U} for Kinnan");
+        assertEquals(LoopPool.stockTarget(ai, l), 1);
+    }
+
+    // Hall's condition over the pips: {G}{U} wants two sources of those colours. One dual land (Hinterland Harbor, {G}
+    // or {U}) and a colourless one are two sources, but only one of them pays either pip, and the loop's colourless
+    // pays neither. With an Island beside the dual land the cost is paid: the Harbor's {G} and the Island's {U}.
+    @Test
+    public void aTwoColouredCostNeedsTwoSourcesOfThoseColours() {
+        start();
+        kinnan();
+        addCard(BASALT, ai);
+        final ComboLines.Line l = line(KINNAN_BASALT);
+        final Card charm = addCardToZone("Simic Charm", ai, ZoneType.Hand);
+        ComboLoopBoards.ready(addCard("Hinterland Harbor", ai));
+        addCard("Wastes", ai);
+        assertFalse(LoopPool.payable(ai, charm, l), "{G}{U} from a G-or-U land and a {C} one");
+        addCard("Island", ai);
+        assertTrue(LoopPool.payable(ai, charm, l), "the Harbor's {G} and the Island's {U}");
     }
 
     // The stock target is the largest payable cost, not the last or the smallest one read: Colossal Dreadmaw's 6
@@ -1442,6 +1512,31 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(decisionDraws, 0, "the driver's decisions drew");
         assertEquals(MyRandom.callCount() - before, 9, "the engine's draws: the nine taps after the first");
         assertEquals(pool(), 10, "each of the ten taps made Kinnan's mana");
+    }
+
+    // AiController.getSpellAbilityToPlay: the loop slot sits after piece 1's go-off. A deck that holds both piece 1's
+    // Oracle line (Thassa's Oracle and Demonic Consultation in hand, Island, Island and Swamp) and the Kinnan loop,
+    // with a go-off the driver could start (Kinnan and Basalt Monolith on ours), casts Oracle first, not Basalt's tap;
+    // asked itself on the same board, the driver would have gone off.
+    @Test
+    public void theLoopSlotComesAfterPieceOnesGoOff() {
+        start();
+        ComboLoopBoards.deck(ai, null, "Thassa's Oracle", "Demonic Consultation");
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        addCard("Island", ai);
+        addCard("Island", ai);
+        addCard("Swamp", ai);
+        final Card oracle = addCardToZone("Thassa's Oracle", ai, ZoneType.Hand);
+        addCardToZone("Demonic Consultation", ai, ZoneType.Hand);
+        fillLibrary(ai, 20);
+        assertTrue(ids(t.deckLines()).contains("742-1295"), "piece 1's Oracle line is held: " + ids(t.deckLines()));
+        assertTrue(LoopPool.stockTarget(ai, line(KINNAN_BASALT)) > 0, "a go-off the driver could start");
+        final List<SpellAbility> offered = ComboLoopBoards.aiOf(ai).chooseSpellAbilityToPlay();
+        assertNotNull(offered, "the AI plays something");
+        assertSame(offered.get(0).getHostCard(), oracle, "piece 1's go-off goes first: " + offered);
+        assertFalse(driver.liftsThrottle(), "the loop driver did not act");
+        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "the driver's own go-off was ready");
     }
 
     // The AiController calls noteStockPlay or afterStockWalk after every walk, for every AI deck: neither draws, inert
