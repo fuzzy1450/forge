@@ -29,14 +29,19 @@ import forge.game.zone.ZoneType;
  * <p>The go-off ({@link #mainPhaseAction}, AiController.getSpellAbilityToPlay's slot after piece 1's go-off): in our
  * main phase on an empty stack, an executable loop line (the tracker's view: ready and not denied, the one signal that
  * stops the driver) whose pieces are where its cycle needs them ({@link LoopCycles#ready}; several: the highest net a
- * cycle, then the variant id) starts a go-off when its kind can stop, some opponent can lose, the board is not five
- * times lethal already, there is something to spend the mana on ({@link LoopPool#stockTarget} above 0) and our hand
- * and battlefield are not those of the last go-off that spent nothing (the futility gate). Then each decision returns
- * the cycle's next step ({@link LoopCycles#next}) until, at a boundary, the pool holds the target, where the driver
- * passes the decision to the stock AI's walk, which plays on the pool ({@link #noteStockPlay}); when it plays nothing
- * the go-off ends ({@link #afterStockWalk}). Every action passes the driver's own check (playable, not refused by a
- * static, its cost paid by the pool and our untapped lands, its targets legal; never canPlayAndPayFor, whose throttle
- * and stock judges would refuse it) and counts toward the caps ({@link LoopRounds}).
+ * cycle, then the variant id) starts a go-off when its kind can stop, some opponent can lose or Walking Ballista can
+ * kill the loss blocker that stops one losing, the board is not five times lethal already (unless Ballista can shoot:
+ * a kill this turn comes first), and there is something to spend the mana on: Ballista's step, or what the stock AI
+ * could spend ({@link LoopPool#stockTarget} above 0) while our hand and battlefield are not those of the last go-off
+ * that spent nothing (the futility gate). Ballista's step comes first ({@link LoopSinks#ballista}): the cycle's next
+ * step ({@link LoopCycles#next}) refills the pool until it holds what Ballista's action needs, a spend taken at a
+ * boundary, and the driver owns every decision while Ballista has a step. Otherwise each decision returns the cycle's
+ * next step until, at a boundary, the pool holds the target, where the driver passes the decision to the stock AI's
+ * walk, which plays on the pool ({@link #noteStockPlay}); when it plays nothing the go-off ends
+ * ({@link #afterStockWalk}). Every action passes the driver's own check (playable, not refused by a static, its cost
+ * paid by the pool and our untapped lands, its targets legal; never canPlayAndPayFor, whose throttle and stock judges
+ * would refuse it) and counts toward the caps ({@link LoopRounds}). A ping that changed neither its target's life nor
+ * its toughness left ends Ballista's volley for the phase (R25).
  *
  * <p>A step that fails or gains nothing never burns the caps (R21): at the next decision an action that was skipped
  * (its payment failed) or changed nothing among the pool, our hand, battlefield and stack fails its line for the
@@ -78,9 +83,15 @@ public final class LoopDriver {
     private ComboLines.Line lastLine;
     private int[] lastState;
     // R21: the pool at the last boundary of this line, -1 when there is none to compare with (the go-off has not passed
-    // one yet, or the stock AI spent since)
+    // one yet, or the stock AI or Walking Ballista spent since)
     private ComboLines.Line boundaryLine;
     private int boundaryPool = -1;
+    // R25: the ping returned last, its target and what the ping is to change on it (a player's life, a creature's
+    // toughness left) when it was returned, judged at the next decision; and whether a ping that changed nothing has
+    // ended Walking Ballista's volley for the phase
+    private GameObject pinged;
+    private int pingedHad;
+    private boolean volleyOver;
     // the futility gate: our hand's and battlefield's card names, each sorted, when the last go-off that spent nothing
     // ended; null when none did
     private List<List<String>> futile;
@@ -101,12 +112,13 @@ public final class LoopDriver {
     }
 
     /**
-     * The go-off slot (AiController.getSpellAbilityToPlay, after piece 1's go-off): the next step of the loop line
-     * the go-off runs, its activator us and its targets set, or null: at once outside our main phase, above a stack,
-     * once the game is over, for a deck holding no loop line, while a cap or the idle rule stops the driver; when no
-     * line can run, a start gate refuses, or the go-off ends; and at a boundary with the pool at the target, where the
-     * stock walk plays next. {@code saList} is what the AI may play now (the walk's list); the steps are read from the
-     * pieces themselves.
+     * The go-off slot (AiController.getSpellAbilityToPlay, after piece 1's go-off): Walking Ballista's next action once
+     * the pool holds what it needs, else the next step of the loop line the go-off runs, its activator us and its
+     * targets (a cast's X) set, or null: at once outside our main phase, above a stack, once the game is over, for a
+     * deck holding no loop line, while a cap or the idle rule stops the driver; when no line can run, a start gate
+     * refuses, or the go-off ends; and, Ballista having nothing to do, at a boundary with the pool at the target, where
+     * the stock walk plays next. {@code saList} is what the AI may play now (the walk's list); the steps are read from
+     * the pieces themselves.
      */
     public SpellAbility mainPhaseAction(final List<SpellAbility> saList) {
         handedToWalk = false;
@@ -131,6 +143,7 @@ public final class LoopDriver {
             return null;
         }
         judgeLast();
+        judgeVolley();
         if (!active) {
             // a go-off measures its cycles from its own first boundary
             boundaryLine = null;
@@ -145,7 +158,17 @@ public final class LoopDriver {
             }
             return null;
         }
-        if (LoopCycles.boundary(ai, l) && LoopPool.floating(ai) >= target(l)) {
+        // Walking Ballista's step first (section 6.4 step 1): its action once the pool holds what it needs, a spend at
+        // a boundary only (the pool there is the loop's surplus), a ping at any decision; and while Ballista has a
+        // step the driver owns every decision, refilling for it, never passing the priority to the walk between a
+        // pump and the volley
+        final int need = ballistaNeed();
+        final boolean boundary = LoopCycles.boundary(ai, l);
+        if (need >= 0) {
+            if (LoopPool.floating(ai) >= need && (need == 0 || boundary)) {
+                return ballistaStep(l, ph);
+            }
+        } else if (boundary && LoopPool.floating(ai) >= target(l)) {
             active = true;
             line = l;
             handedToWalk = true;
@@ -270,6 +293,8 @@ public final class LoopDriver {
         lastState = null;
         boundaryLine = null;
         boundaryPool = -1;
+        pinged = null;
+        volleyOver = false;
     }
 
     // the go-off is over for the phase
@@ -344,30 +369,104 @@ public final class LoopDriver {
         return rose;
     }
 
-    // the start gates (section 6.2), read while no go-off runs this phase: the kind can stop, something to spend the
-    // mana on, and our hand and battlefield not those of the last go-off that spent nothing
+    // the start gates (section 6.2), read while no go-off runs this phase: the kind can stop, and something to spend
+    // the mana on: Walking Ballista's step (on our battlefield, or castable from our hand), or else what the stock AI
+    // could spend, while our hand and battlefield are not those of the last go-off that spent nothing (the futility
+    // gate holds back a go-off whose only spender is the stock AI)
     private boolean starts(final ComboLines.Line l) {
-        if (!l.loop().canStop() || LoopPool.stockTarget(ai, l) <= 0) {
+        if (!l.loop().canStop()) {
             return false;
         }
-        if (futile != null && futile.equals(fingerprint())) {
+        if (ballistaNeed() < 0
+                && (LoopPool.stockTarget(ai, l) <= 0 || (futile != null && futile.equals(fingerprint())))) {
             return false;
         }
         spent = false;
         return true;
     }
 
-    // a go-off goes on while some opponent can lose (section 6.2) and our board is not five times lethal already
-    // (section 6.5, LoopTracker's decisive)
+    // a go-off goes on while some opponent can lose and our board is not five times lethal already (sections 6.2 and
+    // 6.5, LoopTracker's decisive), or while Walking Ballista can shoot now: a kill this turn comes first, so on a board
+    // already five times lethal the driver goes on for Ballista's shot alone, and with no opponent able to lose it
+    // goes on while Ballista can kill the loss blocker that stops one (its volley's first target), and not merely
+    // while a loss blocker its ping could target stands: under a Pithing Needle naming Ballista it cannot kill it
     private boolean goesOn() {
-        boolean canLose = false;
         for (final Player p : ai.getOpponents()) {
             if (!p.cantLose()) {
-                canLose = true;
-                break;
+                return !LoopTracker.Snapshot.of(ai).isDecisive() || shotNow();
             }
         }
-        return canLose && !LoopTracker.Snapshot.of(ai).isDecisive();
+        return shotNow();
+    }
+
+    // whether Walking Ballista can shoot now (LoopSinks.ballistaCanShoot) and has a step to take toward it
+    private boolean shotNow() {
+        return ballistaNeed() >= 0 && LoopSinks.ballistaCanShoot(ai);
+    }
+
+    // the pool Walking Ballista's next action needs (LoopSinks.ballistaPool); -1 when Ballista has nothing to do, or
+    // once a ping that changed nothing has ended its volley for the phase (R25)
+    private int ballistaNeed() {
+        return volleyOver ? -1 : LoopSinks.ballistaPool(ai);
+    }
+
+    // Walking Ballista's action now (LoopSinks.ballista), through the driver's own check and the caps: it opens a round
+    // the idle rule does not judge (Ballista has stops of its own), it is something spent, and the next boundary is
+    // measured afresh (R21: a spend at a boundary is no cycle); a ping's target and what it had are kept for R25's
+    // judge. An action the check refuses ends the go-off for the phase
+    private SpellAbility ballistaStep(final ComboLines.Line l, final PhaseHandler ph) {
+        final SpellAbility sa = LoopSinks.ballista(ai);
+        if (sa == null || !passes(sa)) {
+            if (active) {
+                end();
+            }
+            return null;
+        }
+        if (!rounds.act(ai)) {
+            return null;
+        }
+        rounds.beginRound(ai, false, l);
+        active = true;
+        line = l;
+        spent = true;
+        boundaryPool = -1;
+        if (sa.usesTargeting()) {
+            pinged = sa.getTargets().get(0);
+            pingedHad = had(pinged);
+        }
+        last = sa;
+        lastLine = l;
+        lastState = state();
+        actedTurn = ph.getTurn();
+        return sa;
+    }
+
+    // R25: the ping returned last, judged now that the stack it went on is empty again (resolved, countered or
+    // fizzled): one that changed neither its target player's life nor its target creature's toughness left (a Fog,
+    // Teferi's Protection, a prevention shield) ends Walking Ballista's volley for the phase, so Ballista takes no more
+    // step in it. No margin otherwise: a ping that landed is followed by a fresh count at the next decision
+    private void judgeVolley() {
+        if (pinged == null) {
+            return;
+        }
+        if (had(pinged) == pingedHad) {
+            volleyOver = true;
+        }
+        pinged = null;
+    }
+
+    // what a ping changes on its target: a player's life, a creature's toughness left (LoopSinks.toughnessLeft) on the
+    // battlefield; Integer.MIN_VALUE once the player has lost, or the creature has left the battlefield
+    private int had(final GameObject target) {
+        if (target instanceof Player p) {
+            return p.hasLost() ? Integer.MIN_VALUE : p.getLife();
+        }
+        for (final Card c : ai.getGame().getCardsIn(ZoneType.Battlefield)) {
+            if (c.equals(target)) {
+                return LoopSinks.toughnessLeft(c);
+            }
+        }
+        return Integer.MIN_VALUE;
     }
 
     // the pool a refill builds to while line l runs: the stock AI's view (section 6.3)
@@ -375,13 +474,22 @@ public final class LoopDriver {
         return LoopPool.stockTarget(ai, l);
     }
 
-    // the driver's own check of an action it returns (the plan's Calls): playable now, not refused by a
-    // CantBeActivated or CantBeCast static (a spell read on an LKI copy on the stack, as AiController.canPlaySa reads
-    // it), its cost as the engine prices it now paid by the pool and our untapped lands, and each target it has set one
-    // it can target. A skipped action is R21's to read (judgeLast), which fails its line, not the go-off
-    private boolean passes(final SpellAbility sa) {
+    /**
+     * The driver's own check of an action (the plan's Calls) but its payment and its targets: {@code ai} its activator,
+     * playable now, and not refused by a CantBeActivated or CantBeCast static (a spell read on an LKI copy on the
+     * stack, as AiController.canPlaySa reads it). LoopSinks reads Walking Ballista's steps through it, before the pool
+     * is built for them.
+     */
+    static boolean allowed(final Player ai, final SpellAbility sa) {
         sa.setActivatingPlayer(ai);
-        if (!sa.canPlay() || !sa.checkRestrictions(restrictionHost(sa), ai)) {
+        return sa.canPlay() && sa.checkRestrictions(restrictionHost(ai, sa), ai);
+    }
+
+    // the driver's own check of an action it returns (the plan's Calls): allowed, its cost as the engine prices it now
+    // paid by the pool and our untapped lands, and each target it has set one it can target. A skipped action is R21's
+    // to read (judgeLast), which fails its line, not the go-off
+    private boolean passes(final SpellAbility sa) {
+        if (!allowed(ai, sa)) {
             return false;
         }
         if (!LoopPool.pays(ai, ComboExecute.priced(ai, sa), null)) {
@@ -402,7 +510,7 @@ public final class LoopDriver {
 
     // the card a CantBeActivated or CantBeCast static is read against: an ability's host; for a spell an LKI copy of it
     // on the stack, cast from its zone (AiController.canPlaySa's reading)
-    private Card restrictionHost(final SpellAbility sa) {
+    private static Card restrictionHost(final Player ai, final SpellAbility sa) {
         final Card host = sa.getHostCard();
         if (!sa.isSpell()) {
             return host;
