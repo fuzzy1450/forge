@@ -655,6 +655,30 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertNotNull(afresh, "a new phase: Ballista read afresh");
         assertEquals(afresh.getApi(), ApiType.DealDamage, "a ping: " + afresh);
         assertEquals(firstTarget(afresh), angel, "at the Angel");
+        assertEquals(decisionDraws, 0, "the driver's decisions drew");
+    }
+
+    // No margin (spec 6.4: "if an opponent gains life in response, the loop just goes round again"): the opponent at
+    // 5, Ballista on ours with 8 counters (the kill needs 5). The first ping lands (5 to 4); then the opponent gains 5,
+    // to 9, more than the 5 they had when the ping was returned. That is no ping that changed nothing: the next
+    // decision counts again, the kill needs 9 and Ballista holds 7, so it pumps twice and pings nine times, and the
+    // opponent loses for having 0 life.
+    @Test
+    public void lifeGainedInResponseGoesAroundAgain() {
+        start();
+        opp.setLife(5, null);
+        ballistaOnOurs(8);
+        final List<Act> first = drive(1);
+        assertEquals(first.size(), 1);
+        assertTrue(first.get(0).ping(), "the first ping: " + first);
+        assertEquals(opp.getLife(), 4, "it landed");
+        opp.setLife(9, null);
+        assertEquals(LoopSinks.lethalNeeded(ai), 9, "counted again");
+        final List<Act> rest = drive(MAX_ACTIONS);
+        assertTrue(game.isGameOver(), "the game ended: " + rest);
+        opponentLostByLife(opp);
+        assertEquals(only(rest, Act::pump).size(), 2, "from 7 counters to 9: " + rest);
+        assertEquals(only(rest, Act::ping).size(), 9, "nine pings: " + rest);
     }
 
     // The plan's rule "a Cursed Totem that arrives mid-go-off": after one refill cycle toward Ballista's pump, the
@@ -698,6 +722,25 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertTrue(ai.getCardsIn(ZoneType.Hand).contains(inHand), "still in our hand");
     }
 
+    // Only a Ballista of ours is one: the opponent's Walking Ballista on their battlefield (with 3 counters) and
+    // another in their hand, the opponent at 10. With none of ours there is no volley: nothing to kill, no shot and no
+    // step. With ours in our hand the kill is the opponent's 10, ours can be cast, and its cast is for twice that,
+    // whatever theirs hold.
+    @Test
+    public void anOpponentsBallistaIsNoBallistaOfOurs() {
+        start();
+        opp.setLife(10, null);
+        addCard(BALLISTA, opp).setCounters(CounterEnumType.P1P1, 3);
+        addCardToZone(BALLISTA, opp, ZoneType.Hand);
+        assertEquals(LoopSinks.lethalNeeded(ai), 0, "none of ours: no volley");
+        assertFalse(LoopSinks.ballistaCanShoot(ai));
+        assertEquals(LoopSinks.ballistaPool(ai), -1);
+        ballistaInHand();
+        assertEquals(LoopSinks.lethalNeeded(ai), 10);
+        assertTrue(LoopSinks.ballistaCanShoot(ai), "ours can be cast");
+        assertEquals(LoopSinks.ballistaPool(ai), 20, "a cast at twice 10, whatever theirs hold");
+    }
+
     // What the kill needs, read on several boards: nothing with no Ballista of ours; the opponent's life with one in
     // our hand; with the opponent's Platinum Angel the Angel's toughness besides, less the damage marked on it; and
     // with a hexproof opponent, only the Angel.
@@ -719,15 +762,19 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertTrue(LoopSinks.ballistaCanShoot(ai), "the Angel can still be shot");
     }
 
-    // Every loss blocker's toughness left counts toward the kill: two Platinum Angels of the opponent's, the opponent
-    // at 20, Ballista in our hand. The kill needs 28 counters: the pool is built to 56, Ballista is cast with X = 28,
-    // and it pings four times at each Angel, in the battlefield's order, then twenty times at the opponent, with no
-    // pump: both Angels die, and the opponent loses for having 0 life.
+    // Every loss blocker's toughness left counts toward the kill: two Platinum Angels of the opponent's between two of
+    // their Runeclaw Bears (so that neither Angel is the first or the last of their permanents, and the volley's judge
+    // must find the Angel it pinged), the opponent at 20, Ballista in our hand. The kill needs 28 counters: the pool is
+    // built to 56, Ballista is cast with X = 28, and it pings four times at each Angel, in the battlefield's order,
+    // then twenty times at the opponent, with no pump: both Angels die, the opponent loses for having 0 life, and the
+    // driver's decisions draw nothing.
     @Test
     public void twoPlatinumAngelsAreBothShotFirst() {
         start();
+        addCard("Runeclaw Bear", opp);
         final Card first = addCard(ANGEL, opp);
         final Card second = addCard(ANGEL, opp);
+        addCard("Runeclaw Bear", opp);
         ballistaInHand();
         assertEquals(LoopSinks.lossBlockers(ai), List.of(first, second), "both Angels, in the battlefield's order");
         assertEquals(LoopSinks.lethalNeeded(ai), 28, "the opponent's 20 and each Angel's 4");
@@ -751,6 +798,33 @@ public class ComboLoopBallistaAiTest extends AITest {
             assertEquals(pings.get(i).target(), opp, "then the opponent");
         }
         assertEquals(countCardsWithName(game, ANGEL), 0, "both Angels died");
+        assertEquals(decisionDraws, 0, "the driver's decisions drew");
+    }
+
+    // The Angel's whole point: an opponent at 0 life or less stays in the game while it stands. The opponent at -3
+    // behind their Platinum Angel, Ballista in our hand: the kill is the Angel's toughness alone (their life counts as
+    // 0, not -3 and not 1), so Ballista is cast with X = 4 and pings the Angel four times; the Angel dies, and the
+    // opponent then loses for having -3 life.
+    @Test
+    public void anOpponentBelowZeroLifeBehindAnAngelNeedsOnlyTheAngelKilled() {
+        start();
+        final Card angel = addCard(ANGEL, opp);
+        opp.setLife(-3, null);
+        ballistaInHand();
+        game.getAction().checkStateEffects(true);
+        assertFalse(opp.hasLost(), "the Angel keeps them in the game");
+        assertSame(LoopSinks.lossBlocker(ai), angel);
+        assertEquals(LoopSinks.lethalNeeded(ai), 4, "the Angel's toughness alone");
+        final List<Act> acts = drive(MAX_ACTIONS);
+        assertTrue(game.isGameOver(), "the game ended: " + acts);
+        opponentLostByLife(opp);
+        final List<Act> casts = only(acts, Act::cast);
+        assertEquals(casts.size(), 1, "one cast: " + acts);
+        assertEquals(casts.get(0).x(), Integer.valueOf(4), "X at the Angel's toughness");
+        final List<Act> pings = only(acts, Act::ping);
+        assertEquals(pings.size(), 4, "four pings: " + acts);
+        assertTrue(pings.stream().allMatch(a -> angel.equals(a.target())), "all at the Angel: " + pings);
+        assertEquals(countCardsWithName(game, ANGEL), 0, "the Angel died");
     }
 
     // A tax on the cast (the opponent's Sphere of Resistance: spells cost {1} more) is paid beside {X}{X}: the pool is
