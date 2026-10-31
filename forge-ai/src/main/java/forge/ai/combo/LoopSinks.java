@@ -41,11 +41,12 @@ import forge.game.zone.ZoneType;
  * <p>Then Thrasios's dig, step 3 of section 6.4, taken when the stock AI has nothing it wants to play: its {4}, one
  * activation a decision ({@link #thrasios}), while our library holds more than {@link #LIBRARY_FLOOR} cards, a card in
  * it would add to our board ({@link #digWorth}, {@link #addsToBoard}) and our board is short of five times lethal. A
- * dig toward a library-out winner goes on whatever the library holds: toward Thassa's Oracle in our hand
- * ({@link #digsForOracle}) until our library holds no more than our devotion to blue and Oracle's own {U}{U}
- * ({@link #oracleThreshold}), when Oracle's cast wins ({@link #oracleCast}); with Laboratory Maniac or Jace, Wielder of
- * Mysteries on our battlefield, to empty and one activation more, whose draw wins. Below the floor only while we can
- * win and no opponent has mana to answer the finish (R22).
+ * dig toward a library-out winner goes on whatever the library holds: toward Thassa's Oracle in our hand while it can
+ * win now ({@link #digsForOracle}: its cast not barred, its entering trigger not disabled) until our library holds no
+ * more than our devotion to blue and Oracle's own {U}{U} ({@link #oracleThreshold}), when Oracle's cast wins
+ * ({@link #oracleCast}); with Laboratory Maniac or Jace, Wielder of Mysteries on our battlefield, to empty and one
+ * activation more, whose draw wins. Below the floor only while we can win and no opponent has mana to answer the
+ * finish (R22).
  *
  * <p>Nothing here draws a random number, and no card of the game is written but the abilities read or returned: their
  * activator, a cast's X and a ping's target on the action returned, and a cast's X for a moment while its price
@@ -583,7 +584,7 @@ final class LoopSinks {
         }
         final int library = ai.getCardsIn(ZoneType.Library).size();
         final boolean aboveTheFloor = library > LIBRARY_FLOOR;
-        if (oraclePayable(ai, l)) {
+        if (oracleDig(ai, l)) {
             return library > oracleThreshold(ai) && (aboveTheFloor || belowTheFloor(ai)) ? dig : null;
         }
         if (winsOnEmpty(ai)) {
@@ -608,9 +609,11 @@ final class LoopSinks {
 
     /** Whether a dig toward Thassa's Oracle can run (section 6.4 step 3): our Oracle in our hand, its {U}{U} payable
      *  from the pool, the kinds loop line {@code l} makes, our untapped lands and Chromatic Orrery
-     *  ({@link LoopPool#payable}), and a Thrasios of ours ready: its {4} one the driver may make now. */
+     *  ({@link LoopPool#payable}); Oracle able to win now, as piece 1 reads its own Oracle lines: its cast not barred
+     *  (Iona, Shield of Emeria naming blue, Void Winnower) and its entering trigger not disabled (Torpor Orb,
+     *  Hushbringer); and a Thrasios of ours ready: its {4} one the driver may make now. */
     static boolean digsForOracle(final Player ai, final ComboLines.Line l) {
-        return oraclePayable(ai, l) && readyThrasios(ai) != null;
+        return oracleDig(ai, l) && readyThrasios(ai) != null;
     }
 
     /** The cast of our first Thassa's Oracle in our hand, us its activator; null with none. */
@@ -647,10 +650,22 @@ final class LoopSinks {
         return null;
     }
 
-    // our Thassa's Oracle in our hand, its printed {U}{U} payable (LoopPool.payable)
-    private static boolean oraclePayable(final Player ai, final ComboLines.Line l) {
+    // a dig toward our Thassa's Oracle in our hand: its printed {U}{U} payable (LoopPool.payable), and its win possible
+    // now, as piece 1 reads its own Oracle lines (ComboSignals.deniedNow, through the tracker's view): its cast not
+    // barred by a CantBeCast static (castBarredNow, on a copy of the cast from our hand) and its entering trigger not
+    // disabled (oracleTriggerDisabledNow). An Oracle that cannot win is no library-out winner, and a dig toward it
+    // would only empty our library. With no tracker (no AI of ours decides) there is no dig
+    private static boolean oracleDig(final Player ai, final ComboLines.Line l) {
         final Card oracle = firstNamed(ai, ZoneType.Hand, ComboLines.Winner.ORACLE.card);
-        return oracle != null && LoopPool.payable(ai, oracle, l);
+        if (oracle == null || !LoopPool.payable(ai, oracle, l)) {
+            return false;
+        }
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null) {
+            return false;
+        }
+        final ComboTracker.View v = t.view();
+        return !v.castBarred(ComboLines.Winner.ORACLE.card) && !v.oracleTriggerDisabled();
     }
 
     // a Laboratory Maniac or Jace, Wielder of Mysteries of ours on our battlefield holding its win, a Draw replacement

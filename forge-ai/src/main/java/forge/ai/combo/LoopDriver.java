@@ -36,24 +36,30 @@ import forge.game.zone.ZoneType;
  * above 0) while our hand and battlefield are not those of the last go-off that spent nothing (the futility gate).
  * Ballista's step comes first ({@link LoopSinks#ballista}): the cycle's next step ({@link LoopCycles#next}) refills
  * the pool until it holds what Ballista's action needs, a spend taken at a boundary, and the driver owns every
- * decision while Ballista has a step. Then, once a dig toward Oracle has brought our library to Oracle's threshold
- * ({@link LoopSinks#oracleThreshold}), Oracle's cast. Otherwise each decision returns the cycle's next step until, at a
- * boundary, the pool holds the target, where the driver passes the decision to the stock AI's walk, which plays on
- * the pool ({@link #noteStockPlay}); when it plays nothing Thrasios, Triton Hero digs ({@link #afterStockWalk},
+ * decision while Ballista has a step. Then, once a dig toward Oracle (an Oracle able to win now: its cast not barred,
+ * its entering trigger not disabled) has brought our library to Oracle's threshold ({@link LoopSinks#oracleThreshold}),
+ * Oracle's cast, at any decision the driver's own check passes it; one the check refuses for its price (a tax, the
+ * blue that only Chromatic Orrery lets the pool pay) waits, the decision going on as one with no cast due, so that the
+ * refill makes the pool that pays it. Otherwise each decision returns the cycle's next step until, at a boundary, the
+ * pool holds the target, where the driver passes the decision to the stock AI's walk, which plays on the pool
+ * ({@link #noteStockPlay}); when it plays nothing Thrasios, Triton Hero digs ({@link #afterStockWalk},
  * {@link LoopSinks#thrasios}), one activation a decision, the refill going on to its {4} first, its spend taken at a
  * boundary and the walk not asked again until it has dug, so that what it draws is played before the next
  * activation; with nothing for Thrasios either, the go-off ends. While a dig toward Oracle could run, our hand cast of
  * Oracle waits ({@link #holdsOracle}, ComboHold.vetoesCast), so the stock AI never casts it before the dig has brought
  * our library to Oracle's threshold. Every action passes the driver's own check (playable, not refused by a static,
  * its cost paid by the pool and our untapped lands, its targets legal; never canPlayAndPayFor, whose throttle and
- * stock judges would refuse it) and counts toward the caps ({@link LoopRounds}). A ping that changed neither its
- * target's life nor its toughness left ends Ballista's volley for the phase (R25).
+ * stock judges would refuse it) and counts toward the caps ({@link LoopRounds}); a sink's action the check refuses is
+ * not taken, and ends nothing. A ping that changed neither its target's life nor its toughness left ends Ballista's
+ * volley for the phase (R25).
  *
  * <p>A step that fails or gains nothing never burns the caps (R21): at the next decision an action that was skipped
  * (its payment failed) or changed nothing among the pool, our hand, battlefield and stack fails its line for the
  * phase, and so does a cycle that raised the pool by less than 1 from one boundary to the next (a cost tax, Damping
- * Sphere: what the printed net cannot see). The driver then falls to its next line, or to the stock walk. A check
- * that fails mid-go-off (a hoser arrived) ends the go-off for the phase, as does losing its line, the board reaching
+ * Sphere: what the printed net cannot see). The driver then falls to its next line, or to the stock walk. A Thrasios
+ * activation that moved no card out of our library (a draw limit: Spirit of the Labyrinth, Leovold, Emissary of Trest,
+ * Narset, Parter of Veils) ends Thrasios's dig for the phase, its {4} spent being no gain. A step of the cycle that the
+ * check refuses mid-go-off (a hoser arrived) ends the go-off for the phase, as does losing its line, the board reaching
  * five times lethal, every opponent unable to lose, or two judged rounds in a row that bought nothing.
  *
  * <p>The driver draws no random number (a payment it triggers draws as the engine's payer does), reads no clock, and
@@ -101,6 +107,11 @@ public final class LoopDriver {
     private GameObject pinged;
     private int pingedHad;
     private boolean volleyOver;
+    // the Thrasios activation returned last: our library's size when it was returned, judged at the next decision (-1
+    // when none is to be judged); and whether one that moved no card out of our library has ended Thrasios's dig for
+    // the phase
+    private int dugFrom = -1;
+    private boolean digOver;
     // the futility gate: our hand's and battlefield's card names, each sorted, when the last go-off that spent nothing
     // ended; null when none did
     private List<List<String>> futile;
@@ -123,7 +134,8 @@ public final class LoopDriver {
     /**
      * The go-off slot (AiController.getSpellAbilityToPlay, after piece 1's go-off): Walking Ballista's next action once
      * the pool holds what it needs; else Thassa's Oracle's cast once a dig toward it has brought our library to its
-     * threshold; else, the walk having chosen nothing at this board, Thrasios's activation once the pool holds its {4};
+     * threshold, when the driver's own check passes it (one it refuses waits for the refill below); else, the walk
+     * having chosen nothing at this board, Thrasios's activation once the pool holds its {4};
      * else the next step of the loop line the go-off runs, its activator us and its targets (a cast's X) set; or null:
      * at once outside our main phase, above a stack, once the game is over, for a deck holding no loop line, while a
      * cap or the idle rule stops the driver; when no line can run, a start gate refuses, or the go-off ends; and, with
@@ -155,6 +167,7 @@ public final class LoopDriver {
         }
         judgeLast();
         judgeVolley();
+        judgeDig();
         if (!active) {
             // a go-off measures its cycles from its own first boundary
             boundaryLine = null;
@@ -179,24 +192,31 @@ public final class LoopDriver {
             if (LoopPool.floating(ai) >= need && (need == 0 || boundary)) {
                 return ballistaStep(l, ph);
             }
-        } else if (oracleDue(l)) {
-            // a dig toward Thassa's Oracle has brought our library to its threshold (section 6.4 step 3): its cast wins
-            return spend(l, ph, LoopSinks.oracleCast(ai));
-        } else {
-            // Thrasios's turn (section 6.4 step 3), once the walk chose nothing at this board: the refill goes on to
-            // its {4}, a spend taken at a boundary; else, at a boundary with the pool at the target, the walk's turn
-            final SpellAbility dig = thrasiosDue ? LoopSinks.thrasios(ai, l) : null;
-            thrasiosDue = dig != null;
-            if (dig != null) {
-                if (boundary && LoopPool.floating(ai) >= ComboExecute.priced(ai, dig).getCMC()) {
-                    return thrasiosStep(l, ph, dig);
-                }
-            } else if (boundary && LoopPool.floating(ai) >= target(l)) {
-                active = true;
-                line = l;
-                handedToWalk = true;
-                return null;
+            return refill(l, ph);
+        }
+        if (oracleDue(l)) {
+            // a dig toward Thassa's Oracle has brought our library to its threshold (section 6.4 step 3): its cast
+            // wins, at any decision the driver's own check passes it. One the check refuses for its price, beyond
+            // what the pool and our lands pay now (a tax; the blue that only Chromatic Orrery lets the pool pay),
+            // waits: the decision goes on as one with no cast due, and the refill makes the pool that pays it
+            final SpellAbility cast = spend(l, ph, LoopSinks.oracleCast(ai));
+            if (cast != null) {
+                return cast;
             }
+        }
+        // Thrasios's turn (section 6.4 step 3), once the walk chose nothing at this board: the refill goes on to its
+        // {4}, a spend taken at a boundary; else, at a boundary with the pool at the target, the walk's turn
+        final SpellAbility dig = thrasiosDue ? dig(l) : null;
+        thrasiosDue = dig != null;
+        if (dig != null) {
+            if (boundary && LoopPool.floating(ai) >= ComboExecute.priced(ai, dig).getCMC()) {
+                return thrasiosStep(l, ph, dig);
+            }
+        } else if (boundary && LoopPool.floating(ai) >= target(l)) {
+            active = true;
+            line = l;
+            handedToWalk = true;
+            return null;
         }
         return refill(l, ph);
     }
@@ -216,11 +236,12 @@ public final class LoopDriver {
 
     /**
      * When the walk chose nothing, after this decision's {@link #mainPhaseAction} passed it the priority at the target,
-     * a boundary: Thrasios digs (section 6.4 step 3, {@link LoopSinks#thrasios}), its activation now when the pool
-     * holds its {4}, else the refill toward it, which goes on at the next decisions without the walk asked again (it
-     * chose nothing at this board), each through the driver's own check and the caps. With nothing for Thrasios to do,
-     * or the game over, the go-off ends, and when nothing was spent in it, our hand's and battlefield's names are kept,
-     * so the same futile build is not started again until one of them changes (section 6.2): null. Inert otherwise.
+     * a boundary: Thrasios digs (section 6.4 step 3, {@link LoopSinks#thrasios}, unless an activation that moved no
+     * card has ended its dig for the phase), its activation now when the pool holds its {4}, else the refill toward
+     * it, which goes on at the next decisions without the walk asked again (it chose nothing at this board), each
+     * through the driver's own check and the caps. With nothing for Thrasios to do, or the game over, the go-off ends,
+     * and when nothing was spent in it, our hand's and battlefield's names are kept, so the same futile build is not
+     * started again until one of them changes (section 6.2): null. Inert otherwise.
      */
     public SpellAbility afterStockWalk() {
         if (!handedToWalk) {
@@ -229,7 +250,7 @@ public final class LoopDriver {
         handedToWalk = false;
         final Game game = ai.getGame();
         // a game that timed out is marked over while the walk runs
-        final SpellAbility dig = game.isGameOver() ? null : LoopSinks.thrasios(ai, line);
+        final SpellAbility dig = game.isGameOver() ? null : dig(line);
         if (dig != null) {
             final PhaseHandler ph = game.getPhaseHandler();
             if (LoopPool.floating(ai) >= ComboExecute.priced(ai, dig).getCMC()) {
@@ -250,13 +271,13 @@ public final class LoopDriver {
      * Whether our hand cast {@code sa} of Thassa's Oracle waits for the dig toward it (section 6.4 step 3;
      * ComboHold.vetoesCast): while a loop line of the deck can run (its pieces where its cycle needs them, ready and
      * not denied: {@link LoopCycles#ready} and the tracker's own reading), a dig toward Oracle runs on it
-     * ({@link LoopSinks#digsForOracle}: Oracle in our hand, its {U}{U} payable, Thrasios ready) and our library holds
-     * more than {@link LoopSinks#oracleThreshold} cards. Read from the board at every decision, a go-off running or
-     * not, so the stock walk, which runs before Thrasios's first activation, never casts Oracle early. False for any
-     * other spell, for a deck holding no loop line, and while piece 1's own Oracle go-off holds (R2): while an
-     * executable piece-1 line has Oracle as its winner, the go-off (ComboExecute.goOffNow, which reads those very
-     * lines) and the hold (ComboHold.oracleWaits) are piece 1's, and an immediate Consultation win is never traded for
-     * a dig. Draws nothing.
+     * ({@link LoopSinks#digsForOracle}: Oracle in our hand and able to win now, its {U}{U} payable, Thrasios ready)
+     * and our library holds more than {@link LoopSinks#oracleThreshold} cards. Read from the board at every decision,
+     * a go-off running or not, so the stock walk, which runs before Thrasios's first activation, never casts Oracle
+     * early. False for any other spell, for a deck holding no loop line, and while piece 1's own Oracle go-off holds
+     * (R2): while an executable piece-1 line has Oracle as its winner, the go-off (ComboExecute.goOffNow, which reads
+     * those very lines) and the hold (ComboHold.oracleWaits) are piece 1's, and an immediate Consultation win is never
+     * traded for a dig. Draws nothing.
      */
     public boolean holdsOracle(final SpellAbility sa) {
         if (!ownOracleCast(sa)) {
@@ -354,6 +375,8 @@ public final class LoopDriver {
         boundaryPool = -1;
         pinged = null;
         volleyOver = false;
+        dugFrom = -1;
+        digOver = false;
     }
 
     // the go-off is over for the phase
@@ -437,7 +460,7 @@ public final class LoopDriver {
         if (!l.loop().canStop()) {
             return false;
         }
-        if (ballistaNeed() < 0 && !stockSpends(l) && !oracleDue(l) && LoopSinks.thrasios(ai, l) == null) {
+        if (ballistaNeed() < 0 && !stockSpends(l) && !oracleDue(l) && dig(l) == null) {
             return false;
         }
         spent = false;
@@ -487,21 +510,29 @@ public final class LoopDriver {
     }
 
     // Thrasios's activation now, spent as a sink's (spend): the refill toward it is over, and the next decision is the
-    // walk's again, to play what it drew
+    // walk's again, to play what it drew; our library's size is kept for the activation's judge (judgeDig)
     private SpellAbility thrasiosStep(final ComboLines.Line l, final PhaseHandler ph, final SpellAbility dig) {
         thrasiosDue = false;
-        return spend(l, ph, dig);
+        final SpellAbility sa = spend(l, ph, dig);
+        if (sa != null) {
+            dugFrom = ai.getCardsIn(ZoneType.Library).size();
+        }
+        return sa;
+    }
+
+    // Thrasios's next activation (LoopSinks.thrasios); none once an activation that moved no card has ended its dig
+    // for the phase (judgeDig)
+    private SpellAbility dig(final ComboLines.Line l) {
+        return digOver ? null : LoopSinks.thrasios(ai, l);
     }
 
     // a sink's action now (Walking Ballista's, Thrasios's, Thassa's Oracle's cast), through the driver's own check and
     // the caps: it opens a round the idle rule does not judge (each has stops of its own), it is something spent, and
-    // the next boundary is measured afresh (R21: a spend at a boundary is no cycle). An action the check refuses ends
-    // the go-off for the phase
+    // the next boundary is measured afresh (R21: a spend at a boundary is no cycle). An action the check refuses is not
+    // taken and ends nothing (null): Ballista's and Thrasios's steps are read through the same check before they come
+    // here, and Oracle's cast, refused for its price, waits for the refill (mainPhaseAction)
     private SpellAbility spend(final ComboLines.Line l, final PhaseHandler ph, final SpellAbility sa) {
         if (sa == null || !passes(sa)) {
-            if (active) {
-                end();
-            }
             return null;
         }
         if (!rounds.act(ai)) {
@@ -541,8 +572,9 @@ public final class LoopDriver {
         return next;
     }
 
-    // a dig toward Thassa's Oracle at its end (section 6.4 step 3): the dig runs (LoopSinks.digsForOracle), we can win,
-    // and our library holds Oracle's threshold of cards or fewer (LoopSinks.oracleThreshold), so Oracle's cast wins
+    // a dig toward Thassa's Oracle at its end (section 6.4 step 3): the dig runs (LoopSinks.digsForOracle: Oracle able
+    // to win now), we can win, and our library holds Oracle's threshold of cards or fewer (LoopSinks.oracleThreshold),
+    // so Oracle's cast wins
     private boolean oracleDue(final ComboLines.Line l) {
         return LoopSinks.digsForOracle(ai, l) && !ai.cantWin()
                 && ai.getCardsIn(ZoneType.Library).size() <= LoopSinks.oracleThreshold(ai);
@@ -573,6 +605,22 @@ public final class LoopDriver {
             volleyOver = true;
         }
         pinged = null;
+    }
+
+    // Thrasios's activation returned last, judged now that the stack it went on is empty again (resolved or
+    // countered): one that moved no card out of our library, where each that resolves moves its top card (onto our
+    // battlefield, else into our hand), ends Thrasios's dig for the phase, so Thrasios takes no more activation in it
+    // (R21: a step that gains nothing never burns the caps; the {4} it spent is no gain). A draw limit stops it so
+    // (Spirit of the Labyrinth, Leovold, Emissary of Trest, Narset, Parter of Veils: a second draw in a turn draws
+    // nothing), as does a countered activation; the plain dig, the dig toward Oracle and the dig to empty alike
+    private void judgeDig() {
+        if (dugFrom < 0) {
+            return;
+        }
+        if (ai.getCardsIn(ZoneType.Library).size() >= dugFrom) {
+            digOver = true;
+        }
+        dugFrom = -1;
     }
 
     // what a ping changes on its target: a player's life, a creature's toughness left (LoopSinks.toughnessLeft) on the

@@ -77,6 +77,10 @@ public class ComboLoopThrasiosAiTest extends AITest {
     private static final int MAX_ACTIONS = 1_000;
     /** Kinnan's list beside its commander: every piece of the 19 loop rows, the sinks and lands. */
     private static final List<String> KINNANS_LIST = kinnansList();
+    /** The opponents' hosers of Thassa's Oracle's win: two disable its entering trigger, two bar its cast (Iona,
+     *  Shield of Emeria naming blue; Void Winnower, Oracle's mana value 2 being even). */
+    private static final List<String> ORACLE_HOSERS = List.of("Torpor Orb", "Hushbringer", "Iona, Shield of Emeria",
+            "Void Winnower");
 
     private Game game;
     private Player ai;
@@ -794,6 +798,100 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertFalse(driver.holdsOracle(castOf(oracle)), "Thrasios cannot dig: no hold");
     }
 
+    // The hold is for a go-off: none while no loop line can run, though the dig toward Oracle could. Kinnan and
+    // Thrasios on ours, Basalt Monolith in our hand, Thassa's Oracle in hand, two Islands and a library of ten
+    // Forests, in our Main 2: no hold, and the stock AI may cast Oracle. With a Basalt on our battlefield the hold is
+    // on; tapped, its untap of {3} unpayable (our two Islands pay 2 of it, the pool none), it is off again.
+    @Test
+    public void noHoldWhileNoLoopLineCanRun() {
+        game();
+        ComboLoopBoards.ready(addCard(KINNAN, ai));
+        thrasios = ComboLoopBoards.ready(addCard(THRASIOS, ai));
+        addCardToZone(BASALT, ai, ZoneType.Hand);
+        moveToMain2(game, ai);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCard(ISLAND, ai);
+        addCard(ISLAND, ai);
+        library(FOREST, 10);
+        final ComboLines.Line l = line(KINNAN_BASALT);
+        assertTrue(LoopSinks.digsForOracle(ai, l), "the dig toward Oracle could run");
+        assertFalse(driver.holdsOracle(castOf(oracle)), "Basalt Monolith is in our hand: no loop can run");
+        assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
+        final Card rock = addCard(BASALT, ai);
+        assertTrue(driver.holdsOracle(castOf(oracle)), "Basalt Monolith on our battlefield");
+        rock.setTapped(true);
+        assertFalse(driver.holdsOracle(castOf(oracle)), "tapped, with its untap unpayable: no loop can run");
+    }
+
+    // Chromatic Orrery lets the loop's colourless mana pay Oracle's {U}{U} (spec section 9): Kinnan, Basalt, Thrasios
+    // and Orrery on ours, no land at all, Thassa's Oracle in hand and a library of ten Forests. The dig toward Oracle
+    // could run, Thrasios digs for it, and Oracle is held.
+    @Test
+    public void chromaticOrreryLetsTheLoopPayOraclesBluePips() {
+        start();
+        addCard("Chromatic Orrery", ai);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        library(FOREST, 10);
+        final ComboLines.Line l = line(KINNAN_BASALT);
+        assertTrue(LoopSinks.digsForOracle(ai, l), "no land, but the loop's mana pays {U}{U} through Orrery");
+        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "the dig toward Oracle runs");
+        assertTrue(driver.holdsOracle(castOf(oracle)), "and holds Oracle");
+    }
+
+    // Oracle's cast through Chromatic Orrery waits for the pool that pays it: Orrery's board with a library of four,
+    // Oracle's threshold, in our Main 2. No land pays Oracle's {U}{U} and the pool is empty, so the driver's first
+    // decision is not the cast, which would fail its payment, but Basalt's tap; then the cast, the pool's colourless
+    // paying the blue through Orrery, and the game ends WinsGameSpellEffect.
+    @Test
+    public void theOracleCastThroughChromaticOrreryWaitsForThePool() {
+        start();
+        moveToMain2(game, ai);
+        addCard("Chromatic Orrery", ai);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        library(FOREST, 4);
+        final SpellAbility tap = driver.mainPhaseAction(List.of());
+        assertSame(tap, manaOf(basalt), "the cast waits for the pool: " + tap);
+        playAndResolve(tap);
+        final SpellAbility cast = driver.mainPhaseAction(List.of());
+        assertNotNull(cast, "Oracle's cast from the pool");
+        assertTrue(cast.isSpell());
+        assertSame(cast.getHostCard(), oracle);
+        ai.getController().playChosenSpellAbility(cast);
+        assertWonBy(ORACLE, play(g -> false));
+    }
+
+    // Oracle's cast passes the driver's own check, its price as the engine prices it now (the plan's rules), and a
+    // cast the check refuses ends nothing. Under the opponent's Sphere of Resistance (spells cost {1} more) Oracle
+    // costs {1}{U}{U}, which our two Islands alone do not pay; Thassa's Oracle in hand, our library of five Forests.
+    // The go-off builds to the stock target, Oracle's 2, and the walk plays (its round spends the pool); our library
+    // then milled to Oracle's threshold of four, the driver does not return the cast, which would fail its payment:
+    // it refills, Basalt's tap, the go-off running on, and then casts Oracle, the pool paying the {1}.
+    @Test
+    public void aTaxedOracleCastWaitsForThePoolToPayIt() {
+        start();
+        moveToMain2(game, ai);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCard(ISLAND, ai);
+        addCard(ISLAND, ai);
+        library(FOREST, 5);
+        addCard("Sphere of Resistance", opp);
+        assertEquals(ComboExecute.priced(ai, LoopSinks.oracleCast(ai)).getCMC(), 3, "Oracle's {U}{U} and the tax");
+        assertEquals(slot(MAX_ACTIONS).size(), 4, "built to Oracle's 2, then the walk's turn");
+        driver.noteStockPlay(castOf(oracle));
+        ai.getManaPool().clearPool(false);
+        game.getAction().moveToGraveyard(ai.getCardsIn(ZoneType.Library).get(0), null);
+        assertEquals(library(), 4, "Oracle's threshold");
+        final SpellAbility tap = driver.mainPhaseAction(List.of());
+        assertSame(tap, manaOf(basalt), "the cast waits for the pool: " + tap);
+        playAndResolve(tap);
+        final SpellAbility cast = driver.mainPhaseAction(List.of());
+        assertNotNull(cast, "the refused cast ended nothing: Oracle's cast, the pool paying its {1}");
+        assertTrue(cast.isSpell());
+        assertSame(cast.getHostCard(), oracle);
+        ai.getController().playChosenSpellAbility(cast);
+        assertWonBy(ORACLE, play(g -> false));
+    }
+
     // A dig below the floor reads the opponents' mana to answer it (R22): Laboratory Maniac on ours and a library of
     // three Forests. The opponent's Island tapped: Thrasios digs; untapped: it does not; tapped again, but with mana
     // floating in the opponent's pool: it does not.
@@ -811,6 +909,32 @@ public class ComboLoopThrasiosAiTest extends AITest {
         island.setTapped(true);
         opp.getManaPool().addMana(new Mana((byte) ManaAtom.BLUE, island, null, opp));
         assertNull(LoopSinks.thrasios(ai, l), "mana in their pool");
+    }
+
+    // R22 reads every opponent, and every untapped permanent of theirs that can make mana, a land or not, and no other:
+    // a three-player game, Laboratory Maniac on ours and a library of three Forests. The first opponent's untapped
+    // Memnite makes no mana and stops nothing; the second opponent's untapped Island stops the dig below the floor,
+    // tapped it does not; and so does the first opponent's Sol Ring, a permanent that is no land.
+    @Test
+    public void aDigBelowTheFloorReadsEveryOpponentsManaPermanents() {
+        pod();
+        rock();
+        thrasios = ComboLoopBoards.ready(addCard(THRASIOS, ai));
+        addCard(LAB, ai);
+        library(FOREST, 3);
+        final Player other = game.getPlayers().get(2);
+        final ComboLines.Line l = line(KINNAN_BASALT);
+        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "no opponent has mana");
+        addCard(MEMNITE, opp);
+        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "an untapped Memnite makes no mana");
+        final Card island = addCard(ISLAND, other);
+        assertNull(LoopSinks.thrasios(ai, l), "the second opponent's untapped Island");
+        island.setTapped(true);
+        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "their Island tapped");
+        final Card ring = addCard("Sol Ring", opp);
+        assertNull(LoopSinks.thrasios(ai, l), "the first opponent's untapped Sol Ring, a permanent that is no land");
+        ring.setTapped(true);
+        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "their Sol Ring tapped");
     }
 
     // The winners a dig to empty reads: Jace, Wielder of Mysteries as Laboratory Maniac is (a library of three
@@ -832,6 +956,31 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertNull(LoopSinks.thrasios(ai, l), "a Laboratory Maniac without its abilities wins nothing");
     }
 
+    // Thrasios's {4} is Thrasios's, found by its name: with Thrasios gone, another card of ours with an activated Scry
+    // ability (Crystal Ball) is no dig, though a library of Memnites would be worth one.
+    @Test
+    public void aScryAbilityOfAnotherCardIsNoDig() {
+        start();
+        game.getAction().moveToGraveyard(thrasios, null);
+        addCard("Crystal Ball", ai);
+        library(MEMNITE, 10);
+        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "Crystal Ball is not Thrasios");
+    }
+
+    // A Thrasios that lost its abilities (the opponent's Turn to Frog) has no {4}: no dig, nothing thrown, and with no
+    // dig Oracle's threshold is Oracle's own {U}{U}; the driver's decisions make no dig either.
+    @Test
+    public void aThrasiosThatLostItsAbilitiesIsNoDig() {
+        start();
+        library(MEMNITE, 10);
+        frog(thrasios);
+        final ComboLines.Line l = line(KINNAN_BASALT);
+        assertNull(LoopSinks.thrasios(ai, l), "no ability, no dig");
+        assertFalse(LoopSinks.digsForOracle(ai, l));
+        assertEquals(LoopSinks.oracleThreshold(ai), 2, "Oracle's own {U}{U}");
+        assertTrue(only(drive(MAX_ACTIONS), Act::dig).isEmpty());
+    }
+
     // Thrasios digs only for a card the pool and our lands could pay for (digWorth): a library of ten Colossal
     // Dreadmaws and no green source ({4}{G}{G}: the loop's colourless pays the {4} alone) is no dig; two Forests make
     // it one.
@@ -846,6 +995,36 @@ public class ComboLoopThrasiosAiTest extends AITest {
         addCard(FOREST, ai);
         assertTrue(LoopSinks.digWorth(ai, l), "two Forests pay the {G}{G}");
         assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios));
+    }
+
+    // The go-off's line reaches Thrasios's readings at every call, the start's, the walk's slot's and the driver's
+    // own: a library of ten Colossal Dreadmaws ({4}{G}{G}), which only the loop's colourless mana beside our two
+    // Forests pays for, is dug to the floor, the walk asked once an activation and once more when Thrasios stops.
+    @Test
+    public void thrasiosDigsForCardsOnlyTheLoopCanPayFor() {
+        start();
+        addCard(FOREST, ai);
+        addCard(FOREST, ai);
+        library("Colossal Dreadmaw", 10);
+        final List<Act> acts = drive(MAX_ACTIONS);
+        assertEquals(only(acts, Act::dig).size(), 6, "ten to four: " + acts);
+        assertEquals(library(), LoopSinks.LIBRARY_FLOOR);
+        assertEquals(asks, 7, "the walk asked once an activation, and once when Thrasios stopped");
+    }
+
+    // What adds to our board, the arms the plan's list leaves unread: a plain Pump (Giant Growth), and a ChangeZone to
+    // the battlefield whose ChangeType lists several types, a creature among them (Incoming!); not a flicker, whose
+    // return to the battlefield names no ChangeType (Cloudshift, Ephemerate), nor a static that is no ManaConvert
+    // (Cursed Totem).
+    @Test
+    public void addsToBoardReadsAPlainPumpACommaListAndNotAFlicker() {
+        game();
+        for (final String name : List.of("Giant Growth", "Incoming!")) {
+            assertTrue(LoopSinks.addsToBoard(addCardToZone(name, ai, ZoneType.Library)), name);
+        }
+        for (final String name : List.of("Cloudshift", "Ephemerate", "Cursed Totem")) {
+            assertFalse(LoopSinks.addsToBoard(addCardToZone(name, ai, ZoneType.Library)), name);
+        }
     }
 
     // The Oracle cast waits while we cannot win: a three-player game, one opponent's Platinum Angel (we can't win, and
@@ -884,6 +1063,62 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertTrue(ai.cantWin(), "the Angel stands");
         assertNotNull(next, "the go-off goes on for the other opponent");
         assertSame(next, manaOf(basalt), "a refill, no Oracle cast: " + next);
+    }
+
+    // A dig toward Thassa's Oracle needs Oracle able to win now, as piece 1 reads its own Oracle lines: on the Oracle
+    // dig's board with Endless One in hand too, the opponent's Torpor Orb or Hushbringer disables Oracle's entering
+    // trigger, and Iona, Shield of Emeria naming blue or Void Winnower (Oracle's mana value 2 is even) bars its cast.
+    // Under each, no dig toward Oracle (it would only empty our library) and no hold, and a library of Forests is
+    // worth no other dig: the driver builds the pool of 200 for Endless One and hands the decision to the walk once,
+    // Thrasios taking no activation, our library still at ten.
+    @Test
+    public void anOracleThatCannotWinIsNoDigNorHold() {
+        for (final String hoser : ORACLE_HOSERS) {
+            final Card oracle = hoserBoard(10);
+            final ComboLines.Line l = line(KINNAN_BASALT);
+            assertTrue(LoopSinks.digsForOracle(ai, l), "the dig toward Oracle before " + hoser);
+            hoser(hoser);
+            assertFalse(LoopSinks.digsForOracle(ai, l), hoser);
+            assertNull(LoopSinks.thrasios(ai, l), hoser);
+            assertFalse(driver.holdsOracle(castOf(oracle)), hoser);
+            assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)), hoser);
+            final List<Act> acts = drive(MAX_ACTIONS);
+            assertTrue(only(acts, Act::dig).isEmpty(), hoser + ": " + acts);
+            assertEquals(library(), 10, hoser);
+            assertEquals(pool(), LoopPool.TARGET, hoser + ": the pool built for Endless One");
+            assertEquals(asks, 1, hoser + ": the walk's turn at the target");
+        }
+    }
+
+    // At its threshold an Oracle that cannot win is no cast of the driver's, and the driver goes on without it: the
+    // hosers' board with a library of four, Oracle's threshold. Under each hoser the go-off's first decision is
+    // Basalt's tap, the build toward the 200 for Endless One: not Oracle's cast (under Torpor Orb or Hushbringer it
+    // would resolve and win nothing), nor nothing at all (a cast the driver may not make answered every decision).
+    @Test
+    public void noOracleCastAtItsThresholdWhileItCannotWin() {
+        for (final String hoser : ORACLE_HOSERS) {
+            final Card oracle = hoserBoard(4);
+            hoser(hoser);
+            assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), hoser);
+            assertTrue(ai.getCardsIn(ZoneType.Hand).contains(oracle), hoser);
+        }
+    }
+
+    // Through the whole game loop, Iona, Shield of Emeria naming blue on the opponent's side and Oracle at its
+    // threshold (a library of four): the stock AI's plays go on with the pool topped up, Endless One cast from the
+    // pool of 200 at the stock X search's 99, and Oracle never cast.
+    @Test
+    public void aBarredOracleLeavesThePoolToTheStockAI() {
+        final Card oracle = hoserBoard(4);
+        hoser("Iona, Shield of Emeria");
+        final List<Seen> seen = play(g -> onOurBattlefield(ENDLESS_ONE) != null && g.getStack().isEmpty());
+        final Card cast = onOurBattlefield(ENDLESS_ONE);
+        assertNotNull(cast, "the stock AI cast Endless One: " + seen);
+        assertEquals(cast.getCounters(CounterEnumType.P1P1), 99, "the stock X search's cap");
+        final List<Seen> casts = only(seen, s -> s.cast(ENDLESS_ONE));
+        assertEquals(casts.get(0).poolBefore(), LoopPool.TARGET, "cast from the pool of 200");
+        assertTrue(only(seen, s -> s.cast(ORACLE)).isEmpty(), "Oracle was cast: " + seen);
+        assertTrue(ai.getCardsIn(ZoneType.Hand).contains(oracle));
     }
 
     // The futility gate never holds back Oracle's winning cast: on the below-the-floor board (Basalt, Nyxbloom and
@@ -1024,6 +1259,48 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(logged("Loop driver: stopped for the turn at 1 actions."), 1);
     }
 
+    // A Thrasios activation that moves no card ends its dig for the phase (R21: a step that gains nothing never burns
+    // the caps): under the opponent's Spirit of the Labyrinth, Leovold, Emissary of Trest or Narset, Parter of Veils
+    // (we can't draw more than one card each turn), a library of twenty Memnites, the opponent at 40. Through the whole
+    // game loop Thrasios draws one Memnite, which the stock AI casts; its next activation draws nothing, and Thrasios
+    // takes no more: two activations, no cap's line, and Main 1 over with the game on.
+    @Test
+    public void aDigThatMovesNoCardEndsForThePhase() {
+        for (final String limit : List.of("Spirit of the Labyrinth", "Leovold, Emissary of Trest",
+                "Narset, Parter of Veils")) {
+            start();
+            opp.setLife(40, null);
+            final Card c = addCard(limit, opp);
+            if (c.isPlaneswalker()) {
+                c.setCounters(CounterEnumType.LOYALTY, 5);
+            }
+            library(MEMNITE, 20);
+            final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
+            assertEquals(only(seen, Seen::dig).size(), 2, limit + ": " + seen);
+            assertEquals(library(), 19, limit + ": one Memnite drawn");
+            assertEquals(count(ZoneType.Battlefield, MEMNITE), 1, limit + ": the stock AI cast it");
+            assertEquals(logged("Loop driver: stopped for the turn at " + LoopRounds.TURN_CAP + " actions."), 0,
+                    limit);
+            assertFalse(game.isGameOver(), limit);
+        }
+    }
+
+    // The dig's end is for the phase, as the pool is: under the opponent's Spirit of the Labyrinth, a library of twenty
+    // Memnites, the walk choosing nothing. In Main 1 Thrasios draws one Memnite and its next activation draws nothing:
+    // two activations. In Main 2 Thrasios digs again, once, its draw refused again, and stops.
+    @Test
+    public void aDigEndedForThePhaseDigsAgainInTheNext() {
+        start();
+        addCard("Spirit of the Labyrinth", opp);
+        library(MEMNITE, 20);
+        assertEquals(only(drive(MAX_ACTIONS), Act::dig).size(), 2, "Main 1: one draw, then none");
+        assertEquals(library(), 19);
+        moveToMain2(game, ai);
+        ai.getManaPool().clearPool(false);
+        assertEquals(only(drive(MAX_ACTIONS), Act::dig).size(), 1, "Main 2: the dig again, its draw refused");
+        assertEquals(library(), 19);
+    }
+
     // Once the game is over the driver returns nothing, after the walk too: the pool at Thrasios's 4 at a boundary and
     // a library of Memnites, the go-off passes the decision to the walk; the game over, the slot after the walk returns
     // no Thrasios activation, where on the same board with the game on it does.
@@ -1076,6 +1353,27 @@ public class ComboLoopThrasiosAiTest extends AITest {
         library(FOREST, 10);
         assertTrue(LoopSinks.digsForOracle(ai, line(BASALT_NYXBLOOM)), "the dig toward Oracle runs");
         return oracle;
+    }
+
+    // the Oracle dig's board for the hosers' tests: start's, in our Main 2, Thassa's Oracle and Endless One in hand,
+    // two untapped Islands and a library of that many Forests; returns Oracle
+    private Card hoserBoard(final int forests) {
+        start();
+        moveToMain2(game, ai);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCardToZone(ENDLESS_ONE, ai, ZoneType.Hand);
+        addCard(ISLAND, ai);
+        addCard(ISLAND, ai);
+        library(FOREST, forests);
+        return oracle;
+    }
+
+    // that hoser of Oracle's win (ORACLE_HOSERS) on the opponent's battlefield, Iona, Shield of Emeria naming blue
+    private void hoser(final String name) {
+        final Card c = addCard(name, opp);
+        if ("Iona, Shield of Emeria".equals(name)) {
+            c.setChosenColors(new ArrayList<>(List.of("blue")));
+        }
     }
 
     // the rock's own activated Untap ability
