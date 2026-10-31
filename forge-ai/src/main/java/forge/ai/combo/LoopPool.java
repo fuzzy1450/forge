@@ -35,9 +35,6 @@ final class LoopPool {
     /** The pool a loop builds to: Evan's 200 (section 6.3). */
     static final int TARGET = 200;
 
-    // the sink the plan names beside Walking Ballista (LoopSinks.BALLISTA): its activations are Thrasios's step,
-    // never the stock AI's spend
-    private static final String THRASIOS = "Thrasios, Triton Hero";
     private static final String ORRERY = "Chromatic Orrery";
     // the kinds of mana, as ManaAtom's low bits: W, U, B, R, G, and colourless
     private static final int KINDS = 6;
@@ -240,11 +237,11 @@ final class LoopPool {
         return cost == null ? ManaCost.ZERO : cost.getTotalMana();
     }
 
-    // a sink's card, whose abilities are the driver's own steps (Walking Ballista's, Thrasios's), not the stock AI's
-    // spend
+    // a sink's card (LoopSinks.BALLISTA, LoopSinks.THRASIOS), whose abilities are the driver's own steps (Walking
+    // Ballista's, Thrasios's), not the stock AI's spend
     private static boolean isSink(final Card c) {
         final String name = ComboTracker.nameOf(c);
-        return LoopSinks.BALLISTA.equals(name) || THRASIOS.equals(name);
+        return LoopSinks.BALLISTA.equals(name) || LoopSinks.THRASIOS.equals(name);
     }
 
     // whether Chromatic Orrery is on our battlefield: we may spend mana as though it were mana of any colour

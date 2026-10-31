@@ -41,6 +41,9 @@ public final class ComboHold {
      * <ul>
      * <li>Thassa's Oracle from our hand, while a {@link ComboTracker#live} line has Oracle as its winner and the go-off
      * is not ready ({@link ComboExecute#goOffNow});
+     * <li>Thassa's Oracle from our hand, while the loop driver's dig toward it with Thrasios, Triton Hero could run
+     * (piece 2, spec 2026-10-29-combo-aware-ai-loops-design.md section 6.4 step 3: {@link LoopDriver#holdsOracle},
+     * which yields to piece 1's own Oracle go-off);
      * <li>a wheel (follow-up F5): a spell one of whose parts puts our hand into the graveyard or exile, read from its
      * parts, never its name (a Discard of {@code Mode$ Hand} whose players include us: Wheel of Fortune, Windfall, One
      * with Nothing; a ChangeZoneAll of our hand's cards to the graveyard or exile: Hex Magic), while a card of our hand
@@ -61,9 +64,15 @@ public final class ComboHold {
         }
         if (ComboLines.Winner.ORACLE.card.equals(ComboTracker.nameOf(host)) && host.isInZone(ZoneType.Hand)
                 && ai.equals(host.getOwner())) {
-            return oracleWaits(ai, sa);
+            return oracleWaits(ai, sa) || loopHoldsOracle(ai, sa);
         }
         return wheelWaits(ai, sa, host);
+    }
+
+    // our hand cast of Thassa's Oracle waits for the loop driver's dig toward it (piece 2, LoopDriver.holdsOracle)
+    private static boolean loopHoldsOracle(final Player ai, final SpellAbility sa) {
+        final LoopDriver d = LoopDriver.of(ai);
+        return d != null && d.holdsOracle(sa);
     }
 
     // our hand cast of Thassa's Oracle waits while a live line has Oracle as its winner and the go-off is not ready

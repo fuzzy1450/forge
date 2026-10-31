@@ -11,6 +11,7 @@ import forge.ai.LoopTracker;
 import forge.game.Game;
 import forge.game.GameEntity;
 import forge.game.ability.AbilityKey;
+import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCopyService;
@@ -21,11 +22,13 @@ import forge.game.replacement.ReplacementEffect;
 import forge.game.replacement.ReplacementLayer;
 import forge.game.replacement.ReplacementType;
 import forge.game.spellability.SpellAbility;
+import forge.game.staticability.StaticAbility;
+import forge.game.staticability.StaticAbilityMode;
 import forge.game.zone.ZoneType;
 
 /**
- * The sinks a mana loop spends on (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.4): Walking Ballista
- * (Task B6 adds Thrasios). First the loss blockers: the creatures whose "can't happen" effect stops an opponent losing
+ * The sinks a mana loop spends on (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.4): Walking Ballista and
+ * Thrasios, Triton Hero. First the loss blockers: the creatures whose "can't happen" effect stops an opponent losing
  * or us winning and which the pings can kill, which Walking Ballista kills first (section 6.4, my call), read by
  * signal 2 for a loop line too ({@link ComboSignals#loopDenied}). Then Ballista's step, step 1 of section 6.4, read
  * from the board at each decision: the counters a kill needs ({@link #lethalNeeded}), whether Ballista can shoot
@@ -35,6 +38,15 @@ import forge.game.zone.ZoneType;
  * none on our battlefield, one is cast from our hand with X from the pool. With no kill in reach (a hexproof player)
  * Ballista is pumped, or cast, until our board is five times lethal (LoopTracker's decisive).
  *
+ * <p>Then Thrasios's dig, step 3 of section 6.4, taken when the stock AI has nothing it wants to play: its {4}, one
+ * activation a decision ({@link #thrasios}), while our library holds more than {@link #LIBRARY_FLOOR} cards, a card in
+ * it would add to our board ({@link #digWorth}, {@link #addsToBoard}) and our board is short of five times lethal. A
+ * dig toward a library-out winner goes on whatever the library holds: toward Thassa's Oracle in our hand
+ * ({@link #digsForOracle}) until our library holds no more than our devotion to blue and Oracle's own {U}{U}
+ * ({@link #oracleThreshold}), when Oracle's cast wins ({@link #oracleCast}); with Laboratory Maniac or Jace, Wielder of
+ * Mysteries on our battlefield, to empty and one activation more, whose draw wins. Below the floor only while we can
+ * win and no opponent has mana to answer the finish (R22).
+ *
  * <p>Nothing here draws a random number, and no card of the game is written but the abilities read or returned: their
  * activator, a cast's X and a ping's target on the action returned, and a cast's X for a moment while its price
  * beyond {X}{X} is read. The Ballista whose ping is aimed in a reading is an LKI copy.
@@ -42,6 +54,17 @@ import forge.game.zone.ZoneType;
 final class LoopSinks {
     /** Walking Ballista, the sink whose pings kill, as the table and the deck lists name it. */
     static final String BALLISTA = "Walking Ballista";
+
+    /** Thrasios, Triton Hero, the sink that digs, as the deck lists name it. */
+    static final String THRASIOS = "Thrasios, Triton Hero";
+
+    /** Thrasios activates only while our library holds more cards than this (section 6.4 step 3): DrawAi's own floor,
+     *  which refuses a draw at 4 cards or fewer; a dig toward a library-out winner may go below it ({@link #thrasios},
+     *  R22). */
+    static final int LIBRARY_FLOOR = 4;
+
+    // Thassa's Oracle's own blue pips, its {U}{U}: its devotion to blue once it has entered, which its win counts
+    private static final int ORACLE_PIPS = 2;
 
     // a reading with no Walking Ballista of ours on our battlefield or in our hand: no volley
     private static final Volley NONE = new Volley(null, List.of(), List.of(), 0);
@@ -495,5 +518,208 @@ final class LoopSinks {
         }
         final long missing = LoopTracker.LETHAL_MULTIPLE * life - LoopTracker.Snapshot.of(ai).ownPower();
         return (int) Math.max(0, Math.min(missing, Integer.MAX_VALUE));
+    }
+
+    /**
+     * Whether {@code c} adds to our board (section 6.4 step 3: a card that would raise our attack power, or Chromatic
+     * Orrery, which lets the pool pay for the rest): a creature card, Walking Ballista and Ulamog among them; a card a
+     * part of one of whose spells puts a creature onto the battlefield (a ChangeZone to the battlefield whose
+     * ChangeType names a creature: Finale of Devastation, Green Sun's Zenith; not one that puts a land there, R20:
+     * Cultivate) or pumps (a Pump or PumpAll that is no curse: Overwhelming Stampede); or a card with a ManaConvert
+     * static (Chromatic Orrery). Read from the card's own parts, never its name.
+     */
+    static boolean addsToBoard(final Card c) {
+        if (c.isCreature()) {
+            return true;
+        }
+        for (final SpellAbility spell : c.getSpells()) {
+            for (SpellAbility s = spell; s != null; s = s.getSubAbility()) {
+                if (putsACreature(s) || pumps(s)) {
+                    return true;
+                }
+            }
+        }
+        for (final StaticAbility st : c.getStaticAbilities()) {
+            if (st.checkMode(StaticAbilityMode.ManaConvert)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether our library holds a card that adds to our board ({@link #addsToBoard}) and that the pool, the kinds loop
+     *  line {@code l} makes, our untapped lands and Chromatic Orrery could pay for ({@link LoopPool#payable}): what the
+     *  library holds, never its order (section 6.4: a player knows its own list). */
+    static boolean digWorth(final Player ai, final ComboLines.Line l) {
+        for (final Card c : ai.getCardsIn(ZoneType.Library)) {
+            if (addsToBoard(c) && LoopPool.payable(ai, c, l)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Thrasios's next activation (section 6.4 step 3), us its activator; null when Thrasios has nothing to do. It is
+     * the {4} of our first Thrasios, Triton Hero on our battlefield whose activation the driver may make now
+     * (LoopDriver.allowed: under Cursed Totem, none), while
+     * <ul>
+     * <li>a dig toward Thassa's Oracle runs ({@link #digsForOracle}): our library holds more than
+     * {@link #oracleThreshold} cards, whatever it holds, the library's size being the dig's goal;</li>
+     * <li>with none, a Laboratory Maniac or Jace, Wielder of Mysteries of ours on our battlefield holds its win (a Draw
+     * replacement that wins instead): a dig to empty, whatever the library holds, and once it is empty one activation
+     * more, whose draw wins;</li>
+     * <li>with neither, our library holds a card worth the dig ({@link #digWorth}) and our board is short of five times
+     * lethal (LoopTracker's decisive).</li>
+     * </ul>
+     * Each while our library holds more than {@link #LIBRARY_FLOOR} cards; a dig toward a library-out winner goes on
+     * below the floor only while we can win and no opponent has an untapped permanent with a mana ability, or mana in
+     * their pool, to answer the finish (R22: only a free counterspell can stop it), and otherwise stops at the floor.
+     */
+    static SpellAbility thrasios(final Player ai, final ComboLines.Line l) {
+        final SpellAbility dig = readyThrasios(ai);
+        if (dig == null) {
+            return null;
+        }
+        final int library = ai.getCardsIn(ZoneType.Library).size();
+        final boolean aboveTheFloor = library > LIBRARY_FLOOR;
+        if (oraclePayable(ai, l)) {
+            return library > oracleThreshold(ai) && (aboveTheFloor || belowTheFloor(ai)) ? dig : null;
+        }
+        if (winsOnEmpty(ai)) {
+            return aboveTheFloor || belowTheFloor(ai) ? dig : null;
+        }
+        return aboveTheFloor && digWorth(ai, l) && !LoopTracker.Snapshot.of(ai).isDecisive() ? dig : null;
+    }
+
+    /** Thassa's Oracle wins once our library holds this many cards or fewer: our devotion to blue on our battlefield,
+     *  AbilityUtils' own count (Count$Devotion.Blue, read through our first Thrasios's {4}, us its activator: the count
+     *  needs an ability), plus Oracle's own {U}{U}, its devotion once it has entered. With no Thrasios of ours there is
+     *  no dig, and this is Oracle's two alone. */
+    static int oracleThreshold(final Player ai) {
+        final Card thrasios = firstNamed(ai, ZoneType.Battlefield, THRASIOS);
+        final SpellAbility dig = thrasios == null ? null : digOf(thrasios);
+        if (dig == null) {
+            return ORACLE_PIPS;
+        }
+        dig.setActivatingPlayer(ai);
+        return AbilityUtils.calculateAmount(thrasios, "Count$Devotion.Blue", dig) + ORACLE_PIPS;
+    }
+
+    /** Whether a dig toward Thassa's Oracle can run (section 6.4 step 3): our Oracle in our hand, its {U}{U} payable
+     *  from the pool, the kinds loop line {@code l} makes, our untapped lands and Chromatic Orrery
+     *  ({@link LoopPool#payable}), and a Thrasios of ours ready: its {4} one the driver may make now. */
+    static boolean digsForOracle(final Player ai, final ComboLines.Line l) {
+        return oraclePayable(ai, l) && readyThrasios(ai) != null;
+    }
+
+    /** The cast of our first Thassa's Oracle in our hand, us its activator; null with none. */
+    static SpellAbility oracleCast(final Player ai) {
+        final SpellAbility cast = castOf(firstNamed(ai, ZoneType.Hand, ComboLines.Winner.ORACLE.card));
+        if (cast != null) {
+            cast.setActivatingPlayer(ai);
+        }
+        return cast;
+    }
+
+    // our first Thrasios on our battlefield whose {4} the driver may make now (LoopDriver.allowed), us its activator;
+    // null with none
+    private static SpellAbility readyThrasios(final Player ai) {
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            if (THRASIOS.equals(ComboTracker.nameOf(c))) {
+                final SpellAbility dig = digOf(c);
+                if (dig != null && LoopDriver.allowed(ai, dig)) {
+                    return dig;
+                }
+            }
+        }
+        return null;
+    }
+
+    // Thrasios's {4}: its activated Scry ability (scry 1, then reveal the top card: a land onto the battlefield tapped,
+    // else a draw); null with none (an ability-removing effect)
+    private static SpellAbility digOf(final Card thrasios) {
+        for (final SpellAbility sa : thrasios.getNonManaAbilities()) {
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.Scry) {
+                return sa;
+            }
+        }
+        return null;
+    }
+
+    // our Thassa's Oracle in our hand, its printed {U}{U} payable (LoopPool.payable)
+    private static boolean oraclePayable(final Player ai, final ComboLines.Line l) {
+        final Card oracle = firstNamed(ai, ZoneType.Hand, ComboLines.Winner.ORACLE.card);
+        return oracle != null && LoopPool.payable(ai, oracle, l);
+    }
+
+    // a Laboratory Maniac or Jace, Wielder of Mysteries of ours on our battlefield holding its win, a Draw replacement
+    // that wins the game instead (ComboSignals.winsOnDraw: none under Humility, Lignify or face down)
+    private static boolean winsOnEmpty(final Player ai) {
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            final String name = ComboTracker.nameOf(c);
+            if ((ComboLines.Winner.LAB.card.equals(name) || ComboLines.Winner.JACE.card.equals(name))
+                    && ComboSignals.winsOnDraw(c)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // R22: a dig below the floor toward a library-out winner, which needs us able to win and no opponent with an
+    // untapped permanent that has a mana ability, or mana in their pool, so that only a free counterspell can stop the
+    // finish
+    private static boolean belowTheFloor(final Player ai) {
+        if (ai.cantWin()) {
+            return false;
+        }
+        for (final Player o : ai.getOpponents()) {
+            if (o.getManaPool().totalMana() > 0) {
+                return false;
+            }
+            for (final Card c : o.getCardsIn(ZoneType.Battlefield)) {
+                if (c.isUntapped() && !c.getManaAbilities().isEmpty()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // our first card of that name in that zone of ours (by ComboTracker.nameOf, in the zone's order), or null
+    private static Card firstNamed(final Player ai, final ZoneType zone, final String name) {
+        for (final Card c : ai.getCardsIn(zone)) {
+            if (name.equals(ComboTracker.nameOf(c))) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    // a part of a spell that puts a creature onto the battlefield: a ChangeZone to the battlefield whose ChangeType
+    // names a creature
+    private static boolean putsACreature(final SpellAbility s) {
+        return s.getApi() == ApiType.ChangeZone && s.hasParam("Destination")
+                && ZoneType.listValueOf(s.getParam("Destination")).contains(ZoneType.Battlefield)
+                && namesACreature(s.getParam("ChangeType"));
+    }
+
+    // a ChangeType one of whose terms is a creature card: its type, before any restriction, Creature
+    // (Creature.Green+cmcLEX); Land.Basic is none
+    private static boolean namesACreature(final String changeType) {
+        if (changeType == null) {
+            return false;
+        }
+        for (final String term : changeType.split(",")) {
+            if ("Creature".equals(term.trim().split("\\.", 2)[0])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // a part of a spell that pumps: a Pump or PumpAll that is no curse
+    private static boolean pumps(final SpellAbility s) {
+        return (s.getApi() == ApiType.Pump || s.getApi() == ApiType.PumpAll) && !s.isCurse();
     }
 }
