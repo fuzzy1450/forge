@@ -643,6 +643,21 @@ public class ComboLoopPalinchronAiTest extends AITest {
         assertEquals(pool(), 1);
     }
 
+    // Tapped (used this turn), a Maze of Ith is among the lands Palinchron's untap offers: first on our battlefield,
+    // ahead of seven Islands, it is the first option the engine's own untap hands the choice, which reads it without
+    // throwing; the cycle runs, and the seven Islands come back untapped.
+    @Test
+    public void aTappedLandThatMakesNoManaDoesNotStopAFlickerCycle() {
+        start();
+        paired();
+        final Card maze = addCard("Maze of Ith", ai);
+        maze.setTapped(true);
+        final List<Card> islands = lands(ISLAND, 7);
+        endlessOne();
+        assertEquals(oneCycle(), 5);
+        assertEquals(untapped(islands), 7, "every Island back untapped");
+    }
+
     // A land is tapped for the mana ability that makes blue, when it has one: Floodfarm Verge, whose first ability
     // makes {W} and its second {U} (we control a Plains), is the one blue land beside five Forests and a Plains, tapped
     // last and for its {U}, which pays the flicker.
@@ -1124,6 +1139,34 @@ public class ComboLoopPalinchronAiTest extends AITest {
         assertTrue(LoopCycles.boundary(ai, line(RECAST)), "the recast, four Forests and five Islands");
     }
 
+    // Past seven lands a land that makes no mana takes none of the seven untaps, which go to the lands the put-back set
+    // holds: a tapped Maze of Ith first on our battlefield, ahead of three Islands and six Forests, stays tapped, and
+    // the board after the cycle is a boundary, the flicker's and the recast's alike.
+    @Test
+    public void aTappedLandThatMakesNoManaTakesNoneOfTheSevenUntaps() {
+        start();
+        paired();
+        final Card maze = addCard("Maze of Ith", ai);
+        maze.setTapped(true);
+        lands(ISLAND, 3);
+        lands(FOREST, 6);
+        endlessOne();
+        assertEquals(oneCycle(), 7, "nine taps less two");
+        assertTrue(LoopCycles.boundary(ai, line(FLICKER)), "the flicker, the Maze first");
+        assertTrue(maze.isTapped(), "the Maze stays tapped: the flicker's");
+
+        start();
+        recast();
+        final Card maze2 = addCard("Maze of Ith", ai);
+        maze2.setTapped(true);
+        lands(ISLAND, 3);
+        lands(FOREST, 6);
+        endlessOne();
+        assertEquals(oneCycle(), 16, "27 less 11");
+        assertTrue(LoopCycles.boundary(ai, line(RECAST)), "the recast, the Maze first");
+        assertTrue(maze2.isTapped(), "the Maze stays tapped: the recast's");
+    }
+
     // A Palinchron that lost its abilities (the opponent's Turn to Frog: a 1/1 Frog until end of turn) has no return
     // and no flicker, and no cast of its card either: paired with Deadeye and beside Nyxbloom, neither of its lines
     // nets anything or runs, and nothing throws.
@@ -1282,6 +1325,29 @@ public class ComboLoopPalinchronAiTest extends AITest {
                 "the first that makes blue");
         assertSame(driver.untapChoice(etb, List.of(island, island2)), island);
         assertEquals(MyRandom.callCount() - before, 0, "the untap choice drew");
+    }
+
+    // Palinchron's untap offers every tapped land of ours, one that makes no mana too (a Maze of Ith used this turn):
+    // the choice reads it without throwing, takes a land that makes blue first, then a land that makes mana before it,
+    // as the put-back set the boundary reads holds them, and with no land of ours that makes mana left among the
+    // options leaves the Maze to the stock choice (null).
+    @Test
+    public void aTappedLandThatMakesNoManaIsNoLandTheUntapChoiceTakes() {
+        start();
+        final Card palinchron = paired();
+        lands(ISLAND, 7);
+        endlessOne();
+        final Card maze = addCard("Maze of Ith", ai);
+        final Card island = addCard(ISLAND, ai);
+        final Card forest = addCard(FOREST, ai);
+        for (final Card c : List.of(maze, island, forest)) {
+            c.setTapped(true);
+        }
+        assertEquals(drive(1).size(), 1, "the cycle's first tap");
+        final SpellAbility etb = etbOf(palinchron);
+        assertSame(driver.untapChoice(etb, List.of(maze, island, forest)), island, "the land that makes blue first");
+        assertSame(driver.untapChoice(etb, List.of(maze, forest)), forest, "a land that makes mana before the Maze");
+        assertNull(driver.untapChoice(etb, List.of(maze)), "the Maze alone: the stock choice");
     }
 
     // LoopDriver.partnerChoice is Deadeye Navigator's own pairing alone: Palinchron among the options while the deck

@@ -420,8 +420,8 @@ public class UntapAi extends SpellAbilityAi {
     public Card chooseSingleCard(Player ai, SpellAbility sa, Iterable<Card> list, boolean isOptional, Player targetedPlayer, Map<String, Object> params) {
         // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.8): Palinchron's entering
         // untap during one of the loop driver's flicker or recast cycles takes our lands that make blue first, then the
-        // rest of ours (LoopDriver.untapChoice); the stock pick below takes our lands colour-blind, at random. Null, so
-        // stock, for every other untap and outside such a cycle
+        // rest of ours that make mana (LoopDriver.untapChoice); the stock pick below takes our lands colour-blind, at
+        // random. Null, so stock, for every other untap, outside such a cycle and once none of those lands is left
         final LoopDriver loops = LoopDriver.of(ai);
         final Card loopUntap = loops == null ? null : loops.untapChoice(sa, list);
         if (loopUntap != null) {

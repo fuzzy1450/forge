@@ -353,11 +353,13 @@ public final class LoopDriver {
 
     /**
      * Palinchron's entering untap during one of the driver's flicker or recast cycles (UntapAi.chooseSingleCard,
-     * section 6.8), asked once a land, up to seven: among {@code options}, our first land that makes blue, else our
-     * first other land, so that the lands the cycle pays its blue with are put back first, and never an opponent's.
-     * Null, the stock choice, once none of ours is left among them; for any untap whose host is not a Palinchron (its
-     * entering untap is Palinchron's only Untap); and while the go-off of this step runs no flicker or recast line:
-     * Palinchron's first cast, or a flicker that saves it from removal, is the stock AI's.
+     * section 6.8), asked once a land, up to seven: among {@code options}, never an opponent's, our first land that
+     * makes blue, else our first other land that makes mana, in the order of LoopCycles' put-back set, which the
+     * boundary reads: the lands the cycle pays its blue with are put back first, and a land that makes no mana (a Maze
+     * of Ith) never takes the untap of one that does. Null, the stock choice, once no land of ours that makes mana is
+     * left among them (the stock then takes our other lands among them, else none); for any untap whose host is not a
+     * Palinchron (its entering untap is Palinchron's only Untap); and while the go-off of this step runs no flicker or
+     * recast line: Palinchron's first cast, or a flicker that saves it from removal, is the stock AI's.
      */
     public Card untapChoice(final SpellAbility sa, final Iterable<Card> options) {
         final Card host = sa.getHostCard();
@@ -373,7 +375,7 @@ public final class LoopDriver {
             if (LoopCycles.makesBlue(c)) {
                 return c;
             }
-            if (rest == null) {
+            if (rest == null && LoopCycles.landMana(c) != null) {
                 rest = c;
             }
         }
