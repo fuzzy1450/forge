@@ -133,6 +133,13 @@ public class ComboLoopBounceAiTest extends AITest {
         decisionDraws = 0;
     }
 
+    /** The game of {@link #start} with Llanowar Elves registered beside Kinnan's list: a hand-built row names it. */
+    private void startWithElves() {
+        final List<String> main = new ArrayList<>(KINNANS_LIST);
+        main.add("Llanowar Elves");
+        startWith(KINNAN, main.toArray(new String[0]));
+    }
+
     /** Kinnan, Bonder Prodigy and Hullbreaker Horror, ready on our battlefield. Returns Hullbreaker. */
     private Card bouncer() {
         ComboLoopBoards.ready(addCard(KINNAN, ai));
@@ -450,7 +457,8 @@ public class ComboLoopBounceAiTest extends AITest {
     // makes blue, the first in WUBRG order of the colours of our legends, since the next cast, Opal's, needs none, and
     // Kinnan's bonus copies it, so the pool holds blue alone, though a payment had left black as Amber's choice: never
     // a colour no legend of ours has. A cast that needs green would have green; one that needs only a colour no legend
-    // of ours has gets the blue.
+    // of ours has gets the blue. The driver's decisions, the colour read before each of Amber's taps among them, draw
+    // nothing.
     @Test
     public void moxAmberTapsTheColourTheNextCastNeeds() {
         start();
@@ -469,6 +477,7 @@ public class ComboLoopBounceAiTest extends AITest {
                 "cast Mox Opal"));
         assertEquals(pool(), 4);
         assertEquals(ai.getManaPool().getAmountOfColor(MagicColor.BLUE), 4, "blue alone");
+        assertEquals(decisionDraws, 0, "the driver's decisions drew");
         assertEquals(LoopCycles.reflectedColour(ai, reflect, new ManaCost("G")), MagicColor.GREEN,
                 "a cast that needs green");
         assertEquals(LoopCycles.reflectedColour(ai, reflect, new ManaCost("B")), MagicColor.BLUE,
@@ -606,6 +615,54 @@ public class ComboLoopBounceAiTest extends AITest {
         assertEquals(steps(drive(1)), List.of("cast Sol Ring"));
     }
 
+    // R19 at AiController's hook: the driver's empty list is the trigger's choice, never a cue for the stock one. With
+    // both of x-14's pieces in our hand, the first cast's trigger chooses nothing though the opponent has two nonland
+    // permanents the stock choice would return: only Mox Amber's cast is on the stack, and neither leaves their
+    // battlefield.
+    @Test
+    public void theFirstCastsTriggerChoosesNothingBesideAnOpposingPermanent() {
+        start();
+        bouncer();
+        hand(AMBER);
+        hand(OPAL);
+        endlessOne();
+        final Card bears = addCard("Grizzly Bears", opp);
+        final Card angel = addCard("Serra Angel", opp);
+        final SpellAbility first = driver.mainPhaseAction(List.of());
+        assertNotNull(first, "the cycle's first cast");
+        assertEquals(steps(List.of(first)), List.of("cast Mox Amber"));
+        ai.getController().playChosenSpellAbility(first);
+        game.getStack().addAllTriggeredAbilitiesToStack();
+        assertEquals(game.getStack().size(), 1, "the trigger chose nothing: only Amber's cast is on the stack");
+        resolveAll();
+        int there = 0;
+        for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
+            if (c == bears || c == angel) {
+                there++;
+            }
+        }
+        assertEquals(there, 2, "neither of the opponent's permanents was bounced");
+    }
+
+    // A card of the opponent's named like a piece is none of ours, read as the cycle's state: with both of x-2's pieces
+    // in our hand and the opponent's Sol Ring on their battlefield, the cycle starts from our hand, as with no Sol Ring
+    // there, and casts our Sol Ring first; it neither takes the opponent's for its piece on our battlefield nor casts
+    // Mana Vault beside it.
+    @Test
+    public void bothPiecesInOurHandTheOpponentsSolRingIsNoPieceOfOurs() {
+        start();
+        bouncer();
+        addCard(SOL_RING, opp);
+        hand(SOL_RING);
+        hand(MANA_VAULT);
+        endlessOne();
+        addCard(ISLAND, ai);
+        assertTrue(LoopCycles.ready(ai, line(RING_VAULT)), "an Island pays our Sol Ring");
+        assertFalse(LoopCycles.boundary(ai, line(RING_VAULT)), "both in our hand");
+        assertEquals(steps(drive(1)), List.of("cast Sol Ring"));
+        assertNotNull(onOurBattlefield(SOL_RING), "our Sol Ring resolved");
+    }
+
     // The cycle runs only with its pieces where it needs them: Hullbreaker Horror on our battlefield, and Kinnan where
     // the row names him (x-14 with another legend of ours, Isamaru, whose white lets Amber make mana: it nets 1 but is
     // not ready without Kinnan); one piece on our battlefield and the other in our hand, or both in our hand, never
@@ -659,6 +716,24 @@ public class ComboLoopBounceAiTest extends AITest {
         assertEquals(LoopCycles.net(ai, line("x-9")), 0);
         assertFalse(LoopCycles.ready(ai, line("x-9")), "a net of 0");
         assertNull(driver.mainPhaseAction(List.of()));
+    }
+
+    // The piece in our hand is ours: Mana Vault in the opponent's hand, beside our Sol Ring, is no piece of row x-2,
+    // which nets 0, is not ready and starts nothing; our own Mana Vault in our hand, the control, makes it net 5 and
+    // ready.
+    @Test
+    public void thePieceInHandIsOursNotTheOpponents() {
+        start();
+        bouncer();
+        addCard(SOL_RING, ai);
+        addCardToZone(MANA_VAULT, opp, ZoneType.Hand);
+        endlessOne();
+        assertEquals(LoopCycles.net(ai, line(RING_VAULT)), 0, "no Mana Vault of ours");
+        assertFalse(LoopCycles.ready(ai, line(RING_VAULT)));
+        assertNull(driver.mainPhaseAction(List.of()), "no go-off on the opponent's card");
+        hand(MANA_VAULT);
+        assertEquals(LoopCycles.net(ai, line(RING_VAULT)), 5, "the control: our Mana Vault");
+        assertTrue(LoopCycles.ready(ai, line(RING_VAULT)));
     }
 
     // The cycle must pay its next cast from where it stands: Sensei's Divining Top on ours and Sol Ring in our hand,
@@ -748,6 +823,21 @@ public class ComboLoopBounceAiTest extends AITest {
         addCard(OPAL, ai);
         hand(AMBER);
         assertFalse(LoopCycles.boundary(ai, line(AMBER_OPAL)), "Opal on ours, Amber in our hand: mid-cycle");
+    }
+
+    // The boundary wants our first piece untapped: beside our tapped Sol Ring, the opponent's untapped one is none of
+    // ours, so row x-2, Mana Vault in our hand, is at no boundary until ours untaps (the control).
+    @Test
+    public void theBoundaryNeedsOurUntappedPieceNotTheOpponents() {
+        start();
+        bouncer();
+        final Card ours = addCard(SOL_RING, ai);
+        ours.setTapped(true);
+        addCard(SOL_RING, opp);
+        hand(MANA_VAULT);
+        assertFalse(LoopCycles.boundary(ai, line(RING_VAULT)), "the opponent's untapped Sol Ring is no piece of ours");
+        ours.setTapped(false);
+        assertTrue(LoopCycles.boundary(ai, line(RING_VAULT)), "the control: ours untapped");
     }
 
     // The net of each fill in Kinnan's list (I6 section 2.3), with the rock on our battlefield and the fill in our
@@ -847,6 +937,23 @@ public class ComboLoopBounceAiTest extends AITest {
         assertEquals(steps(drive(3)), List.of("tap Mox Amber", "cast Mox Opal", "cast Mox Amber"));
     }
 
+    // Metalcraft counts our artifacts: the opponent's two Ornithopters are none of them, so row x-14 nets 2, Opal
+    // making nothing; two Ornithopters of ours, the control, make it 4.
+    @Test
+    public void metalcraftCountsOurArtifactsNotTheOpponents() {
+        start();
+        bouncer();
+        addCard(AMBER, ai);
+        hand(OPAL);
+        addCard(ORNITHOPTER, opp);
+        addCard(ORNITHOPTER, opp);
+        endlessOne();
+        assertEquals(LoopCycles.net(ai, line(AMBER_OPAL)), 2, "no metalcraft of ours: Opal makes nothing");
+        addCard(ORNITHOPTER, ai);
+        addCard(ORNITHOPTER, ai);
+        assertEquals(LoopCycles.net(ai, line(AMBER_OPAL)), 4, "the control: two of ours");
+    }
+
     // Mox Amber makes nothing without a legend of ours: with Hullbreaker alone beside Sol Ring (row x-5, which names no
     // Kinnan), the cycle taps Sol Ring, casts Amber and casts Sol Ring, never tapping Amber, and nets 1. With Kinnan
     // out Amber is tapped, for 4.
@@ -923,6 +1030,25 @@ public class ComboLoopBounceAiTest extends AITest {
         assertEquals(LoopCycles.colours(ai, line(AMBER_OPAL)), ManaAtom.BLUE, "Opal, without metalcraft, none");
     }
 
+    // Mox Amber's colour in the cycle is the one the next cast needs, read from that cast itself: every shipped row's
+    // next cast needs no colour, so a hand-built row of Hullbreaker, Amber and Llanowar Elves, whose cast needs {G}.
+    // The cycle's tap of Amber is set to green, not the blue that comes first in WUBRG order among Kinnan's colours,
+    // and the kinds the cycle makes are green alone, Amber's and the Elves' own.
+    @Test
+    public void amberTapsTheColourTheNextCastNeedsInTheCycle() {
+        startWithElves();
+        t.useLines(ComboLoopBoards.loopLines("V|x-5|0||11,17|B:Hullbreaker Horror|B:Mox Amber|H:Llanowar Elves"));
+        bouncer();
+        final Card amber = addCard(AMBER, ai);
+        hand("Llanowar Elves");
+        endlessOne();
+        final ComboLines.Line l = t.deckLines().get(0);
+        final SpellAbility tap = LoopCycles.next(ai, l);
+        assertSame(tap, manaOf(amber), "Amber's tap");
+        assertEquals(tap.getManaPart().getExpressChoice(), "G", "Llanowar Elves needs {G}");
+        assertEquals(LoopCycles.colours(ai, l), ManaAtom.GREEN, "green alone, the kind the tap makes");
+    }
+
     // Review Focus 3: two Sol Rings, the first tapped and the second untapped, beside Mana Vault in our hand: the cycle
     // taps the untapped copy, not the first card of the name; both tapped then, Hullbreaker returns the first of them,
     // and the other stays on our battlefield. The bounce's target is our tapped copy first, else our first, never a
@@ -953,6 +1079,18 @@ public class ComboLoopBounceAiTest extends AITest {
         b.setGamePieceType(GamePieceType.TOKEN);
         assertSame(LoopCycles.bounceTarget(ai, SOL_RING), a, "never a token");
         assertNull(LoopCycles.bounceTarget(ai, MANA_VAULT));
+    }
+
+    // The bounce takes our card of the piece, never the opponent's: their Sol Ring is tapped, which would be taken
+    // first, and ours untapped.
+    @Test
+    public void theBounceTargetIsOursNotTheOpponents() {
+        start();
+        bouncer();
+        final Card theirs = addCard(SOL_RING, opp);
+        theirs.setTapped(true);
+        final Card ours = addCard(SOL_RING, ai);
+        assertSame(LoopCycles.bounceTarget(ai, SOL_RING), ours, "our Sol Ring, not the opponent's");
     }
 
     // A token piece is no piece: returned to our hand it would cease to exist. A token Sol Ring beside Mana Vault in
