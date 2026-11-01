@@ -718,6 +718,40 @@ public class ComboLoopBounceAiTest extends AITest {
         assertNull(driver.mainPhaseAction(List.of()));
     }
 
+    // Hullbreaker Horror, the row's permanent besides its two pieces, is ours: the opponent's, on their battlefield
+    // beside our Sol Ring and our Mana Vault in hand, makes row x-2 no start; ours, the control, does.
+    @Test
+    public void hullbreakerMustBeOursNotTheOpponents() {
+        start();
+        addCard(HULLBREAKER, opp);
+        addCard(SOL_RING, ai);
+        hand(MANA_VAULT);
+        endlessOne();
+        assertFalse(LoopCycles.ready(ai, line(RING_VAULT)), "the opponent's Hullbreaker is none of ours");
+        assertNull(driver.mainPhaseAction(List.of()), "no go-off");
+        ComboLoopBoards.ready(addCard(HULLBREAKER, ai));
+        assertTrue(LoopCycles.ready(ai, line(RING_VAULT)), "the control: ours");
+    }
+
+    // Kinnan, where the row names him, is ours too: row x-14 beside another legend of ours, Isamaru, nets 1 by Mox
+    // Amber's white without our Kinnan, and with the opponent's Kinnan on their battlefield it is no start; ours, the
+    // control, makes it ready.
+    @Test
+    public void kinnanMustBeOursNotTheOpponents() {
+        start();
+        ComboLoopBoards.ready(addCard(HULLBREAKER, ai));
+        ComboLoopBoards.ready(addCard("Isamaru, Hound of Konda", ai));
+        addCard(KINNAN, opp);
+        addCard(AMBER, ai);
+        hand(OPAL);
+        endlessOne();
+        assertEquals(LoopCycles.net(ai, line(AMBER_OPAL)), 1, "Amber's white");
+        assertFalse(LoopCycles.ready(ai, line(AMBER_OPAL)), "the opponent's Kinnan is none of ours");
+        assertNull(driver.mainPhaseAction(List.of()), "no go-off");
+        ComboLoopBoards.ready(addCard(KINNAN, ai));
+        assertTrue(LoopCycles.ready(ai, line(AMBER_OPAL)), "the control: ours");
+    }
+
     // The piece in our hand is ours: Mana Vault in the opponent's hand, beside our Sol Ring, is no piece of row x-2,
     // which nets 0, is not ready and starts nothing; our own Mana Vault in our hand, the control, makes it net 5 and
     // ready.
