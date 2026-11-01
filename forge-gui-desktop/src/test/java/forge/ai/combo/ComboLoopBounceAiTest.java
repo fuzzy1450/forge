@@ -92,6 +92,9 @@ public class ComboLoopBounceAiTest extends AITest {
     private static final String KINNAN_BASALT = "129-4131";
     /** The game-loop steps a stepping test may take for one cycle: two taps, four stack items, and slack. */
     private static final int MAX_STEPS = 300;
+    /** The zones of ours besides our battlefield: where a test puts a card that the cycle does not read. */
+    private static final List<ZoneType> OTHER_ZONES = List.of(ZoneType.Hand, ZoneType.Graveyard, ZoneType.Exile,
+            ZoneType.Library, ZoneType.Command);
     /** Kinnan's list beside its commander: every piece of the 19 loop rows, the sinks, lands and the boards' spells. */
     private static final List<String> KINNANS_LIST = kinnansList();
 
@@ -752,6 +755,55 @@ public class ComboLoopBounceAiTest extends AITest {
         assertTrue(LoopCycles.ready(ai, line(AMBER_OPAL)), "the control: ours");
     }
 
+    // Where a card is matters, not only whose it is. Hullbreaker Horror in our hand, graveyard, exile, library or
+    // command zone is none on our battlefield, so row x-2 is no start; with Hullbreaker out too, the control, it is.
+    // Kinnan, where a row names him, likewise (our commander: in a Commander game he waits in the command zone): row
+    // x-14, beside another legend of ours whose white lets Mox Amber make mana, is no start with Kinnan in any of
+    // those zones; nor is it with Kinnan out and Hullbreaker in one of them. Neither has to be untapped: they attack,
+    // and a loop may run again in the second main phase.
+    @Test
+    public void hullbreakerAndKinnanMustBeOnOurBattlefield() {
+        for (final ZoneType zone : OTHER_ZONES) {
+            start();
+            addCardToZone(HULLBREAKER, ai, zone);
+            addCard(SOL_RING, ai);
+            hand(MANA_VAULT);
+            endlessOne();
+            assertFalse(LoopCycles.ready(ai, line(RING_VAULT)), "Hullbreaker in our " + zone);
+            assertNull(driver.mainPhaseAction(List.of()), "no go-off, Hullbreaker in our " + zone);
+            ComboLoopBoards.ready(addCard(HULLBREAKER, ai));
+            assertTrue(LoopCycles.ready(ai, line(RING_VAULT)), "the control: Hullbreaker out too");
+
+            start();
+            ComboLoopBoards.ready(addCard(HULLBREAKER, ai));
+            ComboLoopBoards.ready(addCard("Isamaru, Hound of Konda", ai));
+            addCardToZone(KINNAN, ai, zone);
+            addCard(AMBER, ai);
+            hand(OPAL);
+            endlessOne();
+            assertFalse(LoopCycles.ready(ai, line(AMBER_OPAL)), "Kinnan in our " + zone);
+            assertNull(driver.mainPhaseAction(List.of()), "no go-off, Kinnan in our " + zone);
+            ComboLoopBoards.ready(addCard(KINNAN, ai));
+            assertTrue(LoopCycles.ready(ai, line(AMBER_OPAL)), "the control: Kinnan out too");
+
+            start();
+            ComboLoopBoards.ready(addCard(KINNAN, ai));
+            addCardToZone(HULLBREAKER, ai, zone);
+            addCard(AMBER, ai);
+            hand(OPAL);
+            endlessOne();
+            assertFalse(LoopCycles.ready(ai, line(AMBER_OPAL)), "x-14 beside Kinnan, Hullbreaker in our " + zone);
+        }
+
+        start();
+        ComboLoopBoards.ready(addCard(HULLBREAKER, ai)).setTapped(true);
+        ComboLoopBoards.ready(addCard(KINNAN, ai)).setTapped(true);
+        addCard(AMBER, ai);
+        hand(OPAL);
+        endlessOne();
+        assertTrue(LoopCycles.ready(ai, line(AMBER_OPAL)), "Hullbreaker and Kinnan tapped");
+    }
+
     // The piece in our hand is ours: Mana Vault in the opponent's hand, beside our Sol Ring, is no piece of row x-2,
     // which nets 0, is not ready and starts nothing; our own Mana Vault in our hand, the control, makes it net 5 and
     // ready.
@@ -768,6 +820,35 @@ public class ComboLoopBounceAiTest extends AITest {
         hand(MANA_VAULT);
         assertEquals(LoopCycles.net(ai, line(RING_VAULT)), 5, "the control: our Mana Vault");
         assertTrue(LoopCycles.ready(ai, line(RING_VAULT)));
+    }
+
+    // A piece is read where its cycle needs it, on our battlefield or in our hand and nowhere else of ours: row x-2
+    // with Sol Ring on our battlefield and Mana Vault in our graveyard, exile, library or command zone, or Mana Vault
+    // in our hand and Sol Ring in one of those, nets 0, is not ready and starts nothing.
+    @Test
+    public void aPieceInAnotherZoneOfOursIsNoPiece() {
+        for (final ZoneType zone : OTHER_ZONES) {
+            if (zone == ZoneType.Hand) {
+                continue;
+            }
+            start();
+            bouncer();
+            addCard(SOL_RING, ai);
+            addCardToZone(MANA_VAULT, ai, zone);
+            endlessOne();
+            assertEquals(LoopCycles.net(ai, line(RING_VAULT)), 0, "Mana Vault in our " + zone);
+            assertFalse(LoopCycles.ready(ai, line(RING_VAULT)), "Mana Vault in our " + zone);
+            assertNull(driver.mainPhaseAction(List.of()), "no go-off, Mana Vault in our " + zone);
+
+            start();
+            bouncer();
+            addCardToZone(SOL_RING, ai, zone);
+            hand(MANA_VAULT);
+            endlessOne();
+            assertEquals(LoopCycles.net(ai, line(RING_VAULT)), 0, "Sol Ring in our " + zone);
+            assertFalse(LoopCycles.ready(ai, line(RING_VAULT)), "Sol Ring in our " + zone);
+            assertNull(driver.mainPhaseAction(List.of()), "no go-off, Sol Ring in our " + zone);
+        }
     }
 
     // The cycle must pay its next cast from where it stands: Sensei's Divining Top on ours and Sol Ring in our hand,
@@ -986,6 +1067,24 @@ public class ComboLoopBounceAiTest extends AITest {
         addCard(ORNITHOPTER, ai);
         addCard(ORNITHOPTER, ai);
         assertEquals(LoopCycles.net(ai, line(AMBER_OPAL)), 4, "the control: two of ours");
+    }
+
+    // Metalcraft counts the artifacts on our battlefield alone: Mox Opal in our hand beside one Ornithopter of ours on
+    // our battlefield, with two more in our hand, graveyard, exile, library or command zone, has no metalcraft, so row
+    // x-14 nets 2, Opal making nothing.
+    @Test
+    public void metalcraftCountsOurBattlefieldAlone() {
+        for (final ZoneType zone : OTHER_ZONES) {
+            start();
+            bouncer();
+            addCard(AMBER, ai);
+            hand(OPAL);
+            addCard(ORNITHOPTER, ai);
+            addCardToZone(ORNITHOPTER, ai, zone);
+            addCardToZone(ORNITHOPTER, ai, zone);
+            endlessOne();
+            assertEquals(LoopCycles.net(ai, line(AMBER_OPAL)), 2, "Ornithopters in our " + zone + ": no metalcraft");
+        }
     }
 
     // Mox Amber makes nothing without a legend of ours: with Hullbreaker alone beside Sol Ring (row x-5, which names no
