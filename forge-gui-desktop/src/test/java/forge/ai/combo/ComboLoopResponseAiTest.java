@@ -21,6 +21,7 @@ import forge.ai.AiController;
 import forge.ai.LobbyPlayerAi;
 import forge.game.Game;
 import forge.game.GameObject;
+import forge.game.GameStage;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
@@ -62,6 +63,8 @@ public class ComboLoopResponseAiTest extends AITest {
     private static final String FOREST = "Forest";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
+    /** The rock untap of Basalt Monolith and Nyxbloom Ancient. */
+    private static final String BASALT_NYXBLOOM = "3430-4131";
     /** The flicker of Palinchron and Deadeye Navigator. */
     private static final String FLICKER = "1409-3542";
     /** The return and recast of Palinchron beside Nyxbloom Ancient. */
@@ -320,6 +323,15 @@ public class ComboLoopResponseAiTest extends AITest {
         throw new AssertionError("the stack did not resolve down to " + removal);
     }
 
+    /** {@code rounds} after {@code n} actions counted this turn, as the driver counts each one it returns
+     *  (LoopRounds.act), none of them refused. */
+    private LoopRounds afterActions(final LoopRounds rounds, final int n) {
+        for (int i = 0; i < n; i++) {
+            assertTrue(rounds.act(ai), "an action refused");
+        }
+        return rounds;
+    }
+
     /** Our Main 1 through the game loop until the go-off has put Basalt's untap on the stack, alone there. */
     private void ourUntapOnTheStack() {
         ComboLoopBoards.stepUntil(game, g -> !g.getStack().isEmpty(), MAX_STEPS);
@@ -506,7 +518,10 @@ public class ComboLoopResponseAiTest extends AITest {
     // no rock line runs: the return and recast (3430-3542) can run, is not denied, Ballista can shoot and Murder on
     // Nyxbloom threatens it, but the recast needs a sorcery-speed cast: no response. With Basalt beside Nyxbloom the
     // rock untap 3430-4131 runs at instant speed, yet Murder on Palinchron, a piece of the recast alone, still draws
-    // none; the control: Murder on Nyxbloom, a piece of the rock line too, draws the response.
+    // none; the control: Murder on Nyxbloom, a piece of the rock line too, draws the response, and the response stays
+    // on the rock line though the recast nets more (10 a cycle to the rock's 6): Basalt's tap, then its untap, never
+    // the pump of Ballista that the recast's boundary (our Palinchron on our battlefield, the lands its untap puts back
+    // untapped) would take with the tap's 9 floating.
     @Test
     public void noResponseForASorcerySpeedKind() {
         start();
@@ -527,8 +542,11 @@ public class ComboLoopResponseAiTest extends AITest {
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
         assertNull(driver.responseAction(), "Murder on a piece of the recast alone");
         game.getStack().clear();
-        ComboLoopBoards.theirSpellOn(game, opp, MURDER, nyxbloom);
-        assertSame(driver.responseAction(), manaOf(basalt), "the control: Murder on Nyxbloom, beside Basalt");
+        final Card murder = ComboLoopBoards.theirSpellOn(game, opp, MURDER, nyxbloom);
+        assertEquals(LoopCycles.net(ai, line(RECAST)), 10, "the recast's net a cycle");
+        assertEquals(LoopCycles.net(ai, line(BASALT_NYXBLOOM)), 6, "the rock's net a cycle");
+        assertEquals(respond(murder, 2), List.of(manaOf(basalt), untapOf(basalt)),
+                "the control: Murder on Nyxbloom, beside Basalt, draws the rock line's tap and untap");
     }
 
     // Review Focus 1: our turn, a go-off running, three untapped lands of ours (R16: the response's first step is a
@@ -601,6 +619,30 @@ public class ComboLoopResponseAiTest extends AITest {
         opponentLostByLife();
         assertSame(onOurBattlefield(KINNAN), kinnan, "Murder resolved");
         assertEquals(decisionDraws, 0, "the driver's decisions drew");
+    }
+
+    // R28's "what the caps have left" counts the actions the driver has already returned: the same volley of 21
+    // actions draws no response from a turn's cap of 30 with 10 of its actions spent this turn, nor from a game's cap
+    // of 30 with 10 spent, 20 left either way. With 9 of a turn's cap of 30 spent, 21 left, the response starts with
+    // Basalt's mana ability, and the volley is played to the kill, its last ping the 30th action counted this turn.
+    @Test
+    public void whatTheCapsHaveLeftCountsTheActionsAlreadySpent() {
+        start();
+        final Card kinnan = rock();
+        ballista(1);
+        opp.setLife(3, null);
+        theirTurn();
+        final Card murder = ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+        assertEquals(LoopResponse.volleyActions(ai, line(KINNAN_BASALT)), 21L, "the volley's actions");
+        driver.useRounds(afterActions(new LoopRounds(30, 100), 10));
+        assertNull(driver.responseAction(), "21 actions, 20 of a turn's cap of 30 left");
+        driver.useRounds(afterActions(new LoopRounds(100, 30), 10));
+        assertNull(driver.responseAction(), "21 actions, 20 of a game's cap of 30 left");
+        driver.useRounds(afterActions(new LoopRounds(30, 100), 9));
+        assertEquals(respond(murder, 1), List.of(manaOf(basalt)), "21 actions, 21 left: the first tap");
+        final List<SpellAbility> acts = respond(murder, MAX_ACTIONS);
+        assertEquals(acts.size(), 20, "the volley's other actions: " + acts);
+        opponentLostByLife();
     }
 
     // R25's judge waits for our ping to leave the stack: Ballista with three counters, the opponent at 3, Murder on
@@ -694,6 +736,43 @@ public class ComboLoopResponseAiTest extends AITest {
         assertNotNull(driver.responseAction(), "the volley went no further");
     }
 
+    // An empty stack holds nothing to answer (AiController asks the driver only above a stack, and MagicStack.peek is
+    // null on an empty one): with the rock line and Ballista ready on the opponent's turn and nothing on the stack, the
+    // driver answers nothing and throws nothing. The control: Murder on Kinnan draws Basalt's mana ability.
+    @Test
+    public void noResponseOnAnEmptyStack() {
+        start();
+        final Card kinnan = rock();
+        ballista(1);
+        theirTurn();
+        assertTrue(game.getStack().isEmpty(), "the stack holds an item");
+        assertNull(driver.responseAction(), "an empty stack");
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+        assertSame(driver.responseAction(), manaOf(basalt), "the control: Murder on Kinnan");
+    }
+
+    // The driver checks that the game is still on before it returns an action (section 7: a game that times out is
+    // marked over while its engine may still be deciding): Murder on Kinnan, Ballista ready, draws Basalt's mana
+    // ability while the game is on, and nothing once it is marked over. Over is the game's age alone, which the
+    // timeout's Game.setGameOver sets before it gives every player an outcome (that takes them out of the game, and
+    // no kill would read as in reach), so the null is the driver's own check.
+    @Test
+    public void noResponseOnceTheGameIsOver() {
+        for (final boolean over : new boolean[] {false, true}) {
+            start();
+            final Card kinnan = rock();
+            ballista(1);
+            theirTurn();
+            ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+            if (over) {
+                game.setAge(GameStage.GameOver);
+                assertNull(driver.responseAction(), "the game is over");
+            } else {
+                assertSame(driver.responseAction(), manaOf(basalt), "the game is on");
+            }
+        }
+    }
+
     // R21 holds in response: the opponent's Suppression Field ({2} more for each activated ability that is no mana
     // ability) makes Basalt's untap cost 5, so a cycle loses mana. With two Islands of ours to pay the first untap, the
     // response to Murder on Kinnan (its count, 347 actions, read at the printed net and the priced pump and ping)
@@ -713,6 +792,33 @@ public class ComboLoopResponseAiTest extends AITest {
         assertEquals(acts, List.of(manaOf(basalt), untapOf(basalt)), "the tap and the untap");
         assertTrue(basalt.isUntapped(), "the untap resolved");
         assertNull(driver.responseAction(), "the line is failed for the phase");
+    }
+
+    // R21's judge of the action returned last holds in response, as in a main phase: Basalt tapped, three untapped
+    // Forests of ours to pay its untap, Ballista with one counter and Murder on Kinnan. The response's first step is
+    // Basalt's untap; asked again with that untap never played, nothing changed among the pool, our hand, our
+    // battlefield and the stack, so the rock line is failed for the phase and the driver returns nothing, never the
+    // same step again. The control, on the same board: with the untap played, the next step is Basalt's tap.
+    @Test
+    public void aStepThatChangesNothingFailsItsLineInResponse() {
+        start();
+        final Card kinnan = rock();
+        lands(FOREST, 3);
+        ballista(1);
+        basalt.setTapped(true);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+        assertSame(driver.responseAction(), untapOf(basalt), "the first step: the untap");
+        assertNull(driver.responseAction(), "the same untap again, nothing changed: its line is failed");
+
+        start();
+        final Card kinnan2 = rock();
+        lands(FOREST, 3);
+        ballista(1);
+        basalt.setTapped(true);
+        theirTurn();
+        final Card murder = ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan2);
+        assertEquals(respond(murder, 2), List.of(untapOf(basalt), manaOf(basalt)), "the control: the untap played");
     }
 
     // A win now beats countering the removal: Counterspell in our hand and two untapped Islands. With no loop line
