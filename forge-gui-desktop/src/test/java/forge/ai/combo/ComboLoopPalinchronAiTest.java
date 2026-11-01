@@ -617,6 +617,32 @@ public class ComboLoopPalinchronAiTest extends AITest {
         assertTrue(ring.isUntapped(), "Sol Ring");
     }
 
+    // A mana rock is no land of the cycle, and neither is a land that makes no mana: beside three Islands, our Sol Ring
+    // and Maze of Ith are not among the lands Palinchron's untap puts back, so the flicker nets 3 - 2 and nothing
+    // throws, and the cycle taps the Islands alone and flickers, the rock and the Maze left untapped.
+    @Test
+    public void aManaRockAndAUtilityLandAreNoLandsOfTheCycle() {
+        start();
+        final Card palinchron = paired();
+        final SpellAbility flicker = flickerOf(palinchron);
+        final List<Card> islands = lands(ISLAND, 3);
+        final Card ring = addCard("Sol Ring", ai);
+        final Card maze = addCard("Maze of Ith", ai);
+        endlessOne();
+        assertEquals(LoopCycles.net(ai, line(FLICKER)), 1, "three Islands less the flicker's two");
+        assertTrue(LoopCycles.ready(ai, line(FLICKER)));
+        assertTrue(LoopCycles.boundary(ai, line(FLICKER)));
+        final List<SpellAbility> acts = drive(4);
+        assertEquals(acts.size(), 4, "three taps and the flicker");
+        for (int i = 0; i < 3; i++) {
+            assertSame(acts.get(i), manaOf(islands.get(i)), "Island " + i);
+        }
+        assertSame(acts.get(3), flicker);
+        assertTrue(ring.isUntapped(), "Sol Ring");
+        assertTrue(maze.isUntapped(), "Maze of Ith");
+        assertEquals(pool(), 1);
+    }
+
     // A land is tapped for the mana ability that makes blue, when it has one: Floodfarm Verge, whose first ability
     // makes {W} and its second {U} (we control a Plains), is the one blue land beside five Forests and a Plains, tapped
     // last and for its {U}, which pays the flicker.
@@ -787,6 +813,30 @@ public class ComboLoopPalinchronAiTest extends AITest {
         assertEquals(decisionDraws, 0, "the driver's decisions drew");
     }
 
+    // The recast hands the pool to the stock walk at its boundary, as the flicker does: Nyxbloom Ancient and Palinchron
+    // beside four Islands and three Forests, and two Counterspells in hand, a target of 2. The board with every land
+    // untapped is a boundary, the go-off's start; the driver taps the seven lands, returns Palinchron and casts it, and
+    // back at a boundary, the seven put back and the pool at 10, the walk's turn comes (null), where a boundary that
+    // never came would refill to the turn cap. The walk's spend there, then a fresh refill of one cycle.
+    @Test
+    public void theRecastHandsThePoolToTheStockWalkAtItsBoundary() {
+        start();
+        recast();
+        lands(ISLAND, 4);
+        lands(FOREST, 3);
+        addCardToZone(COUNTERSPELL, ai, ZoneType.Hand);
+        final Card counterspell = addCardToZone(COUNTERSPELL, ai, ZoneType.Hand);
+        assertTrue(LoopCycles.boundary(ai, line(RECAST)), "every land untapped: a go-off's start");
+        final List<SpellAbility> acts = drive(50);
+        assertEquals(acts.size(), 9, "seven taps, the return and the cast, then the walk's turn");
+        assertTrue(LoopCycles.boundary(ai, line(RECAST)), "back at a boundary");
+        assertEquals(pool(), 10);
+
+        driver.noteStockPlay(counterspell.getFirstSpellAbility());
+        ai.getManaPool().clearPool(false);
+        assertEquals(drive(50).size(), 9, "refilled to 2 with one cycle");
+    }
+
     // Review Focus 4 for the recast: three cycles back to back, a new Palinchron each, and the pool 30 up.
     @Test
     public void threeRecastCyclesInARow() {
@@ -891,6 +941,70 @@ public class ComboLoopPalinchronAiTest extends AITest {
         assertNull(driver.mainPhaseAction(List.of()));
     }
 
+    // Whether the recast can run from where it stands, the whole of the cycle it still has to pay read: Nyxbloom
+    // Ancient and Palinchron beside four Islands (a net of 1; the return and the cast cost 4 and 7, four of it blue),
+    // the first islandsUntapped of the Islands untapped and the rest tapped, and that much blue and green floating.
+    private boolean recastReadyWith(final int islandsUntapped, final int blue, final int green) {
+        start();
+        recast();
+        final List<Card> islands = lands(ISLAND, 4);
+        for (int i = islandsUntapped; i < islands.size(); i++) {
+            islands.get(i).setTapped(true);
+        }
+        endlessOne();
+        floating(blue, (byte) ManaAtom.BLUE, islands.get(0));
+        floating(green, (byte) ManaAtom.GREEN, islands.get(0));
+        return LoopCycles.ready(ai, line(RECAST));
+    }
+
+    // The recast's return and cast are paid from the pool and our lands to tap together, the total and the blue apart:
+    // an Island's 3 and 8 floating pay exactly the 11; one mana fewer, the cast's 7 alone, the return's 4 alone, and
+    // 11 with 3 blue of the 4 do not.
+    @Test
+    public void aRecastNeedsTheWholeOfItsCostFromWhereItStands() {
+        assertTrue(recastReadyWith(1, 4, 4), "an Island's 3 and 8 floating: exactly the 11, 7 of it blue");
+        assertFalse(recastReadyWith(1, 4, 3), "10 of the 11");
+        assertFalse(recastReadyWith(1, 4, 0), "7 of the 11: the cast alone");
+        assertFalse(recastReadyWith(0, 4, 0), "4 of the 11: the return alone");
+        assertFalse(recastReadyWith(1, 0, 8), "11 mana but 3 blue of the 4");
+    }
+
+    // Whether the recast past its return can run: Nyxbloom Ancient on our battlefield, Palinchron in our hand, two
+    // Islands and five Forests of ours, every one tapped, that much blue and green floating, and, taxed, the
+    // opponent's Sphere of Resistance.
+    private boolean recastFromHandReadyWith(final int blue, final int green, final boolean taxed) {
+        start();
+        ComboLoopBoards.ready(addCard(NYXBLOOM, ai));
+        addCardToZone(PALINCHRON, ai, ZoneType.Hand);
+        final List<Card> islands = lands(ISLAND, 2);
+        final List<Card> forests = lands(FOREST, 5);
+        for (final Card c : islands) {
+            c.setTapped(true);
+        }
+        for (final Card c : forests) {
+            c.setTapped(true);
+        }
+        endlessOne();
+        if (taxed) {
+            addCard("Sphere of Resistance", opp);
+        }
+        floating(blue, (byte) ManaAtom.BLUE, islands.get(0));
+        floating(green, (byte) ManaAtom.GREEN, forests.get(0));
+        return LoopCycles.ready(ai, line(RECAST));
+    }
+
+    // Past its return (Palinchron in our hand, every land of ours tapped) the recast needs the whole of its cast from
+    // the pool, as the engine prices it now: {5}{U}{U}, or {6}{U}{U} under the opponent's Sphere of Resistance.
+    @Test
+    public void aRecastPastItsReturnNeedsItsWholeCastFromThePool() {
+        assertTrue(recastFromHandReadyWith(2, 5, false), "{5}{U}{U}");
+        assertFalse(recastFromHandReadyWith(2, 4, false), "6 of the 7");
+        assertFalse(recastFromHandReadyWith(0, 7, false), "7 mana and no blue");
+        assertFalse(recastFromHandReadyWith(1, 6, false), "7 mana and one blue");
+        assertFalse(recastFromHandReadyWith(2, 0, false), "two blue and no more");
+        assertFalse(recastFromHandReadyWith(2, 5, true), "7 of the 8 under Sphere of Resistance");
+    }
+
     // The recast runs only with its pieces but Palinchron on our battlefield: with Nyxbloom Ancient in our library and
     // Mana Reflection doubling our lands instead, the cycle would net 7 x 2 - 11 = 3, but the line is not ready.
     @Test
@@ -978,6 +1092,36 @@ public class ComboLoopPalinchronAiTest extends AITest {
         assertTrue(arbor.isUntapped(), "the Arbor never tapped");
         assertTrue(LoopCycles.boundary(ai, line(FLICKER)));
         assertEquals(pool(), 3);
+    }
+
+    // The lands Palinchron's untap really puts back are those the boundary reads, past seven lands too: after a flicker
+    // cycle on five Forests and four Islands, one on nine Islands, and a recast cycle on four Forests and five Islands,
+    // the board is a boundary, the untap having taken the first of its options, in our battlefield's order, as the
+    // put-back set reads them, not the last.
+    @Test
+    public void afterACycleOnMoreThanSevenLandsTheBoundaryIsReached() {
+        start();
+        paired();
+        lands(FOREST, 5);
+        lands(ISLAND, 4);
+        endlessOne();
+        assertEquals(oneCycle(), 7);
+        assertTrue(LoopCycles.boundary(ai, line(FLICKER)), "five Forests, four Islands");
+
+        start();
+        paired();
+        lands(ISLAND, 9);
+        endlessOne();
+        assertEquals(oneCycle(), 7);
+        assertTrue(LoopCycles.boundary(ai, line(FLICKER)), "nine Islands");
+
+        start();
+        recast();
+        lands(FOREST, 4);
+        lands(ISLAND, 5);
+        endlessOne();
+        assertEquals(oneCycle(), 16);
+        assertTrue(LoopCycles.boundary(ai, line(RECAST)), "the recast, four Forests and five Islands");
     }
 
     // A Palinchron that lost its abilities (the opponent's Turn to Frog: a 1/1 Frog until end of turn) has no return
@@ -1113,6 +1257,31 @@ public class ComboLoopPalinchronAiTest extends AITest {
         assertNull(driver.untapChoice(etb, List.of(ourIsland)), "the cycle's step is over");
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai, 3);
         assertNull(driver.untapChoice(etb, List.of(ourIsland)), "the same step of a later turn");
+    }
+
+    // Mid-cycle the untap choice takes the first of the lands that make blue among its options, and with none the
+    // first of the rest, in the options' order, drawing no random number on either path (the stock pick draws).
+    @Test
+    public void theUntapChoiceTakesTheFirstInTheOptionsOrderAndDrawsNothing() {
+        start();
+        final Card palinchron = paired();
+        lands(ISLAND, 7);
+        endlessOne();
+        final Card forest = addCard(FOREST, ai);
+        final Card forest2 = addCard(FOREST, ai);
+        final Card island = addCard(ISLAND, ai);
+        final Card island2 = addCard(ISLAND, ai);
+        for (final Card c : List.of(forest, forest2, island, island2)) {
+            c.setTapped(true);
+        }
+        assertEquals(drive(1).size(), 1, "the cycle's first tap");
+        final SpellAbility etb = etbOf(palinchron);
+        final long before = MyRandom.callCount();
+        assertSame(driver.untapChoice(etb, List.of(forest, forest2)), forest, "the first of the rest");
+        assertSame(driver.untapChoice(etb, List.of(forest, forest2, island, island2)), island,
+                "the first that makes blue");
+        assertSame(driver.untapChoice(etb, List.of(island, island2)), island);
+        assertEquals(MyRandom.callCount() - before, 0, "the untap choice drew");
     }
 
     // LoopDriver.partnerChoice is Deadeye Navigator's own pairing alone: Palinchron among the options while the deck
