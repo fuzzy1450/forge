@@ -9,6 +9,7 @@ import forge.ai.LoopTracker;
 import forge.ai.PlayerControllerAi;
 import forge.game.Game;
 import forge.game.GameObject;
+import forge.game.ability.AbilityKey;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCollectionView;
@@ -16,6 +17,7 @@ import forge.game.card.CardCopyService;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.zone.MagicStack;
@@ -69,7 +71,10 @@ import forge.game.zone.ZoneType;
  * Sakashima of a Thousand Faces to copy Kinnan when that completes the Grim Monolith line ({@link #copyChoice}). For
  * Palinchron's loops it makes two choices: during one of its flicker or recast cycles Palinchron's entering untap takes
  * our lands that make blue first ({@link #untapChoice}), and Deadeye Navigator's own soulbond pairs it with Palinchron
- * whenever the deck holds the flicker line ({@link #partnerChoice}).
+ * whenever the deck holds the flicker line ({@link #partnerChoice}). During one of its cast and bounce cycles
+ * Hullbreaker Horror's cast trigger returns the cycle's other piece to our hand ({@link #charmModes}), and our hand
+ * cast of the cycle's piece in hand waits for the cycle ({@link #holdsCycleCast}, ComboHold.vetoesCast), so the stock
+ * walk, which plays at the cycle's boundary, never casts it.
  */
 public final class LoopDriver {
     private static final String KINNAN = "Kinnan, Bonder Prodigy";
@@ -407,6 +412,60 @@ public final class LoopDriver {
         return null;
     }
 
+    /**
+     * Hullbreaker Horror's cast trigger during one of the driver's cast and bounce cycles (AiController's
+     * chooseModeForAbility, section 6.8), when the spell whose cast triggered it ({@code sa}'s triggering card) is one
+     * of the two pieces of the line the go-off of this step runs: a mutable list (CharmEffect.chainAbilities sorts it
+     * in place) holding a copy of the mode among {@code possible} that returns a permanent on the battlefield to its
+     * owner's hand, its target our card of the line's other piece on our battlefield, a tapped one first
+     * (LoopCycles.bounceTarget: Sensei's Divining Top and Scroll Rack never tap, Mox Opal taps only with metalcraft);
+     * the copy carries the target, so none is left on the trigger's own mode, which the engine reuses. Empty, the
+     * trigger choosing nothing, when no such card is on our battlefield (R19: x-14's start, both pieces in our hand) or
+     * the mode cannot target it. Null, the stock choice, for any other host's charm, for the trigger of a spell that is
+     * no piece of the line, and while no cast and bounce cycle runs (R19: our own Hullbreaker's trigger outside a
+     * cycle; an opponent's spell never triggers it). Draws nothing.
+     */
+    public List<AbilitySub> charmModes(final SpellAbility sa, final List<AbilitySub> possible) {
+        final Card host = sa.getHostCard();
+        if (host == null || !LoopCycles.HULLBREAKER.equals(ComboTracker.nameOf(host)) || !bounceCycle()) {
+            return null;
+        }
+        final List<String> pieces = LoopCycles.bouncePieces(line);
+        final int cast = sa.getTriggeringObject(AbilityKey.Card) instanceof Card spell
+                ? pieces.indexOf(ComboTracker.nameOf(spell)) : -1;
+        if (cast < 0) {
+            return null;
+        }
+        final List<AbilitySub> modes = new ArrayList<>(1);
+        final Card target = LoopCycles.bounceTarget(ai, pieces.get(1 - cast));
+        if (target == null) {
+            return modes;
+        }
+        for (final AbilitySub mode : possible) {
+            if (mode.usesTargeting() && mode.getTargetRestrictions().getZone().contains(ZoneType.Battlefield)) {
+                final AbilitySub bounce = (AbilitySub) mode.copy(ai);
+                bounce.resetTargets();
+                if (bounce.canTarget(target)) {
+                    bounce.getTargets().add(target);
+                    modes.add(bounce);
+                }
+                break;
+            }
+        }
+        return modes;
+    }
+
+    /** Whether our hand cast {@code sa} waits because the go-off of this step runs a cast and bounce line of which it
+     *  is a step (ComboHold.vetoesCast): the cycle casts its pieces itself, one a decision, and the stock walk plays at
+     *  the cycle's boundary with the line's second piece in our hand. Cast by the walk, that piece would be returned
+     *  and cast again by the next cycle, each time a round the idle rule reads as progress (a nonland permanent
+     *  arrived, a card arrived in our hand that the pool pays for), so the go-off would never end of itself, nor would
+     *  the walk's casts once a cap stopped the driver ({@link #charmModes} reads the same stamp). False while no cast
+     *  and bounce cycle runs. Draws nothing. */
+    public boolean holdsCycleCast(final SpellAbility sa) {
+        return bounceCycle() && LoopCycles.isStep(ai, line, sa);
+    }
+
     /** Tests only: these caps and this round record instead. */
     void useRounds(final LoopRounds rounds) {
         this.rounds = rounds;
@@ -442,12 +501,20 @@ public final class LoopDriver {
     }
 
     // whether the go-off of this step runs a flicker or recast line now: active, on a line of either kind, in the
-    // phase it was stamped in (the flag outlives its step when the go-off's last decision returned nothing without
-    // ending it: a cap stopped it, or its check refused a sink's action)
+    // phase it was stamped in (stampedNow)
     private boolean palinchronCycle() {
-        if (!active || (line.loop() != LoopKind.FLICKER && line.loop() != LoopKind.RECAST)) {
-            return false;
-        }
+        return active && (line.loop() == LoopKind.FLICKER || line.loop() == LoopKind.RECAST) && stampedNow();
+    }
+
+    // whether the go-off of this step runs a cast and bounce line now: active, on a line of that kind, in the phase it
+    // was stamped in (stampedNow)
+    private boolean bounceCycle() {
+        return active && line.loop() == LoopKind.BOUNCE && stampedNow();
+    }
+
+    // whether this is the phase the go-off was stamped in: the active flag outlives its step when the go-off's last
+    // decision returned nothing without ending it (a cap stopped it, or its check refused a sink's action)
+    private boolean stampedNow() {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         return ph.getTurn() == phaseTurn && ph.getPhase() == phase;
     }

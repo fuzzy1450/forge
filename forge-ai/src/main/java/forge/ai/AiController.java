@@ -2949,6 +2949,14 @@ public class AiController {
     }
 
     public List<AbilitySub> chooseModeForAbility(SpellAbility sa, List<AbilitySub> possible, int min, int num, boolean allowRepeat) {
+        // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.8): Hullbreaker Horror's
+        // cast trigger during one of the loop driver's cast and bounce cycles returns the cycle's other piece to our
+        // hand (LoopDriver.charmModes). Null, and the stock choice below, for every other charm and outside such a
+        // cycle; draws nothing.
+        final List<AbilitySub> loopModes = loopDriver.charmModes(sa, possible);
+        if (loopModes != null) {
+            return loopModes;
+        }
         if (simPicker != null) {
             return simPicker.chooseModeForAbility(sa, possible, min, num, allowRepeat);
         }

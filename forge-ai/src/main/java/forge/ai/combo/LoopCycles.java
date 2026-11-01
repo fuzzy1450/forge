@@ -2,6 +2,7 @@ package forge.ai.combo;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import com.google.common.collect.Iterables;
 
@@ -11,6 +12,7 @@ import forge.card.mana.ManaCost;
 import forge.card.mana.ManaCostShard;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
+import forge.game.card.CardUtil;
 import forge.game.mana.ManaPool;
 import forge.game.player.Player;
 import forge.game.replacement.ReplacementEffect;
@@ -24,8 +26,7 @@ import forge.game.zone.ZoneType;
  * One cycle of each loop kind (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.1): what it nets, whether its
  * pieces are where it needs them, and its next action, read from the board alone at each decision, so a piece that
  * changes identity (a recast or flickered card is a new object) or a copy of one (two Basalt Monoliths) is read as the
- * card object it is now, never as the first card of a name. The rock untaps, the flicker and the recast run here; the
- * cast and bounce is no cycle yet (Task B8), so its lines net 0 and are never ready.
+ * card object it is now, never as the first card of a name. All four kinds run here.
  *
  * <p>The rock untap: each rock of the line on our battlefield (a piece whose card taps for mana and untaps itself,
  * Basalt or Grim Monolith) is tapped for mana, its mana ability, and then pays its own untap from the pool. A boundary
@@ -46,15 +47,32 @@ import forge.game.zone.ZoneType;
  * moved, since a flicker would exile it and a return leave it nowhere. A cycle starts or goes on only while the pool
  * and our lands to tap pay the rest of it, so the recast does not return a Palinchron that the pool and our lands
  * cannot cast again.
- * Nothing here draws a random number or writes a card but setActivatingPlayer on the abilities it reads.
+ *
+ * <p>The cast and bounce (Hullbreaker Horror with a rock and a fill, x-2 to x-14): the row's two pieces besides
+ * Hullbreaker and Kinnan, one on our battlefield and the other in our hand, trade places each half of a cycle. The one
+ * on our battlefield is tapped for mana when it makes any, then the other is cast; Hullbreaker's cast trigger, which
+ * the driver chooses ({@link LoopDriver#charmModes}), returns the first to our hand while the second is still on the
+ * stack, and the second resolves untapped. With both in our hand (x-14's start) the line's first piece is cast first,
+ * its trigger choosing nothing. A boundary is a board on which the line's first piece is untapped on our battlefield
+ * and its second in our hand, once in each cycle. Each cast and each return makes a piece a new object, found afresh
+ * at every decision; a token piece is none, since returned to our hand it would cease to exist.
+ * Nothing here draws a random number or writes a card but setActivatingPlayer on the abilities it reads, and Mox
+ * Amber's colour, set as the express choice of the tap it returns ({@link #reflectedColour}).
  */
 final class LoopCycles {
     /** Palinchron, the piece the flicker and the recast move each cycle, as the table names it. */
     static final String PALINCHRON = "Palinchron";
     /** Deadeye Navigator, whose soulbond pair is granted the flicker, as the table names it. */
     static final String DEADEYE = "Deadeye Navigator";
+    /** Hullbreaker Horror, whose cast trigger returns the cast and bounce's other piece to our hand, as the table names
+     *  it. */
+    static final String HULLBREAKER = "Hullbreaker Horror";
+    // Kinnan, Bonder Prodigy: a piece of x-4, x-12 and x-14 for his bonus alone, never one the cast and bounce casts
+    private static final String KINNAN = "Kinnan, Bonder Prodigy";
     // Palinchron's entering untap: up to seven lands
     private static final int UNTAPS = 7;
+    // metalcraft (Mox Opal's tap): three artifacts of ours
+    private static final int METALCRAFT = 3;
 
     private LoopCycles() {
     }
@@ -70,9 +88,25 @@ final class LoopCycles {
      * Palinchron has no flicker (Deadeye Navigator unpaired, or paired with another creature) and with no land of ours
      * that makes blue. The recast: what those lands make, minus Palinchron's printed return and cast, {2}{U}{U} and
      * {5}{U}{U} (+10 with seven lands and one Nyxbloom); 0 with no Palinchron of ours on our battlefield or in our
-     * hand. A cost tax is not read here (R21: the driver measures each cycle).
+     * hand. The cast and bounce (I6 section 2.3's r + K + m + K x [m > 0] - cost(A) - cost(B)): what one tap of each of
+     * its two pieces makes ({@link #tapOf}, times our multipliers, one for each Kinnan of ours its tap fires, less the
+     * tap's own cost: Simic Signet's {1}; none for a piece that makes no mana in the cycle: Sensei's Divining Top,
+     * Scroll Rack, Mox Amber without a legend of ours, Mox Opal short of metalcraft), less both pieces' printed casts;
+     * read from each piece's card on our battlefield or in our hand, so the same at every point of the cycle; 0 with a
+     * piece neither there nor there. A cost tax is not read here (R21: the driver measures each cycle).
      */
     static int net(final Player ai, final ComboLines.Line l) {
+        if (l.loop() == LoopKind.BOUNCE) {
+            final List<Card> cards = bounceCards(ai, l);
+            if (cards == null) {
+                return 0;
+            }
+            int net = 0;
+            for (final Card c : cards) {
+                net += tapYield(ai, l, c) - printed(castOf(c)).getCMC();
+            }
+            return net;
+        }
         if (l.loop() == LoopKind.FLICKER) {
             final SpellAbility flicker = flicker(ai);
             if (flicker == null) {
@@ -112,9 +146,16 @@ final class LoopCycles {
      * paid by the pool and our lands to tap: with a Palinchron of ours in our hand and no land of ours left to tap, the
      * cycle past its return, its cast as priced now; else, with Palinchron on our battlefield, its return as priced now
      * and its cast as printed. Palinchron in our hand beside lands to tap, none on our battlefield, is no start (spec
-     * 6.2: the pieces on the battlefield).
+     * 6.2: the pieces on the battlefield). The cast and bounce: Hullbreaker Horror, and Kinnan where the row names him,
+     * on our battlefield; one of its two pieces on our battlefield (a card, not a token) and the other in our hand, or
+     * both in our hand with neither on our battlefield (R19: x-14's start, the first to be cast first); its net above
+     * 0; and the next cast, as the engine prices it now, paid by the pool, our untapped lands and the tap of the piece
+     * on our battlefield when the cycle taps it first.
      */
     static boolean ready(final Player ai, final ComboLines.Line l) {
+        if (l.loop() == LoopKind.BOUNCE) {
+            return bounceReady(ai, l);
+        }
         if (l.loop() == LoopKind.FLICKER) {
             for (final String name : l.names()) {
                 if (onOurBattlefield(ai, name) == null) {
@@ -155,8 +196,28 @@ final class LoopCycles {
      *  and our untapped lands pay. The flicker: the mana ability of our next land to tap, those that make no blue
      *  first; with none, the flicker of our Palinchron when the pool pays it as the engine prices it now. The recast:
      *  with a Palinchron of ours in our hand and no land of ours left to tap, its cast, when the pool pays it so; else
-     *  the next land's tap, then the return of our Palinchron on our battlefield, when the pool pays it so. */
+     *  the next land's tap, then the return of our Palinchron on our battlefield, when the pool pays it so. The cast
+     *  and bounce: the tap of the piece on our battlefield ({@link #tapOf}) while it is untapped and makes mana in the
+     *  cycle, the driver may make it now and the pool and our untapped lands pay its cost, Mox Amber's set first to the
+     *  colour the next cast needs ({@link #reflectedColour}), so that no colour is left over from the last payment
+     *  (section 6.3); else the cast of the piece in our hand (with both there, the line's first), when the pool and our
+     *  untapped lands pay it as the engine prices it now. */
     static SpellAbility next(final Player ai, final ComboLines.Line l) {
+        if (l.loop() == LoopKind.BOUNCE) {
+            final Bounce s = bounce(ai, l);
+            if (s == null) {
+                return null;
+            }
+            final SpellAbility tap = s.here() == null ? null : tappable(ai, l, s.here());
+            if (tap != null) {
+                if (tap.getApi() == ApiType.ManaReflected) {
+                    final byte colour = reflectedColour(ai, tap, ComboExecute.priced(ai, castOf(s.there())));
+                    tap.getManaPart().setExpressChoice(MagicColor.toShortString(colour));
+                }
+                return tap;
+            }
+            return paid(ai, castOf(s.there()));
+        }
         if (l.loop() == LoopKind.FLICKER) {
             final SpellAbility flicker = flicker(ai);
             return flicker == null ? null : tapOrMove(ai, flicker);
@@ -203,8 +264,15 @@ final class LoopCycles {
 
     /** Whether loop line {@code l}'s cycle is at a boundary, where a refill may end and the stock AI play: a rock
      *  untap's, a rock of it untapped; the flicker's, our Palinchron with its flicker, and the recast's, our Palinchron
-     *  on our battlefield, each with every land Palinchron's untap puts back untapped. */
+     *  on our battlefield, each with every land Palinchron's untap puts back untapped; the cast and bounce's, the
+     *  line's first piece untapped on our battlefield (a card, not a token) and its second in our hand, which comes
+     *  once a cycle (the pieces trade places each half of it). */
     static boolean boundary(final Player ai, final ComboLines.Line l) {
+        if (l.loop() == LoopKind.BOUNCE) {
+            final List<String> pieces = bouncePieces(l);
+            return pieces.size() == 2 && untappedPiece(ai, pieces.get(0)) != null
+                    && inOurHand(ai, pieces.get(1)) != null;
+        }
         if (l.loop() == LoopKind.FLICKER) {
             return flicker(ai) != null && putBackUntapped(ai);
         }
@@ -226,8 +294,18 @@ final class LoopCycles {
      *  or its untap; for the flicker and the recast alike, which each move our Palinchron, a mana ability of a land of
      *  ours, the flicker Deadeye Navigator grants (on Palinchron, or on Deadeye itself), Palinchron's own return and
      *  its cast. ChangeZoneAi makes those moves only to save a creature from removal on the stack, so none of them is
-     *  ever something the stock AI spends the pool on. */
+     *  ever something the stock AI spends the pool on. For the cast and bounce, a mana ability of a card of ours of one
+     *  of its two pieces, and the cast of one from our hand (which the cycle makes itself: LoopDriver.holdsCycleCast).
+     */
     static boolean isStep(final Player ai, final ComboLines.Line l, final SpellAbility sa) {
+        if (l.loop() == LoopKind.BOUNCE) {
+            final Card host = sa.getHostCard();
+            if (host == null || !ai.equals(host.getController())
+                    || !bouncePieces(l).contains(ComboTracker.nameOf(host))) {
+                return false;
+            }
+            return sa.isManaAbility() || (sa.isSpell() && host.isInZone(ZoneType.Hand));
+        }
         if (l.loop() == LoopKind.FLICKER || l.loop() == LoopKind.RECAST) {
             return palinchronStep(ai, sa);
         }
@@ -245,8 +323,28 @@ final class LoopCycles {
     /** The kinds of mana loop line {@code l}'s cycle makes without limit, as ManaAtom's low bits: a rock untap's, its
      *  rocks' (Kinnan's bonus is of the kind the rock made, and Nyxbloom triples what is made); the flicker's and the
      *  recast's, those of the lands Palinchron's untap puts back, blue only while they make more of it than the cycle
-     *  pays (the flicker's {U}, the recast's four), none without the cycle's abilities. */
+     *  pays (the flicker's {U}, the recast's four), none without the cycle's abilities; the cast and bounce's, those of
+     *  its pieces' taps that make mana in the cycle ({@link #tapOf}), Mox Amber's the colour its tap is set to before
+     *  the other piece's cast ({@link #reflectedColour}). */
     static int colours(final Player ai, final ComboLines.Line l) {
+        if (l.loop() == LoopKind.BOUNCE) {
+            final List<Card> cards = bounceCards(ai, l);
+            if (cards == null) {
+                return 0;
+            }
+            int kinds = 0;
+            for (int i = 0; i < cards.size(); i++) {
+                final Card c = cards.get(i);
+                final SpellAbility ma = tapOf(c);
+                if (ma == null || !makesMana(ai, l, ma)) {
+                    continue;
+                }
+                kinds |= ma.getApi() == ApiType.ManaReflected
+                        ? reflectedColour(ai, ma, ComboExecute.priced(ai, castOf(cards.get(1 - i))))
+                        : LoopPool.made(ma);
+            }
+            return kinds;
+        }
         if (l.loop() == LoopKind.FLICKER || l.loop() == LoopKind.RECAST) {
             final int pays = cycleBlue(ai, l);
             if (pays < 0) {
@@ -597,6 +695,250 @@ final class LoopCycles {
         final SpellAbility back = p == null ? null : returnOf(p);
         final SpellAbility cast = p == null ? null : castOf(p);
         return back == null || cast == null ? -1 : blue(printed(back)) + blue(printed(cast));
+    }
+
+    // ---- the cast and bounce ----
+
+    /** The cast and bounce line {@code l}'s two pieces, the cards its cycle taps and casts, in the row's order: every
+     *  piece it names but Hullbreaker Horror and Kinnan (ComboSignals' reading of the cycle's casts); immutable. */
+    static List<String> bouncePieces(final ComboLines.Line l) {
+        final List<String> out = new ArrayList<>(2);
+        for (final String name : l.names()) {
+            if (!HULLBREAKER.equals(name) && !KINNAN.equals(name)) {
+                out.add(name);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /** The mana ability the cast and bounce taps our card {@code c} with: of its mana abilities whose cost taps it, the
+     *  first that makes colourless mana alone (Talisman of Curiosity's {C}, where its {G} or {U} would deal 1 damage to
+     *  us), else the first; null with none (Sensei's Divining Top, Scroll Rack). */
+    static SpellAbility tapOf(final Card c) {
+        SpellAbility first = null;
+        for (final SpellAbility ma : c.getManaAbilities()) {
+            if (!ma.getPayCosts().hasTapCost()) {
+                continue;
+            }
+            if (LoopPool.made(ma) == ManaAtom.COLORLESS) {
+                return ma;
+            }
+            if (first == null) {
+                first = ma;
+            }
+        }
+        return first;
+    }
+
+    /** Our card of the cast and bounce's piece {@code name} that Hullbreaker Horror's trigger returns to our hand: of
+     *  our cards of it on our battlefield, tokens aside, in its order, the first that is tapped (the one the cycle has
+     *  tapped), else the first; null with none. */
+    static Card bounceTarget(final Player ai, final String name) {
+        Card first = null;
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            if (!name.equals(ComboTracker.nameOf(c)) || c.isToken()) {
+                continue;
+            }
+            if (c.isTapped()) {
+                return c;
+            }
+            if (first == null) {
+                first = c;
+            }
+        }
+        return first;
+    }
+
+    /** The colour our reflected mana ability {@code ma} (Mox Amber's) makes at the cast and bounce's tap, which the
+     *  cycle sets as its express choice (section 6.3; a reflected-mana choice is otherwise left over from the last
+     *  payment): of the colours it can reflect now ({@link CardUtil#getReflectableManaColors}: Amber's, those of our
+     *  legendary creatures and planeswalkers), in WUBRG order, the first that a pip of {@code cost}, the cast it pays
+     *  for next, needs, else the first; 0 with none, so never a colour no legend of ours has. */
+    static byte reflectedColour(final Player ai, final SpellAbility ma, final ManaCost cost) {
+        ma.setActivatingPlayer(ai);
+        final Set<String> can = CardUtil.getReflectableManaColors(ma);
+        byte first = 0;
+        for (final byte colour : MagicColor.WUBRG) {
+            if (!can.contains(MagicColor.toLongString(colour))) {
+                continue;
+            }
+            if (needs(cost, colour)) {
+                return colour;
+            }
+            if (first == 0) {
+                first = colour;
+            }
+        }
+        return first;
+    }
+
+    // whether a pip of the cost is of that colour
+    private static boolean needs(final ManaCost cost, final byte colour) {
+        for (final ManaCostShard s : cost) {
+            if ((s.getColorMask() & colour) != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // the cast and bounce's state now: its piece on our battlefield (here; null when both are in our hand) and its
+    // piece in our hand to cast next (there)
+    private record Bounce(Card here, Card there) {
+    }
+
+    // the cast and bounce's state now (see Bounce), its pieces read in the row's order (bounceCards: two, each with a
+    // cast): the first on our battlefield (onBattlefieldPiece) and the second in our hand, or the second there and the
+    // first in our hand; else both in our hand, so neither on our battlefield, the first to be cast first (R19: x-14's
+    // start); null otherwise (both on our battlefield; a piece gone)
+    private static Bounce bounce(final Player ai, final ComboLines.Line l) {
+        if (bounceCards(ai, l) == null) {
+            return null;
+        }
+        final List<String> pieces = bouncePieces(l);
+        final Card aHere = onBattlefieldPiece(ai, pieces.get(0));
+        final Card bHere = onBattlefieldPiece(ai, pieces.get(1));
+        final Card aHand = inOurHand(ai, pieces.get(0));
+        final Card bHand = inOurHand(ai, pieces.get(1));
+        if (aHere != null && bHand != null) {
+            return new Bounce(aHere, bHand);
+        }
+        if (bHere != null && aHand != null) {
+            return new Bounce(bHere, aHand);
+        }
+        // with both in our hand, neither can be on our battlefield here: either would have made a state above
+        return aHand != null && bHand != null ? new Bounce(null, aHand) : null;
+    }
+
+    // the cast and bounce's two pieces as cards, in the row's order: each one's card on our battlefield
+    // (onBattlefieldPiece), else in our hand; null unless the row names exactly two pieces (bouncePieces) and each has
+    // such a card with a cast
+    private static List<Card> bounceCards(final Player ai, final ComboLines.Line l) {
+        final List<String> pieces = bouncePieces(l);
+        if (pieces.size() != 2) {
+            return null;
+        }
+        final List<Card> out = new ArrayList<>(2);
+        for (final String name : pieces) {
+            Card c = onBattlefieldPiece(ai, name);
+            if (c == null) {
+                c = inOurHand(ai, name);
+            }
+            if (c == null || castOf(c) == null) {
+                return null;
+            }
+            out.add(c);
+        }
+        return out;
+    }
+
+    // our card of the piece on our battlefield, tokens aside: the first untapped one (untappedPiece), else the first;
+    // null with none
+    private static Card onBattlefieldPiece(final Player ai, final String name) {
+        final Card untapped = untappedPiece(ai, name);
+        if (untapped != null) {
+            return untapped;
+        }
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            if (name.equals(ComboTracker.nameOf(c)) && !c.isToken()) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    // our first untapped card of the piece on our battlefield, tokens aside, in its order; null with none
+    private static Card untappedPiece(final Player ai, final String name) {
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            if (name.equals(ComboTracker.nameOf(c)) && !c.isToken() && c.isUntapped()) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    // our first card named name in our hand (by ComboTracker.nameOf), or null
+    private static Card inOurHand(final Player ai, final String name) {
+        for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+            if (name.equals(ComboTracker.nameOf(c))) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    // what one tap of our card c makes in the cast and bounce, net of the tap's own cost (Simic Signet's {1}): the mana
+    // of the ability the cycle taps it with (tapOf) times our multipliers, and one for each Kinnan of ours its tap
+    // fires; 0 when that ability makes nothing in the cycle (makesMana), where the cycle does not tap it
+    private static int tapYield(final Player ai, final ComboLines.Line l, final Card c) {
+        final SpellAbility ma = tapOf(c);
+        if (ma == null || !makesMana(ai, l, ma)) {
+            return 0;
+        }
+        ma.setActivatingPlayer(ai);
+        return multiplied(ai, c, ma.amountOfManaGenerated(true)) + kinnans(ai, c) - printed(ma).getCMC();
+    }
+
+    // whether the ability ma of a piece of ours makes mana when the cast and bounce taps it, that piece on our
+    // battlefield and the line's other piece in our hand: a reflected one only with a colour to reflect (Mox Amber with
+    // a legend of ours); any other only when it makes some kind (not Arcane Signet in a game with no commander), and
+    // one that needs metalcraft (Mox Opal) only with three artifacts of ours then (artifactsWith)
+    private static boolean makesMana(final Player ai, final ComboLines.Line l, final SpellAbility ma) {
+        if (ma.getApi() == ApiType.ManaReflected) {
+            ma.setActivatingPlayer(ai);
+            return !CardUtil.getReflectableManaColors(ma).isEmpty();
+        }
+        if (LoopPool.made(ma) == 0) {
+            return false;
+        }
+        return ma.getRestrictions() == null || !ma.getRestrictions().isMetalcraft()
+                || artifactsWith(ai, l) >= METALCRAFT;
+    }
+
+    // the artifacts of ours with a piece of the cast and bounce on our battlefield and the other in our hand: that
+    // piece, an artifact (Mox Opal), and ours on our battlefield that are no piece of the line
+    private static int artifactsWith(final Player ai, final ComboLines.Line l) {
+        final List<String> pieces = bouncePieces(l);
+        int n = 1;
+        for (final Card a : ai.getCardsIn(ZoneType.Battlefield)) {
+            if (a.isArtifact() && !pieces.contains(ComboTracker.nameOf(a))) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    // the tap of the piece here, us its activator, when the cycle taps it now: here untapped, the ability it is tapped
+    // with (tapOf) one that makes mana in the cycle (makesMana) and that the driver may make now (LoopDriver.allowed),
+    // its cost paid by the pool and our untapped lands (paid); else null. It writes no colour (next sets Mox Amber's)
+    private static SpellAbility tappable(final Player ai, final ComboLines.Line l, final Card here) {
+        if (here.isTapped()) {
+            return null;
+        }
+        final SpellAbility ma = tapOf(here);
+        if (ma == null || !makesMana(ai, l, ma) || !LoopDriver.allowed(ai, ma)) {
+            return null;
+        }
+        return paid(ai, ma);
+    }
+
+    // the cast and bounce's readiness (see ready)
+    private static boolean bounceReady(final Player ai, final ComboLines.Line l) {
+        final List<String> pieces = bouncePieces(l);
+        for (final String name : l.names()) {
+            if (!pieces.contains(name) && onOurBattlefield(ai, name) == null) {
+                return false;
+            }
+        }
+        final Bounce s = bounce(ai, l);
+        if (s == null || net(ai, l) <= 0) {
+            return false;
+        }
+        final SpellAbility tap = s.here() == null ? null : tappable(ai, l, s.here());
+        final int extra = tap == null ? 0 : tapYield(ai, l, s.here());
+        final ManaCost cast = ComboExecute.priced(ai, castOf(s.there()));
+        // the tap's mana pays the generic part; a coloured pip is paid by the pool and our lands alone
+        return LoopPool.pays(ai, cast.isPureGeneric() ? ManaCost.get(Math.max(0, cast.getCMC() - extra)) : cast, null);
     }
 
     // the printed mana of the ability's or spell's cost (none for a cost with no mana part)

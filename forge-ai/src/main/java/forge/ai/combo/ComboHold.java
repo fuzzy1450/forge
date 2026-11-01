@@ -24,7 +24,8 @@ import forge.game.zone.ZoneType;
  * from the top of our library where our ordering has just put it. The emptiers keep their own gates (their executor),
  * and a winner that wins from the battlefield is cast freely: casting it is progress. A piece of a live loop line
  * (piece 2, spec 2026-10-29-combo-aware-ai-loops-design.md section 6.7) is protected as piece 1's pieces are, and its
- * own cast is never held: the loop needs it on the battlefield.
+ * own cast is never held: the loop needs it on the battlefield. The one exception is a cast its own cycle makes: while
+ * a cast and bounce cycle runs, the cycle casts its pieces itself.
  *
  * <p>Each method answers for one hook beside the stock code, and answers the stock decision (false, or the list it was
  * given) at once for a deck holding no combo line. Nothing here draws a random number or keeps any state, and
@@ -44,6 +45,9 @@ public final class ComboHold {
      * <li>Thassa's Oracle from our hand, while the loop driver's dig toward it with Thrasios, Triton Hero could run
      * (piece 2, spec 2026-10-29-combo-aware-ai-loops-design.md section 6.4 step 3: {@link LoopDriver#holdsOracle},
      * which yields to piece 1's own Oracle go-off);
+     * <li>a piece of the cast and bounce line the loop driver's go-off runs in this step, from our hand (piece 2,
+     * section 6.8: {@link LoopDriver#holdsCycleCast}): the cycle casts it itself, and the stock walk, which plays at
+     * the cycle's boundary, would otherwise cast it there, round after round;
      * <li>a wheel (follow-up F5): a spell one of whose parts puts our hand into the graveyard or exile, read from its
      * parts, never its name (a Discard of {@code Mode$ Hand} whose players include us: Wheel of Fortune, Windfall, One
      * with Nothing; a ChangeZoneAll of our hand's cards to the graveyard or exile: Hex Magic), while a card of our hand
@@ -66,7 +70,14 @@ public final class ComboHold {
                 && ai.equals(host.getOwner())) {
             return oracleWaits(ai, sa) || loopHoldsOracle(ai, sa);
         }
-        return wheelWaits(ai, sa, host);
+        return loopHoldsCycleCast(ai, sa) || wheelWaits(ai, sa, host);
+    }
+
+    // our hand cast of a piece of the cast and bounce the loop driver's go-off runs waits for its cycle, which casts it
+    // itself (piece 2, LoopDriver.holdsCycleCast)
+    private static boolean loopHoldsCycleCast(final Player ai, final SpellAbility sa) {
+        final LoopDriver d = LoopDriver.of(ai);
+        return d != null && d.holdsCycleCast(sa);
     }
 
     // our hand cast of Thassa's Oracle waits for the loop driver's dig toward it (piece 2, LoopDriver.holdsOracle)
