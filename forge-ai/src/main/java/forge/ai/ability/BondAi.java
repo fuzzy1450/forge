@@ -21,6 +21,7 @@ import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtilCard;
 import forge.ai.SpellAbilityAi;
+import forge.ai.combo.LoopDriver;
 import forge.game.card.Card;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -57,6 +58,14 @@ public final class BondAi extends SpellAbilityAi {
 
     @Override
     protected Card chooseSingleCard(Player ai, SpellAbility sa, Iterable<Card> options, boolean isOptional, Player targetedPlayer, Map<String, Object> params) {
+        // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.8): Deadeye Navigator's own
+        // soulbond pairs it with our Palinchron when the deck holds their flicker loop line (LoopDriver.partnerChoice);
+        // the stock pick below takes our best creature. Null, so stock, for every other pairing and deck
+        final LoopDriver loops = LoopDriver.of(ai);
+        final Card loopPartner = loops == null ? null : loops.partnerChoice(sa, options);
+        if (loopPartner != null) {
+            return loopPartner;
+        }
         final Card host = sa.getHostCard();
         Iterable<Card> candidates = options;
         if (host != null && host.hasSVar("AIPreference")) {

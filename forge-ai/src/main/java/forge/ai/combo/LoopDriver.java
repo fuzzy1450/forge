@@ -9,6 +9,7 @@ import forge.ai.LoopTracker;
 import forge.ai.PlayerControllerAi;
 import forge.game.Game;
 import forge.game.GameObject;
+import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCollectionView;
 import forge.game.card.CardCopyService;
@@ -65,7 +66,10 @@ import forge.game.zone.ZoneType;
  * <p>The driver draws no random number (a payment it triggers draws as the engine's payer does), reads no clock, and
  * checks that the game is still on before it returns an action. Its turn stamp lifts the runaway throttle for the rest
  * of a turn it acted in ({@link #liftsThrottleFor}, read on the AI's evaluation thread, hence volatile), and it steers
- * Sakashima of a Thousand Faces to copy Kinnan when that completes the Grim Monolith line ({@link #copyChoice}).
+ * Sakashima of a Thousand Faces to copy Kinnan when that completes the Grim Monolith line ({@link #copyChoice}). For
+ * Palinchron's loops it makes two choices: during one of its flicker or recast cycles Palinchron's entering untap takes
+ * our lands that make blue first ({@link #untapChoice}), and Deadeye Navigator's own soulbond pairs it with Palinchron
+ * whenever the deck holds the flicker line ({@link #partnerChoice}).
  */
 public final class LoopDriver {
     private static final String KINNAN = "Kinnan, Bonder Prodigy";
@@ -73,6 +77,8 @@ public final class LoopDriver {
     private static final String SAKASHIMA = "Sakashima of a Thousand Faces";
     /** The rock untap of Kinnan, Grim Monolith and Sakashima as a copy of Kinnan. */
     private static final String GRIM_LINE = "129-2585-2719";
+    /** The flicker of Palinchron and Deadeye Navigator. */
+    private static final String FLICKER_LINE = "1409-3542";
 
     private final Player ai;
     // the caps and the round record (tests swap in smaller caps: useRounds)
@@ -345,6 +351,60 @@ public final class LoopDriver {
         return null;
     }
 
+    /**
+     * Palinchron's entering untap during one of the driver's flicker or recast cycles (UntapAi.chooseSingleCard,
+     * section 6.8), asked once a land, up to seven: among {@code options}, our first land that makes blue, else our
+     * first other land, so that the lands the cycle pays its blue with are put back first, and never an opponent's.
+     * Null, the stock choice, once none of ours is left among them; for any untap whose host is not a Palinchron (its
+     * entering untap is Palinchron's only Untap); and while the go-off of this step runs no flicker or recast line:
+     * Palinchron's first cast, or a flicker that saves it from removal, is the stock AI's.
+     */
+    public Card untapChoice(final SpellAbility sa, final Iterable<Card> options) {
+        final Card host = sa.getHostCard();
+        if (host == null || sa.getApi() != ApiType.Untap || !LoopCycles.PALINCHRON.equals(ComboTracker.nameOf(host))
+                || !palinchronCycle()) {
+            return null;
+        }
+        Card rest = null;
+        for (final Card c : options) {
+            if (!ai.equals(c.getController())) {
+                continue;
+            }
+            if (LoopCycles.makesBlue(c)) {
+                return c;
+            }
+            if (rest == null) {
+                rest = c;
+            }
+        }
+        return rest;
+    }
+
+    /**
+     * Deadeye Navigator's own pairing as it enters (BondAi.chooseSingleCard, section 6.8): our nontoken Palinchron
+     * among {@code options}, the first, when the effect's host is Deadeye and the deck holds the flicker line
+     * (1409-3542), so that the pair the flicker needs is made; else null, the stock choice, which takes our best
+     * creature (Hullbreaker Horror or Nyxbloom Ancient before Palinchron). A token Palinchron is never the partner: a
+     * flicker would exile it for ever. When another creature enters, Deadeye alone is the option and the stock pairs it
+     * (the flicker's re-pair).
+     */
+    public Card partnerChoice(final SpellAbility sa, final Iterable<Card> options) {
+        final Card host = sa.getHostCard();
+        if (host == null || !LoopCycles.DEADEYE.equals(ComboTracker.nameOf(host))) {
+            return null;
+        }
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null || !holds(t, FLICKER_LINE)) {
+            return null;
+        }
+        for (final Card c : options) {
+            if (LoopCycles.PALINCHRON.equals(ComboTracker.nameOf(c)) && !c.isToken()) {
+                return c;
+            }
+        }
+        return null;
+    }
+
     /** Tests only: these caps and this round record instead. */
     void useRounds(final LoopRounds rounds) {
         this.rounds = rounds;
@@ -377,6 +437,17 @@ public final class LoopDriver {
         volleyOver = false;
         dugFrom = -1;
         digOver = false;
+    }
+
+    // whether the go-off of this step runs a flicker or recast line now: active, on a line of either kind, in the
+    // phase it was stamped in (the flag outlives its step when the go-off's last decision returned nothing without
+    // ending it: a cap stopped it, or its check refused a sink's action)
+    private boolean palinchronCycle() {
+        if (!active || (line.loop() != LoopKind.FLICKER && line.loop() != LoopKind.RECAST)) {
+            return false;
+        }
+        final PhaseHandler ph = ai.getGame().getPhaseHandler();
+        return ph.getTurn() == phaseTurn && ph.getPhase() == phase;
     }
 
     // the go-off is over for the phase
