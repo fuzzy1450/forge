@@ -823,6 +823,36 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertFalse(driver.holdsOracle(castOf(oracle)), "tapped, with its untap unpayable: no loop can run");
     }
 
+    // R2 gives the hold up to piece 1's own Oracle go-off and to no other line: an executable piece-1 line whose winner
+    // is another card leaves the hold on. Laboratory Maniac and Demonic Consultation registered with Kinnan's list
+    // before the tracker reads it; Kinnan, Basalt, Thrasios and Laboratory Maniac on ours, Thassa's Oracle and Demonic
+    // Consultation in hand, two Islands and a Swamp, a library of twenty Forests, in our Main 2; the tracker reads the
+    // loop lines and the Laboratory Maniac line (742-2836) alone. That line is executable, its winner Laboratory
+    // Maniac, and no line of Oracle's is: the dig toward Oracle holds Oracle, and the stock cast is vetoed.
+    @Test
+    public void anotherWinnersExecutableLineLeavesTheOracleHoldOn() {
+        start();
+        ComboLoopBoards.deck(ai, null, LAB, CONSULTATION);
+        moveToMain2(game, ai);
+        addCard(LAB, ai);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCardToZone(CONSULTATION, ai, ZoneType.Hand);
+        addCard(ISLAND, ai);
+        addCard(ISLAND, ai);
+        addCard("Swamp", ai);
+        library(FOREST, 20);
+        final List<ComboLines.Line> lines = new ArrayList<>(
+                ComboLoopBoards.shippedLoopLines(LoopRows.ids().toArray(new String[0])));
+        lines.addAll(ComboLoopBoards.shippedLoopLines("742-2836"));
+        t.useLines(lines);
+        assertTrue(ids(t.executable()).contains("742-2836"),
+                "piece 1's Laboratory Maniac line: " + ids(t.executable()));
+        assertEquals(line("742-2836").winner(), ComboLines.Winner.LAB);
+        assertTrue(LoopSinks.digsForOracle(ai, line(KINNAN_BASALT)), "the dig toward Oracle could run");
+        assertTrue(driver.holdsOracle(castOf(oracle)), "a Laboratory Maniac line is no Oracle line: the hold stays");
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+    }
+
     // Chromatic Orrery lets the loop's colourless mana pay Oracle's {U}{U} (spec section 9): Kinnan, Basalt, Thrasios
     // and Orrery on ours, no land at all, Thassa's Oracle in hand and a library of ten Forests. The dig toward Oracle
     // could run, Thrasios digs for it, and Oracle is held.
@@ -1299,6 +1329,26 @@ public class ComboLoopThrasiosAiTest extends AITest {
         ai.getManaPool().clearPool(false);
         assertEquals(only(drive(MAX_ACTIONS), Act::dig).size(), 1, "Main 2: the dig again, its draw refused");
         assertEquals(library(), 19);
+    }
+
+    // The walk's slot judges the activations it returns as the go-off slot judges its own: under the opponent's Spirit
+    // of the Labyrinth, a library of twenty Memnites, an empty hand (a stock target of 0) and twelve colourless mana
+    // floating, each decision passes to the walk at once, and afterStockWalk, the walk choosing nothing, returns
+    // Thrasios's activation paid from the pool, no refill between. The first draws a Memnite; the second moves no card
+    // out of our library and ends the dig for the phase: two activations, the walk asked before each and once more,
+    // and the third {4} left in the pool, where a walk's slot that kept no library size would dig on.
+    @Test
+    public void aWalkSlotDigThatMovesNoCardEndsForThePhase() {
+        start();
+        addCard("Spirit of the Labyrinth", opp);
+        library(MEMNITE, 20);
+        floatColourless(12);
+        final List<Act> acts = drive(MAX_ACTIONS);
+        assertEquals(only(acts, Act::dig).size(), 2, "one draw, then none: " + acts);
+        assertEquals(acts.size(), 2, "no refill: each activation the walk's slot's, paid from the pool: " + acts);
+        assertEquals(asks, 3, "the walk asked before each activation, and once when Thrasios stopped");
+        assertEquals(library(), 19);
+        assertEquals(pool(), 4, "the third {4} not spent");
     }
 
     // Once the game is over the driver returns nothing, after the walk too: the pool at Thrasios's 4 at a boundary and
