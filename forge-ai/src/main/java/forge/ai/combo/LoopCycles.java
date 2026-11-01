@@ -543,8 +543,9 @@ final class LoopCycles {
     }
 
     // the lands Palinchron's entering untap puts back each cycle, in LoopDriver.untapChoice's order: of our lands
-    // (lands) those that make blue, then the rest, each in our battlefield's order, the first seven of them
-    private static List<Card> putBack(final Player ai) {
+    // (lands) those that make blue, then the rest, each in our battlefield's order, the first seven of them. A cycle of
+    // the flicker taps each of them (LoopResponse counts a cycle's actions so)
+    static List<Card> putBack(final Player ai) {
         final List<Card> back = new ArrayList<>();
         final List<Card> rest = new ArrayList<>();
         for (final Card c : lands(ai)) {

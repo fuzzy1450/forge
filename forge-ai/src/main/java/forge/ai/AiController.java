@@ -1988,6 +1988,16 @@ public class AiController {
         }
 
         if (!game.getStack().isEmpty()) {
+            // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.6): above an opponent's
+            // removal of a loop piece or of Walking Ballista, a loop of an instant-speed kind goes off and Ballista
+            // shoots to exact lethal before the removal resolves (LoopDriver.responseAction), ahead of the counterspell
+            // pick: a win now beats countering the removal. Null at once for a deck holding no loop line and with no
+            // opponent's item on top; draws nothing.
+            final SpellAbility loopResponse = loopDriver.responseAction();
+            if (loopResponse != null) {
+                return loopResponse;
+            }
+
             SpellAbility counter = chooseCounterSpell(getPlayableCounters(cards));
             if (counter != null) return counter;
 

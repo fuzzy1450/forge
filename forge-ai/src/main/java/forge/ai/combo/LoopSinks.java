@@ -36,7 +36,8 @@ import forge.game.zone.ZoneType;
  * ({@link #ballistaPool}). With a kill in reach a Ballista of ours on our battlefield is pumped with {4} until their
  * counters together cover it, then shoots, every loss blocker first, then each opponent, one ping a decision; with
  * none on our battlefield, one is cast from our hand with X from the pool. With no kill in reach (a hexproof player)
- * Ballista is pumped, or cast, until our board is five times lethal (LoopTracker's decisive).
+ * Ballista is pumped, or cast, until our board is five times lethal (LoopTracker's decisive). A go-off in response to
+ * removal reads what the volley takes ({@link #volleyCost}) to know whether it fits in what the caps have left (R28).
  *
  * <p>Then Thrasios's dig, step 3 of section 6.4, taken when the stock AI has nothing it wants to play: its {4}, one
  * activation a decision ({@link #thrasios}), while our library holds more than {@link #LIBRARY_FLOOR} cards, a card in
@@ -154,6 +155,35 @@ final class LoopSinks {
     static int ballistaPool(final Player ai) {
         final Step s = step(ai);
         return s == null ? -1 : s.pool();
+    }
+
+    /** What Walking Ballista's volley takes ({@link #volleyCost}): its pumps, its pings, and the mana they cost. */
+    record VolleyCost(long pumps, long pings, long mana) {
+    }
+
+    /**
+     * What Walking Ballista's volley takes from the board as it stands, which a go-off in response reads to know
+     * whether the volley fits in what the driver's caps have left (R28): its pings, one for each counter the kill
+     * needs ({@link #lethalNeeded}); its pumps, the counters our Ballistas on our battlefield lack of it; and the mana
+     * they cost as the engine prices our first Ballista's ping and pump now (a ping none, a pump {4}, a tax included).
+     * Null with no Ballista of ours on our battlefield (one in our hand is not cast above the removal), with no kill
+     * to make, and for a Ballista without its ping or its pump.
+     */
+    static VolleyCost volleyCost(final Player ai) {
+        final List<Card> ours = ours(ai);
+        final int needed = lethalNeeded(ai);
+        if (ours.isEmpty() || needed <= 0) {
+            return null;
+        }
+        final SpellAbility ping = pingOf(ours.get(0));
+        final SpellAbility pump = pumpOf(ours.get(0));
+        if (ping == null || pump == null) {
+            return null;
+        }
+        final long pumps = Math.max(0, needed - counters(ours));
+        final long mana = needed * (long) ComboExecute.priced(ai, ping).getCMC()
+                + pumps * ComboExecute.priced(ai, pump).getCMC();
+        return new VolleyCost(pumps, needed, mana);
     }
 
     /** What a ping changes on a creature: its toughness left, the damage that kills it less the damage marked on it

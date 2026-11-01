@@ -128,6 +128,17 @@ final class LoopRounds {
         return gameStopped;
     }
 
+    /** The actions the driver may still return for {@code ai} before a cap stops it: the fewer of those the turn's cap
+     *  and the game's have left, none once either has stopped it (R28: a go-off in response to removal starts only for
+     *  a volley that fits). */
+    int left(final Player ai) {
+        syncTurn(ai);
+        if (gameStopped || turnStopped) {
+            return 0;
+        }
+        return Math.max(0, Math.min(turnCap - turnActions, gameCap - gameActions));
+    }
+
     // a new turn starts the turn's count afresh
     private void syncTurn(final Player ai) {
         final int now = ai.getGame().getPhaseHandler().getTurn();

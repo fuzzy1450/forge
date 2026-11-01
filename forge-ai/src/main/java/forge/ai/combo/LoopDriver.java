@@ -65,6 +65,15 @@ import forge.game.zone.ZoneType;
  * check refuses mid-go-off (a hoser arrived) ends the go-off for the phase, as does losing its line, the board reaching
  * five times lethal, every opponent unable to lose, or two judged rounds in a row that bought nothing.
  *
+ * <p>In response to removal ({@link #responseAction}, section 6.6, AiController's stack-response block, ahead of the
+ * counterspells): with an opponent's spell or ability on the stack that would take a piece of a loop line of an
+ * instant-speed kind (a rock untap, the flicker) or a Walking Ballista of ours off our battlefield, the driver goes off
+ * above it, on either player's turn, and spends on Ballista alone, its volley to exact lethal, when that volley fits in
+ * what the caps have left (R28). Each of its actions goes on the stack above the removal and resolves first, and the
+ * next decision with the removal on top asks the driver again; the go-off goes on while the removal is on the stack,
+ * whether or not its target is still there (the first flicker makes Palinchron a new object). The stop rule's parts
+ * that read Ballista, the caps and R21's judges hold as in a main phase.
+ *
  * <p>The driver draws no random number (a payment it triggers draws as the engine's payer does), reads no clock, and
  * checks that the game is still on before it returns an action. Its turn stamp lifts the runaway throttle for the rest
  * of a turn it acted in ({@link #liftsThrottleFor}, read on the AI's evaluation thread, hence volatile), and it steers
@@ -113,11 +122,16 @@ public final class LoopDriver {
     private ComboLines.Line boundaryLine;
     private int boundaryPool = -1;
     // R25: the ping returned last, its target and what the ping is to change on it (a player's life, a creature's
-    // toughness left) when it was returned, judged at the next decision; and whether a ping that changed nothing has
-    // ended Walking Ballista's volley for the phase
+    // toughness left) when it was returned, judged at the next decision once no item of the ping is on the stack (in
+    // response, an opponent's item may come above it first); and whether a ping that changed nothing has ended Walking
+    // Ballista's volley for the phase
+    private SpellAbility pingedWith;
     private GameObject pinged;
     private int pingedHad;
     private boolean volleyOver;
+    // the opponent's item on the stack that a go-off in response answers (section 6.6), the removal that started it;
+    // null while none does. The go-off goes on while that item is on the stack
+    private SpellAbilityStackInstance respondedTo;
     // the Thrasios activation returned last: our library's size when it was returned, judged at the next decision (-1
     // when none is to be judged); and whether one that moved no card out of our library has ended Thrasios's dig for
     // the phase
@@ -184,7 +198,7 @@ public final class LoopDriver {
             boundaryLine = null;
             boundaryPool = -1;
         }
-        final ComboLines.Line l = choose(t.view());
+        final ComboLines.Line l = choose(t.view(), false);
         // a go-off that runs ends for the phase when its line is gone and when it may go on no more; one that has not
         // started yet simply does not start, and the next decision reads the gates again
         if (l == null || (active ? !goesOn() : !(starts(l) && goesOn()))) {
@@ -313,9 +327,66 @@ public final class LoopDriver {
         return false;
     }
 
-    /** Going off in response to removal of a loop piece or Walking Ballista (section 6.6): Task B9. Null until then. */
+    /**
+     * Going off in response to removal (section 6.6; AiController.getSpellAbilityToPlay's stack-response block, ahead
+     * of the counterspell pick: a win now beats countering the removal), with an opponent's spell or ability on the
+     * stack's top: Walking Ballista's next action toward its volley once the pool holds what it needs (a pump at a
+     * boundary, a ping at any decision), else the next step of the loop line that can run (executable, its pieces
+     * where its cycle needs them, not failed for the phase) of an instant-speed kind, a rock untap or the flicker, the
+     * highest net a cycle first, its activator us and its targets set; each through the driver's own check and the
+     * caps, as in a main phase. Ballista is the only sink: Thrasios and the stock AI's plays wait for the stack. The
+     * go-off in response starts when the item on top threatens a piece of such a line that can run, or a Walking
+     * Ballista of ours ({@link LoopResponse#threatens}), and the volley fits in what the caps have left (R28,
+     * {@link LoopResponse#volleyActions}), a count that needs a Ballista of ours on our battlefield (one in our hand
+     * is not cast above the removal); it measures its cycles from its own first boundary (R21: a main-phase go-off's
+     * untap left beneath the removal is paid again above it). It goes on at each decision with an opponent's item on
+     * top while that removal is on the stack, neither read again: the first flicker leaves the removal no target, and
+     * the volley's count, which errs high mid-cycle, is a start's (the caps stop a go-off in response as they stop one
+     * in a main phase). Either way Ballista can shoot ({@link LoopSinks#ballistaCanShoot}: a kill in reach, a ping the
+     * driver may make) and has a step to take toward the volley (none once a ping that changed nothing has ended it,
+     * R25). Null otherwise: at once with the game over, with no opponent's item on top (our own item on top is the
+     * stock own-top pass's), for a deck holding no loop line, and while a cap stops the driver. Draws no random number.
+     */
     public SpellAbility responseAction() {
-        return null;
+        final Game game = ai.getGame();
+        if (game.isGameOver()) {
+            return null;
+        }
+        final SpellAbilityStackInstance top = game.getStack().peek();
+        if (top == null || !LoopResponse.opposes(ai, top)) {
+            return null;
+        }
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null || !holdsLoop(t)) {
+            return null;
+        }
+        final PhaseHandler ph = game.getPhaseHandler();
+        sync(ph);
+        if (rounds.stoppedForGame() || rounds.stoppedForTurn(ai)) {
+            return null;
+        }
+        judgeLast();
+        judgeVolley();
+        final ComboTracker.View v = t.view();
+        final boolean going = stackHolds(respondedTo);
+        final ComboLines.Line l = going ? choose(v, true) : pick(v, true);
+        final int need = ballistaNeed();
+        if (l == null || need < 0 || !LoopSinks.ballistaCanShoot(ai)
+                || (!going && (!LoopResponse.threatens(ai, top, threatened(v))
+                        || LoopResponse.volleyActions(ai, l) > rounds.left(ai)))) {
+            return null;
+        }
+        if (!going) {
+            // a go-off in response measures its cycles from its own first boundary
+            respondedTo = top;
+            boundaryLine = null;
+            boundaryPool = -1;
+            measured(l);
+        }
+        if (LoopPool.floating(ai) >= need && (need == 0 || LoopCycles.boundary(ai, l))) {
+            return ballistaStep(l, ph);
+        }
+        return refill(l, ph);
     }
 
     /** Whether the driver returned an action this turn: ComputerUtil.preventRunAwayActivations is lifted for the rest
@@ -494,8 +565,10 @@ public final class LoopDriver {
         lastState = null;
         boundaryLine = null;
         boundaryPool = -1;
+        pingedWith = null;
         pinged = null;
         volleyOver = false;
+        respondedTo = null;
         dugFrom = -1;
         digOver = false;
     }
@@ -540,11 +613,11 @@ public final class LoopDriver {
         lastState = null;
     }
 
-    // the line to run now: the best line that can run, past each whose last cycle the pool measured short (R21), which
-    // is failed for the phase
-    private ComboLines.Line choose(final ComboTracker.View v) {
+    // the line to run now: the best line that can run (of an instant-speed kind only, when instantOnly: a go-off in
+    // response), past each whose last cycle the pool measured short (R21), which is failed for the phase
+    private ComboLines.Line choose(final ComboTracker.View v, final boolean instantOnly) {
         while (true) {
-            final ComboLines.Line l = pick(v);
+            final ComboLines.Line l = pick(v, instantOnly);
             if (l == null || measured(l)) {
                 return l;
             }
@@ -552,13 +625,14 @@ public final class LoopDriver {
         }
     }
 
-    // the line that can run with the highest net a cycle, then the lowest variant id. A rock line's net does not depend
-    // on which rock is tapped, so the pick does not move mid-cycle
-    private ComboLines.Line pick(final ComboTracker.View v) {
+    // the line that can run (of an instant-speed kind only, when instantOnly) with the highest net a cycle, then the
+    // lowest variant id. A rock line's net does not depend on which rock is tapped, so the pick does not move
+    // mid-cycle
+    private ComboLines.Line pick(final ComboTracker.View v, final boolean instantOnly) {
         ComboLines.Line best = null;
         int bestNet = 0;
         for (final ComboLines.Line l : v.lines()) {
-            if (!runs(v, l)) {
+            if (!runs(v, l) || (instantOnly && !l.loop().instantSpeed())) {
                 continue;
             }
             final int net = LoopCycles.net(ai, l);
@@ -638,11 +712,12 @@ public final class LoopDriver {
         return volleyOver ? -1 : LoopSinks.ballistaPool(ai);
     }
 
-    // Walking Ballista's action now (LoopSinks.ballista), spent as a sink's (spend); a ping's target and what it had
+    // Walking Ballista's action now (LoopSinks.ballista), spent as a sink's (spend); a ping, its target and what it had
     // are kept for R25's judge
     private SpellAbility ballistaStep(final ComboLines.Line l, final PhaseHandler ph) {
         final SpellAbility sa = spend(l, ph, LoopSinks.ballista(ai));
         if (sa != null && sa.usesTargeting()) {
+            pingedWith = sa;
             pinged = sa.getTargets().get(0);
             pingedHad = had(pinged);
         }
@@ -733,18 +808,69 @@ public final class LoopDriver {
                 && (activator == null || ai.equals(activator));
     }
 
-    // R25: the ping returned last, judged now that the stack it went on is empty again (resolved, countered or
-    // fizzled): one that changed neither its target player's life nor its target creature's toughness left (a Fog,
-    // Teferi's Protection, a prevention shield) ends Walking Ballista's volley for the phase, so Ballista takes no more
-    // step in it. No margin otherwise: a ping that landed is followed by a fresh count at the next decision
+    // R25: the ping returned last, judged at the first decision at which no item of it is on the stack any more
+    // (resolved, countered or fizzled: in a main phase the stack it went on is empty again; in response an opponent's
+    // item may come above it first, and the judge waits): one that changed neither its target player's life nor its
+    // target creature's toughness left (a Fog, Teferi's Protection, a prevention shield) ends Walking Ballista's volley
+    // for the phase, so Ballista takes no more step in it. No margin otherwise: a ping that landed is followed by a
+    // fresh count at the next decision
     private void judgeVolley() {
-        if (pinged == null) {
+        if (pinged == null || stackHolds(pingedWith)) {
             return;
         }
         if (had(pinged) == pingedHad) {
             volleyOver = true;
         }
+        pingedWith = null;
         pinged = null;
+    }
+
+    // whether the stack holds an item of sa: sa itself, or the copy the engine made of it to put it there, whose
+    // original it is (MagicStack.add); false for none
+    private boolean stackHolds(final SpellAbility sa) {
+        if (sa == null) {
+            return false;
+        }
+        for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+            final SpellAbility on = si.getSpellAbility();
+            if (on == sa || on.getOriginalAbility() == sa) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // whether the stack holds that very item; false for none
+    private boolean stackHolds(final SpellAbilityStackInstance item) {
+        if (item == null) {
+            return false;
+        }
+        for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+            if (si == item) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // the cards an opponent's item on the stack must threaten for a go-off in response to start (section 6.6): ours on
+    // our battlefield of a piece of any loop line of an instant-speed kind that can run (runs), whichever runs, and our
+    // Walking Ballistas there
+    private List<Card> threatened(final ComboTracker.View v) {
+        final List<String> pieces = new ArrayList<>();
+        for (final ComboLines.Line l : v.lines()) {
+            if (runs(v, l) && l.loop().instantSpeed()) {
+                pieces.addAll(l.names());
+            }
+        }
+        final List<Card> out = new ArrayList<>();
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            final String name = ComboTracker.nameOf(c);
+            if (pieces.contains(name) || LoopSinks.BALLISTA.equals(name)) {
+                out.add(c);
+            }
+        }
+        return out;
     }
 
     // Thrasios's activation returned last, judged now that the stack it went on is empty again (resolved or

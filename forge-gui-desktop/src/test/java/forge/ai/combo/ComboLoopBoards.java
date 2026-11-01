@@ -18,15 +18,18 @@ import forge.deck.Deck;
 import forge.deck.DeckSection;
 import forge.game.Game;
 import forge.game.GameLogEntry;
+import forge.game.GameObject;
 import forge.game.card.Card;
 import forge.game.player.Player;
+import forge.game.spellability.SpellAbility;
+import forge.model.FModel;
 import forge.util.MyRandom;
 
 /**
  * The piece-2 test classes' shared boards (plan 2026-10-29-combo-aware-ai-loops.md, Part B), so that they do not copy
  * each other: loop lines from rows or from the shipped table, the registered deck the tracker reads, a ready card, the
- * AI deadline off, the pool, the AI of a seat, piece 1's stock-parity idiom and a bounded run of the game loop. Every
- * method is static and keeps nothing between calls.
+ * AI deadline off, the pool, the AI of a seat, piece 1's stock-parity idiom, a bounded run of the game loop, and an
+ * opponent's spell put on the stack by hand (Task B9). Every method is static and keeps nothing between calls.
  */
 final class ComboLoopBoards {
     private ComboLoopBoards() {
@@ -142,5 +145,37 @@ final class ComboLoopBoards {
             out.add(all.get(i).message());
         }
         return out;
+    }
+
+    /** {@code opp}'s {@code name}, cast at {@code targets} and alone on {@code game}'s stack: put there by hand,
+     *  nothing paid ({@code opp}'s AI is not asked to cast it), {@code opp} its activator and, as its caster, holding
+     *  priority (ComboLinesEndToEndAiTest.theirSpellOn's idiom). */
+    static Card theirSpellOn(final Game game, final Player opp, final String name, final GameObject... targets) {
+        final Card card = theirResponse(game, opp, name, targets);
+        assertEquals(game.getStack().size(), 1, name + " is not alone on the stack");
+        return card;
+    }
+
+    /** {@link #theirSpellOn} above whatever {@code game}'s stack holds (ComboLinesEndToEndAiTest.theirResponse's
+     *  idiom): the card built as AITest builds one, {@code targets} set on the first of its spell's parts that targets
+     *  (none for a spell that targets nothing), the spell put on the stack, its top. */
+    static Card theirResponse(final Game game, final Player opp, final String name, final GameObject... targets) {
+        final Card card = Card.fromPaperCard(FModel.getMagicDb().getCommonCards().getCard(name), opp);
+        card.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(card);
+        final SpellAbility sa = card.getFirstSpellAbility();
+        sa.setActivatingPlayer(opp);
+        for (SpellAbility part = sa; part != null; part = part.getSubAbility()) {
+            if (part.usesTargeting()) {
+                for (final GameObject target : targets) {
+                    part.getTargets().add(target);
+                }
+                break;
+            }
+        }
+        game.getStack().add(sa);
+        assertEquals(game.getStack().peek().getSourceCard(), card, name + " is not the stack's top");
+        assertEquals(game.getPhaseHandler().getPriorityPlayer(), opp, "its caster does not hold priority");
+        return card;
     }
 }
