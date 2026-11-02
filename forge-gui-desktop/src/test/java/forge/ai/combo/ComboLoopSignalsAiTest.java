@@ -547,6 +547,42 @@ public class ComboLoopSignalsAiTest extends AITest {
     }
 
     @Test
+    public void theSignalsWriteNoCard() {
+        // the Ballista and Basalt in our hand are read on LKI copies: their own last known zone is left as it was
+        start(ZoneType.Hand);
+        lands(3);
+        final Card ballista = addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        addCard(ANGEL, opp);
+        addCard("Null Rod", opp);
+        final Object ballistaZone = ballista.getLastKnownZone();
+        final Object basaltZone = basalt.getLastKnownZone();
+        abandon(line("129-4131"));
+        assertSame(ballista.getLastKnownZone(), ballistaZone);
+        assertSame(basalt.getLastKnownZone(), basaltZone);
+    }
+
+    @Test
+    public void aPieceInHandCanStillBeCastAfterTheSignalsReadIt() {
+        // a card with a last known zone other than its own fails its spell's hand restriction
+        // (SpellAbilityRestriction.checkZoneRestrictions reads getLastKnownZone): a read that wrote one would leave the
+        // Ballista and the Monolith in our hand uncastable
+        start(ZoneType.Hand);
+        lands(3);
+        final Card ballista = addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        addCard(ANGEL, opp);
+        addCard("Null Rod", opp);
+        final SpellAbility castBallista = ballista.getFirstSpellAbility();
+        castBallista.setActivatingPlayer(ai);
+        final SpellAbility castBasalt = basalt.getFirstSpellAbility();
+        castBasalt.setActivatingPlayer(ai);
+        assertTrue(castBallista.getRestrictions().checkZoneRestrictions(ballista, castBallista));
+        assertTrue(castBasalt.getRestrictions().checkZoneRestrictions(basalt, castBasalt));
+        abandon(line("129-4131"));
+        assertTrue(castBallista.getRestrictions().checkZoneRestrictions(ballista, castBallista));
+        assertTrue(castBasalt.getRestrictions().checkZoneRestrictions(basalt, castBasalt));
+    }
+
+    @Test
     public void cursedTotemDeniesTheFlickerBeforeThePair() {
         // Palinchron in our hand and Deadeye unpaired on our battlefield: no flicker is granted yet, and Palinchron's
         // own return stands in for it, read on Palinchron as it would be on our battlefield (R17)
@@ -562,6 +598,34 @@ public class ComboLoopSignalsAiTest extends AITest {
         // in our hand its return passes: Cursed Totem's AffectedZone$ Battlefield skips it there
         assertNotNull(returnOf(palinchron));
         assertTrue(returnOf(palinchron).checkRestrictions(ai));
+    }
+
+    @Test
+    public void torporOrbDeniesThePalinchronLinesBeforePalinchronIsOnTheBattlefield() {
+        // the lines are read from their assembly too: Palinchron still in our library, the Orb already out, and no
+        // other row's cycle has an entering trigger to disable
+        start();
+        otherPiecesInLibrary();
+        addCard("Torpor Orb", opp);
+        assertEquals(abandon(line("1409-3542")), Signal.DENIED);
+        assertEquals(abandon(line("3430-3542")), Signal.DENIED);
+        assertFalse(denied(line("x-2")));
+        assertFalse(denied(line("129-4131")));
+    }
+
+    @Test
+    public void hushbringerDeniesThePalinchronLinesWithPalinchronInHand() {
+        // Hushbringer disables the entering triggers of creatures as the Orb does; Palinchron, Deadeye and Nyxbloom
+        // are in our hand, so the entering trigger is read off the battlefield
+        start();
+        addCardToZone(PALINCHRON, ai, ZoneType.Hand);
+        addCardToZone(DEADEYE, ai, ZoneType.Hand);
+        addCardToZone(NYXBLOOM, ai, ZoneType.Hand);
+        assertFalse(denied(line("1409-3542")));
+        assertFalse(denied(line("3430-3542")));
+        addCard("Hushbringer", opp);
+        assertEquals(abandon(line("1409-3542")), Signal.DENIED);
+        assertEquals(abandon(line("3430-3542")), Signal.DENIED);
     }
 
     @Test
@@ -802,6 +866,22 @@ public class ComboLoopSignalsAiTest extends AITest {
         assertTrue(amplifies(plain));
         assertEquals(ComboTracker.nameOf(plain), SAKASHIMA);
         assertFalse(denied(line("129-2585-2719")));
+    }
+
+    @Test
+    public void aSakashimaThatCopiedAPalinchronDeniesTheGrimLine() {
+        // row 129-2585-2719 needs a second Kinnan's bonus, a TapsForMana trigger, not any trigger: Sakashima entered
+        // as a copy of Palinchron (the stock clone choice prefers a nonlegendary creature of ours) has Palinchron's
+        // entering trigger and no bonus
+        start();
+        addCard(GRIM, ai);
+        final Card palinchron = ComboLoopBoards.ready(addCard(PALINCHRON, ai));
+        final Card sakashima = addCard(SAKASHIMA, ai);
+        sakashima.addCloneState(CardFactory.getCloneStates(palinchron, sakashima, palinchron.getFirstSpellAbility()),
+                game.getNextTimestamp());
+        assertFalse(sakashima.getTriggers().isEmpty());
+        assertFalse(amplifies(sakashima));
+        assertEquals(abandon(line("129-2585-2719")), Signal.DENIED);
     }
 
     @Test

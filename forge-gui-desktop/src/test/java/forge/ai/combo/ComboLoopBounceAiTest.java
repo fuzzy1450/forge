@@ -169,6 +169,22 @@ public class ComboLoopBounceAiTest extends AITest {
         return one;
     }
 
+    /** Our card {@code name}, cast: put on the stack as our spell and resolved (its payment aside); returns it on our
+     *  battlefield. */
+    private Card resolvesOurs(final String name) {
+        final Card card = createCard(name, ai);
+        card.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(card);
+        final SpellAbility sa = card.getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+        game.getStack().add(sa);
+        game.getStack().resolveStack();
+        assertTrue(game.getStack().isEmpty(), name + " is still on the stack");
+        final Card in = onOurBattlefield(name);
+        assertNotNull(in, name + " did not enter");
+        return in;
+    }
+
     private int pool() {
         return ComboLoopBoards.pool(ai);
     }
@@ -804,6 +820,32 @@ public class ComboLoopBounceAiTest extends AITest {
         assertTrue(LoopCycles.ready(ai, line(AMBER_OPAL)), "Hullbreaker and Kinnan tapped");
     }
 
+    // The creature pieces are read as they stand, summoning sick or not: Hullbreaker Horror and Kinnan just cast, their
+    // sickness not worn off, do not hold a loop back (spec 6.2: it starts right after the last piece lands). Row x-14
+    // with both just cast is ready and its go-off starts with Mox Amber's tap; row x-2 with Hullbreaker just cast is
+    // ready.
+    @Test
+    public void hullbreakerAndKinnanJustCastStartTheLoop() {
+        start();
+        addCard(HULLBREAKER, ai);
+        addCard(KINNAN, ai);
+        addCard(AMBER, ai);
+        hand(OPAL);
+        endlessOne();
+        assertTrue(onOurBattlefield(HULLBREAKER).isSick(), "Hullbreaker Horror just cast");
+        assertTrue(onOurBattlefield(KINNAN).isSick(), "Kinnan just cast");
+        assertTrue(LoopCycles.ready(ai, line(AMBER_OPAL)), "x-14 with both just cast");
+        assertEquals(steps(drive(1)), List.of("tap Mox Amber"));
+
+        start();
+        addCard(HULLBREAKER, ai);
+        addCard(SOL_RING, ai);
+        hand(MANA_VAULT);
+        endlessOne();
+        assertTrue(onOurBattlefield(HULLBREAKER).isSick(), "Hullbreaker Horror just cast");
+        assertTrue(LoopCycles.ready(ai, line(RING_VAULT)), "x-2 with Hullbreaker just cast");
+    }
+
     // The piece in our hand is ours: Mana Vault in the opponent's hand, beside our Sol Ring, is no piece of row x-2,
     // which nets 0, is not ready and starts nothing; our own Mana Vault in our hand, the control, makes it net 5 and
     // ready.
@@ -992,6 +1034,23 @@ public class ComboLoopBounceAiTest extends AITest {
         assertEquals(LoopCycles.net(ai, line(RING_VAULT)), 15, "beside Nyxbloom Ancient");
     }
 
+    // K is the number of Kinnans of ours: with a second one (a copy, as Sakashima of a Thousand Faces makes), each tap
+    // of row x-2 fires both bonuses, so Sol Ring's 2 and Mana Vault's 3 net 7 beside the two casts, not 5. The second
+    // is Sakashima itself, cast while Kinnan is the one other creature of ours (Hullbreaker Horror, which the stock
+    // copy would take, comes after it), so it enters as a copy of Kinnan and the legend rule spares both.
+    @Test
+    public void everyKinnanOfOursAddsItsBonusToTheNet() {
+        start();
+        ComboLoopBoards.ready(addCard(KINNAN, ai));
+        final Card sakashima = resolvesOurs("Sakashima of a Thousand Faces");
+        assertEquals(sakashima.getName(), KINNAN, "Sakashima entered as a copy of Kinnan");
+        ComboLoopBoards.ready(addCard(HULLBREAKER, ai));
+        addCard(SOL_RING, ai);
+        hand(MANA_VAULT);
+        endlessOne();
+        assertEquals(LoopCycles.net(ai, line(RING_VAULT)), 7, "two Kinnans");
+    }
+
     // Talisman of Curiosity taps its {C} (its {G} or {U} would deal 1 damage to us): row x-11's cycle taps Mana Vault,
     // casts the Talisman and taps it for colourless, and our life stays 20.
     @Test
@@ -1085,6 +1144,30 @@ public class ComboLoopBounceAiTest extends AITest {
             endlessOne();
             assertEquals(LoopCycles.net(ai, line(AMBER_OPAL)), 2, "Ornithopters in our " + zone + ": no metalcraft");
         }
+    }
+
+    // Metalcraft counts every artifact of ours on our battlefield, tapped or not and a token or not: Mox Opal in our
+    // hand beside Mox Amber, with two Ornithopters of ours tapped, or one of them a token, has it, so row x-14 nets 4,
+    // Opal making mana.
+    @Test
+    public void metalcraftCountsTappedAndTokenArtifacts() {
+        start();
+        bouncer();
+        addCard(AMBER, ai);
+        hand(OPAL);
+        addCard(ORNITHOPTER, ai).setTapped(true);
+        addCard(ORNITHOPTER, ai).setTapped(true);
+        endlessOne();
+        assertEquals(LoopCycles.net(ai, line(AMBER_OPAL)), 4, "two tapped Ornithopters");
+
+        start();
+        bouncer();
+        addCard(AMBER, ai);
+        hand(OPAL);
+        addCard(ORNITHOPTER, ai);
+        addCard(ORNITHOPTER, ai).setGamePieceType(GamePieceType.TOKEN);
+        endlessOne();
+        assertEquals(LoopCycles.net(ai, line(AMBER_OPAL)), 4, "an Ornithopter and a token one");
     }
 
     // Mox Amber makes nothing without a legend of ours: with Hullbreaker alone beside Sol Ring (row x-5, which names no
