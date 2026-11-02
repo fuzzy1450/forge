@@ -22,6 +22,7 @@ import forge.ai.LobbyPlayerAi;
 import forge.game.Game;
 import forge.game.GameObject;
 import forge.game.GameStage;
+import forge.game.ability.AbilityFactory;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
@@ -30,6 +31,8 @@ import forge.game.player.GameLossReason;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.trigger.Trigger;
+import forge.game.trigger.WrappedAbility;
 import forge.game.zone.MagicStack;
 import forge.game.zone.ZoneType;
 import forge.util.MyRandom;
@@ -898,6 +901,80 @@ public class ComboLoopResponseAiTest extends AITest {
         assertSame(driver.responseAction(), manaOf(islands.get(0)), "the flicker goes off");
     }
 
+    // Removal aimed at the Monolith, the case section 6.6 put to Evan beside Kinnan's: the opponent's Shatter on Basalt
+    // Monolith, the rock line's piece that is no creature, on their turn. The volley happens first, every step above
+    // Shatter, Ballista pumped to 20 counters and shooting 20 times, and the opponent loses before Shatter resolves:
+    // Basalt never leaves our battlefield.
+    @Test
+    public void respondsToRemovalOfTheMonolith() {
+        start();
+        rock();
+        ballista(1);
+        theirTurn();
+        final Card shatter = ComboLoopBoards.theirSpellOn(game, opp, "Shatter", basalt);
+        final List<Item> items = play(shatter);
+        opponentLostByLife();
+        assertSame(onOurBattlefield(BASALT), basalt, "Shatter resolved: Basalt left our battlefield");
+        assertEquals(count(items, Item::pump), 19, "the pumps: " + items);
+        assertEquals(count(items, Item::ping), 20, "the pings: " + items);
+        for (final Item i : items) {
+            assertTrue(i.above(), "an item of ours not above Shatter: " + i);
+        }
+    }
+
+    // The flicker line's other piece is saved as Palinchron is: Palinchron and Deadeye Navigator paired, seven Islands,
+    // Ballista with one counter, and the opponent's Murder on Deadeye Navigator draws the response, the flicker's first
+    // step, the first Island's mana ability.
+    @Test
+    public void respondsToRemovalOfDeadeyeNavigator() {
+        start();
+        paired();
+        final List<Card> islands = lands(ISLAND, 7);
+        ballista(1);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, onOurBattlefield(DEADEYE));
+        assertSame(driver.responseAction(), manaOf(islands.get(0)), "Murder on Deadeye Navigator");
+    }
+
+    // Section 6.6 reads "a spell or ability on the stack": an opponent's ability draws the response as a spell does. An
+    // activated one, Qasali Pridemage's destroy ({1}, sacrifice it: destroy target artifact or enchantment) aimed at
+    // Basalt Monolith and put on the stack by hand (nothing paid), draws Basalt's mana ability; so does a triggered
+    // one, Flametongue Kavu's 4 damage aimed at Kinnan, wrapped as the trigger handler wraps a mandatory trigger.
+    @Test
+    public void goesOffInResponseToAnAbility() {
+        start();
+        rock();
+        ballista(1);
+        theirTurn();
+        final Card pridemage = addCard("Qasali Pridemage", opp);
+        SpellAbility destroy = null;
+        for (final SpellAbility sa : pridemage.getNonManaAbilities()) {
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.Destroy) {
+                destroy = sa;
+            }
+        }
+        assertNotNull(destroy, "Pridemage's ability");
+        destroy.setActivatingPlayer(opp);
+        destroy.getTargets().add(basalt);
+        game.getStack().add(destroy);
+        assertFalse(game.getStack().peek().getSpellAbility().isSpell(), "an ability");
+        assertSame(driver.responseAction(), manaOf(basalt), "an activated ability on Basalt");
+
+        start();
+        final Card kinnan = rock();
+        ballista(1);
+        theirTurn();
+        final Card ftk = addCard("Flametongue Kavu", opp);
+        final Trigger trigger = ftk.getTriggers().get(0);
+        final SpellAbility inner = AbilityFactory.getAbility(ftk, trigger.getParam("Execute"));
+        inner.setActivatingPlayer(opp);
+        inner.setTrigger(trigger);
+        inner.getTargets().add(kinnan);
+        game.getStack().add(new WrappedAbility(trigger, inner, null));
+        assertTrue(game.getStack().peek().getSpellAbility().isWrapper(), "a triggered ability");
+        assertSame(driver.responseAction(), manaOf(basalt), "a trigger on Kinnan");
+    }
+
     // The "all" forms and a removal on a part after the first: Wrath of God (destroy all creatures), Pyroclasm (2
     // damage to each creature, lethal to Kinnan's 2/2), Evacuation (every creature to its owner's hand), Infest (-2/-2
     // to all), Darkness Descends (two -1/-1 counters on each creature) and All Is Dust (each player sacrifices its
@@ -925,6 +1002,22 @@ public class ComboLoopResponseAiTest extends AITest {
         assertTrue(threatens("Arms of Hadar", pieces, ai), "Arms of Hadar aimed at us");
         assertFalse(threatens("Arms of Hadar", pieces, opp), "Arms of Hadar aimed at its caster");
         assertFalse(threatens("Calamity's Wake", pieces), "Calamity's Wake exiles graveyards");
+    }
+
+    // A piece that is no creature is read as a creature is: Shatter (destroy) and Return to Dust (exile) aimed at
+    // Basalt Monolith, and Shatterstorm (destroy all artifacts), threaten it, each read for Basalt alone (Walking
+    // Ballista, an artifact creature, would be Shatterstorm's in its own right), while Shatterstorm spares Kinnan, no
+    // artifact. Each reading draws nothing.
+    @Test
+    public void threatensReadsAPieceThatIsNoCreature() {
+        start();
+        final Card kinnan = rock();
+        ballista(1);
+        theirTurn();
+        assertTrue(threatens("Shatter", List.of(basalt), basalt), "Shatter (destroy) on Basalt");
+        assertTrue(threatens("Return to Dust", List.of(basalt), basalt), "Return to Dust (exile) on Basalt");
+        assertTrue(threatens("Shatterstorm", List.of(basalt)), "Shatterstorm (destroy all artifacts) on Basalt");
+        assertFalse(threatens("Shatterstorm", List.of(kinnan)), "Shatterstorm on Kinnan, no artifact");
     }
 
     // The target as the engine reads it at resolution, and whose item it is: Lightning Bolt on Hullbreaker Horror (3
