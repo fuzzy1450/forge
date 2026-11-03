@@ -74,6 +74,9 @@ public class ComboLoopEndToEndAiTest extends AITest {
     private static final String MURDER = "Murder";
     private static final String ISLAND = "Island";
     private static final String FOREST = "Forest";
+    private static final String SCEPTER = "Isochron Scepter";
+    private static final String REVERSAL = "Dramatic Reversal";
+    private static final String BIRGI = "Birgi, God of Storytelling";
     /** The flicker of Palinchron and Deadeye Navigator. */
     private static final String FLICKER = "1409-3542";
     /** The precon the measure plays against: Forge's own, as the build's combo smokes do. */
@@ -195,6 +198,14 @@ public class ComboLoopEndToEndAiTest extends AITest {
         for (int i = 0; i < n; i++) {
             addCard(name, ai);
         }
+    }
+
+    /** Hullbreaker Horror, ready, and Sol Ring on our battlefield, Mana Vault in our hand: x-2's cast and bounce, whose
+     *  cycles cast its two rocks and tap them for mana. */
+    private void bounce() {
+        ComboLoopBoards.ready(addCard(HULLBREAKER, ai));
+        addCard(SOL_RING, ai);
+        addCardToZone(MANA_VAULT, ai, ZoneType.Hand);
     }
 
     /** The opponent's Main 1 of the game's fourth turn, the turn after ours. */
@@ -537,6 +548,30 @@ public class ComboLoopEndToEndAiTest extends AITest {
                 + "priorities included (%d ms, %d actions, %d steps); the opponent's hand %s", (double) p.millis()
                 / Math.max(1, p.actions()), p.millis(), p.actions(), p.steps(), opp.getCardsIn(ZoneType.Hand)));
         assertTrue(p.actions() > 0, "the driver never acted: " + p);
+    }
+
+    // ---- the final review's round 1 ----
+
+    // Finding 2, spec section 4's anti-goal against the stock AI's own loop on a turn the driver acted in (section 6.8,
+    // amended): x-2's cast and bounce beside Isochron Scepter, Dramatic Reversal imprinted on it, and Birgi, God of
+    // Storytelling. The driver goes off, which makes the turn its own, and the stock AI copies Reversal with the
+    // Scepter, each copy untapping Sol Ring and the Scepter to pay for the next: from the tenth activation the stock
+    // roll ends that loop, as it ends any repeatable ability's, and the opponent's turn comes within the bound.
+    @Test
+    public void aStockLoopOnADriverTurnStillEnds() {
+        start();
+        bounce();
+        ComboLoopBoards.ready(addCard(BIRGI, ai));
+        final Card scepter = addCard(SCEPTER, ai);
+        final Card reversal = addCardToZone(REVERSAL, ai, ZoneType.Exile);
+        scepter.addImprintedCard(reversal);
+        scepter.addExiledCard(reversal);
+        reversal.setExiledWith(scepter);
+        reversal.setExiledBy(ai);
+        final Play p = play("aStockLoopOnADriverTurnStillEnds", g -> g.getPhaseHandler().getPlayerTurn() == opp);
+        assertSame(game.getPhaseHandler().getPlayerTurn(), opp, "our turn never ended: " + p);
+        assertTrue(p.actions() > 0, "the driver never acted: " + p);
+        assertTrue(p.count(SCEPTER + " ability") >= 10, "the Scepter's loop never reached the stock roll: " + p);
     }
 
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on

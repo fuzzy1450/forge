@@ -603,6 +603,54 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(MyRandom.callCount() - before, 1, "the draw is back");
     }
 
+    // The final review's round 1 (spec section 6.8, amended): on a turn the driver acted in, the throttle is lifted
+    // only for the abilities whose count a go-off inflates, Walking Ballista's {4} and ping, Thrasios's {4} and
+    // Kinnan's dig. Every other ability keeps the stock roll, which is what ends the stock AI's own loops (Isochron
+    // Scepter copying Dramatic Reversal). Each ability here is activated twelve times this turn: the four lifted ones
+    // draw nothing, and the Scepter's copy draws its one number on the driver's turn too.
+    @Test
+    public void theThrottleIsLiftedOnlyForTheSinksAndKinnansDig() {
+        start();
+        final Card kinnan = kinnan();
+        addCard(BASALT, ai);
+        endlessOne();
+        final Card ballista = ComboLoopBoards.ready(addCard(LoopSinks.BALLISTA, ai));
+        ballista.setCounters(CounterEnumType.P1P1, 1);
+        final Card thrasios = ComboLoopBoards.ready(addCard(LoopSinks.THRASIOS, ai));
+        final Card scepter = addCard("Isochron Scepter", ai);
+        final List<SpellAbility> lifted = new ArrayList<>();
+        lifted.add(digOf(kinnan));
+        for (final Card c : List.of(ballista, thrasios)) {
+            for (final SpellAbility sa : c.getNonManaAbilities()) {
+                if (sa.isActivatedAbility()) {
+                    lifted.add(sa);
+                }
+            }
+        }
+        assertEquals(lifted.size(), 4, "Kinnan's dig, Ballista's {4} and ping, Thrasios's {4}: " + lifted);
+        final SpellAbility copy = scepter.getNonManaAbilities().stream().filter(SpellAbility::isActivatedAbility)
+                .findFirst().orElseThrow();
+        final List<SpellAbility> all = new ArrayList<>(lifted);
+        all.add(copy);
+        for (final SpellAbility sa : all) {
+            sa.setActivatingPlayer(ai);
+            for (int i = 0; i < 12; i++) {
+                sa.getHostCard().addAbilityActivated(sa);
+            }
+            assertEquals(sa.getActivationsThisTurn(), 12, "twelve activations of " + sa);
+        }
+        assertNotNull(driver.mainPhaseAction(List.of()), "the driver acts");
+        assertTrue(driver.liftsThrottle(), "a turn the driver acted in");
+        for (final SpellAbility sa : lifted) {
+            final long before = MyRandom.callCount();
+            assertFalse(ComputerUtil.preventRunAwayActivations(sa), "lifted: " + sa);
+            assertEquals(MyRandom.callCount() - before, 0, "a draw for " + sa);
+        }
+        final long before = MyRandom.callCount();
+        ComputerUtil.preventRunAwayActivations(copy);
+        assertEquals(MyRandom.callCount() - before, 1, "Isochron Scepter's copy keeps the stock roll");
+    }
+
     // R7: the AI's whole decision on the rock board, with no line and with a loop line the board does not hold
     // (Palinchron and Deadeye's, held by the deck, not on the battlefield), is the stock one, answer and draws.
     @Test

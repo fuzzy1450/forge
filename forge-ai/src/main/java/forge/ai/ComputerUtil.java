@@ -1600,11 +1600,12 @@ public class ComputerUtil {
             return false;
         }
 
-        // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.8): lifted for the rest of
-        // a turn in which the activating player's loop driver acted, whose own activations count here, so Ballista's
-        // {4}, Thrasios and Kinnan's dig meet no random refusal; no draw then, a deliberate change of the random
-        // stream. Untouched on every other turn and for every player whose driver did not act
-        if (LoopDriver.liftsThrottleFor(sa.getActivatingPlayer())) {
+        // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.8, amended): lifted for the
+        // rest of a turn in which the activating player's loop driver acted for the abilities whose counts its go-off
+        // inflates, Walking Ballista's, Thrasios's and Kinnan's dig, so they meet no random refusal; no draw then, a
+        // deliberate change of the random stream (LoopDriver.liftsThrottleOn). Every other ability keeps the roll,
+        // which ends the stock AI's own loops, as does every ability on any other turn and of any other player
+        if (LoopDriver.liftsThrottleOn(sa)) {
             return false;
         }
 

@@ -76,7 +76,9 @@ import forge.game.zone.ZoneType;
  *
  * <p>The driver draws no random number (a payment it triggers draws as the engine's payer does), reads no clock, and
  * checks that the game is still on before it returns an action. Its turn stamp lifts the runaway throttle for the rest
- * of a turn it acted in ({@link #liftsThrottleFor}, read on the AI's evaluation thread, hence volatile), and it steers
+ * of a turn it acted in ({@link #liftsThrottleFor}, read on the AI's evaluation thread, hence volatile) for the
+ * abilities whose counts a go-off inflates alone, Walking Ballista's, Thrasios's and Kinnan's dig
+ * ({@link #liftsThrottleOn}): every other ability keeps the stock roll, which ends the stock AI's own loops. It steers
  * Sakashima of a Thousand Faces to copy Kinnan when that completes the Grim Monolith line ({@link #copyChoice}). For
  * Palinchron's loops it makes two choices: during one of its flicker or recast cycles Palinchron's entering untap takes
  * our lands that make blue first ({@link #untapChoice}), and Deadeye Navigator's own soulbond pairs it with Palinchron
@@ -93,6 +95,10 @@ public final class LoopDriver {
     private static final String GRIM_LINE = "129-2585-2719";
     /** The flicker of Palinchron and Deadeye Navigator. */
     private static final String FLICKER_LINE = "1409-3542";
+    // the cards whose activations a go-off inflates, by printed name, for which the runaway throttle is lifted on a
+    // turn the driver acted in (section 6.8): Walking Ballista's {4} and ping and Thrasios's {4}, the driver's own
+    // sinks, and Kinnan's dig, which the stock walk takes on the pool
+    private static final List<String> LIFTED = List.of(LoopSinks.BALLISTA, LoopSinks.THRASIOS, KINNAN);
 
     private final Player ai;
     // the caps and the round record (tests swap in smaller caps: useRounds)
@@ -390,7 +396,7 @@ public final class LoopDriver {
     }
 
     /** Whether the driver returned an action this turn: ComputerUtil.preventRunAwayActivations is lifted for the rest
-     *  of it (section 6.8), since the driver's own activations count toward it. */
+     *  of it (section 6.8) for the abilities whose counts the go-off inflates ({@link #liftsThrottleOn}). */
     public boolean liftsThrottle() {
         final int acted = actedTurn;
         return acted >= 0 && acted == ai.getGame().getPhaseHandler().getTurn();
@@ -401,6 +407,24 @@ public final class LoopDriver {
     public static boolean liftsThrottleFor(final Player p) {
         final LoopDriver d = of(p);
         return d != null && d.liftsThrottle();
+    }
+
+    /**
+     * Whether ComputerUtil.preventRunAwayActivations is lifted for {@code sa} (section 6.8, amended by the final
+     * review's round 1): an activated ability of a Walking Ballista, a Thrasios, Triton Hero or a Kinnan, Bonder
+     * Prodigy (by printed name), whose counts the go-off inflates (its pumps, pings and digs; the stock walk's digs of
+     * Kinnan on the pool), on a turn in which the driver of the AI deciding for its activator acted
+     * ({@link #liftsThrottleFor}). Every other ability keeps the stock roll, which ends the stock AI's own loops, as on
+     * a turn the driver did not act in: Isochron Scepter copying Dramatic Reversal, each copy untapping the rocks that
+     * pay the next, would otherwise run until the game's timeout (spec section 4's anti-goal). False for null.
+     */
+    public static boolean liftsThrottleOn(final SpellAbility sa) {
+        if (sa == null) {
+            return false;
+        }
+        final Card host = sa.getHostCard();
+        return host != null && LIFTED.contains(ComboTracker.nameOf(host))
+                && liftsThrottleFor(sa.getActivatingPlayer());
     }
 
     /** Sakashima of a Thousand Faces's copy (CloneAi.chooseSingleCard, section 6.8): our Kinnan, Bonder Prodigy among
