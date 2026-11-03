@@ -3,6 +3,7 @@ package forge.ai.combo;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 
@@ -77,6 +78,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
     private static final String SCEPTER = "Isochron Scepter";
     private static final String REVERSAL = "Dramatic Reversal";
     private static final String BIRGI = "Birgi, God of Storytelling";
+    private static final String WRATH = "Wrath of God";
     /** The flicker of Palinchron and Deadeye Navigator. */
     private static final String FLICKER = "1409-3542";
     /** The precon the measure plays against: Forge's own, as the build's combo smokes do. */
@@ -572,6 +574,81 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertSame(game.getPhaseHandler().getPlayerTurn(), opp, "our turn never ended: " + p);
         assertTrue(p.actions() > 0, "the driver never acted: " + p);
         assertTrue(p.count(SCEPTER + " ability") >= 10, "the Scepter's loop never reached the stock roll: " + p);
+    }
+
+    // Finding 3 (spec section 9's stock flicker loop): B10's probe board, Palinchron and Deadeye Navigator paired,
+    // seven Islands, no Walking Ballista (the driver has no response to make), the opponent's Murder on Palinchron on
+    // their turn. The stock blink-to-save flickers Palinchron once, which saves it: Murder's target is gone, and it
+    // fizzles. For a deck holding the flicker line a card is flickered to save it only while an opponent's item targets
+    // it as the object it is now, so the new Palinchron is not flickered again (the stock reading compares card ids,
+    // which a flicker keeps: 429 flickers in 3,000 steps), and our next turn comes within the bound.
+    @Test
+    public void theStockFlickerSavesPalinchronOnce() {
+        start();
+        final Card palinchron = paired();
+        lands(ISLAND, 7);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
+        final Play p = play("theStockFlickerSavesPalinchronOnce",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 2, "our next turn never came: " + p);
+        assertNotNull(onOurBattlefield(PALINCHRON), "Murder resolved: Palinchron left our battlefield");
+        assertEquals(p.count(PALINCHRON + " ability"), 1, "Palinchron's flickers: " + p);
+    }
+
+    // The same with Ballista on ours (one counter) and the opponent at 100,000: the volley cannot fit in what the caps
+    // have left (R28), so the driver declines Murder, and the stock blink-to-save flickers Palinchron once.
+    @Test
+    public void aDeclinedResponseFlickersOnce() {
+        start();
+        opp.setLife(100_000, null);
+        final Card palinchron = paired();
+        lands(ISLAND, 7);
+        ballista(1);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
+        final Play p = play("aDeclinedResponseFlickersOnce", g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 2, "our next turn never came: " + p);
+        assertEquals(p.actions(), 0, "the driver responded: " + p);
+        assertNotNull(onOurBattlefield(PALINCHRON), "Murder resolved: Palinchron left our battlefield");
+        assertEquals(p.count(PALINCHRON + " ability"), 1, "Palinchron's flickers: " + p);
+    }
+
+    // An untargeted removal: the opponent's Wrath of God, Palinchron and Deadeye paired, seven Islands, no Ballista. A
+    // flicker saves nothing from it, since it destroys what is there when it resolves, and the stock reading, which
+    // takes in every creature it would destroy, reads the new Palinchron as threatened after each flicker: for a deck
+    // holding the flicker line nothing is flickered, Wrath resolves, and our next turn comes within the bound.
+    @Test
+    public void aWrathDrawsNoFlicker() {
+        start();
+        paired();
+        lands(ISLAND, 7);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, WRATH);
+        final Play p = play("aWrathDrawsNoFlicker", g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 2, "our next turn never came: " + p);
+        assertEquals(p.count(PALINCHRON + " ability"), 0, "Palinchron's flickers: " + p);
+        assertNull(onOurBattlefield(PALINCHRON), "Wrath of God did not resolve");
+    }
+
+    // The blink refusal's reading (LoopDriver.refusesBlink): with the opponent's Murder aimed at Palinchron as it is
+    // now, a flicker saves it, and it is not refused; with Wrath of God, which targets nothing, a flicker saves
+    // nothing, and it is refused; and for a deck holding no flicker line (the tracker holding none) the stock choice
+    // stands, Wrath or not.
+    @Test
+    public void theBlinkRefusalReadsTheTargetAndNeedsTheFlickerLine() {
+        start();
+        final Card aimed = paired();
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, aimed);
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(aimed)), "Murder aims at Palinchron as it is now");
+        start();
+        final Card palinchron = paired();
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, WRATH);
+        assertTrue(LoopDriver.refusesBlink(ai, List.of(palinchron)), "nothing targets Palinchron");
+        t.useLines(List.of());
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "a deck holding no flicker line");
     }
 
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on

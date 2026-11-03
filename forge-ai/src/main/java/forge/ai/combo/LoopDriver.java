@@ -85,7 +85,9 @@ import forge.game.zone.ZoneType;
  * whenever the deck holds the flicker line ({@link #partnerChoice}). During one of its cast and bounce cycles
  * Hullbreaker Horror's cast trigger returns the cycle's other piece to our hand ({@link #charmModes}), and our hand
  * cast of the cycle's piece in hand waits for the cycle ({@link #holdsCycleCast}, ComboHold.vetoesCast), so the stock
- * walk, which plays at the cycle's boundary, never casts it.
+ * walk, which plays at the cycle's boundary, never casts it. For a deck holding the flicker line the stock flicker
+ * that saves a card from removal (ChangeZoneAi) is refused once no opponent's item targets the card as the object it is
+ * now ({@link #refusesBlink}), so a flicker that saved Palinchron is not made again with each untap paying the next.
  */
 public final class LoopDriver {
     private static final String KINNAN = "Kinnan, Bonder Prodigy";
@@ -505,6 +507,30 @@ public final class LoopDriver {
             }
         }
         return null;
+    }
+
+    /**
+     * Whether the stock flicker of {@code retrieval}, cards of ours ChangeZoneAi would exile and return to save them
+     * from what the stack threatens (its blink-to-save), is refused (spec section 9's stock flicker loop, fixed by the
+     * final review's round 1): for a deck holding the flicker line (1409-3542), while no opponent's item on the stack
+     * targets one of them as the object it is now ({@link LoopResponse#targetsNow}). After one flicker the removal's
+     * target is the card that left, and it fizzles; the stock threat reader compares card ids, which a flicker keeps,
+     * so it would flicker the new card again, and Palinchron, whose untap pays the next flicker, without end. A removal
+     * that targets nothing (destroy all) takes what is on the battlefield when it resolves, which a flicker does not
+     * save; the rare one a new object escapes (Settle the Wreckage's exile of the attacking creatures) is refused too.
+     * False, the stock choice, for every other deck, and for a player no AI of ours decides for. Draws nothing.
+     */
+    public static boolean refusesBlink(final Player ai, final Iterable<Card> retrieval) {
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null || !holds(t, FLICKER_LINE)) {
+            return false;
+        }
+        for (final Card c : retrieval) {
+            if (LoopResponse.targetsNow(ai, c)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

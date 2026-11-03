@@ -100,6 +100,31 @@ final class LoopResponse {
     }
 
     /**
+     * Whether an opponent's item on the stack targets our card {@code c} as the object it is now (the final review's
+     * round 1, LoopDriver.refusesBlink): a part of it, its root (a trigger's wrapped ability) or a sub-ability, holds a
+     * target that is {@code c} with its game timestamp and can still target it, as the engine reads a target at
+     * resolution (MagicStack.hasFizzled). A card that left the battlefield and came back is a new object: the removal
+     * aimed at the old one names it no more. Reads targets alone, no amount, so it draws no random number.
+     */
+    static boolean targetsNow(final Player ai, final Card c) {
+        for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+            if (!opposes(ai, si)) {
+                continue;
+            }
+            SpellAbility root = si.getSpellAbility();
+            if (root.isWrapper()) {
+                root = ((WrappedAbility) root).getWrappedAbility();
+            }
+            for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
+                if (s.usesTargeting() && hits(s, c)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
      * The actions Walking Ballista's volley takes from the board as it stands, every one the driver returns (R28: a
      * go-off in response starts only when they fit in what the caps have left): the volley's pumps and pings
      * ({@link LoopSinks#volleyCost}), and the cycles of loop line {@code l} that make the mana they cost, at its

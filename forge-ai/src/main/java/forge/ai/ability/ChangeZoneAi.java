@@ -8,6 +8,7 @@ import com.google.common.collect.Multiset;
 import forge.ai.*;
 import forge.ai.combo.ComboExecute;
 import forge.ai.combo.ComboFetch;
+import forge.ai.combo.LoopDriver;
 import forge.card.CardType;
 import forge.card.MagicColor;
 import forge.card.mana.ManaCostShard;
@@ -1320,6 +1321,14 @@ public class ChangeZoneAi extends SpellAbilityAi {
                     }
                 }
                 if (!contains) {
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                }
+                // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md section 9, fixed by the final
+                // review's round 1): for a deck holding the flicker loop line, a blink saves a card only while an
+                // opponent's item targets it as the object it is now (LoopDriver.refusesBlink). The reading above
+                // compares card ids, which a blink keeps, so Palinchron, whose untap pays for the next flicker, was
+                // flickered without end. Inert, so stock, for every other deck. Draws nothing
+                if (LoopDriver.refusesBlink(ai, retrieval)) {
                     return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
             }
