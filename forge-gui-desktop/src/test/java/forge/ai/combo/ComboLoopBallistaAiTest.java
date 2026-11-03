@@ -1267,4 +1267,33 @@ public class ComboLoopBallistaAiTest extends AITest {
         addCard(HARSH_MENTOR, opp);
         assertEquals(LoopSinks.volleyLife(ai, 3, 0), 36L, "eight pumps and ten pings at 2 each");
     }
+
+    // ---- the final review's round 1: what its mutation pass's round 3 found untested ----
+
+    // A surplus of counters is no credit against the volley's price (R30: an upper bound): a Ballista of ours with more
+    // counters than the kill needs lacks no pump, so the price is its pings' alone, never less for the counters in
+    // surplus. Five counters on ours, the opponent at 2 under Harsh Mentor (2 for each pump and ping): two pings, 4
+    // life. At our 4 life the price is all of it and the driver takes no action (strictly less than our life); at our 5
+    // the go-off's first action is a ping.
+    @Test
+    public void aSurplusOfCountersIsNoCreditAgainstTheVolleysPrice() {
+        start();
+        opp.setLife(2, null);
+        ballistaOnOurs(5);
+        addCard(HARSH_MENTOR, opp);
+        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 4L, "two pings at 2 each, no pump");
+        ai.setLife(4, null);
+        game.getAction().checkStateEffects(true);
+        assertNull(driver.mainPhaseAction(List.of()), "the volley costs all our life: not taken");
+
+        start();
+        opp.setLife(2, null);
+        ballistaOnOurs(5);
+        addCard(HARSH_MENTOR, opp);
+        ai.setLife(5, null);
+        game.getAction().checkStateEffects(true);
+        final SpellAbility first = driver.mainPhaseAction(List.of());
+        assertNotNull(first, "one life more: the volley is affordable, a go-off");
+        assertEquals(first.getApi(), ApiType.DealDamage, "a ping first: " + first);
+    }
 }

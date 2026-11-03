@@ -948,6 +948,28 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Curtains' Call's second target is Palinchron");
     }
 
+    // ---- the final review's round 1: what its mutation pass's round 3 found untested ----
+
+    // The blink refusal draws no random number, for a deck holding the flicker line or not (section 7: where the stock
+    // path drew none a new path draws none, and a deck holding no line makes the stock's draws): their Murder aimed at
+    // Palinchron, the refusal asked for it and for Deadeye Navigator, which nothing aims at, with the deck's lines and
+    // then with the tracker holding none.
+    @Test
+    public void theBlinkRefusalDrawsNoRandomNumber() {
+        start();
+        final Card palinchron = paired();
+        final Card deadeye = palinchron.getPairedWith();
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
+        final long before = MyRandom.callCount();
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Murder aims at Palinchron");
+        assertTrue(LoopDriver.refusesBlink(ai, List.of(deadeye)), "nothing aims at Deadeye Navigator");
+        assertEquals(MyRandom.callCount() - before, 0, "the refusal drew, a deck holding the flicker line");
+        t.useLines(List.of());
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "a deck holding no flicker line");
+        assertEquals(MyRandom.callCount() - before, 0, "the refusal drew, a deck holding no line");
+    }
+
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on
     // their battlefield, the rest shuffled from seed 7 (a Random of its own, not the game's), the first seven in their
     // hand and the others their library

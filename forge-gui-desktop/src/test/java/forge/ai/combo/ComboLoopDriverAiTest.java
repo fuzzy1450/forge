@@ -1963,4 +1963,23 @@ public class ComboLoopDriverAiTest extends AITest {
         addCard(HARSH_MENTOR, opp);
         assertSame(decide(), manaOf(alone), "the control: Grim Monolith's line alone, its tap");
     }
+
+    // ---- the final review's round 1: what its mutation pass's round 3 found untested ----
+
+    // R30 prices a step even where our life total can fall to 0 or less without our losing: no exemption for our own
+    // Platinum Angel, as the stock refusal has one, since a loop that pays life past zero dies with the Angel.
+    // Harsh Mentor's 2 for Basalt Monolith's untap is its price still with our Platinum Angel on our battlefield.
+    @Test
+    public void ourOwnPlatinumAngelExemptsNoPrice() {
+        start();
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        final SpellAbility untap = untapOf(basalt);
+        untap.setActivatingPlayer(ai);
+        addCard(HARSH_MENTOR, opp);
+        addCard("Platinum Angel", ai);
+        game.getAction().checkStaticAbilities();
+        assertTrue(ai.cantLoseForZeroOrLessLife(), "our Platinum Angel: we cannot lose for 0 or less life");
+        assertEquals(LoopDriver.lifeCost(ai, untap), 2, "priced all the same");
+    }
 }

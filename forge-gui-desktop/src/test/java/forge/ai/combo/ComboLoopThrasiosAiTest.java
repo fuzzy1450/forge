@@ -1690,6 +1690,44 @@ public class ComboLoopThrasiosAiTest extends AITest {
                 "this turn's Main 2: its Main 1 is not still to come");
     }
 
+    // ---- the final review's round 1: what its mutation pass's round 3 found untested ----
+
+    // Only our own triggers raise the floor (section 6.4: our own mandatory draw triggers on our battlefield): a draw
+    // on the opponent's battlefield draws them, its Defined You being its controller, and one that names each player
+    // is left uncounted (section 9), nor does a trigger of theirs of another mode, which would make the floor
+    // uncountable were it ours, make anything of it. The control: the same upkeep draw on ours.
+    @Test
+    public void anOpponentsDrawTriggersRaiseNoFloorOfOurs() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
+        assertEquals(floorWithTheirs(phaseTrigger("Upkeep", "You"), draw), base, "their upkeep draw draws them");
+        assertEquals(floorWithTheirs(phaseTrigger("Upkeep", "You"), "DB$ Draw | Defined$ Player | NumCards$ 3"), base,
+                "a draw by each player at their upkeep is not counted (section 9)");
+        assertEquals(floorWithTheirs("Mode$ SpellCast | Phase$ Upkeep | ValidPlayer$ You"
+                + " | TriggerZones$ Battlefield | Execute$ TrigDraw", draw), base, "another mode of theirs");
+        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "You"), draw}), base + 3, "the control: ours");
+    }
+
+    // The floor draws no random number (section 7: nothing the driver reads draws one) with the draw triggers it counts
+    // in play, which is the path its readers of a trigger take: each player's upkeep draw of 3 (ours at our next
+    // upkeep, the opponent's at theirs) and our own end step's, in our Main 1, 6 and 3 on the floor of 4.
+    @Test
+    public void theFloorDrawsNoRandomNumber() {
+        start();
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
+        final Card upkeep = addCard(MEMNITE, ai);
+        upkeep.setSVar("TrigDraw", draw);
+        upkeep.addTrigger(TriggerHandler.parseTrigger(phaseTrigger("Upkeep", "Player"), upkeep, true));
+        final Card end = addCard(MEMNITE, ai);
+        end.setSVar("TrigDraw", draw);
+        end.addTrigger(TriggerHandler.parseTrigger(phaseTrigger("End of Turn", "You"), end, true));
+        final long before = MyRandom.callCount();
+        final int floor = LoopSinks.floor(ai);
+        assertEquals(MyRandom.callCount() - before, 0, "the floor drew");
+        assertEquals(floor, LoopSinks.LIBRARY_FLOOR + 9, "each player's upkeep and our end step");
+    }
+
     // a phase trigger that executes TrigDraw, for that phase and the players valid
     private static String phaseTrigger(final String phase, final String valid) {
         return "Mode$ Phase | Phase$ " + phase + " | ValidPlayer$ " + valid
@@ -1710,6 +1748,17 @@ public class ComboLoopThrasiosAiTest extends AITest {
         for (final Card host : hosts) {
             game.getAction().moveToGraveyard(host, null);
         }
+        return floor;
+    }
+
+    // our floor with that trigger, whose TrigDraw is that text, on a Memnite of the opponent's put onto their
+    // battlefield for the reading and then into their graveyard
+    private int floorWithTheirs(final String trigger, final String drawText) {
+        final Card host = addCard(MEMNITE, opp);
+        host.setSVar("TrigDraw", drawText);
+        host.addTrigger(TriggerHandler.parseTrigger(trigger, host, true));
+        final int floor = LoopSinks.floor(ai);
+        game.getAction().moveToGraveyard(host, null);
         return floor;
     }
 
