@@ -67,6 +67,9 @@ public class ComboLoopThrasiosAiTest extends AITest {
     private static final String DIVINATION = "Divination";
     private static final String ISLAND = "Island";
     private static final String FOREST = "Forest";
+    private static final String JIN = "Jin-Gitaxias, Core Augur";
+    private static final String NEZAHAL = "Nezahal, Primal Tide";
+    private static final String RHYSTIC = "Rhystic Study";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
     /** The rock untap of Basalt Monolith and Nyxbloom Ancient. */
@@ -1386,6 +1389,65 @@ public class ComboLoopThrasiosAiTest extends AITest {
         moveToMain2(game, ai);
         assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "no Thrasios step");
         assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "not futile: Thrasios spent in it");
+    }
+
+    // ---- the final review's round 1 ----
+
+    // Finding 4 (spec section 6.4, amended): the floor counts the cards our own mandatory draw triggers will draw us
+    // before our next draw step. Jin-Gitaxias, Core Augur on ours draws seven at our end step, whatever our library
+    // holds: a library of fourteen Memnites, Thrasios digs while it holds more than eleven (four, and Jin's seven),
+    // three activations, and stops at eleven, so that Jin's draw leaves four.
+    @Test
+    public void jinsEndStepDrawRaisesTheFloor() {
+        start();
+        ComboLoopBoards.ready(addCard(JIN, ai));
+        library(MEMNITE, 14);
+        final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
+        assertEquals(only(seen, Seen::dig).size(), 3, "Thrasios's activations: " + seen);
+        assertEquals(library(), LoopSinks.LIBRARY_FLOOR + 7, "the floor and Jin's seven");
+        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "then none");
+    }
+
+    // A mandatory draw trigger of ours that waits on another player's play cannot be counted: Nezahal, Primal Tide
+    // draws us a card for each noncreature spell an opponent casts. While one is on our battlefield the plain dig does
+    // not run: a library of ten Memnites, no activation.
+    @Test
+    public void nezahalStopsThePlainDig() {
+        start();
+        ComboLoopBoards.ready(addCard(NEZAHAL, ai));
+        library(MEMNITE, 10);
+        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "a plain dig beside Nezahal");
+        final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
+        assertTrue(only(seen, Seen::dig).isEmpty(), "Thrasios dug: " + seen);
+        assertEquals(library(), 10);
+    }
+
+    // An optional draw is the stock AI's to decline (its confirmTrigger keeps batch 4's library floor), so it raises
+    // no floor: Rhystic Study on ours ("you may draw"), a library of five Memnites, and Thrasios digs from five.
+    @Test
+    public void anOptionalDrawRaisesNoFloor() {
+        start();
+        addCard(RHYSTIC, ai);
+        library(MEMNITE, 5);
+        assertSame(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), digOf(thrasios), "the floor is four");
+    }
+
+    // The floor's reading (LoopSinks.floor), in our Main 1: four with no draw trigger of ours; one more for Phyrexian
+    // Arena (a draw at our next upkeep, before our draw step) and seven more for Jin-Gitaxias (at our end step);
+    // Rhystic Study's optional draw adds nothing; and beside Nezahal, Primal Tide, whose draws wait on the opponents'
+    // spells, no dig that stops at the floor runs.
+    @Test
+    public void theFloorCountsTheDrawsOurTriggersAreDue() {
+        start();
+        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR, "no draw trigger of ours");
+        addCard("Phyrexian Arena", ai);
+        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 1, "Phyrexian Arena's one at our next upkeep");
+        ComboLoopBoards.ready(addCard(JIN, ai));
+        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 8, "and Jin's seven at our end step");
+        addCard(RHYSTIC, ai);
+        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 8, "an optional draw adds nothing");
+        ComboLoopBoards.ready(addCard(NEZAHAL, ai));
+        assertEquals(LoopSinks.floor(ai), Integer.MAX_VALUE, "Nezahal's draws cannot be counted");
     }
 
     // R22's board: Basalt Monolith and Nyxbloom Ancient (3430-4131; no Kinnan) and Thrasios, ready, on ours, in our

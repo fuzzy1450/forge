@@ -75,6 +75,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
     private static final String MURDER = "Murder";
     private static final String ISLAND = "Island";
     private static final String FOREST = "Forest";
+    private static final String JIN = "Jin-Gitaxias, Core Augur";
     private static final String SCEPTER = "Isochron Scepter";
     private static final String REVERSAL = "Dramatic Reversal";
     private static final String BIRGI = "Birgi, God of Storytelling";
@@ -649,6 +650,29 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertTrue(LoopDriver.refusesBlink(ai, List.of(palinchron)), "nothing targets Palinchron");
         t.useLines(List.of());
         assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "a deck holding no flicker line");
+    }
+
+    // Finding 4, the anti-goal "decking itself" with Jin-Gitaxias, Core Augur on ours: thrasiosNeverDecksUs's board
+    // beside Jin, whose trigger draws us seven at our end step, whatever our library holds. Thrasios stops at the floor
+    // and Jin's seven, eleven cards, and Jin's draw leaves four: the opponent's turn comes and the game goes on, where
+    // the dig used to stop at four and Jin's draw decked us.
+    @Test
+    public void jinNeverDecksUs() {
+        board(KINNAN, KINNANS_LIST);
+        fillLibrary(opp, 40);
+        rock();
+        ComboLoopBoards.ready(addCard(THRASIOS, ai));
+        ComboLoopBoards.ready(addCard(JIN, ai));
+        for (int i = 0; i < 15; i++) {
+            addCardToZone(MEMNITE, ai, ZoneType.Library);
+            addCardToZone(FOREST, ai, ZoneType.Library);
+        }
+        final Play p = play("jinNeverDecksUs", g -> g.getPhaseHandler().getPlayerTurn() == opp);
+        final int library = ai.getCardsIn(ZoneType.Library).size();
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
+        assertSame(game.getPhaseHandler().getPlayerTurn(), opp, "the opponent's turn never came: " + p);
+        assertTrue(library >= LoopSinks.LIBRARY_FLOOR, "our library after Jin's draw: " + library + "; " + p);
+        assertTrue(p.count(THRASIOS + " ability") > 0, "Thrasios never dug: " + p);
     }
 
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on
