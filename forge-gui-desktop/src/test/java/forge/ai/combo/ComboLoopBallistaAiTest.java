@@ -56,6 +56,8 @@ public class ComboLoopBallistaAiTest extends AITest {
     private static final String BALLISTA = LoopSinks.BALLISTA;
     private static final String ANGEL = "Platinum Angel";
     private static final String DREADMAW = "Colossal Dreadmaw";
+    private static final String HARSH_MENTOR = "Harsh Mentor";
+    private static final String SPELLSHOCK = "Spellshock";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
     /** The game-loop steps a stepping test may take: a hundred cycles at two or three steps each, and slack. */
@@ -1128,5 +1130,88 @@ public class ComboLoopBallistaAiTest extends AITest {
         final SpellAbility first = driver.mainPhaseAction(List.of());
         assertNotNull(first, "a go-off starts");
         assertEquals(first.getApi(), ApiType.DealDamage, "a ping first: " + first);
+    }
+
+    // ---- the final review's round 1: what its mutation pass found untested ----
+
+    // R30's budget (LoopSinks.volleyLife) priced part by part, on a board where the opponent's Harsh Mentor makes each
+    // pump and each ping cost 2: Ballista on ours with one counter and the opponent at 10, so nine pumps ({4} each) and
+    // ten pings, 38 life. The cycles of the line that makes the mana, 2 life each at a net of 3: as many as the 36 mana
+    // takes, and one more, 13; each mana floating counts toward the 36; and cycles that net nothing never make it.
+    @Test
+    public void theVolleysPriceInLifeIsTheSumOfItsParts() {
+        start();
+        opp.setLife(10, null);
+        ballistaOnOurs(1);
+        addCard(HARSH_MENTOR, opp);
+        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 38L, "nine pumps and ten pings at 2 each");
+        assertEquals(LoopSinks.volleyLife(ai, 3, 2), 38L + 26L, "and 13 cycles for the 36 mana");
+        floatColourless(35);
+        assertEquals(LoopSinks.volleyLife(ai, 3, 2), 38L + 4L, "one mana short: two cycles");
+        floatColourless(1);
+        assertEquals(LoopSinks.volleyLife(ai, 3, 2), 38L, "the pool pays it: no cycle");
+        assertEquals(LoopSinks.volleyLife(ai, 0, 2), 38L, "no cycle is needed, whatever it nets");
+        ai.getManaPool().clearPool(false);
+        assertEquals(LoopSinks.volleyLife(ai, 0, 2), Long.MAX_VALUE, "cycles that net nothing never make the mana");
+        assertEquals(LoopSinks.volleyLife(ai, -1, 2), Long.MAX_VALUE, "nor do cycles that net less");
+    }
+
+    // The mana is what the engine charges now, a tax included: under the opponent's Suppression Field ({2} more for an
+    // activated ability that is no mana ability) a ping costs {2} and a pump {6}. Four pings and three pumps against
+    // the opponent's 4 are 8 + 18 = 26 mana, 10 cycles at 2 life, and 3 x 2 + 4 x 2 = 14 life for the volley: 34.
+    @Test
+    public void theVolleysManaIsWhatTheEngineChargesNow() {
+        start();
+        opp.setLife(4, null);
+        ballistaOnOurs(1);
+        addCard(HARSH_MENTOR, opp);
+        addCard("Suppression Field", opp);
+        assertEquals(LoopSinks.volleyLife(ai, 3, 2), 34L, "26 mana: 10 cycles at 2, then 3 pumps and 4 pings at 2");
+    }
+
+    // Ballista in our hand, its cast at most X = 100 from the loop's pool of 200: the opponent's 20 needs the cast at
+    // 20, twenty pings and no pump, the cast's 40 mana 15 cycles at a net of 3; the opponent's 150 needs fifty pumps
+    // beside the cast at 100.
+    @Test
+    public void theVolleysPriceFromOurHandIsTheCastsPumpsAndPings() {
+        start();
+        opp.setLife(20, null);
+        ballistaInHand();
+        addCard(HARSH_MENTOR, opp);
+        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 40L, "twenty pings at 2, no pump");
+        assertEquals(LoopSinks.volleyLife(ai, 3, 2), 40L + 30L, "and the 40 mana of the cast takes 15 cycles at 2");
+        opp.setLife(150, null);
+        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 400L, "fifty pumps and 150 pings at 2 each");
+    }
+
+    // The cast is priced too: under the opponent's Spellshock (2 damage to a player for each spell they cast)
+    // Ballista's cast from our hand costs 2, and its pump and ping, abilities, nothing; with a Ballista on our
+    // battlefield too, the volley has no cast.
+    @Test
+    public void theVolleysPriceCountsTheCast() {
+        start();
+        opp.setLife(20, null);
+        ballistaInHand();
+        addCard(SPELLSHOCK, opp);
+        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 2L, "the cast alone");
+        ballistaOnOurs(1);
+        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 0L, "a Ballista on our battlefield: no cast, nothing priced");
+    }
+
+    // Only a kill this turn is worth our life: the opponent's Leyline of Sanctity (player hexproof) leaves no ping to
+    // aim, so the pumps toward five times lethal are never worth a price in life (Harsh Mentor's 2 for each), and the
+    // driver takes no action.
+    @Test
+    public void aBoardNoPingCanKillIsNoKillWorthOurLife() {
+        start();
+        opp.setLife(4, null);
+        addCard("Leyline of Sanctity", opp);
+        addCard(HARSH_MENTOR, opp);
+        ballistaOnOurs(1);
+        game.getAction().checkStateEffects(true);
+        assertEquals(LoopSinks.lethalNeeded(ai), 0, "no opponent a ping can target");
+        assertEquals(LoopSinks.volleyLife(ai, 3, 0), Long.MAX_VALUE, "priced, and no kill to pay for");
+        final List<Act> acts = drive(MAX_ACTIONS);
+        assertTrue(acts.isEmpty(), "a pump or an untap that costs life: " + acts);
     }
 }

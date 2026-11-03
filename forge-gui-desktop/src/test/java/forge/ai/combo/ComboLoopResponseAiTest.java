@@ -1095,4 +1095,26 @@ public class ComboLoopResponseAiTest extends AITest {
         game.getStack().clear();
         assertTrue(threatens("Lightning Bolt", List.of(kinnan), kinnan), "the control: Bolt as printed");
     }
+
+    // ---- the final review's round 1: what its mutation pass found untested ----
+
+    // R30's measure in response: the go-off's first action above their Murder, Basalt's tap, costs no life by its
+    // price; a life lost before the next decision (a cost no price reads; here by hand) is judged there, with the
+    // removal still beneath, and fails the line: the response is over.
+    @Test
+    public void aResponseJudgesWhatItsCyclesCostBeneathTheRemoval() {
+        start();
+        final Card kinnan = rock();
+        ballista(1);
+        theirTurn();
+        final Card murder = ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+        game.getAction().checkStateEffects(true);
+        final SpellAbility tap = driver.responseAction();
+        assertSame(tap, manaOf(basalt), "the response starts with Basalt's tap");
+        ai.getController().playChosenSpellAbility(tap);
+        resolveDownTo(murder);
+        ai.setLife(ai.getLife() - 1, null);
+        game.getAction().checkStateEffects(true);
+        assertNull(driver.responseAction(), "the line fails: the response is over");
+    }
 }

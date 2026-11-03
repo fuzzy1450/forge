@@ -35,6 +35,8 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.trigger.Trigger;
+import forge.game.trigger.TriggerHandler;
 import forge.game.zone.ZoneType;
 import forge.util.MyRandom;
 
@@ -71,6 +73,8 @@ public class ComboLoopThrasiosAiTest extends AITest {
     private static final String NEZAHAL = "Nezahal, Primal Tide";
     private static final String RHYSTIC = "Rhystic Study";
     private static final String UNRAVELER = "Fate Unraveler";
+    private static final String EIDOLON = "Eidolon of the Great Revel";
+    private static final String BURNING_TREE = "Burning-Tree Shaman";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
     /** The rock untap of Basalt Monolith and Nyxbloom Ancient. */
@@ -362,6 +366,30 @@ public class ComboLoopThrasiosAiTest extends AITest {
             }
             acts.add(new Act(sa, sa.getHostCard(), pool(), library()));
             playAndResolve(sa);
+        }
+        return acts;
+    }
+
+    /** {@link #drive}, but with the triggers each action causes put on the stack, as the game loop puts them, before
+     *  it resolves (Fate Unraveler's damage for a card drawn). */
+    private List<Act> driveWithTriggers(final int max) {
+        final List<Act> acts = new ArrayList<>();
+        while (acts.size() < max && !game.isGameOver()) {
+            game.getAction().checkStateEffects(true);
+            SpellAbility sa = driver.mainPhaseAction(List.of());
+            if (sa == null) {
+                sa = driver.afterStockWalk();
+            }
+            if (sa == null) {
+                break;
+            }
+            acts.add(new Act(sa, sa.getHostCard(), pool(), library()));
+            ai.getController().playChosenSpellAbility(sa);
+            game.getStack().addAllTriggeredAbilitiesToStack();
+            while (!game.getStack().isEmpty()) {
+                game.getStack().resolveStack();
+                game.getStack().addAllTriggeredAbilitiesToStack();
+            }
         }
         return acts;
     }
@@ -1464,6 +1492,220 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
         assertEquals(only(seen, Seen::dig).size(), 1, "Thrasios's activations: " + seen);
         assertEquals(ai.getLife(), life - 1, "one draw's damage");
+    }
+
+    // ---- the final review's round 1: what its mutation pass found untested ----
+
+    // The floor reads a count as it is written (LoopSinks.floor's plain number): a whole number of one to three digits,
+    // each read in base ten, one card when none is written; any other count cannot be read, and beside it no dig that
+    // stops at the floor runs, beside a count it can read or not. Each draw here is our upkeep trigger's, once before
+    // our next draw step.
+    @Test
+    public void theFloorReadsAPlainNumberOfCardsAsWritten() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final String up = phaseTrigger("Upkeep", "You");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 2"}), base + 2, "2");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You"}), base + 1, "no NumCards: one card");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | NumCards$ 3"}), base + 3, "no Defined: us");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 19"}), base + 19, "19");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 10"}), base + 10, "10");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 123"}), base + 123, "123");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 0"}), base, "0");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 1234"}), Integer.MAX_VALUE,
+                "four digits are no plain number");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ X"}), Integer.MAX_VALUE, "X");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 5."}), Integer.MAX_VALUE, "5.");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 7"},
+                new String[] {up, "DB$ Draw | Defined$ You | NumCards$ X"}), Integer.MAX_VALUE,
+                "a count that cannot be read, beside one that can");
+    }
+
+    // The floor counts a draw of ours that is mandatory: not one with a may on its trigger or on its Draw, nor one with
+    // an UnlessCost, nor an opponent's draw, nor, as spec section 9 reads it, the triggered player's; a draw by each
+    // player is ours too. A mandatory draw of ours on a trigger of another mode, or on a phase trigger that names no
+    // phase, cannot be counted. A suppressed trigger draws nothing, nor does one that works from another zone.
+    @Test
+    public void theFloorCountsOnlyWhatWeMustDraw() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final String up = phaseTrigger("Upkeep", "You");
+        assertEquals(floorWith(new String[] {up + " | OptionalDecider$ You", "DB$ Draw | Defined$ You | NumCards$ 3"}),
+                base, "a may on the trigger");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 3 | OptionalDecider$ You"}),
+                base, "a may on the Draw");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 3 | UnlessCost$ 1"}), base,
+                "an UnlessCost");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ Player | NumCards$ 3"}), base + 3,
+                "each player draws");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ Opponent | NumCards$ 3"}), base,
+                "an opponent draws");
+        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ TriggeredPlayer | NumCards$ 3"}), base,
+                "the triggered player draws");
+        assertEquals(floorWith(new String[] {"Mode$ SpellCast | Phase$ Upkeep | ValidPlayer$ You"
+                + " | TriggerZones$ Battlefield | Execute$ TrigDraw", "DB$ Draw | Defined$ You | NumCards$ 3"}),
+                Integer.MAX_VALUE, "another mode, whatever else it says");
+        assertEquals(floorWith(new String[] {"Mode$ Phase | ValidPlayer$ You | TriggerZones$ Battlefield"
+                + " | Execute$ TrigDraw", "DB$ Draw | Defined$ You | NumCards$ 3"}), Integer.MAX_VALUE,
+                "a phase trigger of no phase");
+        final Card host = addCard(MEMNITE, ai);
+        host.setSVar("TrigDraw", "DB$ Draw | Defined$ You | NumCards$ 3");
+        final Trigger trigger = TriggerHandler.parseTrigger(up, host, true);
+        host.addTrigger(trigger);
+        assertEquals(LoopSinks.floor(ai), base + 3, "the control");
+        trigger.setSuppressed(true);
+        assertEquals(LoopSinks.floor(ai), base, "a suppressed trigger draws nothing");
+        trigger.setSuppressed(false);
+        assertEquals(LoopSinks.floor(ai), base + 3, "and draws again once it is not");
+        game.getAction().moveToGraveyard(host, null);
+        assertEquals(floorWith(new String[] {up.replace("Battlefield", "Graveyard"), "DB$ Draw | Defined$ You"}),
+                base, "a trigger that works from another zone draws nothing here");
+    }
+
+    // The floor counts each draw once for each firing before our next draw step: at our next untap and upkeep (not at
+    // our draw step), in the rest of this turn of ours, and in each other player's turn still in the game, where the
+    // trigger's players take that turn's player.
+    @Test
+    public void theFloorCountsEachFiringBeforeOurNextDrawStep() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
+        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "Player"), draw}), base + 6,
+                "each player's upkeep: ours and the opponent's");
+        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "Opponent"), draw}), base + 3,
+                "the opponent's alone");
+        assertEquals(floorWith(new String[] {phaseTrigger("Untap", "You"), draw}), base + 3, "our next untap");
+        assertEquals(floorWith(new String[] {phaseTrigger("Draw", "You"), draw}), base,
+                "our draw step comes after our next draw");
+        assertEquals(floorWith(new String[] {phaseTrigger("Main1", "You"), draw}), base,
+                "this phase is not still to come");
+        assertEquals(floorWith(new String[] {phaseTrigger("End of Turn", "You"), draw}), base + 3,
+                "the rest of our turn");
+        assertEquals(floorWith(new String[] {phaseTrigger("End of Turn", "Opponent"), draw}), base + 3,
+                "the opponent's end step, not ours");
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp, 4);
+        assertEquals(floorWith(new String[] {phaseTrigger("End of Turn", "You"), draw}), base,
+                "in the opponent's turn our end step comes after our next draw");
+        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "You"), draw}), base + 3, "our next upkeep");
+    }
+
+    // A player who has lost has no more turns: in a three-player game an upkeep trigger of each opponent's counts once
+    // for each opponent still in the game.
+    @Test
+    public void theFloorCountsNoTurnOfAPlayerWhoHasLost() {
+        pod();
+        final Player third = game.getPlayers().get(2);
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "Opponent"), draw}), base + 6, "two opponents");
+        third.concede();
+        assertTrue(third.hasLost(), "the third player conceded");
+        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "Opponent"), draw}), base + 3, "one is left");
+    }
+
+    // The dig toward Thassa's Oracle keeps what our own triggers will draw too: Jin-Gitaxias on ours (his seven at our
+    // end step) and the opponent's untapped Island (so no dig goes below the floor, R22): ten cards are not above Jin's
+    // floor of eleven, twelve are.
+    @Test
+    public void theOracleDigKeepsTheDueDrawsToo() {
+        nyxbloomOracleBoard();
+        ComboLoopBoards.ready(addCard(JIN, ai));
+        addCard(ISLAND, opp);
+        final ComboLines.Line l = line(BASALT_NYXBLOOM);
+        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 7, "the floor and Jin's seven");
+        assertTrue(library() > LoopSinks.oracleThreshold(ai), "the library is above Oracle's threshold");
+        assertNull(LoopSinks.thrasios(ai, l), "ten cards are not above Jin's eleven: no dig toward Oracle");
+        library(FOREST, 2);
+        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "twelve are");
+    }
+
+    // The dig to empty keeps the floor of four, whatever our triggers will draw: Laboratory Maniac wins on a draw from
+    // an empty library, Jin's seven among them. Jin on ours, the opponent's untapped Island, eight cards: the dig goes
+    // on.
+    @Test
+    public void theDigToEmptyKeepsTheFloorOfFour() {
+        start();
+        addCard(LAB, ai);
+        ComboLoopBoards.ready(addCard(JIN, ai));
+        addCard(ISLAND, opp);
+        library(MEMNITE, 8);
+        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 7, "the plain dig's floor");
+        assertSame(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), digOf(thrasios), "above four: the dig to empty");
+    }
+
+    // Thrasios takes no dig that costs life (R30: a dig buys no kill this turn): the opponent's Burning-Tree Shaman
+    // deals 1 to a player who activates an ability that is no mana ability.
+    @Test
+    public void thrasiosTakesNoDigThatCostsLife() {
+        start();
+        library(MEMNITE, 10);
+        assertSame(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), digOf(thrasios), "no punisher: the dig");
+        addCard(BURNING_TREE, opp);
+        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "a dig that costs 1 life");
+    }
+
+    // R30's measure for Thrasios: a dig that cost more life than its price (the opponent's Fate Unraveler's 1 for the
+    // card it drew) ends the dig, not the go-off: the refill goes on toward the stock target (Endless One in hand), so
+    // the driver's actions follow the one activation.
+    @Test
+    public void aDigThatCostsMoreThanItsPriceEndsTheDigNotTheGoOff() {
+        start();
+        addCard(UNRAVELER, opp);
+        library(MEMNITE, 10);
+        addCardToZone(ENDLESS_ONE, ai, ZoneType.Hand);
+        final List<Act> acts = driveWithTriggers(MAX_ACTIONS);
+        final List<Act> digs = only(acts, Act::dig);
+        assertEquals(digs.size(), 1, "one activation: its draw cost 1 life and no price read it");
+        final int at = acts.indexOf(digs.get(0));
+        assertTrue(acts.size() > at + 1, "the go-off went on after the dig ended: " + at + " of " + acts.size());
+    }
+
+    // Thassa's Oracle is not cast at a price of our whole life (the stock refusal's mirror): the opponent's Eidolon of
+    // the Great Revel deals 2 to us for it, its trigger resolving before Oracle does. At our 2 the driver does not cast
+    // Oracle; at our 3 it does.
+    @Test
+    public void oracleIsNotCastAtAPriceOfOurWholeLife() {
+        final SpellAbility refused = oracleCastAtLife(2);
+        assertTrue(refused == null || !refused.isSpell(), "Oracle's cast costs 2 life, all we have: " + refused);
+        final SpellAbility cast = oracleCastAtLife(3);
+        assertNotNull(cast, "a life more: a go-off that casts Oracle");
+        assertTrue(cast.isSpell(), "a cast: " + cast);
+        assertEquals(ComboTracker.nameOf(cast.getHostCard()), ORACLE, "Oracle's cast: " + cast);
+    }
+
+    // a phase trigger that executes TrigDraw, for that phase and the players valid
+    private static String phaseTrigger(final String phase, final String valid) {
+        return "Mode$ Phase | Phase$ " + phase + " | ValidPlayer$ " + valid
+                + " | TriggerZones$ Battlefield | Execute$ TrigDraw";
+    }
+
+    // our floor with each pair {a trigger, its TrigDraw's text} one more trigger of ours, each on a Memnite of ours
+    // put onto our battlefield for the reading and then put into our graveyard
+    private int floorWith(final String[]... triggers) {
+        final List<Card> hosts = new ArrayList<>();
+        for (final String[] tr : triggers) {
+            final Card host = addCard(MEMNITE, ai);
+            host.setSVar("TrigDraw", tr[1]);
+            host.addTrigger(TriggerHandler.parseTrigger(tr[0], host, true));
+            hosts.add(host);
+        }
+        final int floor = LoopSinks.floor(ai);
+        for (final Card host : hosts) {
+            game.getAction().moveToGraveyard(host, null);
+        }
+        return floor;
+    }
+
+    // the go-off slot's first decision on nyxbloomOracleBoard's board with our library milled to three cards, Oracle's
+    // threshold, the opponent's Eidolon of the Great Revel out and our life at that
+    private SpellAbility oracleCastAtLife(final int life) {
+        nyxbloomOracleBoard();
+        addCard(EIDOLON, opp);
+        while (library() > 3) {
+            game.getAction().moveToGraveyard(ai.getCardsIn(ZoneType.Library).get(0), null);
+        }
+        ai.setLife(life, null);
+        return driver.mainPhaseAction(List.of());
     }
 
     // R22's board: Basalt Monolith and Nyxbloom Ancient (3430-4131; no Kinnan) and Thrasios, ready, on ours, in our

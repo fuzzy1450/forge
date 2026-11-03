@@ -60,6 +60,9 @@ public class ComboLoopDriverAiTest extends AITest {
     private static final String DREADMAW = "Colossal Dreadmaw";
     private static final String NULL_ROD = "Null Rod";
     private static final String SUPPRESSION_FIELD = "Suppression Field";
+    private static final String HARSH_MENTOR = "Harsh Mentor";
+    private static final String EIDOLON = "Eidolon of the Great Revel";
+    private static final String HULLBREAKER = "Hullbreaker Horror";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
     /** The rock untap of Kinnan, Grim Monolith and Sakashima as a copy of Kinnan. */
@@ -240,6 +243,32 @@ public class ComboLoopDriverAiTest extends AITest {
             }
         }
         return n;
+    }
+
+    /** {@code sa} played through the AI's own play path, the stack then resolved. */
+    private void playOut(final SpellAbility sa) {
+        ai.getController().playChosenSpellAbility(sa);
+        while (!game.getStack().isEmpty()) {
+            game.getStack().resolveStack();
+        }
+    }
+
+    /** The go-off slot's decision, the state-based actions checked first, as the game loop checks them before every
+     *  priority (which makes the triggers of the cards a board placed active: Kinnan's mana). */
+    private SpellAbility decide() {
+        game.getAction().checkStateEffects(true);
+        return driver.mainPhaseAction(List.of());
+    }
+
+    /** Palinchron and Deadeye Navigator, ready on our battlefield and paired: Deadeye's flicker granted to both.
+     *  Returns Palinchron. */
+    private Card paired() {
+        final Card palinchron = ComboLoopBoards.ready(addCard("Palinchron", ai));
+        final Card deadeye = ComboLoopBoards.ready(addCard("Deadeye Navigator", ai));
+        palinchron.setPairedWith(deadeye);
+        deadeye.setPairedWith(palinchron);
+        game.getAction().checkStaticAbilities();
+        return palinchron;
     }
 
     // ---- the plan's tests ----
@@ -1680,5 +1709,221 @@ public class ComboLoopDriverAiTest extends AITest {
         }
         assertFalse(ai.isControlled());
         assertTrue(LoopDriver.liftsThrottleFor(ai), "control back: its own driver's stamp");
+    }
+
+    // ---- the final review's round 1: what its mutation pass found untested ----
+
+    // R30 picks a line whose cycle costs no life first: the rock untap (Kinnan and Basalt Monolith, net 1) beside x-2's
+    // cast and bounce (Hullbreaker Horror, Sol Ring, Mana Vault in hand: net 5 with Kinnan), Ballista on ours with one
+    // counter, the opponent at 2, and Eidolon of the Great Revel on their battlefield. The casts cost 2 life each and
+    // the untap nothing, and the kill is affordable through either line: the rock line goes first, its tap of Basalt,
+    // not x-2's tap of Sol Ring.
+    @Test
+    public void aLineWhoseCycleCostsNothingIsPickedFirst() {
+        start();
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        ComboLoopBoards.ready(addCard(HULLBREAKER, ai));
+        addCard("Sol Ring", ai);
+        addCardToZone("Mana Vault", ai, ZoneType.Hand);
+        ComboLoopBoards.ready(addCard(LoopSinks.BALLISTA, ai)).setCounters(CounterEnumType.P1P1, 1);
+        opp.setLife(2, null);
+        addCard(EIDOLON, opp);
+        assertEquals(LoopCycles.net(ai, line(KINNAN_BASALT)), 1, "the rock untap's net");
+        assertEquals(LoopCycles.net(ai, line("x-2")), 5, "x-2's net, the higher");
+        final SpellAbility first = driver.mainPhaseAction(List.of());
+        assertSame(first, manaOf(basalt), "the untap costs nothing: Basalt's tap, not Sol Ring's");
+    }
+
+    // A line whose cycle costs life runs toward a kill our life affords even when Ballista's next step needs no mana:
+    // the rock untap under Harsh Mentor (2 for each untap), Ballista on ours with two counters, the opponent at 2. The
+    // volley is two pings at 2 each, and the go-off's first action is a ping.
+    @Test
+    public void aCostlyLineRunsToAPingThatNeedsNoMana() {
+        start();
+        kinnan();
+        addCard(BASALT, ai);
+        final Card ballista = ComboLoopBoards.ready(addCard(LoopSinks.BALLISTA, ai));
+        ballista.setCounters(CounterEnumType.P1P1, 2);
+        opp.setLife(2, null);
+        addCard(HARSH_MENTOR, opp);
+        assertEquals(LoopSinks.ballistaPool(ai), 0, "the ping needs no mana");
+        final SpellAbility first = driver.mainPhaseAction(List.of());
+        assertNotNull(first, "the kill is affordable: a go-off");
+        assertSame(first.getHostCard(), ballista, "Ballista's step: " + first);
+        assertEquals(first.getApi(), ApiType.DealDamage, "a ping first: " + first);
+    }
+
+    // R30 prices a cycle by its actions that are no mana ability (LoopCycles.lifeSteps), us each one's activator: the
+    // rock untap's is its rock's untap; the flicker's, Palinchron's flicker; the return and recast's, Palinchron's
+    // return while it is on our battlefield, then its cast, and with it in our hand its cast alone.
+    @Test
+    public void aCyclesPricedStepsAreItsNonManaActions() {
+        start();
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        final List<SpellAbility> rock = LoopCycles.lifeSteps(ai, line(KINNAN_BASALT));
+        assertEquals(rock.size(), 1, "the rock's untap: " + rock);
+        assertSame(rock.get(0), untapOf(basalt));
+        assertSame(rock.get(0).getActivatingPlayer(), ai);
+
+        final Card palinchron = paired();
+        final List<SpellAbility> flicker = LoopCycles.lifeSteps(ai, line("1409-3542"));
+        assertEquals(flicker.size(), 1, "Palinchron's flicker: " + flicker);
+        assertSame(flicker.get(0).getHostCard(), palinchron);
+        assertEquals(flicker.get(0).getApi(), ApiType.ChangeZone);
+        assertSame(flicker.get(0).getActivatingPlayer(), ai);
+
+        ComboLoopBoards.ready(addCard(NYXBLOOM, ai));
+        final List<SpellAbility> recast = LoopCycles.lifeSteps(ai, line("3430-3542"));
+        assertEquals(recast.size(), 2, "its return, then its cast: " + recast);
+        assertSame(recast.get(0).getHostCard(), palinchron);
+        assertFalse(recast.get(0).isSpell(), "the return");
+        assertEquals(recast.get(0).getParam("Destination"), "Hand");
+        assertSame(recast.get(1).getHostCard(), palinchron);
+        assertTrue(recast.get(1).isSpell(), "the cast");
+        assertSame(recast.get(0).getActivatingPlayer(), ai);
+        assertSame(recast.get(1).getActivatingPlayer(), ai);
+
+        game.getAction().moveToHand(palinchron, null);
+        final List<SpellAbility> inHand = LoopCycles.lifeSteps(ai, line("3430-3542"));
+        assertEquals(inHand.size(), 1, "with Palinchron in our hand the cycle is past its return: its cast alone");
+        assertTrue(inHand.get(0).isSpell(), "the cast");
+        assertSame(inHand.get(0).getActivatingPlayer(), ai);
+    }
+
+    // The cast and bounce's priced steps are its two pieces' casts: Sol Ring's, on our battlefield, and Mana Vault's,
+    // in our hand.
+    @Test
+    public void theBouncesPricedStepsAreItsTwoCasts() {
+        start();
+        ComboLoopBoards.ready(addCard(HULLBREAKER, ai));
+        final Card ring = addCard("Sol Ring", ai);
+        final Card vault = addCardToZone("Mana Vault", ai, ZoneType.Hand);
+        final List<SpellAbility> steps = LoopCycles.lifeSteps(ai, line("x-2"));
+        assertEquals(steps.size(), 2, "the two casts: " + steps);
+        int rings = 0;
+        int vaults = 0;
+        for (final SpellAbility sa : steps) {
+            assertTrue(sa.isSpell(), "a cast: " + sa);
+            assertSame(sa.getActivatingPlayer(), ai);
+            rings += sa.getHostCard() == ring ? 1 : 0;
+            vaults += sa.getHostCard() == vault ? 1 : 0;
+        }
+        assertEquals(rings, 1, "Sol Ring's cast");
+        assertEquals(vaults, 1, "Mana Vault's cast");
+    }
+
+    // An entering is priced for the card a flicker returns, Rampaging Ferocidon's 1 as Palinchron comes back, and for
+    // no other ability: Ballista's pump and ping put nothing onto the battlefield.
+    @Test
+    public void anEnteringIsPricedForTheCardAFlickerReturnsAndForNoOtherAbility() {
+        start();
+        final Card ballista = ComboLoopBoards.ready(addCard(LoopSinks.BALLISTA, ai));
+        ballista.setCounters(CounterEnumType.P1P1, 1);
+        paired();
+        final SpellAbility flicker = LoopCycles.lifeSteps(ai, line("1409-3542")).get(0);
+        SpellAbility pump = null;
+        SpellAbility ping = null;
+        for (final SpellAbility sa : ballista.getNonManaAbilities()) {
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.PutCounter) {
+                pump = sa;
+            } else if (sa.isActivatedAbility() && sa.getApi() == ApiType.DealDamage) {
+                ping = sa;
+            }
+        }
+        assertNotNull(pump, "Ballista's pump");
+        assertNotNull(ping, "Ballista's ping");
+        pump.setActivatingPlayer(ai);
+        ping.setActivatingPlayer(ai);
+        assertEquals(LoopDriver.lifeCost(ai, flicker), 0, "no punisher");
+        addCard("Rampaging Ferocidon", opp);
+        assertEquals(LoopDriver.lifeCost(ai, flicker), 1, "Ferocidon's 1 as Palinchron comes back");
+        assertEquals(LoopDriver.lifeCost(ai, pump), 0, "a pump puts nothing onto the battlefield");
+        assertEquals(LoopDriver.lifeCost(ai, ping), 0, "a ping puts nothing onto the battlefield");
+    }
+
+    // Nothing is priced while we cannot lose life: Harsh Mentor's 2 for Basalt Monolith's untap, then 0 once our
+    // Platinum Emperion (our life total cannot change) is on our battlefield.
+    @Test
+    public void nothingIsPricedWhileWeCannotLoseLife() {
+        start();
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        final SpellAbility untap = untapOf(basalt);
+        untap.setActivatingPlayer(ai);
+        addCard(HARSH_MENTOR, opp);
+        assertEquals(LoopDriver.lifeCost(ai, untap), 2, "Harsh Mentor's 2 for the untap");
+        addCard("Platinum Emperion", ai);
+        assertEquals(LoopDriver.lifeCost(ai, untap), 0, "our life total cannot change");
+    }
+
+    // R30's measure for Walking Ballista: a step that cost more life than its price (a cost no price reads; here a
+    // life lost by hand) ends the volley for the phase, and the go-off goes on without it. Kinnan, Basalt and Ballista
+    // (three counters), the opponent at 3, Endless One in hand (a stock target of 200): the first action is a ping; we
+    // lose a life as it resolves; the next decision is Basalt's tap, the refill toward what the stock AI spends, not a
+    // second ping and not a pass.
+    @Test
+    public void aBallistaStepThatCostsMoreThanItsPriceEndsTheVolleyNotTheGoOff() {
+        start();
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        endlessOne();
+        final Card ballista = ComboLoopBoards.ready(addCard(LoopSinks.BALLISTA, ai));
+        ballista.setCounters(CounterEnumType.P1P1, 3);
+        opp.setLife(3, null);
+        final SpellAbility ping = decide();
+        assertNotNull(ping, "a go-off starts with Ballista's ping");
+        assertSame(ping.getHostCard(), ballista);
+        assertEquals(ping.getApi(), ApiType.DealDamage);
+        playOut(ping);
+        assertEquals(opp.getLife(), 2, "the ping landed");
+        ai.setLife(ai.getLife() - 1, null);
+        assertSame(decide(), manaOf(basalt), "the volley is over, the go-off goes on");
+    }
+
+    // R30's judge runs once: an action judged at a decision is not judged again at the next, so a life lost between
+    // them (a stock play's cost) is not charged to it. Two Counterspells and two Islands make a stock target of 2: one
+    // mana floats, a tap and an untap bring the pool to 2 at a boundary, where the walk plays; it spends the pool, we
+    // lose a life, and the refill goes on.
+    @Test
+    public void anActionIsJudgedOnce() {
+        start();
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        counterspells();
+        ai.getManaPool().addMana(new Mana((byte) ManaAtom.COLORLESS, basalt, null, ai));
+        final SpellAbility tap = decide();
+        assertSame(tap, manaOf(basalt), "the refill");
+        playOut(tap);
+        final SpellAbility untap = decide();
+        assertSame(untap, untapOf(basalt), "the untap");
+        playOut(untap);
+        game.getAction().checkStateEffects(true);
+        assertNull(driver.mainPhaseAction(List.of()), "the pool is at its target at a boundary: the walk's turn");
+        driver.noteStockPlay(ai.getCardsIn(ZoneType.Hand).get(0).getFirstSpellAbility());
+        ai.getManaPool().clearPool(false);
+        ai.setLife(ai.getLife() - 1, null);
+        assertSame(decide(), manaOf(basalt), "the walk spent the pool: the refill goes on");
+    }
+
+    // A new phase forgets the action armed: a tap and an untap in Main 1, then in Main 2 a life lost, and the go-off
+    // starts afresh, its first action Basalt's tap.
+    @Test
+    public void aNewPhaseForgetsTheActionArmed() {
+        start();
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        endlessOne();
+        final SpellAbility tap = decide();
+        assertSame(tap, manaOf(basalt), "the refill");
+        playOut(tap);
+        final SpellAbility untap = decide();
+        assertSame(untap, untapOf(basalt), "the untap");
+        playOut(untap);
+        moveToMain2(game, ai);
+        ai.getManaPool().clearPool(false);
+        ai.setLife(ai.getLife() - 1, null);
+        assertSame(decide(), manaOf(basalt), "Main 2's go-off starts afresh");
     }
 }

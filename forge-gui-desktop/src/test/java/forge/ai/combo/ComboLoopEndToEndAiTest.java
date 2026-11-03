@@ -28,13 +28,17 @@ import forge.deck.io.DeckSerializer;
 import forge.game.Game;
 import forge.game.GameEndReason;
 import forge.game.GameLogEntry;
+import forge.game.ability.AbilityFactory;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.GameLossReason;
 import forge.game.player.Player;
+import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.trigger.Trigger;
+import forge.game.trigger.WrappedAbility;
 import forge.game.zone.ZoneType;
 import forge.item.PaperCard;
 import forge.localinstance.properties.ForgeConstants;
@@ -82,6 +86,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
     private static final String REVERSAL = "Dramatic Reversal";
     private static final String BIRGI = "Birgi, God of Storytelling";
     private static final String WRATH = "Wrath of God";
+    private static final String EIDOLON = "Eidolon of the Great Revel";
     /** The flicker of Palinchron and Deadeye Navigator. */
     private static final String FLICKER = "1409-3542";
     /** The precon the measure plays against: Forge's own, as the build's combo smokes do. */
@@ -765,6 +770,150 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertSame(game.getPhaseHandler().getPlayerTurn(), opp, "the opponent's turn never came: " + p);
         assertTrue(library >= LoopSinks.LIBRARY_FLOOR, "our library after Jin's draw: " + library + "; " + p);
         assertTrue(p.count(THRASIOS + " ability") > 0, "Thrasios never dug: " + p);
+    }
+
+    // ---- the final review's round 1: what its mutation pass found untested ----
+
+    // The blink refusal (LoopDriver.refusesBlink) reads an opponent's items alone (LoopResponse.targetsNow): our own
+    // Murder on the stack, aimed at Palinchron, is no opponent's removal, and a flicker to save Palinchron from it is
+    // refused.
+    @Test
+    public void onlyAnOpponentsItemWarrantsABlink() {
+        start();
+        final Card palinchron = paired();
+        ComboLoopBoards.theirSpellOn(game, ai, MURDER, palinchron);
+        assertTrue(LoopDriver.refusesBlink(ai, List.of(palinchron)), "our own Murder is no opponent's item");
+    }
+
+    // It reads every item on the stack, not the top one alone: their Murder aimed at Palinchron beneath their Wrath of
+    // God, and, in a second game, above it.
+    @Test
+    public void anOpponentsItemBeneathOthersWarrantsABlink() {
+        start();
+        final Card palinchron = paired();
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
+        ComboLoopBoards.theirResponse(game, opp, WRATH);
+        assertEquals(game.getStack().size(), 2, "Murder beneath Wrath of God");
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Murder beneath Wrath of God");
+        start();
+        final Card again = paired();
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, WRATH);
+        ComboLoopBoards.theirResponse(game, opp, MURDER, again);
+        assertEquals(game.getStack().size(), 2, "Murder above Wrath of God");
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(again)), "Murder above Wrath of God");
+    }
+
+    // It reads every part of a spell: their Severed Strands, a gain of life that targets nothing and then a destroy,
+    // the destroy aimed at Palinchron.
+    @Test
+    public void aTargetInASecondPartWarrantsABlink() {
+        start();
+        final Card palinchron = paired();
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, "Severed Strands", palinchron);
+        final SpellAbility root = game.getStack().peek().getSpellAbility();
+        assertFalse(root.usesTargeting(), "the gain of life targets nothing");
+        assertTrue(root.getSubAbility().usesTargeting(), "the destroy targets");
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Severed Strands's destroy aims at Palinchron");
+    }
+
+    // It reads a trigger's ability: Flametongue Kavu's 4 damage aimed at Palinchron, wrapped as the trigger handler
+    // wraps a mandatory trigger. A pin: the wrapper hands on its targets and its parts, so the reading needs no
+    // unwrapping to see them.
+    @Test
+    public void aTriggeredAbilityThatTargetsWarrantsABlink() {
+        start();
+        final Card palinchron = paired();
+        theirTurn();
+        final Card ftk = addCard("Flametongue Kavu", opp);
+        final Trigger trigger = ftk.getTriggers().get(0);
+        final SpellAbility inner = AbilityFactory.getAbility(ftk, trigger.getParam("Execute"));
+        inner.setActivatingPlayer(opp);
+        inner.setTrigger(trigger);
+        inner.getTargets().add(palinchron);
+        game.getStack().add(new WrappedAbility(trigger, inner, null));
+        assertTrue(game.getStack().peek().getSpellAbility().isWrapper(), "a triggered ability");
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "the trigger's damage aims at Palinchron");
+    }
+
+    // It reads a target as the engine reads one at resolution: their Murder aimed at Palinchron, which Shalai, Voice of
+    // Plenty now gives hexproof, would fizzle, and a flicker saves Palinchron from nothing.
+    @Test
+    public void aTargetNoLongerTargetableWarrantsNoBlink() {
+        start();
+        final Card palinchron = paired();
+        addCard("Shalai, Voice of Plenty", ai);
+        game.getAction().checkStaticAbilities();
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
+        assertTrue(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Murder can no longer target Palinchron");
+    }
+
+    // R30's affordability is strict: a volley that costs exactly our life is not taken. Under the opponent's Harsh
+    // Mentor, Ballista (one counter) fed by x-2's cycles, which cost no life, needs nine pumps and ten pings against
+    // the opponent's 10: 38 life, all of ours.
+    @Test
+    public void aVolleyThatCostsExactlyOurLifeIsNotTaken() {
+        start();
+        ai.setLife(38, null);
+        opp.setLife(10, null);
+        bounce();
+        ballista(1);
+        addCard(HARSH_MENTOR, opp);
+        final Play p = play("aVolleyThatCostsExactlyOurLifeIsNotTaken", g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
+        assertEquals(ai.getLife(), 38, "Ballista paid life: " + p);
+        assertEquals(p.count(BALLISTA + " ability"), 0, "Ballista acted: " + p);
+    }
+
+    // The same with one life more: the volley is taken and wins in our Main 1, and leaves us at 1.
+    @Test
+    public void aVolleyThatCostsOneLessThanOurLifeIsTaken() {
+        start();
+        ai.setLife(39, null);
+        opp.setLife(10, null);
+        bounce();
+        ballista(1);
+        addCard(HARSH_MENTOR, opp);
+        final Play p = play("aVolleyThatCostsOneLessThanOurLifeIsTaken", g -> false);
+        assertOpponentLostByLife(p, ai, OUR_TURN);
+        assertEquals(ai.getLife(), 1, "our life after nine pumps and ten pings at 2 each: " + p);
+    }
+
+    // R30 prices a cycle by all its priced steps: x-2's cast and bounce under the opponent's Eidolon of the Great Revel
+    // (2 damage to a player for each spell of mana value 3 or less they cast) casts Mana Vault and Sol Ring, 2 each, 4
+    // a cycle, where Ballista's pump and ping, abilities, cost nothing. Ballista (one counter) against the opponent's 2
+    // needs one pump, {4}: two cycles of net 3, 8 life. The budget, three cycles priced (12), is less than our 13, so
+    // the volley is taken and wins in our Main 1, with 5 life left.
+    @Test
+    public void aCheapKillPaysTheBounceLinesCasts() {
+        start();
+        ai.setLife(13, null);
+        opp.setLife(2, null);
+        bounce();
+        ballista(1);
+        addCard(EIDOLON, opp);
+        final Play p = play("aCheapKillPaysTheBounceLinesCasts", g -> false);
+        assertOpponentLostByLife(p, ai, OUR_TURN);
+        assertEquals(ai.getLife(), 5, "our life after four casts at 2 each: " + p);
+    }
+
+    // The same at our 8, the two cycles' cost exactly: the budget (12) is not less than our life, and the driver takes
+    // no step.
+    @Test
+    public void aKillTheCastsWouldCostAllOurLifeIsNotTaken() {
+        start();
+        ai.setLife(8, null);
+        opp.setLife(2, null);
+        bounce();
+        ballista(1);
+        addCard(EIDOLON, opp);
+        final Play p = play("aKillTheCastsWouldCostAllOurLifeIsNotTaken",
+                g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
+        assertEquals(p.actions(), 0, "the driver acted: " + p);
     }
 
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on
