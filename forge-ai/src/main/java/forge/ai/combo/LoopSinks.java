@@ -56,6 +56,9 @@ import forge.util.FileSection;
  * mandatory draw triggers will draw us before our next draw step ({@link #floor}: Jin-Gitaxias, Core Augur's seven at
  * our end step), and run not at all beside one whose draws cannot be counted (Nezahal, Primal Tide's).
  *
+ * <p>What a step costs us in life is priced by the driver (R30, LoopDriver.lifeCost): Thrasios digs only for none, and
+ * the rest of Ballista's volley is priced here ({@link #volleyLife}), which the driver weighs against our life.
+ *
  * <p>Nothing here draws a random number, and no card of the game is written but the abilities read or returned: their
  * activator, a cast's X and a ping's target on the action returned, and a cast's X for a moment while its price
  * beyond {X}{X} is read. The Ballista whose ping is aimed in a reading is an LKI copy.
@@ -191,6 +194,63 @@ final class LoopSinks {
         final long mana = needed * (long) ComboExecute.priced(ai, ping).getCMC()
                 + pumps * ComboExecute.priced(ai, pump).getCMC();
         return new VolleyCost(pumps, needed, mana);
+    }
+
+    /**
+     * R30: the life the rest of Walking Ballista's volley costs us, an upper bound, each of its actions priced as the
+     * driver prices one (LoopDriver.lifeCost): its pings, one for each counter the kill needs ({@link #lethalNeeded}),
+     * at the price of our first Ballista's ping, read on it as it is on our battlefield; its pumps, the counters our
+     * Ballistas on our battlefield lack of it (with none there, those a cast from our hand at the loop's pool would
+     * leave), at its pump's price; that cast, when none is on our battlefield; and the cycles of the loop line feeding
+     * the volley, {@code perCycle} each, as many as the mana its pumps, pings and cast still need beyond the pool takes
+     * at {@code net} a cycle, and one more. 0 when none of these costs life, and with no Ballista of ours on our
+     * battlefield or in our hand. With no kill in reach (a hexproof player: the five-times path), Long.MAX_VALUE as
+     * soon as one of them costs life, since only a kill this turn is worth our life.
+     */
+    static long volleyLife(final Player ai, final int net, final int perCycle) {
+        final Volley v = volley(ai);
+        if (v.aim() == null) {
+            return 0;
+        }
+        final List<Card> ours = ours(ai);
+        final SpellAbility pump = pumpOf(v.aim().getHostCard());
+        final SpellAbility cast = ours.isEmpty() ? castOf(first(ai, ZoneType.Hand)) : null;
+        if (pump != null) {
+            pump.setActivatingPlayer(ai);
+        }
+        if (cast != null) {
+            cast.setActivatingPlayer(ai);
+        }
+        final long pingLife = LoopDriver.lifeCost(ai, v.aim());
+        final long pumpLife = pump == null ? 0 : LoopDriver.lifeCost(ai, pump);
+        final long castLife = cast == null ? 0 : LoopDriver.lifeCost(ai, cast);
+        if (pingLife + pumpLife + castLife + perCycle == 0) {
+            return 0;
+        }
+        if (v.needed() <= 0 || !shoots(ai, v) || (ours.isEmpty() && cast == null)) {
+            return Long.MAX_VALUE;
+        }
+        final long needed = v.needed();
+        final long pumpMana = pump == null ? 0 : ComboExecute.priced(ai, pump).getCMC();
+        long pumps;
+        long mana = needed * ComboExecute.priced(ai, v.aim()).getCMC();
+        if (!ours.isEmpty()) {
+            pumps = Math.max(0, needed - counters(ours));
+        } else {
+            final int beyond = beyondX(ai, cast);
+            pumps = Math.max(0, needed - Math.max(0, (LoopPool.TARGET - beyond) / 2));
+            mana += Math.min(2L * needed + beyond, LoopPool.TARGET);
+        }
+        mana += pumps * pumpMana;
+        long cycles = 0;
+        final long lacking = mana - LoopPool.floating(ai);
+        if (perCycle > 0 && lacking > 0) {
+            if (net <= 0) {
+                return Long.MAX_VALUE;
+            }
+            cycles = (lacking + net - 1) / net + 1;
+        }
+        return castLife + pumps * pumpLife + needed * pingLife + cycles * perCycle;
     }
 
     /** What a ping changes on a creature: its toughness left, the damage that kills it less the damage marked on it
@@ -777,13 +837,14 @@ final class LoopSinks {
         return cast;
     }
 
-    // our first Thrasios on our battlefield whose {4} the driver may make now (LoopDriver.allowed), us its activator;
-    // null with none
+    // our first Thrasios on our battlefield whose {4} the driver may make now (LoopDriver.allowed) and that costs us no
+    // life (R30, LoopDriver.lifeCost: Harsh Mentor's 2 for it; a dig buys no kill this turn), us its activator; null
+    // with none
     private static SpellAbility readyThrasios(final Player ai) {
         for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
             if (THRASIOS.equals(ComboTracker.nameOf(c))) {
                 final SpellAbility dig = digOf(c);
-                if (dig != null && LoopDriver.allowed(ai, dig)) {
+                if (dig != null && LoopDriver.allowed(ai, dig) && LoopDriver.lifeCost(ai, dig) == 0) {
                     return dig;
                 }
             }

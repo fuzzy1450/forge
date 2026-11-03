@@ -75,6 +75,8 @@ public class ComboLoopEndToEndAiTest extends AITest {
     private static final String MURDER = "Murder";
     private static final String ISLAND = "Island";
     private static final String FOREST = "Forest";
+    private static final String HARSH_MENTOR = "Harsh Mentor";
+    private static final String YAVIMAYA_COAST = "Yavimaya Coast";
     private static final String JIN = "Jin-Gitaxias, Core Augur";
     private static final String SCEPTER = "Isochron Scepter";
     private static final String REVERSAL = "Dramatic Reversal";
@@ -554,6 +556,96 @@ public class ComboLoopEndToEndAiTest extends AITest {
     }
 
     // ---- the final review's round 1 ----
+
+    // Finding 1, R30: the opponent's Harsh Mentor deals 2 to us for each ability of an artifact, creature or land we
+    // activate that is no mana ability, so each untap of the rock loop costs 2 life (Kinnan and Basalt Monolith,
+    // Walking Ballista in our hand, both at 40). A cycle that costs life is no unlimited loop, and Ballista's volley
+    // through it (forty pings at 2 each, beside the untaps) would cost more than our life: the driver takes no step,
+    // and our Main 1 ends with our life at 40, where the go-off used to pay its untaps until the twentieth killed us.
+    @Test
+    public void harshMentorNeverKillsUs() {
+        start();
+        ai.setLife(LIFE, null);
+        rock();
+        ballistaInHand();
+        addCard(HARSH_MENTOR, opp);
+        final Play p = play("harshMentorNeverKillsUs", g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
+        assertEquals(ai.getLife(), LIFE, "the loop paid life: " + p);
+        assertEquals(p.actions(), 0, "the driver acted: " + p);
+    }
+
+    // R30, Walking Ballista's side: under the opponent's Harsh Mentor each pump and each ping costs us 2. x-2's cycles
+    // cast its rocks and tap them for mana, so they cost no life; Ballista on ours with one counter, the opponent at
+    // 11, we at 40: the volley's ten pumps and eleven pings would cost 42, all our life, so Ballista takes no step and
+    // our Main 1 ends with our life at 40, where the volley used to go on until a ping's trigger killed us.
+    @Test
+    public void ballistaHoldsItsFireWhenAPunisherWouldKillUs() {
+        start();
+        ai.setLife(LIFE, null);
+        opp.setLife(11, null);
+        bounce();
+        ballista(1);
+        addCard(HARSH_MENTOR, opp);
+        final Play p = play("ballistaHoldsItsFireWhenAPunisherWouldKillUs",
+                g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
+        assertEquals(ai.getLife(), LIFE, "Ballista paid life: " + p);
+        assertEquals(p.count(BALLISTA + " ability"), 0, "Ballista acted: " + p);
+    }
+
+    // The same with the opponent at 10: nine pumps and ten pings cost 38, less than our 40, so the volley goes and
+    // wins in our Main 1, our life left at 2.
+    @Test
+    public void ballistaShootsThroughAPunisherWithinOurLife() {
+        start();
+        ai.setLife(LIFE, null);
+        opp.setLife(10, null);
+        bounce();
+        ballista(1);
+        addCard(HARSH_MENTOR, opp);
+        final Play p = play("ballistaShootsThroughAPunisherWithinOurLife", g -> false);
+        assertOpponentLostByLife(p, ai, OUR_TURN);
+        assertEquals(ai.getLife(), LIFE - 38, "our life after nine pumps and ten pings at 2 each: " + p);
+    }
+
+    // R30, a cycle that costs life, toward a kill this turn that our life affords: the rock loop under the opponent's
+    // Harsh Mentor (2 for each untap), Ballista in our hand, the opponent at 2, we at 40. The rest of the volley, the
+    // cycles for its cast at X of 2 and two pings, is priced at 14 (an upper bound) against our 40, so the rock line
+    // runs: four untaps build the pool of 4, Ballista is cast with two counters and pings twice, and the opponent loses
+    // in our Main 1, our life at 28 (four untaps and two pings at 2 each).
+    @Test
+    public void aCheapKillPaysTheRockLinesUntaps() {
+        start();
+        ai.setLife(LIFE, null);
+        opp.setLife(2, null);
+        rock();
+        ballistaInHand();
+        addCard(HARSH_MENTOR, opp);
+        final Play p = play("aCheapKillPaysTheRockLinesUntaps", g -> false);
+        assertOpponentLostByLife(p, ai, OUR_TURN);
+        assertEquals(ai.getLife(), LIFE - 12, "our life after four untaps and two pings at 2 each: " + p);
+    }
+
+    // R30, a cost no price reads: Yavimaya Coast's blue deals 1 to us, and the flicker cycle taps it for blue
+    // (Palinchron and Deadeye Navigator paired, six Islands and Yavimaya Coast, Ballista with one counter, both at 40).
+    // The first cycle's tap of it costs 1, which the driver measures at its next decision: the line fails for the
+    // phase, Palinchron is never flickered, and our Main 1 ends with our life at 39, where the loop used to pay 1 a
+    // cycle for the rest of the volley.
+    @Test
+    public void aLifeCostNoPriceReadsEndsTheLine() {
+        start();
+        ai.setLife(LIFE, null);
+        paired();
+        lands(ISLAND, 6);
+        addCard(YAVIMAYA_COAST, ai);
+        ballista(1);
+        final Play p = play("aLifeCostNoPriceReadsEndsTheLine", g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
+        assertEquals(ai.getLife(), LIFE - 1, "the painland's one tap: " + p);
+        assertEquals(p.count(PALINCHRON + " ability"), 0, "Palinchron flickered: " + p);
+        assertTrue(p.actions() > 0, "the driver never acted: " + p);
+    }
 
     // Finding 2, spec section 4's anti-goal against the stock AI's own loop on a turn the driver acted in (section 6.8,
     // amended): x-2's cast and bounce beside Isochron Scepter, Dramatic Reversal imprinted on it, and Birgi, God of

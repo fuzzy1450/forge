@@ -367,6 +367,60 @@ final class LoopCycles {
         return kinds;
     }
 
+    /** The actions of one cycle of loop line {@code l} that are no mana ability, read from the board as it stands, us
+     *  each one's activator: what the driver prices a cycle's cost in life by (R30, LoopDriver.lifeCost), since a mana
+     *  ability fires no cast or activation trigger. A rock untap's: its first rock's untap; the flicker's: our
+     *  Palinchron's flicker; the recast's: our Palinchron's return, while it is on our battlefield, and its cast; the
+     *  cast and bounce's: its two pieces' casts. Empty when the cycle's pieces are not where it reads them. */
+    static List<SpellAbility> lifeSteps(final Player ai, final ComboLines.Line l) {
+        final List<SpellAbility> out = new ArrayList<>(2);
+        if (l.loop() == LoopKind.ROCK_UNTAP) {
+            final List<Card> rocks = rocks(ai, l);
+            if (!rocks.isEmpty()) {
+                out.add(untapOf(rocks.get(0)));
+            }
+        } else if (l.loop() == LoopKind.FLICKER) {
+            final SpellAbility flicker = flicker(ai);
+            if (flicker != null) {
+                out.add(flicker);
+            }
+        } else if (l.loop() == LoopKind.RECAST) {
+            final Card p = recastPalinchron(ai);
+            final SpellAbility back = p == null || !p.isInZone(ZoneType.Battlefield) ? null : returnOf(p);
+            final SpellAbility cast = p == null ? null : castOf(p);
+            if (back != null) {
+                out.add(back);
+            }
+            if (cast != null) {
+                out.add(cast);
+            }
+        } else if (l.loop() == LoopKind.BOUNCE) {
+            final List<Card> cards = bounceCards(ai, l);
+            if (cards != null) {
+                for (final Card c : cards) {
+                    out.add(castOf(c));
+                }
+            }
+        }
+        for (final SpellAbility sa : out) {
+            sa.setActivatingPlayer(ai);
+        }
+        return out;
+    }
+
+    /** The card {@code sa} puts onto the battlefield, whose entering's triggers the driver prices too (R30): a
+     *  permanent spell's card, and the card a flicker exiles and returns (Deadeye Navigator's grant); else null. */
+    static Card entersWith(final SpellAbility sa) {
+        final Card host = sa.getHostCard();
+        if (host == null) {
+            return null;
+        }
+        if (sa.isSpell()) {
+            return host.isPermanent() ? host : null;
+        }
+        return isFlicker(sa) ? host : null;
+    }
+
     // the rocks of the line on our battlefield, in its order: our cards of a piece the line names (by
     // ComboTracker.nameOf) that tap for mana and untap themselves
     static List<Card> rocks(final Player ai, final ComboLines.Line l) {

@@ -651,6 +651,38 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(MyRandom.callCount() - before, 1, "Isochron Scepter's copy keeps the stock roll");
     }
 
+    // Finding 1, R30: an action's price in life, as the stock AI prices a play. The opponent's Harsh Mentor makes
+    // Basalt Monolith's untap cost 2 (an ability of an artifact that is no mana ability) and its tap nothing, and a
+    // cast nothing; Rampaging Ferocidon makes a creature's cast cost 1, for its entering, and an artifact's nothing;
+    // Eidolon of the Great Revel makes a spell of mana value 3 or less cost 2. No price draws a random number.
+    @Test
+    public void aStepsPriceInLifeReadsItsTriggers() {
+        start();
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        endlessOne();
+        final SpellAbility tap = manaOf(basalt);
+        final SpellAbility untap = untapOf(basalt);
+        tap.setActivatingPlayer(ai);
+        untap.setActivatingPlayer(ai);
+        final SpellAbility bear = addCardToZone(BEAR, ai, ZoneType.Hand).getFirstSpellAbility();
+        final SpellAbility sol = addCardToZone("Sol Ring", ai, ZoneType.Hand).getFirstSpellAbility();
+        bear.setActivatingPlayer(ai);
+        sol.setActivatingPlayer(ai);
+        final long before = MyRandom.callCount();
+        assertEquals(LoopDriver.lifeCost(ai, untap), 0, "no punisher");
+        addCard("Harsh Mentor", opp);
+        assertEquals(LoopDriver.lifeCost(ai, untap), 2, "Harsh Mentor's 2 for the untap");
+        assertEquals(LoopDriver.lifeCost(ai, tap), 0, "a mana ability");
+        assertEquals(LoopDriver.lifeCost(ai, bear), 0, "a cast is no activation");
+        addCard("Rampaging Ferocidon", opp);
+        assertEquals(LoopDriver.lifeCost(ai, bear), 1, "Ferocidon's 1 as a creature enters");
+        assertEquals(LoopDriver.lifeCost(ai, sol), 0, "an artifact enters free");
+        addCard("Eidolon of the Great Revel", opp);
+        assertEquals(LoopDriver.lifeCost(ai, sol), 2, "Eidolon's 2 for a spell of mana value 3 or less");
+        assertEquals(MyRandom.callCount() - before, 0, "a price drew");
+    }
+
     // R7: the AI's whole decision on the rock board, with no line and with a loop line the board does not hold
     // (Palinchron and Deadeye's, held by the deck, not on the battlefield), is the stock one, answer and draws.
     @Test

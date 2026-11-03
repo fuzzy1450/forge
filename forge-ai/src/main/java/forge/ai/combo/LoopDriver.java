@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import forge.ai.ComputerUtil;
 import forge.ai.LoopTracker;
 import forge.ai.PlayerControllerAi;
 import forge.game.Game;
@@ -65,6 +66,18 @@ import forge.game.zone.ZoneType;
  * check refuses mid-go-off (a hoser arrived) ends the go-off for the phase, as does losing its line, the board reaching
  * five times lethal, every opponent unable to lose, or two judged rounds in a row that bought nothing.
  *
+ * <p>A step that costs us life is priced before it is taken (R30, the final review's round 1): what the stock AI
+ * prices a play at ({@link #lifeCost}: the cast and activation triggers that damage us, Harsh Mentor's 2 for each
+ * ability of an artifact, creature or land we activate; the triggers of what it puts onto the battlefield, Rampaging
+ * Ferocidon's). A cycle whose steps cost life is no unlimited loop: its line runs, and its steps are taken, only toward
+ * Walking Ballista's kill this turn whose whole remaining cost in life, the cycles its mana needs, its pumps, its pings
+ * and its cast, is less than our life ({@link LoopSinks#volleyLife}); otherwise the line fails for the phase. Ballista
+ * takes a step that costs life only toward such a kill, Thrasios none, and Thassa's Oracle is not cast for a cost of
+ * our whole life. Then each action is measured: our life when it was returned, against our life at the first decision
+ * at which no item of it is on the stack. One that cost more than its price (a painland's damage, a punisher's for
+ * each card we draw: costs no price reads) fails its line for the phase, if a cycle's step, and ends Ballista's
+ * volley, or Thrasios's dig, for the phase.
+ *
  * <p>In response to removal ({@link #responseAction}, section 6.6, AiController's stack-response block, ahead of the
  * counterspells): with an opponent's spell or ability on the stack that would take a piece of a loop line of an
  * instant-speed kind (a rock untap, the flicker) or a Walking Ballista of ours off our battlefield, the driver goes off
@@ -101,6 +114,9 @@ public final class LoopDriver {
     // turn the driver acted in (section 6.8): Walking Ballista's {4} and ping and Thrasios's {4}, the driver's own
     // sinks, and Kinnan's dig, which the stock walk takes on the pool
     private static final List<String> LIFTED = List.of(LoopSinks.BALLISTA, LoopSinks.THRASIOS, KINNAN);
+
+    // R30: what an action returned was, for the judge of its cost in life
+    private enum Spent { CYCLE, BALLISTA, THRASIOS, ORACLE }
 
     private final Player ai;
     // the caps and the round record (tests swap in smaller caps: useRounds)
@@ -148,6 +164,15 @@ public final class LoopDriver {
     // the futility gate: our hand's and battlefield's card names, each sorted, when the last go-off that spent nothing
     // ended; null when none did
     private List<List<String>> futile;
+    // R30: the action returned last whose cost in life is judged at the first decision at which neither it nor anything
+    // put on the stack after it is there: our life and the stack's size when it was returned, the life it was priced
+    // at (lifeCost), what it was and its line; null while none is to be judged
+    private SpellAbility lifeOf;
+    private int lifeHad;
+    private int lifeStack;
+    private int lifePriced;
+    private Spent lifeKind;
+    private ComboLines.Line lifeLine;
 
     /** The driver of {@code ai}'s loops, made with its AiController: it reads nothing yet, since the player is not yet
      *  registered with its game. */
@@ -201,6 +226,7 @@ public final class LoopDriver {
         judgeLast();
         judgeVolley();
         judgeDig();
+        judgeLife();
         if (!active) {
             // a go-off measures its cycles from its own first boundary
             boundaryLine = null;
@@ -209,7 +235,7 @@ public final class LoopDriver {
         final ComboLines.Line l = choose(t.view(), false);
         // a go-off that runs ends for the phase when its line is gone and when it may go on no more; one that has not
         // started yet simply does not start, and the next decision reads the gates again
-        if (l == null || (active ? !goesOn() : !(starts(l) && goesOn()))) {
+        if (l == null || (active ? !goesOn(l) : !(starts(l) && goesOn(l)))) {
             if (active) {
                 end();
             }
@@ -219,7 +245,7 @@ public final class LoopDriver {
         // a boundary only (the pool there is the loop's surplus), a ping at any decision; and while Ballista has a
         // step the driver owns every decision, refilling for it, never passing the priority to the walk between a
         // pump and the volley
-        final int need = ballistaNeed();
+        final int need = ballistaNeed(l);
         final boolean boundary = LoopCycles.boundary(ai, l);
         if (need >= 0) {
             if (LoopPool.floating(ai) >= need && (need == 0 || boundary)) {
@@ -232,7 +258,7 @@ public final class LoopDriver {
             // wins, at any decision the driver's own check passes it. One the check refuses for its price, beyond
             // what the pool and our lands pay now (a tax; the blue that only Chromatic Orrery lets the pool pay),
             // waits: the decision goes on as one with no cast due, and the refill makes the pool that pays it
-            final SpellAbility cast = spend(l, ph, LoopSinks.oracleCast(ai));
+            final SpellAbility cast = spend(l, ph, LoopSinks.oracleCast(ai), Spent.ORACLE);
             if (cast != null) {
                 return cast;
             }
@@ -375,11 +401,15 @@ public final class LoopDriver {
         }
         judgeLast();
         judgeVolley();
+        judgeLife();
         final ComboTracker.View v = t.view();
         final boolean going = stackHolds(respondedTo);
         final ComboLines.Line l = going ? choose(v, true) : pick(v, true);
-        final int need = ballistaNeed();
-        if (l == null || need < 0 || !LoopSinks.ballistaCanShoot(ai)
+        if (l == null) {
+            return null;
+        }
+        final int need = ballistaNeed(l);
+        if (need < 0 || !LoopSinks.ballistaCanShoot(ai)
                 || (!going && (!LoopResponse.threatens(ai, top, threatened(v))
                         || LoopResponse.volleyActions(ai, l) > rounds.left(ai)))) {
             return null;
@@ -621,6 +651,8 @@ public final class LoopDriver {
         respondedTo = null;
         dugFrom = -1;
         digOver = false;
+        lifeOf = null;
+        lifeLine = null;
     }
 
     // whether the go-off of this step runs a flicker or recast line now: active, on a line of either kind, in the
@@ -675,31 +707,35 @@ public final class LoopDriver {
         }
     }
 
-    // the line that can run (of an instant-speed kind only, when instantOnly) with the highest net a cycle, then the
-    // lowest variant id. A rock line's net does not depend on which rock is tapped, so the pick does not move
-    // mid-cycle
+    // the line that can run (of an instant-speed kind only, when instantOnly): one whose cycle costs no life (R30)
+    // first, then the highest net a cycle, then the lowest variant id. A rock line's net does not depend on which rock
+    // is tapped, so the pick does not move mid-cycle
     private ComboLines.Line pick(final ComboTracker.View v, final boolean instantOnly) {
         ComboLines.Line best = null;
         int bestNet = 0;
+        boolean bestFree = false;
         for (final ComboLines.Line l : v.lines()) {
             if (!runs(v, l) || (instantOnly && !l.loop().instantSpeed())) {
                 continue;
             }
             final int net = LoopCycles.net(ai, l);
-            if (best == null || net > bestNet
-                    || (net == bestNet && l.variant().id().compareTo(best.variant().id()) < 0)) {
+            final boolean free = cycleLife(l) == 0;
+            if (best == null || (free && !bestFree) || (free == bestFree && (net > bestNet
+                    || (net == bestNet && l.variant().id().compareTo(best.variant().id()) < 0)))) {
                 best = l;
                 bestNet = net;
+                bestFree = free;
             }
         }
         return best;
     }
 
     // a loop line not failed this phase whose pieces are where its cycle needs them and that is executable: ready and
-    // not denied, the tracker's own reading (its executable list's test, read only for these lines)
+    // not denied, the tracker's own reading (its executable list's test, read only for these lines); and whose cycle
+    // costs no life, or feeds Walking Ballista's kill this turn that our life affords (R30)
     private boolean runs(final ComboTracker.View v, final ComboLines.Line l) {
         return l.isLoop() && !failed.contains(l.variant().id()) && LoopCycles.ready(ai, l) && v.ready(l)
-                && !v.denied(l);
+                && !v.denied(l) && (cycleLife(l) == 0 || ballistaNeed(l) >= 0);
     }
 
     // R21: at a boundary, the cycle that ended there must have raised the pool by 1 or more since the line's previous
@@ -724,7 +760,7 @@ public final class LoopDriver {
         if (!l.loop().canStop()) {
             return false;
         }
-        if (ballistaNeed() < 0 && !stockSpends(l) && !oracleDue(l) && dig(l) == null) {
+        if (ballistaNeed(l) < 0 && !stockSpends(l) && !oracleDue(l) && dig(l) == null) {
             return false;
         }
         spent = false;
@@ -742,30 +778,75 @@ public final class LoopDriver {
     // already five times lethal the driver goes on for Ballista's shot alone, and with no opponent able to lose it
     // goes on while Ballista can kill the loss blocker that stops one (its volley's first target), and not merely
     // while a loss blocker its ping could target stands: under a Pithing Needle naming Ballista it cannot kill it
-    private boolean goesOn() {
+    private boolean goesOn(final ComboLines.Line l) {
         for (final Player p : ai.getOpponents()) {
             if (!p.cantLose()) {
-                return !LoopTracker.Snapshot.of(ai).isDecisive() || shotNow();
+                return !LoopTracker.Snapshot.of(ai).isDecisive() || shotNow(l);
             }
         }
-        return shotNow();
+        return shotNow(l);
     }
 
-    // whether Walking Ballista can shoot now (LoopSinks.ballistaCanShoot) and has a step to take toward it
-    private boolean shotNow() {
-        return ballistaNeed() >= 0 && LoopSinks.ballistaCanShoot(ai);
+    // whether Walking Ballista can shoot now (LoopSinks.ballistaCanShoot) and has a step to take toward it, fed by l
+    private boolean shotNow(final ComboLines.Line l) {
+        return ballistaNeed(l) >= 0 && LoopSinks.ballistaCanShoot(ai);
     }
 
-    // the pool Walking Ballista's next action needs (LoopSinks.ballistaPool); -1 when Ballista has nothing to do, or
-    // once a ping that changed nothing has ended its volley for the phase (R25)
-    private int ballistaNeed() {
-        return volleyOver ? -1 : LoopSinks.ballistaPool(ai);
+    // the pool Walking Ballista's next action needs (LoopSinks.ballistaPool); -1 when Ballista has nothing to do, once
+    // a ping that changed nothing (R25) or a step that cost more life than its price (R30) has ended its volley for
+    // the phase, and while the volley, fed by loop line l, would pay life our life does not afford (R30, affords)
+    private int ballistaNeed(final ComboLines.Line l) {
+        if (volleyOver) {
+            return -1;
+        }
+        final int pool = LoopSinks.ballistaPool(ai);
+        return pool < 0 || !affords(l) ? -1 : pool;
+    }
+
+    // R30: whether Walking Ballista's volley, fed by loop line l, may pay what it costs us in life: the rest of it
+    // (LoopSinks.volleyLife: its pumps, pings and cast, and l's cycles its mana needs, each priced) costs none, or,
+    // with a kill in reach, less than our life
+    private boolean affords(final ComboLines.Line l) {
+        final long life = LoopSinks.volleyLife(ai, LoopCycles.net(ai, l), cycleLife(l));
+        return life == 0 || (life < ai.getLife() && LoopSinks.ballistaCanShoot(ai));
+    }
+
+    // R30: the life one cycle of loop line l costs us: its actions that are no mana ability (LoopCycles.lifeSteps),
+    // each priced (lifeCost); a mana ability fires no cast or activation trigger
+    private int cycleLife(final ComboLines.Line l) {
+        int life = 0;
+        for (final SpellAbility step : LoopCycles.lifeSteps(ai, l)) {
+            life += lifeCost(ai, step);
+        }
+        return life;
+    }
+
+    /**
+     * R30: the life action {@code sa} costs {@code ai}, as the stock AI prices a play (AiController.saSideEffects): the
+     * cast and activation triggers in force that damage its activator or make them lose life
+     * (ComputerUtil.getDamageForPlaying: Harsh Mentor, Burning-Tree Shaman, Eidolon of the Great Revel), and, for an
+     * action that puts a permanent onto the battlefield (a permanent spell's card, the card a flicker returns:
+     * {@link LoopCycles#entersWith}), the triggers of its entering (ComputerUtil.getDamageFromETB: Rampaging
+     * Ferocidon); 0 while {@code ai} cannot lose life. What no trigger of a cast or an activation does (a painland's
+     * own damage, a punisher's for each card drawn) is not read here: the driver measures it (judgeLife). Draws no
+     * random number.
+     */
+    static int lifeCost(final Player ai, final SpellAbility sa) {
+        if (!ai.canLoseLife()) {
+            return 0;
+        }
+        int life = ComputerUtil.getDamageForPlaying(ai, sa);
+        final Card enters = LoopCycles.entersWith(sa);
+        if (enters != null) {
+            life += ComputerUtil.getDamageFromETB(ai, enters);
+        }
+        return life;
     }
 
     // Walking Ballista's action now (LoopSinks.ballista), spent as a sink's (spend); a ping, its target and what it had
     // are kept for R25's judge
     private SpellAbility ballistaStep(final ComboLines.Line l, final PhaseHandler ph) {
-        final SpellAbility sa = spend(l, ph, LoopSinks.ballista(ai));
+        final SpellAbility sa = spend(l, ph, LoopSinks.ballista(ai), Spent.BALLISTA);
         if (sa != null && sa.usesTargeting()) {
             pingedWith = sa;
             pinged = sa.getTargets().get(0);
@@ -778,7 +859,7 @@ public final class LoopDriver {
     // walk's again, to play what it drew; our library's size is kept for the activation's judge (judgeDig)
     private SpellAbility thrasiosStep(final ComboLines.Line l, final PhaseHandler ph, final SpellAbility dig) {
         thrasiosDue = false;
-        final SpellAbility sa = spend(l, ph, dig);
+        final SpellAbility sa = spend(l, ph, dig, Spent.THRASIOS);
         if (sa != null) {
             dugFrom = ai.getCardsIn(ZoneType.Library).size();
         }
@@ -791,12 +872,14 @@ public final class LoopDriver {
         return digOver ? null : LoopSinks.thrasios(ai, l);
     }
 
-    // a sink's action now (Walking Ballista's, Thrasios's, Thassa's Oracle's cast), through the driver's own check and
-    // the caps: it opens a round the idle rule does not judge (each has stops of its own), it is something spent, and
-    // the next boundary is measured afresh (R21: a spend at a boundary is no cycle). An action the check refuses is not
-    // taken and ends nothing (null): Ballista's and Thrasios's steps are read through the same check before they come
-    // here, and Oracle's cast, refused for its price, waits for the refill (mainPhaseAction)
-    private SpellAbility spend(final ComboLines.Line l, final PhaseHandler ph, final SpellAbility sa) {
+    // a sink's action now (Walking Ballista's, Thrasios's, Thassa's Oracle's cast: kind), through the driver's own
+    // check and the caps: it opens a round the idle rule does not judge (each has stops of its own), it is something
+    // spent, and the next boundary is measured afresh (R21: a spend at a boundary is no cycle); its cost in life is
+    // judged at a later decision (R30, judgeLife). An action the check refuses is not taken and ends nothing (null):
+    // Ballista's and Thrasios's steps are read through the same check before they come here, and Oracle's cast,
+    // refused for its price, waits for the refill (mainPhaseAction)
+    private SpellAbility spend(final ComboLines.Line l, final PhaseHandler ph, final SpellAbility sa,
+            final Spent kind) {
         if (sa == null || !passes(sa)) {
             return null;
         }
@@ -811,14 +894,22 @@ public final class LoopDriver {
         last = sa;
         lastLine = l;
         lastState = state();
+        arm(sa, kind, lifeCost(ai, sa), l);
         actedTurn = ph.getTurn();
         return sa;
     }
 
     // the cycle's next step (LoopCycles.next), a refill, through the driver's own check and the caps; a step the check
-    // refuses (a hoser arrived) ends the go-off for the phase
+    // refuses (a hoser arrived) ends the go-off for the phase. A step that costs us life (R30, lifeCost) is taken only
+    // toward Walking Ballista's kill this turn that our life affords; otherwise its line fails for the phase, and the
+    // next decision falls to another line, or to the walk. Its cost in life is judged at a later decision (judgeLife)
     private SpellAbility refill(final ComboLines.Line l, final PhaseHandler ph) {
         final SpellAbility next = LoopCycles.next(ai, l);
+        final int life = next == null ? 0 : lifeCost(ai, next);
+        if (life > 0 && ballistaNeed(l) < 0) {
+            failed.add(l.variant().id());
+            return null;
+        }
         if (next == null || !passes(next)) {
             if (active) {
                 end();
@@ -833,8 +924,43 @@ public final class LoopDriver {
         last = next;
         lastLine = l;
         lastState = state();
+        arm(next, Spent.CYCLE, life, l);
         actedTurn = ph.getTurn();
         return next;
+    }
+
+    // R30: the judge of sa's cost in life, armed as the driver returns it: our life and the stack's size now, its
+    // price, what it is
+    private void arm(final SpellAbility sa, final Spent kind, final int priced, final ComboLines.Line l) {
+        lifeOf = sa;
+        lifeHad = ai.getLife();
+        lifeStack = ai.getGame().getStack().size();
+        lifePriced = priced;
+        lifeKind = kind;
+        lifeLine = l;
+    }
+
+    // R30: the action returned last, judged at the first decision at which neither it nor anything put on the stack
+    // after it is there, the stack no taller than when it was returned (in a main phase empty again; in response the
+    // removal beneath): it and all it triggered have resolved, a punisher's trigger for the card a draw of ours drew
+    // among them, which comes to the stack after the draw. One that cost us more life than its price (a painland's
+    // own damage, a punisher's for each card we draw, which no price reads) fails its line for the phase, if it was a
+    // cycle's step, and ends Walking Ballista's volley or Thrasios's dig for the phase, if it was theirs
+    private void judgeLife() {
+        if (lifeOf == null || stackHolds(lifeOf) || ai.getGame().getStack().size() > lifeStack) {
+            return;
+        }
+        if (lifeHad - ai.getLife() > lifePriced) {
+            if (lifeKind == Spent.CYCLE) {
+                failed.add(lifeLine.variant().id());
+            } else if (lifeKind == Spent.BALLISTA) {
+                volleyOver = true;
+            } else if (lifeKind == Spent.THRASIOS) {
+                digOver = true;
+            }
+        }
+        lifeOf = null;
+        lifeLine = null;
     }
 
     // a dig toward Thassa's Oracle at its end (section 6.4 step 3): the dig runs (LoopSinks.digsForOracle: Oracle able
@@ -969,11 +1095,16 @@ public final class LoopDriver {
         return sa.canPlay() && sa.checkRestrictions(restrictionHost(ai, sa), ai);
     }
 
-    // the driver's own check of an action it returns (the plan's Calls): allowed, its cost as the engine prices it now
-    // paid by the pool and our untapped lands, and each target it has set one it can target. A skipped action is R21's
-    // to read (judgeLast), which fails its line, not the go-off
+    // the driver's own check of an action it returns (the plan's Calls): allowed, not priced at our whole life or more
+    // (R30: the stock refusal, AiController.saSideEffects', which the driver's own pricing narrows), its cost as the
+    // engine prices it now paid by the pool and our untapped lands, and each target it has set one it can target. A
+    // skipped action is R21's to read (judgeLast), which fails its line, not the go-off
     private boolean passes(final SpellAbility sa) {
         if (!allowed(ai, sa)) {
+            return false;
+        }
+        final int life = lifeCost(ai, sa);
+        if (life > 0 && life >= ai.getLife()) {
             return false;
         }
         if (!LoopPool.pays(ai, ComboExecute.priced(ai, sa), null)) {

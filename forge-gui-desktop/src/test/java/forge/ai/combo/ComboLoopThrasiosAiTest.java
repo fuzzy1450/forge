@@ -70,6 +70,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
     private static final String JIN = "Jin-Gitaxias, Core Augur";
     private static final String NEZAHAL = "Nezahal, Primal Tide";
     private static final String RHYSTIC = "Rhystic Study";
+    private static final String UNRAVELER = "Fate Unraveler";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
     /** The rock untap of Basalt Monolith and Nyxbloom Ancient. */
@@ -1448,6 +1449,21 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 8, "an optional draw adds nothing");
         ComboLoopBoards.ready(addCard(NEZAHAL, ai));
         assertEquals(LoopSinks.floor(ai), Integer.MAX_VALUE, "Nezahal's draws cannot be counted");
+    }
+
+    // Finding 1, R30: a draw that costs us life ends Thrasios's dig for the phase. The opponent's Fate Unraveler deals
+    // 1 to us for each card we draw, which no price of the activation reads: a library of ten Memnites, one activation
+    // draws one, its 1 damage is measured at the next decision, and Thrasios digs no more (the floor alone would have
+    // taken the library to four, at 1 a draw).
+    @Test
+    public void aDrawThatCostsLifeEndsTheDig() {
+        start();
+        addCard(UNRAVELER, opp);
+        library(MEMNITE, 10);
+        final int life = ai.getLife();
+        final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
+        assertEquals(only(seen, Seen::dig).size(), 1, "Thrasios's activations: " + seen);
+        assertEquals(ai.getLife(), life - 1, "one draw's damage");
     }
 
     // R22's board: Basalt Monolith and Nyxbloom Ancient (3430-4131; no Kinnan) and Thrasios, ready, on ours, in our
