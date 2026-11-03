@@ -1214,4 +1214,57 @@ public class ComboLoopBallistaAiTest extends AITest {
         final List<Act> acts = drive(MAX_ACTIONS);
         assertTrue(acts.isEmpty(), "a pump or an untap that costs life: " + acts);
     }
+
+    // ---- the final review's round 1: what its mutation pass's round 2 found untested ----
+
+    // The cast's tax is in the volley's price beside its {X}{X}: under the opponent's Sphere of Resistance (each spell
+    // costs {1} more) and Harsh Mentor (2 for each ping), Ballista in our hand against the opponent's 20 is cast at
+    // X = 20 for 41 mana, which cycles of net 1 make in 42 cycles at 2 life each, beside twenty pings: 124.
+    @Test
+    public void theVolleysPriceFromOurHandCountsTheCastsTax() {
+        start();
+        opp.setLife(20, null);
+        ballistaInHand();
+        addCard(HARSH_MENTOR, opp);
+        addCard("Sphere of Resistance", opp);
+        assertEquals(LoopSinks.volleyLife(ai, 1, 2), 124L, "41 mana: 42 cycles at 2, and twenty pings at 2");
+    }
+
+    // The counters the cast leaves are the loop's pool of 200 less the tax, halved, and the cast's mana is at most that
+    // pool: the opponent at 150 under the same Sphere of Resistance and Harsh Mentor, the cast at X = 99 for all 200
+    // mana and 51 pumps ({4} each) beside it, 404 mana, so 405 cycles at a net of 1, and 2 life for each cycle, pump
+    // and ping: 810 + 102 + 300.
+    @Test
+    public void theVolleysPriceFromOurHandCapsTheCastAtTheLoopsPool() {
+        start();
+        opp.setLife(150, null);
+        ballistaInHand();
+        addCard(HARSH_MENTOR, opp);
+        addCard("Sphere of Resistance", opp);
+        assertEquals(LoopSinks.volleyLife(ai, 1, 2), 1212L, "51 pumps, 150 pings and 405 cycles at 2 each");
+    }
+
+    // Cycles that cost nothing are never in the price, whatever they net: Ballista in our hand against the opponent's
+    // 20 under Harsh Mentor, twenty pings at 2 and no cycle.
+    @Test
+    public void cyclesThatCostNothingAreNeverInTheVolleysPrice() {
+        start();
+        opp.setLife(20, null);
+        ballistaInHand();
+        addCard(HARSH_MENTOR, opp);
+        assertEquals(LoopSinks.volleyLife(ai, 0, 0), 40L, "cycles that net nothing and cost nothing");
+        assertEquals(LoopSinks.volleyLife(ai, -1, 0), 40L, "cycles that net less and cost nothing");
+    }
+
+    // The pumps the volley still needs are the counters all our Ballistas lack together: two on our battlefield with
+    // one counter each, the opponent at 10 under Harsh Mentor (2 for each pump and ping): eight pumps and ten pings.
+    @Test
+    public void theVolleysPumpsAreWhatAllOurBallistasLack() {
+        start();
+        opp.setLife(10, null);
+        ballistaOnOurs(1);
+        ballistaOnOurs(1);
+        addCard(HARSH_MENTOR, opp);
+        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 36L, "eight pumps and ten pings at 2 each");
+    }
 }

@@ -1926,4 +1926,41 @@ public class ComboLoopDriverAiTest extends AITest {
         ai.setLife(ai.getLife() - 1, null);
         assertSame(decide(), manaOf(basalt), "Main 2's go-off starts afresh");
     }
+
+    // ---- the final review's round 1: what its mutation pass's round 2 found untested ----
+
+    // R30 picks, of two lines whose cycles cost life, the higher net a cycle first, as it does of two that cost none:
+    // Basalt Monolith and Nyxbloom Ancient (net 6) beside Grim Monolith and Nyxbloom Ancient (net 5), the opponent's
+    // Harsh Mentor making each untap cost 2, Ballista on ours with one counter and the opponent at 2, a kill our life
+    // affords through either line. The deck lists Grim Monolith's line first, so a pick that kept the first of two
+    // costly lines would tap Grim Monolith. The control: with Grim Monolith's line alone on the board, its tap.
+    @Test
+    public void ofTwoLinesThatCostLifeTheHigherNetIsPickedFirst() {
+        start();
+        final Card basalt = addCard(BASALT, ai);
+        final Card grim = addCard(GRIM, ai);
+        ComboLoopBoards.ready(addCard(NYXBLOOM, ai));
+        ComboLoopBoards.ready(addCard(LoopSinks.BALLISTA, ai)).setCounters(CounterEnumType.P1P1, 1);
+        opp.setLife(2, null);
+        addCard(HARSH_MENTOR, opp);
+        final List<String> order = ids(t.view().lines());
+        final int grimAt = order.indexOf("2585-3430");
+        assertTrue(grimAt >= 0 && grimAt < order.indexOf("3430-4131"), "Grim Monolith's line comes first: " + order);
+        assertEquals(LoopCycles.net(ai, line("3430-4131")), 6, "Basalt Monolith's line, the higher net");
+        assertEquals(LoopCycles.net(ai, line("2585-3430")), 5, "Grim Monolith's line");
+        for (final Card rock : List.of(basalt, grim)) {
+            final SpellAbility untap = untapOf(rock);
+            untap.setActivatingPlayer(ai);
+            assertEquals(LoopDriver.lifeCost(ai, untap), 2, "Harsh Mentor's 2 for the untap of " + rock);
+        }
+        assertSame(decide(), manaOf(basalt), "both lines cost life: Basalt's tap, the higher net, not Grim's");
+
+        start();
+        final Card alone = addCard(GRIM, ai);
+        ComboLoopBoards.ready(addCard(NYXBLOOM, ai));
+        ComboLoopBoards.ready(addCard(LoopSinks.BALLISTA, ai)).setCounters(CounterEnumType.P1P1, 1);
+        opp.setLife(2, null);
+        addCard(HARSH_MENTOR, opp);
+        assertSame(decide(), manaOf(alone), "the control: Grim Monolith's line alone, its tap");
+    }
 }

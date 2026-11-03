@@ -1117,4 +1117,22 @@ public class ComboLoopResponseAiTest extends AITest {
         game.getAction().checkStateEffects(true);
         assertNull(driver.responseAction(), "the line fails: the response is over");
     }
+
+    // ---- the final review's round 1: what its mutation pass's round 2 found untested ----
+
+    // The threat is read in every target of a part, as the blink refusal reads it: their Curtains' Call (destroy two
+    // target creatures) aimed at their own Runeclaw Bear and then at Kinnan threatens Kinnan, its second target; aimed
+    // at two creatures of theirs it threatens nothing of ours.
+    @Test
+    public void threatensReadsEveryTargetOfAPart() {
+        start();
+        final Card kinnan = rock();
+        final Card ballista = ballista(1);
+        final Card theirs = addCard(BEAR, opp);
+        final Card other = addCard(BEAR, opp);
+        final List<Card> pieces = List.of(kinnan, basalt, ballista);
+        theirTurn();
+        assertTrue(threatens("Curtains' Call", pieces, theirs, kinnan), "Kinnan, its second target");
+        assertFalse(threatens("Curtains' Call", pieces, theirs, other), "two creatures of theirs");
+    }
 }

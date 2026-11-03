@@ -916,6 +916,38 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertEquals(p.actions(), 0, "the driver acted: " + p);
     }
 
+    // ---- the final review's round 1: what its mutation pass's round 2 found untested ----
+
+    // The blink refusal reads every card of the retrieval and warrants the blink when an opponent's item targets any
+    // one of them, as the stock reading of the threat does: their Murder aimed at Palinchron warrants a blink of
+    // Palinchron and Deadeye Navigator together, listed either way round, and none of Deadeye Navigator alone.
+    @Test
+    public void aBlinkOfSeveralCardsIsWarrantedByAnyOneTheyTarget() {
+        start();
+        final Card palinchron = paired();
+        final Card deadeye = palinchron.getPairedWith();
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron, deadeye)), "Murder aims at the first of them");
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(deadeye, palinchron)), "Murder aims at the second of them");
+        assertTrue(LoopDriver.refusesBlink(ai, List.of(deadeye)), "Murder aims at none of these");
+    }
+
+    // It reads every target of a part: their Curtains' Call (destroy two target creatures) aimed at Deadeye Navigator
+    // and then at Palinchron warrants a blink of Palinchron, its second target.
+    @Test
+    public void aSecondTargetOfAPartWarrantsABlink() {
+        start();
+        final Card palinchron = paired();
+        final Card deadeye = palinchron.getPairedWith();
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, "Curtains' Call", deadeye, palinchron);
+        final SpellAbility destroy = game.getStack().peek().getSpellAbility();
+        assertEquals(destroy.getTargets().size(), 2, "one part, two targets");
+        assertSame(destroy.getTargets().get(1), palinchron, "Palinchron the second");
+        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Curtains' Call's second target is Palinchron");
+    }
+
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on
     // their battlefield, the rest shuffled from seed 7 (a Random of its own, not the game's), the first seven in their
     // hand and the others their library

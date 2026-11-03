@@ -1673,6 +1673,23 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(ComboTracker.nameOf(cast.getHostCard()), ORACLE, "Oracle's cast: " + cast);
     }
 
+    // ---- the final review's round 1: what its mutation pass's round 2 found untested ----
+
+    // A trigger of several phases fires at each of them: the floor counts its draw once for each of its phases still to
+    // come before our next draw step. In our Main 1 a trigger of our upkeep and end step fires at this turn's end step
+    // and at our next upkeep; one of each of our main phases (Main1,Main2, as the scripts write "at the beginning of
+    // each of your main phases") at this turn's Main 2 alone.
+    @Test
+    public void theFloorCountsEachPhaseOfATriggerOnce() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
+        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep,End of Turn", "You"), draw}), base + 6,
+                "this turn's end step and our next upkeep");
+        assertEquals(floorWith(new String[] {phaseTrigger("Main1,Main2", "You"), draw}), base + 3,
+                "this turn's Main 2: its Main 1 is not still to come");
+    }
+
     // a phase trigger that executes TrigDraw, for that phase and the players valid
     private static String phaseTrigger(final String phase, final String valid) {
         return "Mode$ Phase | Phase$ " + phase + " | ValidPlayer$ " + valid
