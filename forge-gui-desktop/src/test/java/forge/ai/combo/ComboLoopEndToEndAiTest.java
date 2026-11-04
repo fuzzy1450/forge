@@ -92,6 +92,10 @@ public class ComboLoopEndToEndAiTest extends AITest {
     private static final String WRATH = "Wrath of God";
     private static final String NEZAHAL = "Nezahal, Primal Tide";
     private static final String EIDOLON = "Eidolon of the Great Revel";
+    /** Draws us one whenever an opponent draws their second card each turn (Kinnan's list). */
+    private static final String MASTERMIND = "Faerie Mastermind";
+    /** Its controller draws one, and loses 1 life, at the beginning of their upkeep. */
+    private static final String ARENA = "Phyrexian Arena";
     /** The flicker of Palinchron and Deadeye Navigator. */
     private static final String FLICKER = "1409-3542";
     /** The precon the measure plays against: Forge's own, as the build's combo smokes do. */
@@ -1456,6 +1460,48 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertOpponentLostByLife(p, opp, OUR_TURN + 1);
         assertEquals(p.acted(BALLISTA, ApiType.DealDamage), 3, "Ballista's pings: " + p);
         assertEquals(ai.getLife(), 3, "our life after three pings at 2 each: " + p);
+    }
+
+    // ---- Faerie Mastermind's bound (Evan, 2026-11-04) ----
+
+    // The anti-goal "decking itself" beside Faerie Mastermind of Kinnan's list, which draws us one whenever an
+    // opponent draws their second card each turn, so at most once for each opponent in each turn (spec section 6.4,
+    // amended 2026-11-04 (Faerie Mastermind's bound)): thrasiosNeverDecksUs's board with Mastermind on ours, fifteen
+    // Memnites and fifteen Forests in turn, Memnite on top, and the opponent's own Phyrexian Arena, so that they draw
+    // two cards in their turn. In our Main 1 the plain dig keeps four and Mastermind's nine draws to the fourth of our
+    // draw steps, 13: Thrasios digs, where beside Mastermind's draw, uncountable, it never did, and the opponent's turn
+    // comes with 13 cards in our library. In their turn their Arena's draw and their draw step's make two, Mastermind
+    // draws us one, and our next turn comes, the game going on, our library 13 less that card and each card a stock
+    // Thrasios activation of ours took in their turn (ScryAi's, at the end step before our turn).
+    @Test
+    public void mastermindLetsThrasiosDigAndNeverDecksUs() {
+        board(KINNAN, KINNANS_LIST);
+        fillLibrary(opp, 40);
+        rock();
+        ComboLoopBoards.ready(addCard(THRASIOS, ai));
+        ComboLoopBoards.ready(addCard(MASTERMIND, ai));
+        addCard(ARENA, opp);
+        for (int i = 0; i < 15; i++) {
+            addCardToZone(MEMNITE, ai, ZoneType.Library);
+            addCardToZone(FOREST, ai, ZoneType.Library);
+        }
+        final Play ours = play("mastermindLetsThrasiosDigAndNeverDecksUs, our turn",
+                g -> g.getPhaseHandler().getPlayerTurn() == opp);
+        final int library = ai.getCardsIn(ZoneType.Library).size();
+        assertSame(game.getPhaseHandler().getPlayerTurn(), opp, "the opponent's turn never came: " + ours);
+        assertTrue(ours.count(THRASIOS + " ability") > 0, "Thrasios never dug: " + ours);
+        assertEquals(library, LoopSinks.LIBRARY_FLOOR + 9, "our library when the opponent's turn came: " + ours);
+        final Play theirs = play("mastermindLetsThrasiosDigAndNeverDecksUs, their turn",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
+        Reporter.log("mastermindLetsThrasiosDigAndNeverDecksUs: our library " + library + " when the opponent's turn"
+                + " came, " + ai.getCardsIn(ZoneType.Library).size() + " when our next came; Thrasios activations "
+                + ours.count(THRASIOS + " ability") + " in our turn, " + theirs.count(THRASIOS + " ability")
+                + " in theirs; Mastermind's triggers in theirs " + theirs.count(MASTERMIND + " trigger"));
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + theirs);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 2, "our next turn never came: " + theirs);
+        assertEquals(theirs.count(MASTERMIND + " trigger"), 1, "Mastermind's draws in their turn: " + theirs);
+        assertEquals(ai.getCardsIn(ZoneType.Library).size(), library - 1 - theirs.count(THRASIOS + " ability"),
+                "our library when our next turn came: " + theirs);
     }
 
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on

@@ -24,15 +24,21 @@ import forge.ai.AiPlayDecision;
 import forge.ai.LobbyPlayerAi;
 import forge.ai.LoopTracker;
 import forge.card.mana.ManaAtom;
+import forge.deck.Deck;
 import forge.game.Game;
 import forge.game.GameEndReason;
 import forge.game.GameLogEntry;
+import forge.game.GameRules;
+import forge.game.GameStage;
+import forge.game.GameType;
+import forge.game.Match;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
 import forge.game.mana.Mana;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.player.RegisteredPlayer;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.trigger.Trigger;
@@ -75,6 +81,17 @@ public class ComboLoopThrasiosAiTest extends AITest {
     private static final String UNRAVELER = "Fate Unraveler";
     private static final String EIDOLON = "Eidolon of the Great Revel";
     private static final String BURNING_TREE = "Burning-Tree Shaman";
+    /** Draws us one whenever an opponent draws their second card each turn (Kinnan's list). */
+    private static final String MASTERMIND = "Faerie Mastermind";
+    /** Draws us one whenever a player draws their second card each turn, ours included. */
+    private static final String TCHALLA = "King T'Challa";
+    /** Draws us one whenever a player draws their second card during their turn (ValidPlayer$ Player.Active). */
+    private static final String COUNCIL = "The Council of Four";
+    /** Draws us two whenever an opponent draws their second card each turn. */
+    private static final String UNAGI = "The Unagi of Kyoshi Island";
+    /** Draws us one on an opponent's second card each turn, on their attack with two creatures or on their second
+     *  spell each turn. */
+    private static final String TROUBLE = "Trouble in Pairs";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
     /** The rock untap of Basalt Monolith and Nyxbloom Ancient. */
@@ -140,6 +157,23 @@ public class ComboLoopThrasiosAiTest extends AITest {
     /** The seats of a three-player game, as {@link #game}: the AI is player 1, its opponents players 0 and 2. */
     private void pod() {
         board(initAndCreateThreePlayerGame());
+    }
+
+    /** The seats of a four-player game, as {@link #game}, built as AITest builds its three-player one: the AI is
+     *  player 1, its opponents players 0, 2 and 3, in that turn order. */
+    private void fourPlayerPod() {
+        initAndCreateGame();
+        final List<RegisteredPlayer> players = new ArrayList<>();
+        final Deck deck = new Deck();
+        for (final String name : List.of("opponent", "ai", "second", "third")) {
+            players.add(new RegisteredPlayer(deck).setPlayer(new LobbyPlayerAi(name, null)));
+        }
+        final GameRules rules = new GameRules(GameType.Constructed);
+        final Game g = new Game(players, rules, new Match(rules, players, "Test"));
+        g.setAge(GameStage.Play);
+        g.getPhaseHandler().devModeSet(PhaseType.MAIN1, g.getPlayers().get(1));
+        g.getPhaseHandler().onStackResolved();
+        board(g);
     }
 
     private void board(final Game g) {
@@ -1881,6 +1915,238 @@ public class ComboLoopThrasiosAiTest extends AITest {
         addCard(ISLAND, opp);
         assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR, "the dig toward Oracle's floor");
         assertSame(thrasiosOf(line(BASALT_NYXBLOOM)), digOf(thrasios), "the dig toward Oracle above it");
+    }
+
+    // ---- Faerie Mastermind's bound (Evan, 2026-11-04) ----
+
+    // Spec section 6.4, amended 2026-11-04 (Faerie Mastermind's bound): a mandatory draw of ours on a trigger that
+    // fires on a player's Nth card each turn (Mode$ Drawn with a plain Number$) is counted at its bound. The engine
+    // fires it only when a player's count of the cards drawn this turn reaches N (TriggerDrawn), so at most once for
+    // each player it can match in each turn; each turn of a floor's horizon counts once, whole, by its player. Faerie
+    // Mastermind draws us one on an opponent's second card. In our Main 1 of a 1v1, nobody having drawn this turn, the
+    // floor's horizon is this turn, the opponent's and our next through its draw step: three firings, 4 + 3 = 7. The
+    // plain dig's adds the three rounds of two turns to the fourth of our draw steps: nine, 4 + 9 = 13. In the
+    // opponent's Main 1 it is their turn and our next, 4 + 2 = 6, and eight turns to our fourth draw step, 4 + 8 = 12.
+    @Test
+    public void mastermindsDrawIsCountedAtItsBound() {
+        start();
+        addCard(MASTERMIND, ai);
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        assertEquals(floorOf(), base + 3, "our Main 1: this turn, the opponent's and our next");
+        assertEquals(plainFloorOf(), base + 9, "our Main 1: nine turns to our fourth draw step");
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp, 4);
+        assertEquals(floorOf(), base + 2, "the opponent's Main 1: their turn and our next");
+        assertEquals(plainFloorOf(), base + 8, "the opponent's Main 1: eight turns to our fourth draw step");
+    }
+
+    // The bound in a four-player pod: in our Main 1, nobody having drawn this turn, each of the three opponents can
+    // fire Mastermind once in each turn. The floor's horizon is this turn, the three opponents' and our next: five
+    // turns, 3 * 5 = 15 firings, 4 + 15 = 19. The plain dig's adds three rounds of four turns, seventeen turns:
+    // 3 * 17 = 51, 4 + 51 = 55. So beside Mastermind in a pod the plain dig keeps 55 cards (spec section 9). A player
+    // who has lost has no more turns and draws no more cards: once one opponent concedes, two are left, in four turns,
+    // 4 + 2 * 4 = 12, and in thirteen, 4 + 2 * 13 = 30.
+    @Test
+    public void mastermindsBoundInAFourPlayerPod() {
+        fourPlayerPod();
+        assertEquals(game.getPlayers().size(), 4, "four players");
+        addCard(MASTERMIND, ai);
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        assertEquals(floorOf(), base + 3 * 5, "three opponents in each of five turns");
+        assertEquals(plainFloorOf(), base + 3 * 17, "three opponents in each of seventeen turns");
+        final Player third = game.getPlayers().get(3);
+        third.concede();
+        assertTrue(third.hasLost(), "the fourth player conceded");
+        assertEquals(floorOf(), base + 2 * 4, "two opponents in each of four turns");
+        assertEquals(plainFloorOf(), base + 2 * 13, "two opponents in each of thirteen turns");
+    }
+
+    // King T'Challa draws us one whenever a player draws their second card each turn (ValidPlayer$ Player): ours too,
+    // which Thrasios's dig can itself make. In our Main 1 of a 1v1, nobody having drawn this turn, both players can
+    // fire it once in each turn: two in each of the floor's three turns, 4 + 6 = 10, and in each of the plain dig's
+    // nine, 4 + 18 = 22. Once we have drawn two cards this turn we cannot fire it again this turn: 4 + 5 = 9 and
+    // 4 + 17 = 21.
+    @Test
+    public void kingTChallaCountsOurOwnSecondCardToo() {
+        start();
+        addCard(TCHALLA, ai);
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        assertEquals(floorOf(), base + 2 * 3, "both players in each of three turns");
+        assertEquals(plainFloorOf(), base + 2 * 9, "both players in each of nine turns");
+        library(MEMNITE, 2);
+        ai.drawCards(2);
+        assertEquals(ai.getNumDrawnThisTurn(), 2, "we drew our second card this turn");
+        assertEquals(floorOf(), base + 5, "not us in the rest of this turn");
+        assertEquals(plainFloorOf(), base + 17, "nor in the plain dig's");
+    }
+
+    // The Council of Four draws us one whenever a player draws their second card during their own turn (ValidPlayer$
+    // Player.Active). A property that narrows ValidPlayer may be read tighter, as the turn's player, and Active is: it
+    // fires at most once a turn, for that turn's player. In our Main 1 of a 1v1: once in each of the floor's three
+    // turns, 4 + 3 = 7, and in each of the plain dig's nine, 4 + 9 = 13. In a four-player pod: five turns, 4 + 5 = 9,
+    // and seventeen, 4 + 17 = 21, where every player in every turn would be 4 + 20 and 4 + 68.
+    @Test
+    public void theCouncilOfFourCountsOneFiringATurn() {
+        start();
+        addCard(COUNCIL, ai);
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        assertEquals(floorOf(), base + 3, "a 1v1: once in each of three turns");
+        assertEquals(plainFloorOf(), base + 9, "a 1v1: once in each of nine turns");
+        fourPlayerPod();
+        addCard(COUNCIL, ai);
+        assertEquals(floorOf(), base + 5, "a pod: once in each of five turns");
+        assertEquals(plainFloorOf(), base + 17, "a pod: once in each of seventeen turns");
+    }
+
+    // The players a bounded draw can match are read from its ValidPlayer's words, each part's word alone and of its
+    // properties Active: a draw of one on our own second card (ValidPlayer$ You) counts us alone, once in each turn,
+    // 4 + 3 = 7 and 4 + 9 = 13, in our Main 1 of a 1v1, nobody having drawn this turn; one that names no player counts
+    // any player's second card, as King T'Challa's does, 4 + 6 = 10 and 4 + 18 = 22; one on an opponent's second card
+    // during their own turn (Opponent.Active) counts the opponent's turns alone, not this one: the floor's one,
+    // 4 + 1 = 5, and the plain dig's four, 4 + 4 = 8; and a property other than Active is not read, which keeps the
+    // count an upper bound: Player.Opponent counts us too, as Player does, 4 + 6 = 10.
+    @Test
+    public void theBoundReadsTheWordsOfValidPlayer() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 1";
+        final String you = "Mode$ Drawn | ValidPlayer$ You | Number$ 2 | TriggerZones$ Battlefield | Execute$ TrigDraw";
+        assertEquals(floorWith(new String[] {you, draw}), base + 3, "You: us in each of three turns");
+        assertEquals(plainFloorWith(you, draw), base + 9, "You: us in each of nine turns");
+        final String any = "Mode$ Drawn | Number$ 2 | TriggerZones$ Battlefield | Execute$ TrigDraw";
+        assertEquals(floorWith(new String[] {any, draw}), base + 6, "no player named: both in each of three turns");
+        assertEquals(plainFloorWith(any, draw), base + 18, "no player named: both in each of nine turns");
+        final String theirs = you.replace("You", "Opponent.Active");
+        assertEquals(floorWith(new String[] {theirs, draw}), base + 1, "Opponent.Active: the opponent's next turn");
+        assertEquals(plainFloorWith(theirs, draw), base + 4, "Opponent.Active: the opponent's four turns");
+        assertEquals(floorWith(new String[] {you.replace("You", "Player.Opponent"), draw}), base + 6,
+                "Player.Opponent: its property not read, both in each of three turns");
+    }
+
+    // The Unagi of Kyoshi Island draws us two whenever an opponent draws their second card each turn: Mastermind's
+    // firings, two cards each. In our Main 1 of a 1v1, 4 + 2 * 3 = 10 and 4 + 2 * 9 = 22.
+    @Test
+    public void theUnagiCountsTwoCardsAFiring() {
+        start();
+        addCard(UNAGI, ai);
+        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 2 * 3, "three firings of two");
+        assertEquals(plainFloorOf(), LoopSinks.LIBRARY_FLOOR + 2 * 9, "nine firings of two");
+    }
+
+    // In the current turn a player who has already drawn N cards or more cannot fire the trigger again, and is not
+    // counted in it. Mastermind in our Main 1 of a 1v1, the opponent drawing one card at a time: with one drawn their
+    // second is still to come, 4 + 3 = 7; with two, this turn's firing is spent, 4 + 2 = 6 and 4 + 8 = 12, while a
+    // draw on an opponent's third card (Number$ 3) can still fire this turn, three more, 4 + 2 + 3 = 9; with three, the
+    // same 6. The Council of Four alike, this turn's player us: once we have drawn two, 4 + 2 = 6.
+    @Test
+    public void aPlayerWhoHasDrawnTheirNthCardIsNotCountedThisTurn() {
+        start();
+        fillLibrary(opp, 3);
+        opp.drawCards(1);
+        final Card mastermind = addCard(MASTERMIND, ai);
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        assertEquals(floorOf(), base + 3, "one drawn: their second is still to come");
+        opp.drawCards(1);
+        assertEquals(opp.getNumDrawnThisTurn(), 2, "the opponent drew their second card this turn");
+        assertEquals(floorOf(), base + 2, "two drawn: not in the rest of this turn");
+        assertEquals(plainFloorOf(), base + 8, "nor in the plain dig's");
+        final String third = "Mode$ Drawn | ValidPlayer$ Opponent | Number$ 3 | TriggerZones$ Battlefield"
+                + " | Execute$ TrigDraw";
+        assertEquals(floorWith(new String[] {third, "DB$ Draw | Defined$ You"}), base + 2 + 3,
+                "their third card is still to come");
+        opp.drawCards(1);
+        assertEquals(floorOf(), base + 2, "three drawn: the same");
+        game.getAction().moveToGraveyard(mastermind, null);
+        addCard(COUNCIL, ai);
+        library(MEMNITE, 2);
+        ai.drawCards(2);
+        assertEquals(floorOf(), base + 2, "The Council of Four, this turn's player us with two drawn");
+    }
+
+    // Every other mandatory draw trigger of ours stays uncountable, as before the bound: beside Mastermind's 7, the
+    // control, a Drawn trigger with no Number$ (a draw on each card an opponent draws), one whose Number$ is no plain
+    // number, a bounded one whose NumCards is no plain number, and a trigger of another mode that carries a Number$;
+    // Nezahal, Primal Tide's draw on each noncreature spell an opponent casts; and Trouble in Pairs, whose draw on an
+    // opponent's second card each turn is bounded but whose draws on their attack and on their second spell are not.
+    // No dig that stops at a floor runs beside any of them. A second bounded draw beside Mastermind's adds its own
+    // three: 4 + 6 = 10.
+    @Test
+    public void aDrawTriggerWithNoBoundStaysUncountable() {
+        start();
+        addCard(MASTERMIND, ai);
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        assertEquals(floorOf(), base + 3, "the control: Mastermind's bound");
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 1";
+        final String drawn = "Mode$ Drawn | ValidPlayer$ Opponent | TriggerZones$ Battlefield | Execute$ TrigDraw";
+        assertEquals(floorWith(new String[] {drawn, draw}), Integer.MAX_VALUE, "no Number$: each card they draw");
+        assertEquals(plainFloorWith(drawn, draw), Integer.MAX_VALUE, "the plain dig's floor, no Number$");
+        assertEquals(floorWith(new String[] {drawn + " | Number$ X", draw}), Integer.MAX_VALUE, "Number$ X");
+        assertEquals(floorWith(new String[] {drawn + " | Number$ 2", "DB$ Draw | Defined$ You | NumCards$ X"}),
+                Integer.MAX_VALUE, "a bounded draw of NumCards$ X");
+        assertEquals(floorWith(new String[] {drawn.replace("Drawn", "SpellCast") + " | Number$ 2", draw}),
+                Integer.MAX_VALUE, "another mode, a Number$ beside it");
+        assertEquals(floorWith(new String[] {drawn + " | Number$ 2", draw}), base + 6,
+                "the control: a second bounded draw, its own three");
+        final Card nezahal = addCard(NEZAHAL, ai);
+        assertEquals(floorOf(), Integer.MAX_VALUE, "Nezahal's draws cannot be counted");
+        assertEquals(plainFloorOf(), Integer.MAX_VALUE, "nor by the plain dig's floor");
+        game.getAction().moveToGraveyard(nezahal, null);
+        addCard(TROUBLE, ai);
+        assertEquals(floorOf(), Integer.MAX_VALUE, "Trouble in Pairs: its draws on an attack and on a second spell");
+        assertEquals(plainFloorOf(), Integer.MAX_VALUE, "nor by the plain dig's floor");
+    }
+
+    // The plain dig's floor counts Mastermind on a card of ours in our hand or library as if it were on our
+    // battlefield now, as it counts a phase trigger there, and the dig toward Oracle's floor does not (spec section
+    // 6.4: our battlefield alone). On our battlefield, the control, 7 and 13; in our hand, 4 and 13; in our library, 4
+    // and 13. The opponent's Mastermind in their hand adds nothing to ours.
+    @Test
+    public void mastermindInOurHandOrLibraryRaisesThePlainDigsFloorAlone() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final Card onOurs = addCard(MASTERMIND, ai);
+        assertEquals(floorOf(), base + 3, "the control: on our battlefield");
+        assertEquals(plainFloorOf(), base + 9, "the control: the plain dig's");
+        game.getAction().exile(onOurs, null, null);
+        final Card inHand = addCardToZone(MASTERMIND, ai, ZoneType.Hand);
+        assertEquals(floorOf(), base, "in our hand: the dig toward Oracle's floor");
+        assertEquals(plainFloorOf(), base + 9, "in our hand: the plain dig's");
+        game.getAction().exile(inHand, null, null);
+        addCardToZone(MASTERMIND, ai, ZoneType.Library);
+        assertEquals(floorOf(), base, "in our library: the dig toward Oracle's floor");
+        assertEquals(plainFloorOf(), base + 9, "in our library: the plain dig's");
+        addCardToZone(MASTERMIND, opp, ZoneType.Hand);
+        assertEquals(plainFloorOf(), base + 9, "the opponent's Mastermind in their hand");
+    }
+
+    // The bounded readers draw no random number (spec section 7: nothing the driver reads draws one), read here inside
+    // one MyRandom.callCount() bracket around both floors, as floorOf and plainFloorOf bracket each: Mastermind, King
+    // T'Challa, The Council of Four and The Unagi on our battlefield in our Main 1 of a 1v1, 3 + 6 + 3 + 6 = 18 cards
+    // on the floor's 4 and 9 + 18 + 9 + 18 = 54 on the plain dig's.
+    @Test
+    public void theBoundedReadersDrawNoRandomNumber() {
+        start();
+        for (final String name : List.of(MASTERMIND, TCHALLA, COUNCIL, UNAGI)) {
+            addCard(name, ai);
+        }
+        final long before = MyRandom.callCount();
+        final int floor = LoopSinks.floor(ai);
+        final int plain = LoopSinks.plainFloor(ai);
+        assertEquals(MyRandom.callCount() - before, 0, "the floors drew");
+        assertEquals(floor, LoopSinks.LIBRARY_FLOOR + 3 + 6 + 3 + 6, "the four triggers' draws, the floor's");
+        assertEquals(plain, LoopSinks.LIBRARY_FLOOR + 9 + 18 + 9 + 18, "the four triggers' draws, the plain dig's");
+    }
+
+    // The plain dig runs beside Mastermind, whose draw, uncountable, used to stop it, and stops at the bound: in our
+    // Main 1 of a 1v1 a library of 13 Memnites is not above the plain floor of 13, no dig; 14 are.
+    @Test
+    public void thePlainDigRunsBesideMastermindAboveItsBound() {
+        start();
+        addCard(MASTERMIND, ai);
+        library(MEMNITE, 13);
+        assertEquals(plainFloorOf(), LoopSinks.LIBRARY_FLOOR + 9, "the plain dig's floor beside Mastermind");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "13 cards are not above Mastermind's 13");
+        library(MEMNITE, 1);
+        assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "14 are");
     }
 
     // Thrasios's next activation (LoopSinks.thrasios), which draws no random number (spec section 7)
