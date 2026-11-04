@@ -1388,6 +1388,59 @@ public class ComboLoopResponseAiTest extends AITest {
                 "the untap's loss read without both pumps' 4 taken out: its line failed");
     }
 
+    // R30's judge hands a step's loss to the step beneath it alone, the nearest earlier one (section 6.5, amended):
+    // three steps nested as the response nests them, the judge driven as everyLaterStepIsTakenOutOfTheEarlierOnesLoss
+    // drives it. Their Murder on Kinnan, we at 60; Basalt's untap returned above it, priced 2; their Lightning Bolt on
+    // Ballista above the untap, and a pump returned above Bolt; a second Bolt above the pump, and a second pump above
+    // that, each pump priced 2. The second pump is judged at 58: it lost 2, its price. The second Bolt gone, the first
+    // pump is judged at 56: it lost 4, 2 of them the second pump's, so it cost its price and the volley goes on. The
+    // first Bolt gone, the untap is judged at 53: it lost 7, 4 of them the pumps', so it cost 3 against its price of 2
+    // and its line fails. A judge that handed the second pump's loss to the untap, the first of the three, read the
+    // first pump's 4 against 2 and ended the volley; one that handed it to the untap as well as to the first pump took
+    // it out of the untap's twice and read 1 there.
+    @Test
+    public void aStepsLossGoesToTheStepBeneathItAlone() throws ReflectiveOperationException {
+        start();
+        final Card kinnan = rock();
+        final Card ballista = ballista(1);
+        ai.setLife(60, null);
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+        final Class<?> spent = Class.forName(LoopDriver.class.getName() + "$Spent");
+        final Method arm = LoopDriver.class.getDeclaredMethod("arm", SpellAbility.class, spent, int.class,
+                ComboLines.Line.class);
+        final Method judge = LoopDriver.class.getDeclaredMethod("judgeLife");
+        final Field owed = LoopDriver.class.getDeclaredField("owed");
+        final Field over = LoopDriver.class.getDeclaredField("volleyOver");
+        final Field failed = LoopDriver.class.getDeclaredField("failed");
+        arm.setAccessible(true);
+        judge.setAccessible(true);
+        owed.setAccessible(true);
+        over.setAccessible(true);
+        failed.setAccessible(true);
+        final ComboLines.Line l = line(KINNAN_BASALT);
+        arm.invoke(driver, untapOf(basalt), spentKind(spent, "CYCLE"), 2, l);
+        ComboLoopBoards.theirResponse(game, opp, BOLT, ballista);
+        arm.invoke(driver, pumpOf(ballista), spentKind(spent, "BALLISTA"), 2, l);
+        ComboLoopBoards.theirResponse(game, opp, BOLT, ballista);
+        arm.invoke(driver, pumpOf(ballista), spentKind(spent, "BALLISTA"), 2, l);
+        ai.setLife(58, null);
+        judge.invoke(driver);
+        assertEquals(((List<?>) owed.get(driver)).size(), 2, "the second pump judged, the two beneath it waiting");
+        game.getStack().remove(game.getStack().peek());
+        ai.setLife(56, null);
+        judge.invoke(driver);
+        assertEquals(((List<?>) owed.get(driver)).size(), 1, "the first pump judged once the second Bolt was gone");
+        assertFalse(over.getBoolean(driver),
+                "the first pump's loss read without the second pump's 2 taken out: the volley ended");
+        game.getStack().remove(game.getStack().peek());
+        assertEquals(game.getStack().size(), 1, "Murder alone on the stack");
+        ai.setLife(53, null);
+        judge.invoke(driver);
+        assertTrue(((List<?>) owed.get(driver)).isEmpty(), "the untap not judged once the first Bolt was gone");
+        assertTrue(((List<?>) failed.get(driver)).contains(KINNAN_BASALT),
+                "the untap's 3 over its price read with the second pump's 2 taken out twice: its line went on");
+    }
+
     // The wait is the go-off in response's alone (section 6.6, amended; section 6.5's main phase stays as it was): our
     // Main 1, the rock under the opponent's Harsh Mentor, Ballista in our hand, the opponent at 2, the go-off running
     // (its cheap kill, aCheapKillPaysTheRockLinesUntaps's), its untap on the stack and Harsh Mentor's trigger for it
