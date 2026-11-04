@@ -44,7 +44,7 @@ import forge.game.zone.ZoneType;
  * Thassa's Oracle in our hand able to win now, its {U}{U} payable and a Thrasios ready
  * ({@link LoopSinks#digsForOracle}); we able to win; Thrasios's dig not over for the phase; Oracle's cast one the
  * driver may make, at a price in life below ours; and the line's whole cost, its build, its cast and one activation for
- * each card in our library, within what the caps have left, read at the line's start (R28's shape). The refill builds
+ * each card in our library, within what the caps have left, read at each decision (R28's shape). The refill builds
  * the pool to what a dig of our whole library costs and Oracle's own price ({@link LoopSinks#oraclePool}), the driver
  * owning every decision meanwhile, so that the walk neither taps the blue sources nor spends the pool first; at a
  * boundary there, Oracle's cast, through the driver's own check (one it refuses for its payment waits for the refill).
@@ -212,10 +212,9 @@ public final class LoopDriver {
     // whether responseAction's last answer was the wait of a go-off in response for its own action (waits), or the
     // Oracle line's window with no dig to take, which respond answers with a pass
     private boolean waiting;
-    // the Oracle line of the phase (section 6.4 step 3, amended 2026-11-04 (the Oracle window)): whether its build has
-    // begun, its fit read at its start; the card id of the Thassa's Oracle it cast, -1 while it has cast none, whose
-    // entering trigger opens its window; and the loop line whose go-off cast it, the window's digs' line
-    private boolean oracleBuild;
+    // the Oracle line of the phase (section 6.4 step 3, amended 2026-11-04 (the Oracle window)): the card id of the
+    // Thassa's Oracle it cast, -1 while it has cast none, whose entering trigger opens its window; and the loop line
+    // whose go-off cast it, the window's digs' line
     private int windowOracle = -1;
     private ComboLines.Line windowLine;
 
@@ -305,11 +304,9 @@ public final class LoopDriver {
             // meanwhile, so that the walk neither taps the blue sources nor spends the pool; at a boundary there,
             // Oracle's cast, through the driver's own check, one it refuses for its payment (a colour the pool has not
             // made yet) waiting for the refill. Nothing is dug before Oracle resolves: the window digs (respond)
-            oracleBuild = true;
             if (boundary && LoopPool.floating(ai) >= LoopSinks.oraclePool(ai)) {
                 final SpellAbility cast = spend(l, ph, LoopSinks.oracleCast(ai), Spent.ORACLE);
                 if (cast != null) {
-                    oracleBuild = false;
                     windowOracle = cast.getHostCard().getId();
                     windowLine = l;
                     return cast;
@@ -825,7 +822,6 @@ public final class LoopDriver {
         dugFrom = -1;
         digOver = false;
         owed.clear();
-        oracleBuild = false;
         windowOracle = -1;
         windowLine = null;
     }
@@ -1160,14 +1156,16 @@ public final class LoopDriver {
     // Oracle in our hand able to win now, its {U}{U} payable and a Thrasios ready (LoopSinks.digsForOracle); we can
     // win; Thrasios's dig is not over for the phase (judgeDig, R30), so that its window can dig; Oracle's cast is one
     // the driver may make now, at a price in life below what we will have (mayTake: a build for a cast the check would
-    // refuse for good is never begun); and, read at the line's start alone (its build counts down with the caps), its
-    // whole cost fits what the caps have left (windowFits). Otherwise the line waits, Oracle held (holdsOracle)
+    // refuse for good is never begun); and its whole cost from here fits what the caps have left (windowFits), read at
+    // every decision: at a boundary the count is exact for a rock line, and mid-cycle, where it errs high by a cycle, a
+    // line that reads as no fit costs nothing, the go-off refilling either way. Otherwise the line waits, Oracle held
+    // (holdsOracle), and at a boundary the walk takes the pool built so far
     private boolean oracleLine(final ComboLines.Line l) {
         if (digOver || !LoopSinks.digsForOracle(ai, l) || ai.cantWin()) {
             return false;
         }
         final SpellAbility cast = LoopSinks.oracleCast(ai);
-        return cast != null && mayTake(cast) && (oracleBuild || windowFits(l));
+        return cast != null && mayTake(cast) && windowFits(l);
     }
 
     // R28's shape for the Oracle line (THE RULE's fit, section 6.4 step 3, amended 2026-11-04 (the Oracle window)): the
