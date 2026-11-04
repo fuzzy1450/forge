@@ -42,7 +42,9 @@ import forge.game.zone.ZoneType;
  * holds what Ballista's action needs, a spend taken at a boundary, and the driver owns every decision while Ballista
  * has a step. Then the Oracle line (section 6.4 step 3, amended 2026-11-04 (the Oracle window)), while it can run:
  * Thassa's Oracle in our hand able to win now, its {U}{U} payable and a Thrasios ready
- * ({@link LoopSinks#digsForOracle}); we able to win; Thrasios's dig not over for the phase; Oracle's cast one the
+ * ({@link LoopSinks#digsForOracle}); we able to win; no mandatory draw trigger of ours on our battlefield whose draws
+ * cannot be counted ({@link LoopSinks#drawsUncounted}: Nezahal, Primal Tide's, which a noncreature spell of theirs in
+ * the window would set off on our emptied library); Thrasios's dig not over for the phase; Oracle's cast one the
  * driver may make, at a price in life below ours; and the line's whole cost, its build, its cast and one activation for
  * each card in our library, within what the caps have left, read at each decision (R28's shape). The refill builds
  * the pool to what a dig of our whole library costs and Oracle's own price ({@link LoopSinks#oraclePool}), the driver
@@ -385,11 +387,13 @@ public final class LoopDriver {
      * it ({@link LoopSinks#digsForOracle}: Oracle in our hand and able to win now, its {U}{U} payable, Thrasios ready)
      * and our library holds more than {@link LoopSinks#oracleThreshold} cards. Read from the board at every decision,
      * a go-off running or not, so the stock walk never casts Oracle above its threshold: the line casts it itself,
-     * through its own check, and waits too while it does not fit the caps. False for any other spell, for a deck
-     * holding no loop line, and while piece 1's own Oracle go-off holds (R2): while an executable piece-1 line has
-     * Oracle as its winner, the go-off (ComboExecute.goOffNow, which reads those very lines) and the hold
-     * (ComboHold.oracleWaits) are piece 1's, and an immediate Consultation win is never traded for a dig. Draws
-     * nothing.
+     * through its own check, and waits too while it does not fit the caps, or beside a draw trigger of ours whose draws
+     * cannot be counted (amended 2026-11-04 (the Oracle window, its review's round 1): Oracle is held there while
+     * the line waits, never released to the stock AI, whose cast above the threshold would not win). False for any
+     * other spell, for a deck holding no loop line, and while piece 1's own Oracle go-off holds (R2): while an
+     * executable piece-1 line has Oracle as its winner, the go-off (ComboExecute.goOffNow, which reads those very
+     * lines) and the hold (ComboHold.oracleWaits) are piece 1's, and an immediate Consultation win is never traded for
+     * a dig. Draws nothing.
      */
     public boolean holdsOracle(final SpellAbility sa) {
         if (!ownOracleCast(sa)) {
@@ -1154,14 +1158,17 @@ public final class LoopDriver {
 
     // whether the Oracle line runs on loop line l now (section 6.4 step 3, amended 2026-11-04 (the Oracle window)):
     // Oracle in our hand able to win now, its {U}{U} payable and a Thrasios ready (LoopSinks.digsForOracle); we can
-    // win; Thrasios's dig is not over for the phase (judgeDig, R30), so that its window can dig; Oracle's cast is one
-    // the driver may make now, at a price in life below what we will have (mayTake: a build for a cast the check would
-    // refuse for good is never begun); and its whole cost from here fits what the caps have left (windowFits), read at
-    // every decision: at a boundary the count is exact for a rock line, and mid-cycle, where it errs high by a cycle, a
-    // line that reads as no fit costs nothing, the go-off refilling either way. Otherwise the line waits, Oracle held
-    // (holdsOracle), and at a boundary the walk takes the pool built so far
+    // win; no mandatory draw trigger of ours on our battlefield draws what no floor can count
+    // (LoopSinks.drawsUncounted, amended 2026-11-04 (the Oracle window, its review's round 1): Nezahal, Primal Tide's,
+    // which any noncreature spell an opponent cast in the window would set off on our emptied library); Thrasios's dig
+    // is not over for the phase (judgeDig, R30), so that its window can dig; Oracle's cast is one the driver may make
+    // now, at a price in life below what we will have (mayTake: a build for a cast the check would refuse for good is
+    // never begun); and its whole cost from here fits what the caps have left (windowFits), read at every decision: at
+    // a boundary the count is exact for a rock line, and mid-cycle, where it errs high by a cycle, a line that reads
+    // as no fit costs nothing, the go-off refilling either way. Otherwise the line waits, Oracle held (holdsOracle),
+    // and at a boundary the walk takes the pool built so far
     private boolean oracleLine(final ComboLines.Line l) {
-        if (digOver || !LoopSinks.digsForOracle(ai, l) || ai.cantWin()) {
+        if (digOver || !LoopSinks.digsForOracle(ai, l) || ai.cantWin() || LoopSinks.drawsUncounted(ai)) {
             return false;
         }
         final SpellAbility cast = LoopSinks.oracleCast(ai);

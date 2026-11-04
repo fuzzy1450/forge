@@ -2472,6 +2472,39 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertSame(cast.getHostCard(), oracle);
     }
 
+    // ---- the Oracle window: its review's round 1 ----
+
+    // Beside a mandatory draw trigger of ours whose draws cannot be counted the Oracle line waits, Oracle held (section
+    // 6.4 step 3, amended 2026-11-04 (the Oracle window, its review's round 1)): Nezahal, Primal Tide draws us a card
+    // whenever an opponent casts a noncreature spell, so with our library dug to empty above Oracle's trigger any such
+    // spell in response, a removal, a counterspell or a cantrip, would draw us from it before the trigger resolved. The
+    // Oracle line's board with Nezahal on ours: the line could run but for it, and Oracle is held; through the whole
+    // game loop of our Main 2 Oracle is never cast and nothing is dug (the plain dig's floor is Integer.MAX_VALUE
+    // beside Nezahal too), Oracle staying in our hand. Beside Faerie Mastermind, whose draw on an opponent's second
+    // card is counted at its bound, the line runs, as it does with Nezahal in our hand, whose draw no floor reads.
+    @Test
+    public void besideNezahalTheOracleLineWaits() {
+        final Card oracle = oracleBoard(10);
+        ComboLoopBoards.ready(addCard(NEZAHAL, ai));
+        assertTrue(LoopSinks.digsForOracle(ai, line(KINNAN_BASALT)), "the line could run but for Nezahal");
+        assertEquals(plainFloorOf(), Integer.MAX_VALUE, "Nezahal's draws cannot be counted");
+        assertTrue(driver.holdsOracle(castOf(oracle)), "Oracle held");
+        final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN2));
+        assertTrue(only(seen, s -> s.cast(ORACLE)).isEmpty(), "Oracle cast beside Nezahal: " + seen);
+        assertTrue(only(seen, Seen::dig).isEmpty(), "a dig beside Nezahal: " + seen);
+        assertEquals(library(), 10);
+        assertTrue(ai.getCardsIn(ZoneType.Hand).contains(oracle), "Oracle in our hand");
+        assertFalse(game.isGameOver());
+        oracleBoard(10);
+        addCard(MASTERMIND, ai);
+        final List<SpellAbility> built = new ArrayList<>();
+        assertNotNull(toTheOracleCast(built), "beside Mastermind the line runs; its actions: " + built);
+        oracleBoard(10);
+        addCardToZone(NEZAHAL, ai, ZoneType.Hand);
+        built.clear();
+        assertNotNull(toTheOracleCast(built), "Nezahal in our hand: the line runs; its actions: " + built);
+    }
+
     // Thrasios's next activation (LoopSinks.thrasios), which draws no random number (spec section 7)
     private SpellAbility thrasiosOf(final ComboLines.Line l) {
         final long before = MyRandom.callCount();

@@ -62,7 +62,9 @@ import forge.util.FileSection;
  * ({@link #oracleWindowNeed}) and Oracle's own price ({@link #oraclePool}), casts Oracle ({@link #oracleCast}), and
  * above its entering trigger digs to empty ({@link #windowDig}), one activation a decision, whatever mana the opponents
  * have open. The trigger then resolves on an empty library, its count of cards, none, no more than any devotion of ours
- * to blue, whatever has become of Oracle meanwhile; and a countered Oracle has cost no card.
+ * to blue, whatever has become of Oracle meanwhile; and a countered Oracle has cost no card. Beside a mandatory draw
+ * trigger of ours on our battlefield whose draws cannot be counted ({@link #drawsUncounted}: Nezahal, Primal Tide's)
+ * the line waits, Oracle held, as no plain dig runs there either.
  *
  * <p>What a step costs us in life is priced by the driver (R30, LoopDriver.lifeCost): Thrasios digs only for none, and
  * the rest of Ballista's volley is priced here ({@link #volleyLife}), which the driver weighs against our life.
@@ -739,10 +741,28 @@ final class LoopSinks {
         return due < 0 ? Integer.MAX_VALUE : (int) Math.min(LIBRARY_FLOOR + due, Integer.MAX_VALUE);
     }
 
+    /** Whether a mandatory draw trigger of ours on our battlefield draws what no floor can count, so that no plain dig
+     *  runs ({@link #plainFloor}: Integer.MAX_VALUE) and the Oracle line waits, Oracle held (LoopDriver.oracleLine,
+     *  amended 2026-11-04 (the Oracle window, its review's round 1)): one that waits on what another player does
+     *  (Nezahal, Primal Tide's, on each noncreature spell an opponent casts; a Drawn trigger with no plain Number, on
+     *  each card an opponent draws), or draws a number not written plainly. Above Oracle's trigger, our library dug to
+     *  empty, any such play in response would draw us from it before the trigger resolved. Read from our battlefield
+     *  alone, as the plain floor reads such a draw: one on a card in our hand or library is not read. Draws no random
+     *  number. */
+    static boolean drawsUncounted(final Player ai) {
+        return drawsOnOurBattlefield(ai, ai.getGame().getPhaseHandler()) < 0;
+    }
+
     // the draws plainFloor counts, those of the triggers on our battlefield and of our permanent cards in our hand and
     // library (drawsToCome); -1 when one on our battlefield cannot be counted (see plainFloor)
     private static long drawsDue(final Player ai) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
+        final long due = drawsOnOurBattlefield(ai, ph);
+        return due < 0 ? -1 : due + drawsToCome(ai, ph);
+    }
+
+    // the draws plainFloor counts for the triggers on our battlefield; -1 when one cannot be counted (see plainFloor)
+    private static long drawsOnOurBattlefield(final Player ai, final PhaseHandler ph) {
         long due = 0;
         for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
             for (final Trigger t : c.getTriggers()) {
@@ -760,7 +780,7 @@ final class LoopSinks {
                 due += n;
             }
         }
-        return due + drawsToCome(ai, ph);
+        return due;
     }
 
     // the draws plainFloor counts for the permanent cards of ours in our hand and in our library, each as if it were on
@@ -1020,10 +1040,13 @@ final class LoopSinks {
 
     /** The Oracle line's next dig in its window, above Thassa's Oracle's entering trigger (section 6.6, amended
      *  2026-11-04 (the Oracle window)): the {4} of our first ready Thrasios, us its activator, while our library holds
-     *  a card, whatever else it holds and whatever mana the opponents have open (R22, amended: only a counter of the
-     *  trigger stops that finish, where a stop above empty loses to any removal of a blue permanent of ours); null once
-     *  the library is empty, and with no Thrasios ready. No threshold is read: Oracle's pips are in our devotion once
-     *  it is on our battlefield, and an empty library needs none. Draws no random number. */
+     *  a card, whatever else it holds and whatever mana the opponents have open (R22, amended: a stop above empty loses
+     *  to any removal of a blue permanent of ours, where a stop at empty loses only to a counter of the trigger or to a
+     *  draw an opponent's play makes us take before it resolves, Faerie Mastermind's on their second card; beside a
+     *  draw of ours that cannot be counted, which any of their spells could set off, the line never casts Oracle:
+     *  {@link #drawsUncounted}); null once the library is empty, and with no Thrasios ready. No threshold is read:
+     *  Oracle's pips are in our devotion once it is on our battlefield, and an empty library needs none. Draws no
+     *  random number. */
     static SpellAbility windowDig(final Player ai) {
         return ai.getCardsIn(ZoneType.Library).isEmpty() ? null : readyThrasios(ai);
     }
