@@ -2292,6 +2292,24 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(built.size(), 2 * 42, "42 cycles of Basalt's tap and untap");
     }
 
+    // The window is the trigger of the Oracle the line cast, that card alone (section 6.6, amended 2026-11-04 (the
+    // Oracle window)): the line's Oracle cast and its trigger on the stack, a second Thassa's Oracle of ours put onto
+    // our battlefield, its entering trigger on top, hosted by a card that is not the one the line cast: the
+    // stack-response slot answers nothing there, the stock's decision, the pool floating and Thrasios able to dig.
+    @Test
+    public void aSecondOraclesTriggerOpensNoWindow() {
+        oracleBoard(10);
+        toTheWindow();
+        final int first = game.getStack().peek().getSourceCard().getId();
+        game.getAction().moveToPlay(addCardToZone(ORACLE, ai, ZoneType.Hand), null, null);
+        game.getAction().checkStateEffects(true);
+        game.getStack().addAllTriggeredAbilitiesToStack();
+        final Card host = game.getStack().peek().getSourceCard();
+        assertEquals(ComboTracker.nameOf(host), ORACLE, "the second Oracle's trigger on top: " + game.getStack());
+        assertTrue(host.getId() != first, "a card other than the line's Oracle");
+        assertNull(driver.respond(), "a window for an Oracle the line did not cast");
+    }
+
     // No dig toward Oracle runs in a main phase any more (section 6.4 step 3, amended 2026-11-04 (the Oracle window)):
     // on the Oracle line's board Thrasios's reading is no dig, ten Forests holding nothing worth a plain dig; and with
     // a library of ten Memnites instead, which a plain dig would dig for, the whole game loop casts Oracle first, the
