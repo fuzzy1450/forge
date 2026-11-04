@@ -2331,6 +2331,19 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertNotNull(toTheOracleCast(built), "room for 26: the line runs; its actions: " + built);
     }
 
+    // The window's digs leave the go-off its line (section 6.6, amended 2026-11-04 (the Oracle window)): after the
+    // window's first activation the go-off is still active on the line that cast Oracle, so that a question the stock
+    // AI's casts ask of it (ComboHold.vetoesCast, which reads the line of a cast and bounce cycle) is answered.
+    @Test
+    public void theWindowsDigsKeepTheGoOffsLine() {
+        oracleBoard(10);
+        toTheWindow();
+        final List<LoopDriver.Answer> first = answers(1);
+        assertNotNull(first.get(0).action(), "a dig: " + first);
+        final SpellAbility memnite = addCardToZone(MEMNITE, ai, ZoneType.Hand).getFirstSpellAbility();
+        assertFalse(ComboHold.vetoesCast(ai, memnite), "a Memnite is held by no cycle");
+    }
+
     // No dig toward Oracle runs in a main phase any more (section 6.4 step 3, amended 2026-11-04 (the Oracle window)):
     // on the Oracle line's board Thrasios's reading is no dig, ten Forests holding nothing worth a plain dig; and with
     // a library of ten Memnites instead, which a plain dig would dig for, the whole game loop casts Oracle first, the
