@@ -216,6 +216,24 @@ public class ComboLoopBallistaAiTest extends AITest {
         return -1;
     }
 
+    // LoopSinks.volleyLife(ai, net, perCycle), which draws no random number (spec section 7), on whichever branch
+    // the board takes it
+    private long volleyLifeOf(final int net, final int perCycle) {
+        final long before = MyRandom.callCount();
+        final long life = LoopSinks.volleyLife(ai, net, perCycle);
+        assertEquals(MyRandom.callCount() - before, 0, "the volley's price drew");
+        return life;
+    }
+
+    // the go-off slot's decision (LoopDriver.mainPhaseAction), which draws no random number (the driver's decision
+    // code draws none, spec section 7)
+    private SpellAbility act() {
+        final long before = MyRandom.callCount();
+        final SpellAbility sa = driver.mainPhaseAction(List.of());
+        assertEquals(MyRandom.callCount() - before, 0, "a driver decision drew");
+        return sa;
+    }
+
     /** Plays the driver's go-off actions, one decision at a time, each through the AI's own play path
      *  (PlayerControllerAi.playChosenSpellAbility) with the stack then resolved, until it returns null, the game is
      *  over or {@code max} actions; returns them in order, each as it was when returned (its host's counters before its
@@ -227,7 +245,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         while (acts.size() < max) {
             game.getAction().checkStateEffects(true);
             final long before = MyRandom.callCount();
-            final SpellAbility sa = driver.mainPhaseAction(List.of());
+            final SpellAbility sa = act();
             decisionDraws += MyRandom.callCount() - before;
             if (sa == null) {
                 break;
@@ -375,7 +393,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         final LoopTracker.Snapshot now = LoopTracker.Snapshot.of(ai);
         assertEquals(now.ownPower(), 20, "Ballista's 18 and Kinnan's 2");
         assertTrue(now.isDecisive(), "five times the opponent's 4");
-        assertNull(driver.mainPhaseAction(List.of()), "the driver stops");
+        assertNull(act(), "the driver stops");
         assertEquals(opp.getLife(), 4);
         assertEquals(decisionDraws, 0, "the driver's decisions drew");
     }
@@ -398,7 +416,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertNotNull(ballista, "Ballista entered");
         assertEquals(ballista.getCounters(CounterEnumType.P1P1), 18);
         assertEquals(LoopTracker.Snapshot.of(ai).ownPower(), 20);
-        assertNull(driver.mainPhaseAction(List.of()), "the driver stops");
+        assertNull(act(), "the driver stops");
         assertEquals(opp.getLife(), 4);
         assertEquals(decisionDraws, 0, "the driver's decisions drew");
     }
@@ -464,7 +482,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         start();
         ballistaOnOurs(2);
         assertEquals(LoopPool.stockTarget(ai, line(KINNAN_BASALT)), 0, "nothing else to spend on");
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "the control: a refill toward the pump");
+        assertSame(act(), manaOf(basalt), "the control: a refill toward the pump");
 
         start();
         final Card ballista = ballistaOnOurs(2);
@@ -472,7 +490,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertFalse(LoopSinks.ballistaCanShoot(ai));
         assertNull(LoopSinks.ballista(ai), "no Ballista step");
         assertFalse(ComboSignals.denied(ai, line(KINNAN_BASALT), t), "the line itself is not denied");
-        assertNull(driver.mainPhaseAction(List.of()), "no go-off on Ballista's account");
+        assertNull(act(), "no go-off on Ballista's account");
         assertEquals(ballista.getCounters(CounterEnumType.P1P1), 2);
     }
 
@@ -496,7 +514,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         for (final ComboLines.Line l : t.deckLines()) {
             assertEquals(ComboSignals.abandon(ai, l, t), ComboSignals.Signal.DENIED, l.variant().id());
         }
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
     }
 
     // R25: the opponent at 3, Ballista on ours with 3 counters. The first ping lands (3 to 2); then the opponent's
@@ -519,11 +537,11 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertEquals(opp.getLife(), 2, "the second ping was prevented");
         assertEquals(ballista.getCounters(CounterEnumType.P1P1), 1);
         assertTrue(LoopSinks.lethalNeeded(ai) > 1, "the counters are short of the kill");
-        assertNull(driver.mainPhaseAction(List.of()), "no pump: the volley is over for the phase");
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act(), "no pump: the volley is over for the phase");
+        assertNull(act());
 
         moveToMain2(game, ai);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "a new phase: a refill toward a pump");
+        assertSame(act(), manaOf(basalt), "a new phase: a refill toward a pump");
     }
 
     // The opponent's Lich's Mastery and nothing else: no opponent can lose, and an enchantment is no loss blocker, so
@@ -538,7 +556,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertEquals(LoopSinks.lethalNeeded(ai), 0);
         assertTrue(LoopCycles.ready(ai, line(KINNAN_BASALT)));
         assertFalse(ComboSignals.denied(ai, line(KINNAN_BASALT), t));
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
     }
 
     // A three-player game, the opponents at 7 and 9, Ballista in our hand: the kill needs 16 counters, Ballista is cast
@@ -621,7 +639,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertTrue(angel.isEnchanted(), "Inviolability is on the Angel");
         assertEquals(LoopSinks.lossBlockers(ai), List.of());
         assertEquals(ComboSignals.abandon(ai, line(KINNAN_BASALT), t), ComboSignals.Signal.DENIED);
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
     }
 
     // R25's judge for a loss blocker: the opponent's Platinum Angel, the opponent at 3, Ballista on ours with 10
@@ -646,14 +664,14 @@ public class ComboLoopBallistaAiTest extends AITest {
         final SpellAbility again = LoopSinks.ballista(ai);
         assertNotNull(again, "the control: Ballista has a ping to make");
         assertEquals(firstTarget(again), angel, "the control: at the Angel");
-        assertNull(driver.mainPhaseAction(List.of()), "the volley is over for the phase");
+        assertNull(act(), "the volley is over for the phase");
         final List<Act> rest = drive(MAX_ACTIONS);
         assertTrue(rest.stream().noneMatch(a -> a.pump() || a.ping()), "no pump and no ping: " + rest);
         assertEquals(opp.getLife(), 3);
         assertEquals(ballista.getCounters(CounterEnumType.P1P1), 9);
 
         moveToMain2(game, ai);
-        final SpellAbility afresh = driver.mainPhaseAction(List.of());
+        final SpellAbility afresh = act();
         assertNotNull(afresh, "a new phase: Ballista read afresh");
         assertEquals(afresh.getApi(), ApiType.DealDamage, "a ping: " + afresh);
         assertEquals(firstTarget(afresh), angel, "at the Angel");
@@ -922,11 +940,11 @@ public class ComboLoopBallistaAiTest extends AITest {
         opp.setLife(10, null);
         final Card ballista = ballistaOnOurs(2);
         floatColourless(4);
-        final SpellAbility pump = driver.mainPhaseAction(List.of());
+        final SpellAbility pump = act();
         assertNotNull(pump, "a go-off starts");
         assertEquals(pump.getApi(), ApiType.PutCounter, "the pump first: " + pump);
         assertEquals(pump.getHostCard(), ballista);
-        assertNull(driver.mainPhaseAction(List.of()), "nothing changed: the line is failed");
+        assertNull(act(), "nothing changed: the line is failed");
     }
 
     // The futility gate holds back a go-off whose only spender is the stock AI. Ballista on ours with 2 counters under
@@ -949,9 +967,9 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertEquals(ai.getCardsIn(ZoneType.Hand).size(), 2, "neither counterspell cast");
         assertEquals(ballista.getCounters(CounterEnumType.P1P1), 2, "no Ballista step");
         moveToMain2(game, ai);
-        assertNull(driver.mainPhaseAction(List.of()), "the futile build is not repeated");
+        assertNull(act(), "the futile build is not repeated");
         game.getAction().moveToGraveyard(needle, null);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "Ballista's step: a refill toward its pump");
+        assertSame(act(), manaOf(basalt), "Ballista's step: a refill toward its pump");
     }
 
     // With no opponent able to lose, the driver goes on only while Ballista can kill the loss blocker that stops one
@@ -970,9 +988,9 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertFalse(ComboSignals.denied(ai, line(KINNAN_BASALT), t), "signal 2 reads the target, not the activation");
         assertEquals(LoopPool.stockTarget(ai, line(KINNAN_BASALT)), LoopPool.TARGET);
         assertFalse(LoopSinks.ballistaCanShoot(ai));
-        assertNull(driver.mainPhaseAction(List.of()), "no go-off: Ballista cannot shoot the Angel");
+        assertNull(act(), "no go-off: Ballista cannot shoot the Angel");
         game.getAction().moveToGraveyard(needle, null);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "Ballista can: a refill toward its pump");
+        assertSame(act(), manaOf(basalt), "Ballista can: a refill toward its pump");
     }
 
     // A cast is for what the kill needs and never more, and never with X = 0: the opponent at 20, Ballista in our hand.
@@ -986,7 +1004,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertNull(LoopSinks.ballista(ai), "no X of 0");
         assertEquals(LoopSinks.ballistaPool(ai), 40);
         floatColourless(49);
-        final SpellAbility cast = driver.mainPhaseAction(List.of());
+        final SpellAbility cast = act();
         assertNotNull(cast, "a go-off starts");
         assertTrue(cast.isSpell(), "the cast at once: " + cast);
         assertEquals(cast.getXManaCostPaid(), Integer.valueOf(20), "what the kill needs, not half the pool");
@@ -1083,7 +1101,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         ai.getManaPool().clearPool(false);
         moveToMain2(game, ai);
         addCard("Pithing Needle", opp).setNamedCards(List.of(BALLISTA));
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "not futile: Ballista spent in it");
+        assertSame(act(), manaOf(basalt), "not futile: Ballista spent in it");
     }
 
     // A round of Ballista's breaks a run of idle stock rounds, as any round the idle rule does not judge does (spec
@@ -1111,7 +1129,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         assertEquals(drive(MAX_ACTIONS).size(), 4, "built to 2 again, then the walk's turn");
         driver.noteStockPlay(counter);
         ai.getManaPool().clearPool(false);
-        assertNotNull(driver.mainPhaseAction(List.of()), "one idle round since Ballista's, not two");
+        assertNotNull(act(), "one idle round since Ballista's, not two");
     }
 
     // A ping spends no mana, so it needs no boundary: Basalt Monolith tapped (its untap payable by our three Islands)
@@ -1127,7 +1145,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         ballistaOnOurs(3);
         assertTrue(LoopCycles.ready(ai, line(KINNAN_BASALT)), "the line can run: its untap is payable");
         assertFalse(LoopCycles.boundary(ai, line(KINNAN_BASALT)), "mid-cycle");
-        final SpellAbility first = driver.mainPhaseAction(List.of());
+        final SpellAbility first = act();
         assertNotNull(first, "a go-off starts");
         assertEquals(first.getApi(), ApiType.DealDamage, "a ping first: " + first);
     }
@@ -1144,16 +1162,16 @@ public class ComboLoopBallistaAiTest extends AITest {
         opp.setLife(10, null);
         ballistaOnOurs(1);
         addCard(HARSH_MENTOR, opp);
-        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 38L, "nine pumps and ten pings at 2 each");
-        assertEquals(LoopSinks.volleyLife(ai, 3, 2), 38L + 26L, "and 13 cycles for the 36 mana");
+        assertEquals(volleyLifeOf(3, 0), 38L, "nine pumps and ten pings at 2 each");
+        assertEquals(volleyLifeOf(3, 2), 38L + 26L, "and 13 cycles for the 36 mana");
         floatColourless(35);
-        assertEquals(LoopSinks.volleyLife(ai, 3, 2), 38L + 4L, "one mana short: two cycles");
+        assertEquals(volleyLifeOf(3, 2), 38L + 4L, "one mana short: two cycles");
         floatColourless(1);
-        assertEquals(LoopSinks.volleyLife(ai, 3, 2), 38L, "the pool pays it: no cycle");
-        assertEquals(LoopSinks.volleyLife(ai, 0, 2), 38L, "no cycle is needed, whatever it nets");
+        assertEquals(volleyLifeOf(3, 2), 38L, "the pool pays it: no cycle");
+        assertEquals(volleyLifeOf(0, 2), 38L, "no cycle is needed, whatever it nets");
         ai.getManaPool().clearPool(false);
-        assertEquals(LoopSinks.volleyLife(ai, 0, 2), Long.MAX_VALUE, "cycles that net nothing never make the mana");
-        assertEquals(LoopSinks.volleyLife(ai, -1, 2), Long.MAX_VALUE, "nor do cycles that net less");
+        assertEquals(volleyLifeOf(0, 2), Long.MAX_VALUE, "cycles that net nothing never make the mana");
+        assertEquals(volleyLifeOf(-1, 2), Long.MAX_VALUE, "nor do cycles that net less");
     }
 
     // The mana is what the engine charges now, a tax included: under the opponent's Suppression Field ({2} more for an
@@ -1166,7 +1184,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         ballistaOnOurs(1);
         addCard(HARSH_MENTOR, opp);
         addCard("Suppression Field", opp);
-        assertEquals(LoopSinks.volleyLife(ai, 3, 2), 34L, "26 mana: 10 cycles at 2, then 3 pumps and 4 pings at 2");
+        assertEquals(volleyLifeOf(3, 2), 34L, "26 mana: 10 cycles at 2, then 3 pumps and 4 pings at 2");
     }
 
     // Ballista in our hand, its cast at most X = 100 from the loop's pool of 200: the opponent's 20 needs the cast at
@@ -1178,10 +1196,10 @@ public class ComboLoopBallistaAiTest extends AITest {
         opp.setLife(20, null);
         ballistaInHand();
         addCard(HARSH_MENTOR, opp);
-        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 40L, "twenty pings at 2, no pump");
-        assertEquals(LoopSinks.volleyLife(ai, 3, 2), 40L + 30L, "and the 40 mana of the cast takes 15 cycles at 2");
+        assertEquals(volleyLifeOf(3, 0), 40L, "twenty pings at 2, no pump");
+        assertEquals(volleyLifeOf(3, 2), 40L + 30L, "and the 40 mana of the cast takes 15 cycles at 2");
         opp.setLife(150, null);
-        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 400L, "fifty pumps and 150 pings at 2 each");
+        assertEquals(volleyLifeOf(3, 0), 400L, "fifty pumps and 150 pings at 2 each");
     }
 
     // The cast is priced too: under the opponent's Spellshock (2 damage to a player for each spell they cast)
@@ -1193,9 +1211,9 @@ public class ComboLoopBallistaAiTest extends AITest {
         opp.setLife(20, null);
         ballistaInHand();
         addCard(SPELLSHOCK, opp);
-        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 2L, "the cast alone");
+        assertEquals(volleyLifeOf(3, 0), 2L, "the cast alone");
         ballistaOnOurs(1);
-        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 0L, "a Ballista on our battlefield: no cast, nothing priced");
+        assertEquals(volleyLifeOf(3, 0), 0L, "a Ballista on our battlefield: no cast, nothing priced");
     }
 
     // Only a kill this turn is worth our life: the opponent's Leyline of Sanctity (player hexproof) leaves no ping to
@@ -1210,7 +1228,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         ballistaOnOurs(1);
         game.getAction().checkStateEffects(true);
         assertEquals(LoopSinks.lethalNeeded(ai), 0, "no opponent a ping can target");
-        assertEquals(LoopSinks.volleyLife(ai, 3, 0), Long.MAX_VALUE, "priced, and no kill to pay for");
+        assertEquals(volleyLifeOf(3, 0), Long.MAX_VALUE, "priced, and no kill to pay for");
         final List<Act> acts = drive(MAX_ACTIONS);
         assertTrue(acts.isEmpty(), "a pump or an untap that costs life: " + acts);
     }
@@ -1227,7 +1245,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         ballistaInHand();
         addCard(HARSH_MENTOR, opp);
         addCard("Sphere of Resistance", opp);
-        assertEquals(LoopSinks.volleyLife(ai, 1, 2), 124L, "41 mana: 42 cycles at 2, and twenty pings at 2");
+        assertEquals(volleyLifeOf(1, 2), 124L, "41 mana: 42 cycles at 2, and twenty pings at 2");
     }
 
     // The counters the cast leaves are the loop's pool of 200 less the tax, halved, and the cast's mana is at most that
@@ -1241,7 +1259,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         ballistaInHand();
         addCard(HARSH_MENTOR, opp);
         addCard("Sphere of Resistance", opp);
-        assertEquals(LoopSinks.volleyLife(ai, 1, 2), 1212L, "51 pumps, 150 pings and 405 cycles at 2 each");
+        assertEquals(volleyLifeOf(1, 2), 1212L, "51 pumps, 150 pings and 405 cycles at 2 each");
     }
 
     // Cycles that cost nothing are never in the price, whatever they net: Ballista in our hand against the opponent's
@@ -1252,8 +1270,8 @@ public class ComboLoopBallistaAiTest extends AITest {
         opp.setLife(20, null);
         ballistaInHand();
         addCard(HARSH_MENTOR, opp);
-        assertEquals(LoopSinks.volleyLife(ai, 0, 0), 40L, "cycles that net nothing and cost nothing");
-        assertEquals(LoopSinks.volleyLife(ai, -1, 0), 40L, "cycles that net less and cost nothing");
+        assertEquals(volleyLifeOf(0, 0), 40L, "cycles that net nothing and cost nothing");
+        assertEquals(volleyLifeOf(-1, 0), 40L, "cycles that net less and cost nothing");
     }
 
     // The pumps the volley still needs are the counters all our Ballistas lack together: two on our battlefield with
@@ -1265,7 +1283,16 @@ public class ComboLoopBallistaAiTest extends AITest {
         ballistaOnOurs(1);
         ballistaOnOurs(1);
         addCard(HARSH_MENTOR, opp);
-        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 36L, "eight pumps and ten pings at 2 each");
+        assertEquals(volleyLifeOf(3, 0), 36L, "eight pumps and ten pings at 2 each");
+    }
+
+    // A board with no Walking Ballista of ours, on the battlefield or in our hand, prices no volley (volleyLife's
+    // documented contract): 0 whatever the cycles cost, and no random number.
+    @Test
+    public void aBoardWithNoBallistaPricesNoVolley() {
+        start();
+        addCard(HARSH_MENTOR, opp);
+        assertEquals(volleyLifeOf(3, 2), 0L, "no Ballista of ours: nothing is priced");
     }
 
     // ---- the final review's round 1: what its mutation pass's round 3 found untested ----
@@ -1281,10 +1308,10 @@ public class ComboLoopBallistaAiTest extends AITest {
         opp.setLife(2, null);
         ballistaOnOurs(5);
         addCard(HARSH_MENTOR, opp);
-        assertEquals(LoopSinks.volleyLife(ai, 3, 0), 4L, "two pings at 2 each, no pump");
+        assertEquals(volleyLifeOf(3, 0), 4L, "two pings at 2 each, no pump");
         ai.setLife(4, null);
         game.getAction().checkStateEffects(true);
-        assertNull(driver.mainPhaseAction(List.of()), "the volley costs all our life: not taken");
+        assertNull(act(), "the volley costs all our life: not taken");
 
         start();
         opp.setLife(2, null);
@@ -1292,7 +1319,7 @@ public class ComboLoopBallistaAiTest extends AITest {
         addCard(HARSH_MENTOR, opp);
         ai.setLife(5, null);
         game.getAction().checkStateEffects(true);
-        final SpellAbility first = driver.mainPhaseAction(List.of());
+        final SpellAbility first = act();
         assertNotNull(first, "one life more: the volley is affordable, a go-off");
         assertEquals(first.getApi(), ApiType.DealDamage, "a ping first: " + first);
     }

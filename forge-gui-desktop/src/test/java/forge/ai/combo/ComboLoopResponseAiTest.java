@@ -287,6 +287,15 @@ public class ComboLoopResponseAiTest extends AITest {
         return items;
     }
 
+    // the driver's response (LoopDriver.responseAction), which draws no random number (the driver's decision code
+    // draws none, spec section 7)
+    private SpellAbility answer() {
+        final long before = MyRandom.callCount();
+        final SpellAbility sa = driver.responseAction();
+        assertEquals(MyRandom.callCount() - before, 0, "a driver response drew");
+        return sa;
+    }
+
     /** Plays the driver's responses, one decision at a time, each through the AI's own play path
      *  (PlayerControllerAi.playChosenSpellAbility: paid, then resolved at once or put on the stack), the stack then
      *  resolved down to {@code removal}'s item, which stays, until the driver returns null, the game is over or
@@ -301,7 +310,7 @@ public class ComboLoopResponseAiTest extends AITest {
                 break;
             }
             final long before = MyRandom.callCount();
-            final SpellAbility sa = driver.responseAction();
+            final SpellAbility sa = answer();
             decisionDraws += MyRandom.callCount() - before;
             if (sa == null) {
                 break;
@@ -473,9 +482,9 @@ public class ComboLoopResponseAiTest extends AITest {
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
         assertTrue(LoopResponse.volleyActions(ai, line(KINNAN_BASALT)) > LoopRounds.TURN_CAP, "a volley past the cap");
-        assertNull(driver.responseAction(), "no response");
+        assertNull(answer(), "no response");
         opp.setLife(20, null);
-        assertSame(driver.responseAction(), manaOf(basalt), "the control: the opponent at 20");
+        assertSame(answer(), manaOf(basalt), "the control: the opponent at 20");
     }
 
     // Murder on Ballista itself: the volley happens first, every step above Murder, and the opponent loses before
@@ -507,14 +516,14 @@ public class ComboLoopResponseAiTest extends AITest {
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
         assertTrue(LoopCycles.ready(ai, line(KINNAN_BASALT)), "the line can run");
-        assertNull(driver.responseAction(), "no Ballista");
+        assertNull(answer(), "no Ballista");
         addCardToZone(BALLISTA, ai, ZoneType.Hand);
-        assertNull(driver.responseAction(), "a Ballista in our hand");
+        assertNull(answer(), "a Ballista in our hand");
         addCard("Leyline of Anticipation", ai);
         assertTrue(LoopSinks.ballistaCanShoot(ai), "with flash, the Ballista in our hand could be cast");
-        assertNull(driver.responseAction(), "a Ballista in our hand, though it has flash");
+        assertNull(answer(), "a Ballista in our hand, though it has flash");
         ballista(1);
-        assertSame(driver.responseAction(), manaOf(basalt), "the control: a Ballista on our battlefield");
+        assertSame(answer(), manaOf(basalt), "the control: a Ballista on our battlefield");
     }
 
     // R5: Palinchron, Nyxbloom Ancient, seven lands (four Islands, three Forests) and Ballista, no Basalt Monolith, so
@@ -539,11 +548,11 @@ public class ComboLoopResponseAiTest extends AITest {
         assertTrue(t.executable().contains(line(RECAST)), "the recast is executable");
         assertTrue(LoopSinks.ballistaCanShoot(ai), "Ballista can shoot");
         assertTrue(LoopResponse.threatens(ai, game.getStack().peek(), List.of(nyxbloom, ballista)), "Murder threatens");
-        assertNull(driver.responseAction(), "the recast is sorcery speed");
+        assertNull(answer(), "the recast is sorcery speed");
         game.getStack().clear();
         basalt = addCard(BASALT, ai);
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
-        assertNull(driver.responseAction(), "Murder on a piece of the recast alone");
+        assertNull(answer(), "Murder on a piece of the recast alone");
         game.getStack().clear();
         final Card murder = ComboLoopBoards.theirSpellOn(game, opp, MURDER, nyxbloom);
         assertEquals(LoopCycles.net(ai, line(RECAST)), 10, "the recast's net a cycle");
@@ -611,9 +620,9 @@ public class ComboLoopResponseAiTest extends AITest {
         final Card murder = ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
         assertEquals(LoopResponse.volleyActions(ai, line(KINNAN_BASALT)), 21L, "the volley's actions");
         driver.useRounds(new LoopRounds(20, 100));
-        assertNull(driver.responseAction(), "21 actions under a turn's cap of 20");
+        assertNull(answer(), "21 actions under a turn's cap of 20");
         driver.useRounds(new LoopRounds(100, 20));
-        assertNull(driver.responseAction(), "21 actions under a game's cap of 20");
+        assertNull(answer(), "21 actions under a game's cap of 20");
         driver.useRounds(new LoopRounds(21, 100));
         assertEquals(respond(murder, 1), List.of(manaOf(basalt)), "the first tap");
         assertEquals(LoopResponse.volleyActions(ai, line(KINNAN_BASALT)), 23L, "mid-cycle, the sum errs high");
@@ -638,9 +647,9 @@ public class ComboLoopResponseAiTest extends AITest {
         final Card murder = ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
         assertEquals(LoopResponse.volleyActions(ai, line(KINNAN_BASALT)), 21L, "the volley's actions");
         driver.useRounds(afterActions(new LoopRounds(30, 100), 10));
-        assertNull(driver.responseAction(), "21 actions, 20 of a turn's cap of 30 left");
+        assertNull(answer(), "21 actions, 20 of a turn's cap of 30 left");
         driver.useRounds(afterActions(new LoopRounds(100, 30), 10));
-        assertNull(driver.responseAction(), "21 actions, 20 of a game's cap of 30 left");
+        assertNull(answer(), "21 actions, 20 of a game's cap of 30 left");
         driver.useRounds(afterActions(new LoopRounds(30, 100), 9));
         assertEquals(respond(murder, 1), List.of(manaOf(basalt)), "21 actions, 21 left: the first tap");
         final List<SpellAbility> acts = respond(murder, MAX_ACTIONS);
@@ -661,7 +670,7 @@ public class ComboLoopResponseAiTest extends AITest {
         opp.setLife(3, null);
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
-        final SpellAbility first = driver.responseAction();
+        final SpellAbility first = answer();
         assertNotNull(first, "a response");
         assertEquals(first.getApi(), ApiType.DealDamage, "a ping first");
         ai.getController().playChosenSpellAbility(first);
@@ -688,7 +697,7 @@ public class ComboLoopResponseAiTest extends AITest {
         game.getAction().checkStaticAbilities();
         assertFalse(LoopSinks.ballistaCanShoot(ai), "a hexproof opponent");
         assertTrue(LoopSinks.ballistaPool(ai) >= 0, "Ballista still has a step");
-        assertNull(driver.responseAction(), "the response went on");
+        assertNull(answer(), "the response went on");
     }
 
     // R25 in response: Ballista with five counters, the opponent at 3, Murder on Kinnan. The first ping lands (3 to
@@ -713,7 +722,7 @@ public class ComboLoopResponseAiTest extends AITest {
         assertEquals(rest.get(0).getApi(), ApiType.DealDamage, "a ping");
         assertEquals(opp.getLife(), 2, "the second ping was prevented");
         assertTrue(LoopSinks.ballistaCanShoot(ai), "Ballista can still shoot");
-        assertNull(driver.responseAction(), "the volley is over for the phase");
+        assertNull(answer(), "the volley is over for the phase");
         assertEquals(decisionDraws, 0, "the driver's decisions drew");
     }
 
@@ -728,15 +737,15 @@ public class ComboLoopResponseAiTest extends AITest {
         opp.setLife(3, null);
         theirTurn();
         final Card murder = ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
-        final SpellAbility ping = driver.responseAction();
+        final SpellAbility ping = answer();
         assertNotNull(ping, "a response");
         assertEquals(ping.getApi(), ApiType.DealDamage, "a ping first");
         ai.getController().playChosenSpellAbility(ping);
         assertSame(game.getStack().peek().getActivatingPlayer(), ai, "our ping on top");
-        assertNull(driver.responseAction(), "an action above our own ping");
+        assertNull(answer(), "an action above our own ping");
         resolveDownTo(murder);
         assertEquals(opp.getLife(), 2, "the ping resolved");
-        assertNotNull(driver.responseAction(), "the volley went no further");
+        assertNotNull(answer(), "the volley went no further");
     }
 
     // An empty stack holds nothing to answer (AiController asks the driver only above a stack, and MagicStack.peek is
@@ -749,9 +758,9 @@ public class ComboLoopResponseAiTest extends AITest {
         ballista(1);
         theirTurn();
         assertTrue(game.getStack().isEmpty(), "the stack holds an item");
-        assertNull(driver.responseAction(), "an empty stack");
+        assertNull(answer(), "an empty stack");
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
-        assertSame(driver.responseAction(), manaOf(basalt), "the control: Murder on Kinnan");
+        assertSame(answer(), manaOf(basalt), "the control: Murder on Kinnan");
     }
 
     // The driver checks that the game is still on before it returns an action (section 7: a game that times out is
@@ -769,9 +778,9 @@ public class ComboLoopResponseAiTest extends AITest {
             ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
             if (over) {
                 game.setAge(GameStage.GameOver);
-                assertNull(driver.responseAction(), "the game is over");
+                assertNull(answer(), "the game is over");
             } else {
-                assertSame(driver.responseAction(), manaOf(basalt), "the game is on");
+                assertSame(answer(), manaOf(basalt), "the game is on");
             }
         }
     }
@@ -794,7 +803,7 @@ public class ComboLoopResponseAiTest extends AITest {
         final List<SpellAbility> acts = respond(murder, MAX_ACTIONS);
         assertEquals(acts, List.of(manaOf(basalt), untapOf(basalt)), "the tap and the untap");
         assertTrue(basalt.isUntapped(), "the untap resolved");
-        assertNull(driver.responseAction(), "the line is failed for the phase");
+        assertNull(answer(), "the line is failed for the phase");
     }
 
     // R21's judge of the action returned last holds in response, as in a main phase: Basalt tapped, three untapped
@@ -811,8 +820,8 @@ public class ComboLoopResponseAiTest extends AITest {
         basalt.setTapped(true);
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
-        assertSame(driver.responseAction(), untapOf(basalt), "the first step: the untap");
-        assertNull(driver.responseAction(), "the same untap again, nothing changed: its line is failed");
+        assertSame(answer(), untapOf(basalt), "the first step: the untap");
+        assertNull(answer(), "the same untap again, nothing changed: its line is failed");
 
         start();
         final Card kinnan2 = rock();
@@ -876,10 +885,10 @@ public class ComboLoopResponseAiTest extends AITest {
         final Card bear = ComboLoopBoards.ready(addCard(BEAR, ai));
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, bear);
-        assertNull(driver.responseAction(), "Murder on a Runeclaw Bear");
+        assertNull(answer(), "Murder on a Runeclaw Bear");
         game.getStack().clear();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
-        assertSame(driver.responseAction(), manaOf(basalt), "the control: Murder on Kinnan");
+        assertSame(answer(), manaOf(basalt), "the control: Murder on Kinnan");
     }
 
     // A piece of any instant-speed line that can run is the response's to save, not only of the line it runs: Kinnan
@@ -898,7 +907,7 @@ public class ComboLoopResponseAiTest extends AITest {
         assertEquals(LoopCycles.net(ai, line(KINNAN_BASALT)), 1);
         assertFalse(line(FLICKER).names().contains(KINNAN));
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
-        assertSame(driver.responseAction(), manaOf(islands.get(0)), "the flicker goes off");
+        assertSame(answer(), manaOf(islands.get(0)), "the flicker goes off");
     }
 
     // Removal aimed at the Monolith, the case section 6.6 put to Evan beside Kinnan's: the opponent's Shatter on Basalt
@@ -933,7 +942,7 @@ public class ComboLoopResponseAiTest extends AITest {
         ballista(1);
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, onOurBattlefield(DEADEYE));
-        assertSame(driver.responseAction(), manaOf(islands.get(0)), "Murder on Deadeye Navigator");
+        assertSame(answer(), manaOf(islands.get(0)), "Murder on Deadeye Navigator");
     }
 
     // Section 6.6 reads "a spell or ability on the stack": an opponent's ability draws the response as a spell does. An
@@ -958,7 +967,7 @@ public class ComboLoopResponseAiTest extends AITest {
         destroy.getTargets().add(basalt);
         game.getStack().add(destroy);
         assertFalse(game.getStack().peek().getSpellAbility().isSpell(), "an ability");
-        assertSame(driver.responseAction(), manaOf(basalt), "an activated ability on Basalt");
+        assertSame(answer(), manaOf(basalt), "an activated ability on Basalt");
 
         start();
         final Card kinnan = rock();
@@ -972,7 +981,7 @@ public class ComboLoopResponseAiTest extends AITest {
         inner.getTargets().add(kinnan);
         game.getStack().add(new WrappedAbility(trigger, inner, null));
         assertTrue(game.getStack().peek().getSpellAbility().isWrapper(), "a triggered ability");
-        assertSame(driver.responseAction(), manaOf(basalt), "a trigger on Kinnan");
+        assertSame(answer(), manaOf(basalt), "a trigger on Kinnan");
     }
 
     // The "all" forms and a removal on a part after the first: Wrath of God (destroy all creatures), Pyroclasm (2
@@ -1109,13 +1118,13 @@ public class ComboLoopResponseAiTest extends AITest {
         theirTurn();
         final Card murder = ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
         game.getAction().checkStateEffects(true);
-        final SpellAbility tap = driver.responseAction();
+        final SpellAbility tap = answer();
         assertSame(tap, manaOf(basalt), "the response starts with Basalt's tap");
         ai.getController().playChosenSpellAbility(tap);
         resolveDownTo(murder);
         ai.setLife(ai.getLife() - 1, null);
         game.getAction().checkStateEffects(true);
-        assertNull(driver.responseAction(), "the line fails: the response is over");
+        assertNull(answer(), "the line fails: the response is over");
     }
 
     // ---- the final review's round 1: what its mutation pass's round 2 found untested ----

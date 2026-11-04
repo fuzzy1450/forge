@@ -333,8 +333,9 @@ public class ComboLoopThrasiosAiTest extends AITest {
         while (acts.size() < max) {
             game.getAction().checkStateEffects(true);
             final long before = MyRandom.callCount();
-            final SpellAbility sa = driver.mainPhaseAction(List.of());
+            final SpellAbility sa = act();
             decisionDraws += MyRandom.callCount() - before;
+            assertEquals(MyRandom.callCount() - before, 0, "a driver decision drew");
             if (sa == null) {
                 break;
             }
@@ -355,12 +356,13 @@ public class ComboLoopThrasiosAiTest extends AITest {
         while (acts.size() < max && !game.isGameOver()) {
             game.getAction().checkStateEffects(true);
             final long before = MyRandom.callCount();
-            SpellAbility sa = driver.mainPhaseAction(List.of());
+            SpellAbility sa = act();
             if (sa == null) {
                 asks++;
                 sa = driver.afterStockWalk();
             }
             decisionDraws += MyRandom.callCount() - before;
+            assertEquals(MyRandom.callCount() - before, 0, "a driver decision drew");
             if (sa == null) {
                 break;
             }
@@ -376,7 +378,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final List<Act> acts = new ArrayList<>();
         while (acts.size() < max && !game.isGameOver()) {
             game.getAction().checkStateEffects(true);
-            SpellAbility sa = driver.mainPhaseAction(List.of());
+            SpellAbility sa = act();
             if (sa == null) {
                 sa = driver.afterStockWalk();
             }
@@ -481,7 +483,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(library(), LoopSinks.LIBRARY_FLOOR, "to four");
         assertEquals(count(ZoneType.Battlefield, MEMNITE), 1, "the drawn Memnite cast");
         assertTrue(LoopSinks.digWorth(ai, line(KINNAN_BASALT)), "Memnites left to dig for");
-        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "then none: the floor");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "then none: the floor");
     }
 
     // Thrasios digs only while the library holds a card that adds to our board (section 6.4): a library of ten
@@ -495,13 +497,13 @@ public class ComboLoopThrasiosAiTest extends AITest {
         library(COUNTERSPELL, 10);
         final ComboLines.Line l = line(KINNAN_BASALT);
         assertFalse(LoopSinks.digWorth(ai, l));
-        assertNull(LoopSinks.thrasios(ai, l));
+        assertNull(thrasiosOf(l));
         final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
         assertTrue(only(seen, Seen::dig).isEmpty(), "Thrasios dug for nothing: " + seen);
         assertEquals(library(), 10);
         addCardToZone(MEMNITE, ai, ZoneType.Library);
         assertTrue(LoopSinks.digWorth(ai, l), "a Memnite at the bottom");
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios));
+        assertSame(thrasiosOf(l), digOf(thrasios));
     }
 
     // Thrasios stops once the board is five times lethal (section 6.4, Evan: "until the board is 5x lethal"): the
@@ -522,7 +524,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(power(), 10);
         assertTrue(LoopTracker.Snapshot.of(ai).isDecisive());
         assertTrue(LoopSinks.digWorth(ai, line(KINNAN_BASALT)), "Memnites left to dig for");
-        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "Thrasios's own stop");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "Thrasios's own stop");
     }
 
     // What adds to our board (section 6.4: a card that would raise our attack power, or Chromatic Orrery), read from a
@@ -617,7 +619,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(only(dug, Seen::dig).size(), 6, "ten to four: " + dug);
         assertTrue(only(dug, s -> s.cast(ORACLE)).isEmpty(), "the stock AI cast Oracle: " + dug);
         assertTrue(ai.getCardsIn(ZoneType.Hand).contains(oracle));
-        final SpellAbility cast = driver.mainPhaseAction(List.of());
+        final SpellAbility cast = act();
         assertNotNull(cast, "the driver casts Oracle at four");
         assertTrue(cast.isSpell());
         assertSame(cast.getHostCard(), oracle);
@@ -635,7 +637,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final Card totem = addCard("Cursed Totem", opp);
         library(MEMNITE, 10);
         addCardToZone(ENDLESS_ONE, ai, ZoneType.Hand);
-        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "Thrasios's {4} refused");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "Thrasios's {4} refused");
         final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
         assertTrue(only(seen, Seen::dig).isEmpty(), "a Thrasios activation: " + seen);
         final Card cast = onOurBattlefield(ENDLESS_ONE);
@@ -643,7 +645,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(cast.getCounters(CounterEnumType.P1P1), 99);
         assertFalse(LoopTracker.Snapshot.of(ai).isDecisive(), "short of five times lethal");
         game.getAction().moveToGraveyard(totem, null);
-        assertSame(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), digOf(thrasios), "the Totem gone: a dig");
+        assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "the Totem gone: a dig");
     }
 
     // The Oracle dig's board with two Forests for the Islands, in our Main 2: no {U}{U} for Oracle, so no dig toward
@@ -713,7 +715,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertFalse(only(seen.subList(divinations.get(0), divinations.get(1)), s -> s.host() == basalt).isEmpty(),
                 "one idle round: the driver refilled for the second");
         final int untaps = untapsOf(basalt);
-        assertNull(driver.mainPhaseAction(List.of()), "two idle judged rounds: the driver refills no more");
+        assertNull(act(), "two idle judged rounds: the driver refills no more");
         ComboLoopBoards.stepUntil(game, g -> !g.getPhaseHandler().is(PhaseType.MAIN2), MAX_STEPS);
         assertEquals(untapsOf(basalt), untaps, "no refill after the two idle rounds");
     }
@@ -730,7 +732,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
             addCard(ISLAND, ai);
         }
         library(MEMNITE, 10);
-        assertNull(driver.mainPhaseAction(List.of()), "no loop runs: no go-off");
+        assertNull(act(), "no loop runs: no go-off");
         assertNull(driver.afterStockWalk(), "nor anything after the walk");
         moveToMain2(game, ai);
         final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
@@ -784,13 +786,13 @@ public class ComboLoopThrasiosAiTest extends AITest {
         addCard(LAB, ai);
         library(FOREST, 3);
         final ComboLines.Line l = line(KINNAN_BASALT);
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "below the floor, the opponent with nothing");
+        assertSame(thrasiosOf(l), digOf(thrasios), "below the floor, the opponent with nothing");
         addCard("Platinum Angel", opp);
         game.getAction().checkStateEffects(true);
         assertTrue(ai.cantWin());
-        assertNull(LoopSinks.thrasios(ai, l), "we cannot win: the floor holds");
+        assertNull(thrasiosOf(l), "we cannot win: the floor holds");
         library(FOREST, 2);
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "five cards: above the floor");
+        assertSame(thrasiosOf(l), digOf(thrasios), "five cards: above the floor");
     }
 
     // The hold's edge: our library above Oracle's threshold holds Oracle, at the threshold it does not, the driver
@@ -819,7 +821,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(library(), 4);
         assertFalse(driver.holdsOracle(castOf(oracle)), "at the threshold: no hold");
         assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
-        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "nor a dig: Oracle's cast is due");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "nor a dig: Oracle's cast is due");
         library(FOREST, 1);
         assertTrue(driver.holdsOracle(castOf(oracle)), "five again");
         final Card rod = addCard("Null Rod", opp);
@@ -896,7 +898,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         library(FOREST, 10);
         final ComboLines.Line l = line(KINNAN_BASALT);
         assertTrue(LoopSinks.digsForOracle(ai, l), "no land, but the loop's mana pays {U}{U} through Orrery");
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "the dig toward Oracle runs");
+        assertSame(thrasiosOf(l), digOf(thrasios), "the dig toward Oracle runs");
         assertTrue(driver.holdsOracle(castOf(oracle)), "and holds Oracle");
     }
 
@@ -911,10 +913,10 @@ public class ComboLoopThrasiosAiTest extends AITest {
         addCard("Chromatic Orrery", ai);
         final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
         library(FOREST, 4);
-        final SpellAbility tap = driver.mainPhaseAction(List.of());
+        final SpellAbility tap = act();
         assertSame(tap, manaOf(basalt), "the cast waits for the pool: " + tap);
         playAndResolve(tap);
-        final SpellAbility cast = driver.mainPhaseAction(List.of());
+        final SpellAbility cast = act();
         assertNotNull(cast, "Oracle's cast from the pool");
         assertTrue(cast.isSpell());
         assertSame(cast.getHostCard(), oracle);
@@ -943,10 +945,10 @@ public class ComboLoopThrasiosAiTest extends AITest {
         ai.getManaPool().clearPool(false);
         game.getAction().moveToGraveyard(ai.getCardsIn(ZoneType.Library).get(0), null);
         assertEquals(library(), 4, "Oracle's threshold");
-        final SpellAbility tap = driver.mainPhaseAction(List.of());
+        final SpellAbility tap = act();
         assertSame(tap, manaOf(basalt), "the cast waits for the pool: " + tap);
         playAndResolve(tap);
-        final SpellAbility cast = driver.mainPhaseAction(List.of());
+        final SpellAbility cast = act();
         assertNotNull(cast, "the refused cast ended nothing: Oracle's cast, the pool paying its {1}");
         assertTrue(cast.isSpell());
         assertSame(cast.getHostCard(), oracle);
@@ -965,12 +967,12 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final ComboLines.Line l = line(KINNAN_BASALT);
         final Card island = addCard(ISLAND, opp);
         island.setTapped(true);
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "their Island tapped: no mana to answer");
+        assertSame(thrasiosOf(l), digOf(thrasios), "their Island tapped: no mana to answer");
         island.setTapped(false);
-        assertNull(LoopSinks.thrasios(ai, l), "their Island untapped");
+        assertNull(thrasiosOf(l), "their Island untapped");
         island.setTapped(true);
         opp.getManaPool().addMana(new Mana((byte) ManaAtom.BLUE, island, null, opp));
-        assertNull(LoopSinks.thrasios(ai, l), "mana in their pool");
+        assertNull(thrasiosOf(l), "mana in their pool");
     }
 
     // R22 reads every opponent, and every untapped permanent of theirs that can make mana, a land or not, and no other:
@@ -986,17 +988,17 @@ public class ComboLoopThrasiosAiTest extends AITest {
         library(FOREST, 3);
         final Player other = game.getPlayers().get(2);
         final ComboLines.Line l = line(KINNAN_BASALT);
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "no opponent has mana");
+        assertSame(thrasiosOf(l), digOf(thrasios), "no opponent has mana");
         addCard(MEMNITE, opp);
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "an untapped Memnite makes no mana");
+        assertSame(thrasiosOf(l), digOf(thrasios), "an untapped Memnite makes no mana");
         final Card island = addCard(ISLAND, other);
-        assertNull(LoopSinks.thrasios(ai, l), "the second opponent's untapped Island");
+        assertNull(thrasiosOf(l), "the second opponent's untapped Island");
         island.setTapped(true);
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "their Island tapped");
+        assertSame(thrasiosOf(l), digOf(thrasios), "their Island tapped");
         final Card ring = addCard("Sol Ring", opp);
-        assertNull(LoopSinks.thrasios(ai, l), "the first opponent's untapped Sol Ring, a permanent that is no land");
+        assertNull(thrasiosOf(l), "the first opponent's untapped Sol Ring, a permanent that is no land");
         ring.setTapped(true);
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "their Sol Ring tapped");
+        assertSame(thrasiosOf(l), digOf(thrasios), "their Sol Ring tapped");
     }
 
     // The winners a dig to empty reads: Jace, Wielder of Mysteries as Laboratory Maniac is (a library of three
@@ -1009,13 +1011,13 @@ public class ComboLoopThrasiosAiTest extends AITest {
         jace.setCounters(CounterEnumType.LOYALTY, 4);
         library(FOREST, 3);
         final ComboLines.Line l = line(KINNAN_BASALT);
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "Jace: a dig below the floor");
+        assertSame(thrasiosOf(l), digOf(thrasios), "Jace: a dig below the floor");
         game.getAction().moveToGraveyard(jace, null);
-        assertNull(LoopSinks.thrasios(ai, l), "no winner: the floor");
+        assertNull(thrasiosOf(l), "no winner: the floor");
         final Card lab = addCard(LAB, ai);
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "Laboratory Maniac");
+        assertSame(thrasiosOf(l), digOf(thrasios), "Laboratory Maniac");
         frog(lab);
-        assertNull(LoopSinks.thrasios(ai, l), "a Laboratory Maniac without its abilities wins nothing");
+        assertNull(thrasiosOf(l), "a Laboratory Maniac without its abilities wins nothing");
     }
 
     // Thrasios's {4} is Thrasios's, found by its name: with Thrasios gone, another card of ours with an activated Scry
@@ -1026,7 +1028,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         game.getAction().moveToGraveyard(thrasios, null);
         addCard("Crystal Ball", ai);
         library(MEMNITE, 10);
-        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "Crystal Ball is not Thrasios");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "Crystal Ball is not Thrasios");
     }
 
     // A Thrasios that lost its abilities (the opponent's Turn to Frog) has no {4}: no dig, nothing thrown, and with no
@@ -1037,7 +1039,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         library(MEMNITE, 10);
         frog(thrasios);
         final ComboLines.Line l = line(KINNAN_BASALT);
-        assertNull(LoopSinks.thrasios(ai, l), "no ability, no dig");
+        assertNull(thrasiosOf(l), "no ability, no dig");
         assertFalse(LoopSinks.digsForOracle(ai, l));
         assertEquals(LoopSinks.oracleThreshold(ai), 2, "Oracle's own {U}{U}");
         assertTrue(only(drive(MAX_ACTIONS), Act::dig).isEmpty());
@@ -1052,11 +1054,11 @@ public class ComboLoopThrasiosAiTest extends AITest {
         library("Colossal Dreadmaw", 10);
         final ComboLines.Line l = line(KINNAN_BASALT);
         assertFalse(LoopSinks.digWorth(ai, l));
-        assertNull(LoopSinks.thrasios(ai, l));
+        assertNull(thrasiosOf(l));
         addCard(FOREST, ai);
         addCard(FOREST, ai);
         assertTrue(LoopSinks.digWorth(ai, l), "two Forests pay the {G}{G}");
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios));
+        assertSame(thrasiosOf(l), digOf(thrasios));
     }
 
     // The go-off's line reaches Thrasios's readings at every call, the start's, the walk's slot's and the driver's
@@ -1115,13 +1117,13 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertTrue(ai.cantWin(), "the Angel");
         assertEquals(LoopSinks.lethalNeeded(ai), 8, "the Angel's 4, and 1 and 3");
         assertEquals(LoopSinks.oracleThreshold(ai), 4);
-        final SpellAbility ping = driver.mainPhaseAction(List.of());
+        final SpellAbility ping = act();
         assertNotNull(ping, "a go-off: Ballista can kill the Angel");
         assertEquals(ping.getApi(), ApiType.DealDamage, "the ping first: " + ping);
         assertSame(ping.getTargets().get(0), angel, "at the Angel");
         playAndResolve(ping);
         angel.setDamage(0);
-        final SpellAbility next = driver.mainPhaseAction(List.of());
+        final SpellAbility next = act();
         assertTrue(ai.cantWin(), "the Angel stands");
         assertNotNull(next, "the go-off goes on for the other opponent");
         assertSame(next, manaOf(basalt), "a refill, no Oracle cast: " + next);
@@ -1141,7 +1143,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
             assertTrue(LoopSinks.digsForOracle(ai, l), "the dig toward Oracle before " + hoser);
             hoser(hoser);
             assertFalse(LoopSinks.digsForOracle(ai, l), hoser);
-            assertNull(LoopSinks.thrasios(ai, l), hoser);
+            assertNull(thrasiosOf(l), hoser);
             assertFalse(driver.holdsOracle(castOf(oracle)), hoser);
             assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)), hoser);
             final List<Act> acts = drive(MAX_ACTIONS);
@@ -1161,7 +1163,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         for (final String hoser : ORACLE_HOSERS) {
             final Card oracle = hoserBoard(4);
             hoser(hoser);
-            assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), hoser);
+            assertSame(act(), manaOf(basalt), hoser);
             assertTrue(ai.getCardsIn(ZoneType.Hand).contains(oracle), hoser);
         }
     }
@@ -1197,10 +1199,10 @@ public class ComboLoopThrasiosAiTest extends AITest {
         }
         final List<Act> acts = drive(MAX_ACTIONS);
         assertTrue(only(acts, Act::dig).isEmpty(), "Thrasios kept the floor: " + acts);
-        assertNull(driver.mainPhaseAction(List.of()), "the futile build is not repeated");
+        assertNull(act(), "the futile build is not repeated");
         game.getAction().moveToGraveyard(ai.getCardsIn(ZoneType.Library).get(0), null);
         assertEquals(library(), 3, "Oracle's threshold");
-        final SpellAbility cast = driver.mainPhaseAction(List.of());
+        final SpellAbility cast = act();
         assertNotNull(cast, "a go-off past the futility gate");
         assertTrue(cast.isSpell());
         assertSame(cast.getHostCard(), oracle, "Oracle's cast: " + cast);
@@ -1216,25 +1218,25 @@ public class ComboLoopThrasiosAiTest extends AITest {
     public void thrasiosTurnEndsWithThePhaseAndWhenThrasiosCannotDig() {
         start();
         library(MEMNITE, 10);
-        assertNull(driver.mainPhaseAction(List.of()), "the walk's turn first");
+        assertNull(act(), "the walk's turn first");
         final SpellAbility tap = driver.afterStockWalk();
         assertSame(tap, manaOf(basalt), "the walk chose nothing: the refill toward Thrasios's {4}");
         playAndResolve(tap);
         moveToMain2(game, ai);
         ai.getManaPool().clearPool(false);
         basalt.setTapped(false);
-        assertNull(driver.mainPhaseAction(List.of()), "a new phase: the walk asked first again");
+        assertNull(act(), "a new phase: the walk asked first again");
         final SpellAbility tap2 = driver.afterStockWalk();
         assertSame(tap2, manaOf(basalt), "it chose nothing: the refill toward Thrasios");
         playAndResolve(tap2);
-        final SpellAbility untap = driver.mainPhaseAction(List.of());
+        final SpellAbility untap = act();
         assertSame(untap, untapOf(basalt), "the refill goes on, the walk not asked");
         playAndResolve(untap);
         final Card totem = addCard("Cursed Totem", opp);
-        assertNull(driver.mainPhaseAction(List.of()), "Thrasios cannot dig: the walk's turn at the boundary");
+        assertNull(act(), "Thrasios cannot dig: the walk's turn at the boundary");
         assertNull(driver.afterStockWalk(), "nothing for Thrasios: the go-off ends");
         game.getAction().moveToGraveyard(totem, null);
-        assertNull(driver.mainPhaseAction(List.of()), "the Totem gone: the walk asked first");
+        assertNull(act(), "the Totem gone: the walk asked first");
         assertSame(driver.afterStockWalk(), manaOf(basalt), "then the refill toward Thrasios");
     }
 
@@ -1302,7 +1304,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertNotNull(onOurBattlefield(FOREST), "Thrasios revealed the Forest");
         driver.noteStockPlay(counter);
         ai.getManaPool().clearPool(false);
-        assertNotNull(driver.mainPhaseAction(List.of()), "one idle round since Thrasios's, not two");
+        assertNotNull(act(), "one idle round since Thrasios's, not two");
     }
 
     // Every Thrasios activation counts toward the caps and stamps the turn for the runaway throttle's lift: room for
@@ -1392,7 +1394,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
             start();
             library(MEMNITE, 10);
             floatColourless(4);
-            assertNull(driver.mainPhaseAction(List.of()), "the walk's turn first");
+            assertNull(act(), "the walk's turn first");
             if (over) {
                 game.setGameOver(GameEndReason.Draw);
                 assertNull(driver.afterStockWalk(), "the game is over");
@@ -1416,8 +1418,8 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(library(), LoopSinks.LIBRARY_FLOOR);
         ai.getManaPool().clearPool(false);
         moveToMain2(game, ai);
-        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "no Thrasios step");
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "not futile: Thrasios spent in it");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "no Thrasios step");
+        assertSame(act(), manaOf(basalt), "not futile: Thrasios spent in it");
     }
 
     // ---- the final review's round 1 ----
@@ -1434,7 +1436,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
         assertEquals(only(seen, Seen::dig).size(), 3, "Thrasios's activations: " + seen);
         assertEquals(library(), LoopSinks.LIBRARY_FLOOR + 7, "the floor and Jin's seven");
-        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "then none");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "then none");
     }
 
     // A mandatory draw trigger of ours that waits on another player's play cannot be counted: Nezahal, Primal Tide
@@ -1445,7 +1447,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         start();
         ComboLoopBoards.ready(addCard(NEZAHAL, ai));
         library(MEMNITE, 10);
-        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "a plain dig beside Nezahal");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "a plain dig beside Nezahal");
         final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
         assertTrue(only(seen, Seen::dig).isEmpty(), "Thrasios dug: " + seen);
         assertEquals(library(), 10);
@@ -1458,7 +1460,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         start();
         addCard(RHYSTIC, ai);
         library(MEMNITE, 5);
-        assertSame(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), digOf(thrasios), "the floor is four");
+        assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "the floor is four");
     }
 
     // The floor's reading (LoopSinks.floor), in our Main 1: four with no draw trigger of ours; one more for Phyrexian
@@ -1468,15 +1470,15 @@ public class ComboLoopThrasiosAiTest extends AITest {
     @Test
     public void theFloorCountsTheDrawsOurTriggersAreDue() {
         start();
-        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR, "no draw trigger of ours");
+        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR, "no draw trigger of ours");
         addCard("Phyrexian Arena", ai);
-        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 1, "Phyrexian Arena's one at our next upkeep");
+        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 1, "Phyrexian Arena's one at our next upkeep");
         ComboLoopBoards.ready(addCard(JIN, ai));
-        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 8, "and Jin's seven at our end step");
+        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 8, "and Jin's seven at our end step");
         addCard(RHYSTIC, ai);
-        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 8, "an optional draw adds nothing");
+        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 8, "an optional draw adds nothing");
         ComboLoopBoards.ready(addCard(NEZAHAL, ai));
-        assertEquals(LoopSinks.floor(ai), Integer.MAX_VALUE, "Nezahal's draws cannot be counted");
+        assertEquals(floorOf(), Integer.MAX_VALUE, "Nezahal's draws cannot be counted");
     }
 
     // Finding 1, R30: a draw that costs us life ends Thrasios's dig for the phase. The opponent's Fate Unraveler deals
@@ -1552,11 +1554,11 @@ public class ComboLoopThrasiosAiTest extends AITest {
         host.setSVar("TrigDraw", "DB$ Draw | Defined$ You | NumCards$ 3");
         final Trigger trigger = TriggerHandler.parseTrigger(up, host, true);
         host.addTrigger(trigger);
-        assertEquals(LoopSinks.floor(ai), base + 3, "the control");
+        assertEquals(floorOf(), base + 3, "the control");
         trigger.setSuppressed(true);
-        assertEquals(LoopSinks.floor(ai), base, "a suppressed trigger draws nothing");
+        assertEquals(floorOf(), base, "a suppressed trigger draws nothing");
         trigger.setSuppressed(false);
-        assertEquals(LoopSinks.floor(ai), base + 3, "and draws again once it is not");
+        assertEquals(floorOf(), base + 3, "and draws again once it is not");
         game.getAction().moveToGraveyard(host, null);
         assertEquals(floorWith(new String[] {up.replace("Battlefield", "Graveyard"), "DB$ Draw | Defined$ You"}),
                 base, "a trigger that works from another zone draws nothing here");
@@ -1612,11 +1614,11 @@ public class ComboLoopThrasiosAiTest extends AITest {
         ComboLoopBoards.ready(addCard(JIN, ai));
         addCard(ISLAND, opp);
         final ComboLines.Line l = line(BASALT_NYXBLOOM);
-        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 7, "the floor and Jin's seven");
+        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 7, "the floor and Jin's seven");
         assertTrue(library() > LoopSinks.oracleThreshold(ai), "the library is above Oracle's threshold");
-        assertNull(LoopSinks.thrasios(ai, l), "ten cards are not above Jin's eleven: no dig toward Oracle");
+        assertNull(thrasiosOf(l), "ten cards are not above Jin's eleven: no dig toward Oracle");
         library(FOREST, 2);
-        assertSame(LoopSinks.thrasios(ai, l), digOf(thrasios), "twelve are");
+        assertSame(thrasiosOf(l), digOf(thrasios), "twelve are");
     }
 
     // The dig to empty keeps the floor of four, whatever our triggers will draw: Laboratory Maniac wins on a draw from
@@ -1629,8 +1631,8 @@ public class ComboLoopThrasiosAiTest extends AITest {
         ComboLoopBoards.ready(addCard(JIN, ai));
         addCard(ISLAND, opp);
         library(MEMNITE, 8);
-        assertEquals(LoopSinks.floor(ai), LoopSinks.LIBRARY_FLOOR + 7, "the plain dig's floor");
-        assertSame(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), digOf(thrasios), "above four: the dig to empty");
+        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 7, "the plain dig's floor");
+        assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "above four: the dig to empty");
     }
 
     // Thrasios takes no dig that costs life (R30: a dig buys no kill this turn): the opponent's Burning-Tree Shaman
@@ -1639,9 +1641,9 @@ public class ComboLoopThrasiosAiTest extends AITest {
     public void thrasiosTakesNoDigThatCostsLife() {
         start();
         library(MEMNITE, 10);
-        assertSame(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), digOf(thrasios), "no punisher: the dig");
+        assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "no punisher: the dig");
         addCard(BURNING_TREE, opp);
-        assertNull(LoopSinks.thrasios(ai, line(KINNAN_BASALT)), "a dig that costs 1 life");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "a dig that costs 1 life");
     }
 
     // R30's measure for Thrasios: a dig that cost more life than its price (the opponent's Fate Unraveler's 1 for the
@@ -1723,9 +1725,53 @@ public class ComboLoopThrasiosAiTest extends AITest {
         end.setSVar("TrigDraw", draw);
         end.addTrigger(TriggerHandler.parseTrigger(phaseTrigger("End of Turn", "You"), end, true));
         final long before = MyRandom.callCount();
-        final int floor = LoopSinks.floor(ai);
+        final int floor = floorOf();
         assertEquals(MyRandom.callCount() - before, 0, "the floor drew");
         assertEquals(floor, LoopSinks.LIBRARY_FLOOR + 9, "each player's upkeep and our end step");
+    }
+
+    // Only the triggers on our battlefield raise the floor (as LoopSinks.floor's javadoc says and the final review's
+    // round 1 ruled, "our battlefield's" draw triggers): a mandatory upkeep draw of 3 on a card of ours in our
+    // graveyard, or in the command zone, where the trigger works from there, draws nothing here; the control, the
+    // same draw on our battlefield.
+    @Test
+    public void onlyTheTriggersOnOurBattlefieldRaiseTheFloor() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
+        for (final ZoneType zone : List.of(ZoneType.Graveyard, ZoneType.Command)) {
+            final Card host = addCardToZone(MEMNITE, ai, zone);
+            host.setSVar("TrigDraw", draw);
+            host.addTrigger(TriggerHandler.parseTrigger(
+                    phaseTrigger("Upkeep", "You").replace("Battlefield", zone.name()), host, true));
+            assertEquals(floorOf(), base, "a draw that works from our " + zone + " is not on our battlefield");
+        }
+        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "You"), draw}), base + 3, "the control");
+    }
+
+    // Thrasios's next activation (LoopSinks.thrasios), which draws no random number (spec section 7)
+    private SpellAbility thrasiosOf(final ComboLines.Line l) {
+        final long before = MyRandom.callCount();
+        final SpellAbility dig = LoopSinks.thrasios(ai, l);
+        assertEquals(MyRandom.callCount() - before, 0, "the dig's reading drew");
+        return dig;
+    }
+
+    // the go-off slot's decision (LoopDriver.mainPhaseAction), which draws no random number (the driver's decision
+    // code draws none, spec section 7)
+    private SpellAbility act() {
+        final long before = MyRandom.callCount();
+        final SpellAbility sa = driver.mainPhaseAction(List.of());
+        assertEquals(MyRandom.callCount() - before, 0, "a driver decision drew");
+        return sa;
+    }
+
+    // the floor (LoopSinks.floor), which draws no random number (spec section 7), whatever trigger it reads
+    private int floorOf() {
+        final long before = MyRandom.callCount();
+        final int floor = LoopSinks.floor(ai);
+        assertEquals(MyRandom.callCount() - before, 0, "the floor drew");
+        return floor;
     }
 
     // a phase trigger that executes TrigDraw, for that phase and the players valid
@@ -1744,7 +1790,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
             host.addTrigger(TriggerHandler.parseTrigger(tr[0], host, true));
             hosts.add(host);
         }
-        final int floor = LoopSinks.floor(ai);
+        final int floor = floorOf();
         for (final Card host : hosts) {
             game.getAction().moveToGraveyard(host, null);
         }
@@ -1757,7 +1803,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final Card host = addCard(MEMNITE, opp);
         host.setSVar("TrigDraw", drawText);
         host.addTrigger(TriggerHandler.parseTrigger(trigger, host, true));
-        final int floor = LoopSinks.floor(ai);
+        final int floor = floorOf();
         game.getAction().moveToGraveyard(host, null);
         return floor;
     }
@@ -1771,7 +1817,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
             game.getAction().moveToGraveyard(ai.getCardsIn(ZoneType.Library).get(0), null);
         }
         ai.setLife(life, null);
-        return driver.mainPhaseAction(List.of());
+        return act();
     }
 
     // R22's board: Basalt Monolith and Nyxbloom Ancient (3430-4131; no Kinnan) and Thrasios, ready, on ours, in our

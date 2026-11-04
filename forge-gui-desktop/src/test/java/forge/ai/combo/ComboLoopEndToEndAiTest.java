@@ -22,6 +22,7 @@ import org.testng.Reporter;
 import org.testng.annotations.Test;
 
 import forge.ai.AITest;
+import forge.ai.AiPlayDecision;
 import forge.ai.LobbyPlayerAi;
 import forge.deck.Deck;
 import forge.deck.io.DeckSerializer;
@@ -29,6 +30,7 @@ import forge.game.Game;
 import forge.game.GameEndReason;
 import forge.game.GameLogEntry;
 import forge.game.ability.AbilityFactory;
+import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
 import forge.game.phase.PhaseHandler;
@@ -739,14 +741,14 @@ public class ComboLoopEndToEndAiTest extends AITest {
         final Card aimed = paired();
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, aimed);
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(aimed)), "Murder aims at Palinchron as it is now");
+        assertFalse(refuses(List.of(aimed)), "Murder aims at Palinchron as it is now");
         start();
         final Card palinchron = paired();
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, WRATH);
-        assertTrue(LoopDriver.refusesBlink(ai, List.of(palinchron)), "nothing targets Palinchron");
+        assertTrue(refuses(List.of(palinchron)), "nothing targets Palinchron");
         t.useLines(List.of());
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "a deck holding no flicker line");
+        assertFalse(refuses(List.of(palinchron)), "a deck holding no flicker line");
     }
 
     // Finding 4, the anti-goal "decking itself" with Jin-Gitaxias, Core Augur on ours: thrasiosNeverDecksUs's board
@@ -782,7 +784,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
         start();
         final Card palinchron = paired();
         ComboLoopBoards.theirSpellOn(game, ai, MURDER, palinchron);
-        assertTrue(LoopDriver.refusesBlink(ai, List.of(palinchron)), "our own Murder is no opponent's item");
+        assertTrue(refuses(List.of(palinchron)), "our own Murder is no opponent's item");
     }
 
     // It reads every item on the stack, not the top one alone: their Murder aimed at Palinchron beneath their Wrath of
@@ -795,14 +797,14 @@ public class ComboLoopEndToEndAiTest extends AITest {
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
         ComboLoopBoards.theirResponse(game, opp, WRATH);
         assertEquals(game.getStack().size(), 2, "Murder beneath Wrath of God");
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Murder beneath Wrath of God");
+        assertFalse(refuses(List.of(palinchron)), "Murder beneath Wrath of God");
         start();
         final Card again = paired();
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, WRATH);
         ComboLoopBoards.theirResponse(game, opp, MURDER, again);
         assertEquals(game.getStack().size(), 2, "Murder above Wrath of God");
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(again)), "Murder above Wrath of God");
+        assertFalse(refuses(List.of(again)), "Murder above Wrath of God");
     }
 
     // It reads every part of a spell: their Severed Strands, a gain of life that targets nothing and then a destroy,
@@ -816,7 +818,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
         final SpellAbility root = game.getStack().peek().getSpellAbility();
         assertFalse(root.usesTargeting(), "the gain of life targets nothing");
         assertTrue(root.getSubAbility().usesTargeting(), "the destroy targets");
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Severed Strands's destroy aims at Palinchron");
+        assertFalse(refuses(List.of(palinchron)), "Severed Strands's destroy aims at Palinchron");
     }
 
     // It reads a trigger's ability: Flametongue Kavu's 4 damage aimed at Palinchron, wrapped as the trigger handler
@@ -835,7 +837,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
         inner.getTargets().add(palinchron);
         game.getStack().add(new WrappedAbility(trigger, inner, null));
         assertTrue(game.getStack().peek().getSpellAbility().isWrapper(), "a triggered ability");
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "the trigger's damage aims at Palinchron");
+        assertFalse(refuses(List.of(palinchron)), "the trigger's damage aims at Palinchron");
     }
 
     // It reads a target as the engine reads one at resolution: their Murder aimed at Palinchron, which Shalai, Voice of
@@ -848,7 +850,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
         game.getAction().checkStaticAbilities();
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
-        assertTrue(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Murder can no longer target Palinchron");
+        assertTrue(refuses(List.of(palinchron)), "Murder can no longer target Palinchron");
     }
 
     // R30's affordability is strict: a volley that costs exactly our life is not taken. Under the opponent's Harsh
@@ -928,9 +930,9 @@ public class ComboLoopEndToEndAiTest extends AITest {
         final Card deadeye = palinchron.getPairedWith();
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron, deadeye)), "Murder aims at the first of them");
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(deadeye, palinchron)), "Murder aims at the second of them");
-        assertTrue(LoopDriver.refusesBlink(ai, List.of(deadeye)), "Murder aims at none of these");
+        assertFalse(refuses(List.of(palinchron, deadeye)), "Murder aims at the first of them");
+        assertFalse(refuses(List.of(deadeye, palinchron)), "Murder aims at the second of them");
+        assertTrue(refuses(List.of(deadeye)), "Murder aims at none of these");
     }
 
     // It reads every target of a part: their Curtains' Call (destroy two target creatures) aimed at Deadeye Navigator
@@ -945,7 +947,62 @@ public class ComboLoopEndToEndAiTest extends AITest {
         final SpellAbility destroy = game.getStack().peek().getSpellAbility();
         assertEquals(destroy.getTargets().size(), 2, "one part, two targets");
         assertSame(destroy.getTargets().get(1), palinchron, "Palinchron the second");
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Curtains' Call's second target is Palinchron");
+        assertFalse(refuses(List.of(palinchron)), "Curtains' Call's second target is Palinchron");
+    }
+
+    // LoopDriver.refusesBlink(ai, retrieval), which draws no random number (spec section 7): every reading of the
+    // stack the tests make is bracketed, an opponent's spell, a triggered ability, a part after the first and an
+    // item of ours among them
+    private boolean refuses(final List<Card> retrieval) {
+        final long before = MyRandom.callCount();
+        final boolean refused = LoopDriver.refusesBlink(ai, retrieval);
+        assertEquals(MyRandom.callCount() - before, 0, "the blink refusal drew");
+        return refused;
+    }
+
+    // The hook in ChangeZoneAi (LoopDriver.refusesBlink), through the AI's own reading of Palinchron's flicker, Deadeye
+    // Navigator's grant, draws no random number and leaves a deck holding no line the stock's answer. Their Murder
+    // aimed at Palinchron: a yes for either deck. Palinchron flickered once (Murder's target gone, the new
+    // Palinchron paired again): the stock reads card ids, which a flicker keeps, and says yes again, which the deck
+    // holding the flicker line is refused (spec section 9). Nothing is drawn in any of the four.
+    @Test
+    public void theHookInTheStockBlinkReadingDrawsNothingAndKeepsTheStocksYesForADeckHoldingNoLine() {
+        start();
+        final Card palinchron = paired();
+        final Card deadeye = palinchron.getPairedWith();
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
+        assertEquals(weighs(flickerOf(palinchron)), AiPlayDecision.WillPlay, "Murder aims at Palinchron");
+        t.useLines(List.of());
+        assertEquals(weighs(flickerOf(palinchron)), AiPlayDecision.WillPlay, "the stock: a deck holding no line");
+        t.useLines(ComboLines.shipped());
+        final Card back = game.getAction().moveToPlay(game.getAction().exile(palinchron, null, null), null, null);
+        back.setPairedWith(deadeye);
+        deadeye.setPairedWith(back);
+        game.getAction().checkStaticAbilities();
+        assertEquals(weighs(flickerOf(back)), AiPlayDecision.CantPlayAi, "Murder's target is gone: no second flicker");
+        t.useLines(List.of());
+        assertEquals(weighs(flickerOf(back)), AiPlayDecision.WillPlay, "the stock reads card ids: yes again");
+    }
+
+    // the AI's reading of that ability (AiController.canPlaySa), which draws no random number here
+    private AiPlayDecision weighs(final SpellAbility sa) {
+        sa.setActivatingPlayer(ai);
+        final long before = MyRandom.callCount();
+        final AiPlayDecision decision = ComboLoopBoards.aiOf(ai).canPlaySa(sa);
+        assertEquals(MyRandom.callCount() - before, 0, "the stock blink reading drew");
+        return decision;
+    }
+
+    // the flicker Deadeye Navigator grants the card: its activated ChangeZone to exile that a static grants
+    private static SpellAbility flickerOf(final Card c) {
+        for (final SpellAbility sa : c.getNonManaAbilities()) {
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.ChangeZone && sa.getGrantorStatic() != null
+                    && "Exile".equals(sa.getParam("Destination"))) {
+                return sa;
+            }
+        }
+        throw new AssertionError(c + " has no flicker");
     }
 
     // ---- the final review's round 1: what its mutation pass's round 3 found untested ----
@@ -962,11 +1019,11 @@ public class ComboLoopEndToEndAiTest extends AITest {
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
         final long before = MyRandom.callCount();
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "Murder aims at Palinchron");
-        assertTrue(LoopDriver.refusesBlink(ai, List.of(deadeye)), "nothing aims at Deadeye Navigator");
+        assertFalse(refuses(List.of(palinchron)), "Murder aims at Palinchron");
+        assertTrue(refuses(List.of(deadeye)), "nothing aims at Deadeye Navigator");
         assertEquals(MyRandom.callCount() - before, 0, "the refusal drew, a deck holding the flicker line");
         t.useLines(List.of());
-        assertFalse(LoopDriver.refusesBlink(ai, List.of(palinchron)), "a deck holding no flicker line");
+        assertFalse(refuses(List.of(palinchron)), "a deck holding no flicker line");
         assertEquals(MyRandom.callCount() - before, 0, "the refusal drew, a deck holding no line");
     }
 

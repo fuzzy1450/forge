@@ -192,7 +192,7 @@ public class ComboLoopDriverAiTest extends AITest {
         while (acts.size() < max) {
             game.getAction().checkStateEffects(true);
             final long before = MyRandom.callCount();
-            final SpellAbility sa = driver.mainPhaseAction(List.of());
+            final SpellAbility sa = act();
             decisionDraws += MyRandom.callCount() - before;
             if (sa == null) {
                 break;
@@ -253,11 +253,28 @@ public class ComboLoopDriverAiTest extends AITest {
         }
     }
 
+    // the go-off slot's decision (LoopDriver.mainPhaseAction), which draws no random number (the driver's decision
+    // code draws none, spec section 7), on whichever branch the board takes it
+    private SpellAbility act() {
+        final long before = MyRandom.callCount();
+        final SpellAbility sa = driver.mainPhaseAction(List.of());
+        assertEquals(MyRandom.callCount() - before, 0, "a driver decision drew");
+        return sa;
+    }
+
+    // LoopDriver.lifeCost(ai, sa), which draws no random number, whatever it prices
+    private int priced(final SpellAbility sa) {
+        final long before = MyRandom.callCount();
+        final int life = LoopDriver.lifeCost(ai, sa);
+        assertEquals(MyRandom.callCount() - before, 0, "a price drew");
+        return life;
+    }
+
     /** The go-off slot's decision, the state-based actions checked first, as the game loop checks them before every
      *  priority (which makes the triggers of the cards a board placed active: Kinnan's mana). */
     private SpellAbility decide() {
         game.getAction().checkStateEffects(true);
-        return driver.mainPhaseAction(List.of());
+        return act();
     }
 
     /** Palinchron and Deadeye Navigator, ready on our battlefield and paired: Deadeye's flicker granted to both.
@@ -280,7 +297,7 @@ public class ComboLoopDriverAiTest extends AITest {
         kinnan();
         final Card basalt = addCard(BASALT, ai);
         endlessOne();
-        final SpellAbility first = driver.mainPhaseAction(List.of());
+        final SpellAbility first = act();
         assertNotNull(first, "a go-off starts");
         assertSame(first, manaOf(basalt), "Basalt's own mana ability");
         assertSame(first.getActivatingPlayer(), ai);
@@ -375,11 +392,11 @@ public class ComboLoopDriverAiTest extends AITest {
         addCard(GRIM, ai);
         endlessOne();
         assertEquals(LoopCycles.net(ai, line(GRIM_LINE)), 0);
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         ComboLoopBoards.ready(addCard(SAKASHIMA, ai));
         assertEquals(LoopCycles.net(ai, line(GRIM_LINE)), 0, "Sakashima as itself makes no Kinnan's mana");
         assertFalse(LoopCycles.ready(ai, line(GRIM_LINE)));
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
     }
 
     // Nothing in hand and no land to pay Kinnan's dig: nothing to spend the pool on, so no go-off; an X spell in hand
@@ -390,10 +407,10 @@ public class ComboLoopDriverAiTest extends AITest {
         kinnan();
         addCard(BASALT, ai);
         assertEquals(LoopPool.stockTarget(ai, line(KINNAN_BASALT)), 0);
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         endlessOne();
         assertEquals(LoopPool.stockTarget(ai, line(KINNAN_BASALT)), LoopPool.TARGET);
-        assertNotNull(driver.mainPhaseAction(List.of()), "an X spell in hand is something to spend on");
+        assertNotNull(act(), "an X spell in hand is something to spend on");
     }
 
     // Only our own main phase on an empty stack: the board that goes off in ours does not in another step of our turn,
@@ -406,17 +423,17 @@ public class ComboLoopDriverAiTest extends AITest {
         final Card basalt = addCard(BASALT, ai);
         endlessOne();
         game.getPhaseHandler().devModeSet(PhaseType.COMBAT_BEGIN, ai);
-        assertNull(driver.mainPhaseAction(List.of()), "our beginning of combat");
+        assertNull(act(), "our beginning of combat");
         game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, ai);
-        assertNull(driver.mainPhaseAction(List.of()), "our end step");
+        assertNull(act(), "our end step");
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
-        assertNull(driver.mainPhaseAction(List.of()), "the opponent's turn");
+        assertNull(act(), "the opponent's turn");
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
         pushAbilities(game, opp, 1);
         assertFalse(game.getStack().isEmpty());
-        assertNull(driver.mainPhaseAction(List.of()), "an item on the stack");
+        assertNull(act(), "an item on the stack");
         game.getStack().clear();
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "the control: our main phase, an empty stack");
+        assertSame(act(), manaOf(basalt), "the control: our main phase, an empty stack");
     }
 
     // Review Focus 3: two Basalt Monoliths, the tapped one first on our battlefield. The first action is the untapped
@@ -452,7 +469,7 @@ public class ComboLoopDriverAiTest extends AITest {
         addCard(BASALT, ai);
         endlessOne();
         addCard(NULL_ROD, opp);
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         final AiController brains = ComboLoopBoards.aiOf(ai);
         t.useLines(List.of());
         brains.chooseSpellAbilityToPlay(); // warm: a stock pick's first call can draw what later calls do not
@@ -492,9 +509,9 @@ public class ComboLoopDriverAiTest extends AITest {
         counterspells();
         futileMainOne(basalt);
         moveToMain2(game, ai);
-        assertNull(driver.mainPhaseAction(List.of()), "the same hand and battlefield");
+        assertNull(act(), "the same hand and battlefield");
         addCard("Forest", ai);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "the battlefield changed");
+        assertSame(act(), manaOf(basalt), "the battlefield changed");
 
         start();
         kinnan();
@@ -503,7 +520,7 @@ public class ComboLoopDriverAiTest extends AITest {
         futileMainOne(basalt2);
         driver.forgetFutility();
         moveToMain2(game, ai);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt2), "no fingerprint, no refusal");
+        assertSame(act(), manaOf(basalt2), "no fingerprint, no refusal");
     }
 
     // Main 1 through the game loop: two cycles build the pool to 2, the rock ends untapped, the stock AI casts nothing
@@ -526,7 +543,7 @@ public class ComboLoopDriverAiTest extends AITest {
         ai.setLife(3, null);
         ComboLoopBoards.ready(addCard(DREADMAW, opp));
         assertEquals(ComboSignals.abandon(ai, line(KINNAN_BASALT), t), ComboSignals.Signal.DANGER);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt));
+        assertSame(act(), manaOf(basalt));
     }
 
     // Kinnan's own dig, {5}{G}{U}, paid from the loop's colourless and a Forest and an Island, is something to spend
@@ -540,7 +557,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(LoopPool.stockTarget(ai, line(KINNAN_BASALT)), 0, "a Forest alone");
         addCard("Island", ai);
         assertEquals(LoopPool.stockTarget(ai, line(KINNAN_BASALT)), 7);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt));
+        assertSame(act(), manaOf(basalt));
     }
 
     // The opponent's Null Rod arriving after the first cycle denies the line: the driver's next pick is null, and it
@@ -554,11 +571,11 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(drive(2).size(), 2, "one cycle");
         assertEquals(pool(), 1);
         final Card rod = addCard(NULL_ROD, opp);
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         game.getAction().moveToGraveyard(rod, null);
-        assertNull(driver.mainPhaseAction(List.of()), "over for the phase");
+        assertNull(act(), "over for the phase");
         moveToMain2(game, ai);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "a new phase");
+        assertSame(act(), manaOf(basalt), "a new phase");
     }
 
     // The turn's cap: 10 actions, then null for the rest of the turn, one log line; the next turn it acts again.
@@ -570,13 +587,13 @@ public class ComboLoopDriverAiTest extends AITest {
         endlessOne();
         driver.useRounds(new LoopRounds(10, 100));
         assertEquals(drive(50).size(), 10);
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         moveToMain2(game, ai);
-        assertNull(driver.mainPhaseAction(List.of()), "the rest of the turn");
+        assertNull(act(), "the rest of the turn");
         final String line = "Loop driver: stopped for the turn at 10 actions.";
         assertEquals(logged(line), 1);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai, 3);
-        assertNotNull(driver.mainPhaseAction(List.of()), "the next turn");
+        assertNotNull(act(), "the next turn");
         assertEquals(logged(line), 1);
     }
 
@@ -589,11 +606,11 @@ public class ComboLoopDriverAiTest extends AITest {
         endlessOne();
         driver.useRounds(new LoopRounds(1_000, 10));
         assertEquals(drive(50).size(), 10);
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai, 3);
-        assertNull(driver.mainPhaseAction(List.of()), "a later turn");
+        assertNull(act(), "a later turn");
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai, 5);
-        assertNull(driver.mainPhaseAction(List.of()), "and the next");
+        assertNull(act(), "and the next");
         assertEquals(logged("Loop driver: stopped for the game at 10 actions."), 1);
         assertEquals(logged("Loop driver: stopped for the turn at 1000 actions."), 0);
     }
@@ -617,7 +634,7 @@ public class ComboLoopDriverAiTest extends AITest {
         ComputerUtil.preventRunAwayActivations(dig);
         assertEquals(MyRandom.callCount() - before, 1, "a turn the driver did not act in draws");
 
-        assertNotNull(driver.mainPhaseAction(List.of()), "the driver acts");
+        assertNotNull(act(), "the driver acts");
         assertTrue(driver.liftsThrottle());
         assertTrue(LoopDriver.liftsThrottleFor(ai));
         assertFalse(LoopDriver.liftsThrottleFor(opp), "per player");
@@ -668,7 +685,7 @@ public class ComboLoopDriverAiTest extends AITest {
             }
             assertEquals(sa.getActivationsThisTurn(), 12, "twelve activations of " + sa);
         }
-        assertNotNull(driver.mainPhaseAction(List.of()), "the driver acts");
+        assertNotNull(act(), "the driver acts");
         assertTrue(driver.liftsThrottle(), "a turn the driver acted in");
         for (final SpellAbility sa : lifted) {
             final long before = MyRandom.callCount();
@@ -699,16 +716,16 @@ public class ComboLoopDriverAiTest extends AITest {
         bear.setActivatingPlayer(ai);
         sol.setActivatingPlayer(ai);
         final long before = MyRandom.callCount();
-        assertEquals(LoopDriver.lifeCost(ai, untap), 0, "no punisher");
+        assertEquals(priced(untap), 0, "no punisher");
         addCard("Harsh Mentor", opp);
-        assertEquals(LoopDriver.lifeCost(ai, untap), 2, "Harsh Mentor's 2 for the untap");
-        assertEquals(LoopDriver.lifeCost(ai, tap), 0, "a mana ability");
-        assertEquals(LoopDriver.lifeCost(ai, bear), 0, "a cast is no activation");
+        assertEquals(priced(untap), 2, "Harsh Mentor's 2 for the untap");
+        assertEquals(priced(tap), 0, "a mana ability");
+        assertEquals(priced(bear), 0, "a cast is no activation");
         addCard("Rampaging Ferocidon", opp);
-        assertEquals(LoopDriver.lifeCost(ai, bear), 1, "Ferocidon's 1 as a creature enters");
-        assertEquals(LoopDriver.lifeCost(ai, sol), 0, "an artifact enters free");
+        assertEquals(priced(bear), 1, "Ferocidon's 1 as a creature enters");
+        assertEquals(priced(sol), 0, "an artifact enters free");
         addCard("Eidolon of the Great Revel", opp);
-        assertEquals(LoopDriver.lifeCost(ai, sol), 2, "Eidolon's 2 for a spell of mana value 3 or less");
+        assertEquals(priced(sol), 2, "Eidolon's 2 for a spell of mana value 3 or less");
         assertEquals(MyRandom.callCount() - before, 0, "a price drew");
     }
 
@@ -747,7 +764,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertSame(acts.get(1), untapOf(basalt));
         assertTrue(basalt.isUntapped());
         assertEquals(pool(), 0, "the cycle raised the pool by nothing");
-        assertNull(driver.mainPhaseAction(List.of()), "the line stays failed");
+        assertNull(act(), "the line stays failed");
     }
 
     // R21: the untap returned, its cost made unpayable before it is played (the pool emptied, no land), so its payment
@@ -761,7 +778,7 @@ public class ComboLoopDriverAiTest extends AITest {
         final Card basalt = addCard(BASALT, ai);
         endlessOne();
         assertEquals(drive(1).size(), 1, "the tap");
-        final SpellAbility untap = driver.mainPhaseAction(List.of());
+        final SpellAbility untap = act();
         assertSame(untap, untapOf(basalt));
         ai.getManaPool().clearPool(false);
         ai.getController().playChosenSpellAbility(untap);
@@ -772,7 +789,7 @@ public class ComboLoopDriverAiTest extends AITest {
             ai.getManaPool().addMana(new Mana((byte) ManaAtom.COLORLESS, basalt, null, ai));
         }
         assertTrue(LoopCycles.ready(ai, line(KINNAN_BASALT)), "the line could run again");
-        assertNull(driver.mainPhaseAction(List.of()), "failed for the phase");
+        assertNull(act(), "failed for the phase");
         final List<SpellAbility> offered = ComboLoopBoards.aiOf(ai).chooseSpellAbilityToPlay();
         assertTrue(offered == null || !offered.contains(untap), "offered again: " + offered);
     }
@@ -787,7 +804,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(drive(1).size(), 1, "the tap");
         assertTrue(basalt.isTapped());
         game.setGameOver(GameEndReason.Draw);
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         assertNull(driver.afterStockWalk());
     }
 
@@ -902,11 +919,11 @@ public class ComboLoopDriverAiTest extends AITest {
         final Card basalt = addCard(BASALT, ai);
         endlessOne();
         assertEquals(drive(1).size(), 1, "the tap");
-        assertSame(driver.mainPhaseAction(List.of()), untapOf(basalt), "the untap, never played");
-        assertNull(driver.mainPhaseAction(List.of()), "nothing changed: the line is failed");
-        assertNull(driver.mainPhaseAction(List.of()), "for the phase");
+        assertSame(act(), untapOf(basalt), "the untap, never played");
+        assertNull(act(), "nothing changed: the line is failed");
+        assertNull(act(), "for the phase");
         moveToMain2(game, ai);
-        assertSame(driver.mainPhaseAction(List.of()), untapOf(basalt), "a new phase");
+        assertSame(act(), untapOf(basalt), "a new phase");
     }
 
     // R21, a cycle that loses mana: each completed cycle must raise the pool by at least 1, as measured, from a pool
@@ -938,11 +955,11 @@ public class ComboLoopDriverAiTest extends AITest {
         endlessOne();
         assertEquals(drive(2).size(), 2, "one cycle");
         final Card rod = addCard(NULL_ROD, opp);
-        assertNull(driver.mainPhaseAction(List.of()), "denied: the go-off ends for the phase");
+        assertNull(act(), "denied: the go-off ends for the phase");
         game.getAction().moveToGraveyard(rod, null);
-        assertNull(driver.mainPhaseAction(List.of()), "over for the phase");
+        assertNull(act(), "over for the phase");
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai, 3);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "Main 1 of turn 3");
+        assertSame(act(), manaOf(basalt), "Main 1 of turn 3");
     }
 
     // Several lines can run: the one with the highest net a cycle runs, though another comes first in the deck's
@@ -957,7 +974,7 @@ public class ComboLoopDriverAiTest extends AITest {
         final List<String> order = ids(t.deckLines());
         assertTrue(order.indexOf("2585-3430") < order.indexOf("3430-4131"));
         assertTrue(LoopCycles.ready(ai, line("2585-3430")), "Grim's line can run too");
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt));
+        assertSame(act(), manaOf(basalt));
     }
 
     // And with the lines the other way round: the line with the highest net runs though a lower one comes after it,
@@ -975,7 +992,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(LoopCycles.net(ai, line(KINNAN_BASALT)), 7);
         assertEquals(LoopCycles.net(ai, line("2585-3430")), 6);
         assertTrue(LoopCycles.ready(ai, line("2585-3430")), "Grim's line can run too");
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt));
+        assertSame(act(), manaOf(basalt));
     }
 
     // Some opponent must be able to lose (section 6.2): under the opponent's Lich's Mastery none can, so no go-off
@@ -990,7 +1007,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertTrue(opp.cantLose());
         assertTrue(LoopCycles.ready(ai, line(KINNAN_BASALT)));
         assertFalse(ComboSignals.denied(ai, line(KINNAN_BASALT), t));
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
     }
 
     // And for a go-off that is running (spec 6.5's stop rule, read at each of its decisions): the opponent's Lich's
@@ -1006,7 +1023,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertTrue(opp.cantLose());
         assertTrue(LoopCycles.ready(ai, line(KINNAN_BASALT)));
         assertFalse(ComboSignals.denied(ai, line(KINNAN_BASALT), t));
-        assertNull(driver.mainPhaseAction(List.of()), "the go-off ends");
+        assertNull(act(), "the go-off ends");
     }
 
     // Spec 6.5, "in a pod the driver goes on against those left": in a three-player game, with one opponent unable to
@@ -1038,7 +1055,7 @@ public class ComboLoopDriverAiTest extends AITest {
             assertSame(acts.get(0), manaOf(basalt));
             addCard("Lich's Mastery", other);
             assertTrue(other.cantLose());
-            assertNull(driver.mainPhaseAction(List.of()), "nobody can lose any more: it ends, locked " + locked);
+            assertNull(act(), "nobody can lose any more: it ends, locked " + locked);
         }
     }
 
@@ -1054,9 +1071,9 @@ public class ComboLoopDriverAiTest extends AITest {
         ComboLoopBoards.ready(addCard(BEAR, ai));
         opp.setLife(2, null); // Kinnan's 2, Dreadmaw's 6 and the Bear's 2: ten, five times 2
         assertTrue(LoopTracker.Snapshot.of(ai).isDecisive());
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         opp.setLife(20, null);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "not decisive: a go-off starts");
+        assertSame(act(), manaOf(basalt), "not decisive: a go-off starts");
     }
 
     // And for a go-off that is running, spec 6.5's "stop when the board is 5x lethal": through the game loop the stock
@@ -1076,10 +1093,10 @@ public class ComboLoopDriverAiTest extends AITest {
         assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai), "still our Main 1");
         assertTrue(LoopTracker.Snapshot.of(ai).isDecisive(), "five times lethal");
         assertEquals(pool(), LoopPool.TARGET - 99);
-        assertNull(driver.mainPhaseAction(List.of()), "the go-off ends: no refill");
+        assertNull(act(), "the go-off ends: no refill");
         opp.setLife(500, null);
         assertFalse(LoopTracker.Snapshot.of(ai).isDecisive());
-        assertNull(driver.mainPhaseAction(List.of()), "and it is over for the phase");
+        assertNull(act(), "and it is over for the phase");
     }
 
     // A rock tapped when the go-off starts: its untap, paid by our lands (the pool is empty), is the first action, and
@@ -1092,7 +1109,7 @@ public class ComboLoopDriverAiTest extends AITest {
         basalt.setTapped(true);
         endlessOne();
         assertFalse(LoopCycles.ready(ai, line(KINNAN_BASALT)), "no land to pay the untap");
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         for (int i = 0; i < 3; i++) {
             addCard("Island", ai);
         }
@@ -1235,7 +1252,7 @@ public class ComboLoopDriverAiTest extends AITest {
         final Card basalt = addCard(BASALT, ai);
         addCard("Mind Stone", ai);
         assertEquals(LoopPool.stockTarget(ai, line(KINNAN_BASALT)), 1);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "a go-off for a spend of 1");
+        assertSame(act(), manaOf(basalt), "a go-off for a spend of 1");
     }
 
     // The idle rule in the driver: each time it passes the decision to the stock walk at its target, the walk's play
@@ -1254,10 +1271,10 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(drive(50).size(), 4, "one idle round: the driver refills");
         driver.noteStockPlay(counter);
         ai.getManaPool().clearPool(false);
-        assertNull(driver.mainPhaseAction(List.of()), "two idle rounds: stopped for the phase");
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act(), "two idle rounds: stopped for the phase");
+        assertNull(act());
         moveToMain2(game, ai);
-        assertNotNull(driver.mainPhaseAction(List.of()), "a new phase");
+        assertNotNull(act(), "a new phase");
     }
 
     // A stock play the driver did not pass the priority to is no round of a go-off: the AiController reports every
@@ -1272,7 +1289,7 @@ public class ComboLoopDriverAiTest extends AITest {
         final SpellAbility counter = ai.getCardsIn(ZoneType.Hand).get(0).getFirstSpellAbility();
         driver.noteStockPlay(counter);
         driver.noteStockPlay(counter);
-        assertNotNull(driver.mainPhaseAction(List.of()), "no round was begun, so none was idle");
+        assertNotNull(act(), "no round was begun, so none was idle");
     }
 
     // The driver's round record reads a card that arrives in our hand against the loop's colours: after the walk's
@@ -1293,7 +1310,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(drive(50).size(), 12, "the round bought something: the driver refills, now to 6");
         driver.noteStockPlay(counter);
         ai.getManaPool().clearPool(false);
-        assertNotNull(driver.mainPhaseAction(List.of()), "one idle round, not two");
+        assertNotNull(act(), "one idle round, not two");
     }
 
     // The sinks' activations are the driver's own steps, never the stock AI's spend (Tasks B5 and B6 run them):
@@ -1327,7 +1344,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(LoopCycles.net(ai, line("2585-3430")), 1);
         assertFalse(LoopCycles.ready(ai, line("2585-3430")), "Nyxbloom is not on our battlefield");
         assertTrue(t.view().ready(line("2585-3430")), "the tracker's readiness: every piece reachable");
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
     }
 
     // The net reads the effects a rock's tap fires, never names: Wild Growth's TapsForMana trigger fires for its
@@ -1366,7 +1383,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(LoopCycles.net(ai, line("2585-3430")), -1, "Grim's 3, less its untap's 4");
         assertFalse(LoopCycles.ready(ai, line("2585-3430")));
         assertFalse(ComboSignals.denied(ai, line("2585-3430"), t), "no reading of signal 2");
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         assertTrue(grim.isUntapped());
     }
 
@@ -1402,7 +1419,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(ai.getCardsIn(ZoneType.Hand).size(), 2, "and cast no Counterspell");
         assertFalse(LoopTracker.Snapshot.of(ai).isDecisive());
         moveToMain2(game, ai);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "no fingerprint: a go-off starts");
+        assertSame(act(), manaOf(basalt), "no fingerprint: a go-off starts");
     }
 
     // The walk choosing nothing keeps a futile build's fingerprint only when the driver passed it the priority at its
@@ -1415,7 +1432,7 @@ public class ComboLoopDriverAiTest extends AITest {
         addCard(BASALT, ai);
         counterspells();
         assertNull(driver.afterStockWalk(), "the driver passed the walk no priority");
-        assertNotNull(driver.mainPhaseAction(List.of()), "so no futile build was kept");
+        assertNotNull(act(), "so no futile build was kept");
     }
 
     // The futility fingerprint is our hand's and our battlefield's card names, each sorted: after a futile build with
@@ -1433,13 +1450,13 @@ public class ComboLoopDriverAiTest extends AITest {
         addCard("Island", ai);
         futileMainOne(basalt);
         moveToMain2(game, ai);
-        assertNull(driver.mainPhaseAction(List.of()), "the same hand and battlefield");
+        assertNull(act(), "the same hand and battlefield");
 
         final Card first = ai.getCardsIn(ZoneType.Hand).get(0);
         final String name = first.getName();
         game.getAction().moveToHand(game.getAction().moveToLibrary(first, null), null);
         assertEquals(ai.getCardsIn(ZoneType.Hand).get(1).getName(), name, "the first card of the hand is last now");
-        assertNull(driver.mainPhaseAction(List.of()), "the same names in another order");
+        assertNull(act(), "the same names in another order");
 
         Card leak = null;
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
@@ -1451,7 +1468,7 @@ public class ComboLoopDriverAiTest extends AITest {
         game.getAction().moveToGraveyard(leak, null);
         addCardToZone("Memory Lapse", ai, ZoneType.Hand);
         assertEquals(ai.getCardsIn(ZoneType.Hand).size(), 2, "the same count");
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "another name in its place");
+        assertSame(act(), manaOf(basalt), "another name in its place");
     }
 
     // The fingerprint reads our hand as well as our battlefield: after a futile build, a third Counterspell arriving in
@@ -1464,9 +1481,9 @@ public class ComboLoopDriverAiTest extends AITest {
         counterspells();
         futileMainOne(basalt);
         moveToMain2(game, ai);
-        assertNull(driver.mainPhaseAction(List.of()), "the same hand and battlefield");
+        assertNull(act(), "the same hand and battlefield");
         addCardToZone(COUNTERSPELL, ai, ZoneType.Hand);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "the hand changed");
+        assertSame(act(), manaOf(basalt), "the hand changed");
     }
 
     // The driver's own check of each step: a rock that cannot be tapped (Basalt a summoning-sick creature under our
@@ -1482,9 +1499,9 @@ public class ComboLoopDriverAiTest extends AITest {
         assertTrue(basalt.isSick(), "Basalt is a summoning-sick creature");
         assertTrue(LoopCycles.ready(ai, line(KINNAN_BASALT)));
         assertFalse(ComboSignals.denied(ai, line(KINNAN_BASALT), t));
-        assertNull(driver.mainPhaseAction(List.of()));
+        assertNull(act());
         basalt.setSickness(false);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "no longer sick: the go-off starts");
+        assertSame(act(), manaOf(basalt), "no longer sick: the go-off starts");
     }
 
     // Signal 2 stops the driver beyond what its own check of the next step sees: the opponent's Pithing Needle naming
@@ -1501,7 +1518,7 @@ public class ComboLoopDriverAiTest extends AITest {
         tap.setActivatingPlayer(ai);
         assertTrue(tap.checkRestrictions(ai), "the tap is not barred");
         assertTrue(ComboSignals.denied(ai, line(KINNAN_BASALT), t));
-        assertNull(driver.mainPhaseAction(List.of()), "the cycle cannot close: no go-off");
+        assertNull(act(), "the cycle cannot close: no go-off");
     }
 
     // A check that fails in the middle of a go-off ends it for the phase (the plan's step 5): after one cycle our own
@@ -1518,10 +1535,10 @@ public class ComboLoopDriverAiTest extends AITest {
         addCard("March of the Machines", ai);
         game.getAction().checkStaticAbilities();
         assertTrue(basalt.isSick(), "Basalt is a summoning-sick creature");
-        assertNull(driver.mainPhaseAction(List.of()), "the tap cannot be played");
+        assertNull(act(), "the tap cannot be played");
         basalt.setSickness(false);
         ai.getManaPool().addMana(new Mana((byte) ManaAtom.COLORLESS, basalt, null, ai));
-        assertNull(driver.mainPhaseAction(List.of()), "over for the phase");
+        assertNull(act(), "over for the phase");
     }
 
     // R21: a step that fails the driver's check never burns the caps: with room for three actions a turn, ten
@@ -1538,7 +1555,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertTrue(basalt.isSick());
         driver.useRounds(new LoopRounds(3, 100));
         for (int i = 0; i < 10; i++) {
-            assertNull(driver.mainPhaseAction(List.of()), "the check refuses the tap");
+            assertNull(act(), "the check refuses the tap");
         }
         assertEquals(logged("Loop driver: stopped for the turn at 3 actions."), 0);
         basalt.setSickness(false);
@@ -1560,7 +1577,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertEquals(logged(line), 0, "the hand-off is no action");
         driver.noteStockPlay(ai.getCardsIn(ZoneType.Hand).get(0).getFirstSpellAbility());
         ai.getManaPool().clearPool(false);
-        assertNull(driver.mainPhaseAction(List.of()), "the fifth action is refused");
+        assertNull(act(), "the fifth action is refused");
         assertEquals(logged(line), 1);
     }
 
@@ -1576,12 +1593,12 @@ public class ComboLoopDriverAiTest extends AITest {
         for (int i = 0; i < LoopPool.TARGET; i++) {
             ai.getManaPool().addMana(new Mana((byte) ManaAtom.COLORLESS, basalt, null, ai));
         }
-        assertNull(driver.mainPhaseAction(List.of()), "the pool at its target at a boundary: the walk's turn");
+        assertNull(act(), "the pool at its target at a boundary: the walk's turn");
         assertFalse(driver.liftsThrottle(), "the driver returned no action");
         assertFalse(LoopDriver.liftsThrottleFor(ai));
         driver.noteStockPlay(endless.getFirstSpellAbility());
         ai.getManaPool().clearPool(false);
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "the walk spent the pool: the refill");
+        assertSame(act(), manaOf(basalt), "the walk spent the pool: the refill");
         assertTrue(driver.liftsThrottle(), "an action returned");
     }
 
@@ -1645,7 +1662,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertNotNull(offered, "the AI plays something");
         assertSame(offered.get(0).getHostCard(), oracle, "piece 1's go-off goes first: " + offered);
         assertFalse(driver.liftsThrottle(), "the loop driver did not act");
-        assertSame(driver.mainPhaseAction(List.of()), manaOf(basalt), "the driver's own go-off was ready");
+        assertSame(act(), manaOf(basalt), "the driver's own go-off was ready");
     }
 
     // The AiController calls noteStockPlay or afterStockWalk after every walk, for every AI deck: neither draws, inert
@@ -1731,7 +1748,7 @@ public class ComboLoopDriverAiTest extends AITest {
         addCard(EIDOLON, opp);
         assertEquals(LoopCycles.net(ai, line(KINNAN_BASALT)), 1, "the rock untap's net");
         assertEquals(LoopCycles.net(ai, line("x-2")), 5, "x-2's net, the higher");
-        final SpellAbility first = driver.mainPhaseAction(List.of());
+        final SpellAbility first = act();
         assertSame(first, manaOf(basalt), "the untap costs nothing: Basalt's tap, not Sol Ring's");
     }
 
@@ -1748,7 +1765,7 @@ public class ComboLoopDriverAiTest extends AITest {
         opp.setLife(2, null);
         addCard(HARSH_MENTOR, opp);
         assertEquals(LoopSinks.ballistaPool(ai), 0, "the ping needs no mana");
-        final SpellAbility first = driver.mainPhaseAction(List.of());
+        final SpellAbility first = act();
         assertNotNull(first, "the kill is affordable: a go-off");
         assertSame(first.getHostCard(), ballista, "Ballista's step: " + first);
         assertEquals(first.getApi(), ApiType.DealDamage, "a ping first: " + first);
@@ -1836,15 +1853,16 @@ public class ComboLoopDriverAiTest extends AITest {
         assertNotNull(ping, "Ballista's ping");
         pump.setActivatingPlayer(ai);
         ping.setActivatingPlayer(ai);
-        assertEquals(LoopDriver.lifeCost(ai, flicker), 0, "no punisher");
+        assertEquals(priced(flicker), 0, "no punisher");
         addCard("Rampaging Ferocidon", opp);
-        assertEquals(LoopDriver.lifeCost(ai, flicker), 1, "Ferocidon's 1 as Palinchron comes back");
-        assertEquals(LoopDriver.lifeCost(ai, pump), 0, "a pump puts nothing onto the battlefield");
-        assertEquals(LoopDriver.lifeCost(ai, ping), 0, "a ping puts nothing onto the battlefield");
+        assertEquals(priced(flicker), 1, "Ferocidon's 1 as Palinchron comes back");
+        assertEquals(priced(pump), 0, "a pump puts nothing onto the battlefield");
+        assertEquals(priced(ping), 0, "a ping puts nothing onto the battlefield");
     }
 
-    // Nothing is priced while we cannot lose life: Harsh Mentor's 2 for Basalt Monolith's untap, then 0 once our
-    // Platinum Emperion (our life total cannot change) is on our battlefield.
+    // Nothing is priced while we cannot lose life: Harsh Mentor's 2 for Basalt Monolith's untap, still 2 beside the
+    // opponent's Platinum Emperion (their life total cannot change, ours can), then 0 once our Platinum Emperion (our
+    // life total cannot change) is on our battlefield.
     @Test
     public void nothingIsPricedWhileWeCannotLoseLife() {
         start();
@@ -1853,9 +1871,11 @@ public class ComboLoopDriverAiTest extends AITest {
         final SpellAbility untap = untapOf(basalt);
         untap.setActivatingPlayer(ai);
         addCard(HARSH_MENTOR, opp);
-        assertEquals(LoopDriver.lifeCost(ai, untap), 2, "Harsh Mentor's 2 for the untap");
+        assertEquals(priced(untap), 2, "Harsh Mentor's 2 for the untap");
+        addCard("Platinum Emperion", opp);
+        assertEquals(priced(untap), 2, "their life total cannot change, ours can");
         addCard("Platinum Emperion", ai);
-        assertEquals(LoopDriver.lifeCost(ai, untap), 0, "our life total cannot change");
+        assertEquals(priced(untap), 0, "our life total cannot change");
     }
 
     // R30's measure for Walking Ballista: a step that cost more life than its price (a cost no price reads; here a
@@ -1900,7 +1920,7 @@ public class ComboLoopDriverAiTest extends AITest {
         assertSame(untap, untapOf(basalt), "the untap");
         playOut(untap);
         game.getAction().checkStateEffects(true);
-        assertNull(driver.mainPhaseAction(List.of()), "the pool is at its target at a boundary: the walk's turn");
+        assertNull(act(), "the pool is at its target at a boundary: the walk's turn");
         driver.noteStockPlay(ai.getCardsIn(ZoneType.Hand).get(0).getFirstSpellAbility());
         ai.getManaPool().clearPool(false);
         ai.setLife(ai.getLife() - 1, null);
@@ -1951,7 +1971,7 @@ public class ComboLoopDriverAiTest extends AITest {
         for (final Card rock : List.of(basalt, grim)) {
             final SpellAbility untap = untapOf(rock);
             untap.setActivatingPlayer(ai);
-            assertEquals(LoopDriver.lifeCost(ai, untap), 2, "Harsh Mentor's 2 for the untap of " + rock);
+            assertEquals(priced(untap), 2, "Harsh Mentor's 2 for the untap of " + rock);
         }
         assertSame(decide(), manaOf(basalt), "both lines cost life: Basalt's tap, the higher net, not Grim's");
 
@@ -1962,6 +1982,23 @@ public class ComboLoopDriverAiTest extends AITest {
         opp.setLife(2, null);
         addCard(HARSH_MENTOR, opp);
         assertSame(decide(), manaOf(alone), "the control: Grim Monolith's line alone, its tap");
+    }
+
+    // R30's cheap kill, decision by decision (the end-to-end test of that name plays it as a game): the rock loop
+    // under the opponent's Harsh Mentor (2 for each untap), Ballista in our hand, the opponent at 2 and we at 20.
+    // The untaps are refill steps that cost life and are taken toward a kill our life affords; Ballista's cast costs
+    // no life (Harsh Mentor punishes activations, not casts), and its two pings, 2 each, are the sink's actions that
+    // cost life; drive brackets every decision's draws.
+    @Test
+    public void aCheapKillUnderAPunisherIsPlayedDecisionByDecision() {
+        start();
+        kinnan();
+        addCard(BASALT, ai);
+        addCardToZone(LoopSinks.BALLISTA, ai, ZoneType.Hand);
+        opp.setLife(2, null);
+        addCard(HARSH_MENTOR, opp);
+        final List<SpellAbility> acts = drive(60);
+        assertTrue(opp.getLife() <= 0, "the kill was taken: " + acts.size() + " actions, " + opp.getLife() + " life");
     }
 
     // ---- the final review's round 1: what its mutation pass's round 3 found untested ----
@@ -1980,6 +2017,6 @@ public class ComboLoopDriverAiTest extends AITest {
         addCard("Platinum Angel", ai);
         game.getAction().checkStaticAbilities();
         assertTrue(ai.cantLoseForZeroOrLessLife(), "our Platinum Angel: we cannot lose for 0 or less life");
-        assertEquals(LoopDriver.lifeCost(ai, untap), 2, "priced all the same");
+        assertEquals(priced(untap), 2, "priced all the same");
     }
 }
