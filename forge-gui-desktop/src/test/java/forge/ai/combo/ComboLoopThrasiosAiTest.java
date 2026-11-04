@@ -2149,6 +2149,31 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "14 are");
     }
 
+    // ---- Faerie Mastermind's bound: what its review's mutation pass, round 1, found unpinned ----
+
+    // An inverted ValidPlayer (InvertValidPlayer: CardTraitBase.matchesValidParam then matches the players its
+    // ValidPlayer does not) is read as if it named none, every living player, not by its word. ValidPlayer$ You
+    // inverted fires on an opponent's second card. In our Main 1 of a four-player pod, nobody having drawn this turn,
+    // the three opponents can fire it in each of the floor's five turns, 15 firings, and of the plain dig's seventeen,
+    // 51, which its word read alone, us, would undercount, 5 and 17: every player is 4 + 4 * 5 = 24 and
+    // 4 + 4 * 17 = 72. In our Main 1 of a 1v1, both players in each of three turns, 4 + 6 = 10, and of nine,
+    // 4 + 18 = 22, above the opponent's 3 and 9.
+    @Test
+    public void anInvertedValidPlayerCountsEveryPlayer() {
+        fourPlayerPod();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 1";
+        final String inverted = "Mode$ Drawn | ValidPlayer$ You | InvertValidPlayer$ True | Number$ 2"
+                + " | TriggerZones$ Battlefield | Execute$ TrigDraw";
+        assertEquals(floorWith(new String[] {inverted, draw}), base + 4 * 5,
+                "inverted You in a pod: every player in each of five turns, not us alone");
+        assertEquals(plainFloorWith(inverted, draw), base + 4 * 17,
+                "inverted You in a pod: every player in each of seventeen turns, not us alone");
+        start();
+        assertEquals(floorWith(new String[] {inverted, draw}), base + 6, "inverted You: both in each of three turns");
+        assertEquals(plainFloorWith(inverted, draw), base + 18, "inverted You: both in each of nine turns");
+    }
+
     // Thrasios's next activation (LoopSinks.thrasios), which draws no random number (spec section 7)
     private SpellAbility thrasiosOf(final ComboLines.Line l) {
         final long before = MyRandom.callCount();
