@@ -728,8 +728,9 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "the Totem gone: a dig");
     }
 
-    // The Oracle dig's board with two Forests for the Islands, in our Main 2: no {U}{U} for Oracle, so no dig toward
-    // it, and nothing else in the library is worth a dig: no activation, the library ends at 4 or more (all ten).
+    // The Oracle line's board with two Forests for the Islands, in our Main 2: no {U}{U} for Oracle, so the Oracle line
+    // cannot run (amended 2026-11-04 (the Oracle window)), and nothing in the library is worth a plain dig: no
+    // activation, the library ends at 4 or more (all ten).
     @Test
     public void oracleWithoutBlueKeepsTheFloor() {
         start();
@@ -740,13 +741,13 @@ public class ComboLoopThrasiosAiTest extends AITest {
         library(FOREST, 10);
         assertFalse(LoopSinks.digsForOracle(ai, line(KINNAN_BASALT)), "no {U}{U}");
         final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN2));
-        assertTrue(only(seen, Seen::dig).isEmpty(), "an Oracle dig: " + seen);
+        assertTrue(only(seen, Seen::dig).isEmpty(), "a dig: " + seen);
         assertTrue(library() >= LoopSinks.LIBRARY_FLOOR, "the floor kept");
         assertEquals(library(), 10);
         assertTrue(ai.getCardsIn(ZoneType.Hand).contains(oracle));
         addCard(ISLAND, ai);
         addCard(ISLAND, ai);
-        assertTrue(LoopSinks.digsForOracle(ai, line(KINNAN_BASALT)), "two Islands: the dig would run");
+        assertTrue(LoopSinks.digsForOracle(ai, line(KINNAN_BASALT)), "two Islands: the Oracle line could run");
     }
 
     // With Laboratory Maniac on our battlefield the floor does not apply (section 6.4 step 3): a library of six
