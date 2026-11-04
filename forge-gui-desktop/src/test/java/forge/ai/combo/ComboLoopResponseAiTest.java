@@ -7,6 +7,8 @@ import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -210,6 +212,16 @@ public class ComboLoopResponseAiTest extends AITest {
         throw new AssertionError(c + " has no untap");
     }
 
+    /** The card's own activated PutCounter ability: Walking Ballista's {4} pump. */
+    private static SpellAbility pumpOf(final Card c) {
+        for (final SpellAbility sa : c.getNonManaAbilities()) {
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.PutCounter) {
+                return sa;
+            }
+        }
+        throw new AssertionError(c + " has no pump");
+    }
+
     /** Our first card on our battlefield by its printed name (ComboTracker.nameOf), or null. */
     private Card onOurBattlefield(final String name) {
         for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
@@ -377,6 +389,17 @@ public class ComboLoopResponseAiTest extends AITest {
             assertTrue(rounds.act(ai), "an action refused");
         }
         return rounds;
+    }
+
+    /** The constant of that name of the driver's private record of what an action it returned was (LoopDriver.Spent),
+     *  for a test that drives the judge of R30 by reflection. */
+    private static Object spentKind(final Class<?> spent, final String name) {
+        for (final Object k : spent.getEnumConstants()) {
+            if (((Enum<?>) k).name().equals(name)) {
+                return k;
+            }
+        }
+        throw new AssertionError("no " + name + " among " + List.of(spent.getEnumConstants()));
     }
 
     /** Our Main 1 through the game loop until the go-off has put Basalt's untap on the stack, alone there. */
@@ -1309,6 +1332,49 @@ public class ComboLoopResponseAiTest extends AITest {
                 assertEquals(after.getApi(), ApiType.DealDamage, "the control, the next ping: " + after);
             }
         }
+    }
+
+    // R30's judge takes every later step's loss out of the earlier step's (section 6.5, amended), not only the last
+    // one's: two steps returned one after the other above a new threat while an earlier one waits beneath it, each
+    // judged before the next is returned. The judge is driven as the response drives it (LoopDriver.arm and judgeLife,
+    // by reflection), the stack's size each window's end: their Murder on Kinnan on the stack, we at 60; Basalt's
+    // untap returned, priced 2 (Harsh Mentor's); their Lightning Bolt on Ballista above it; a pump returned there,
+    // priced 2, and judged at 58; a second returned and judged at 56, the untap still waiting beneath Bolt; Bolt gone
+    // and the untap's own 2 lost, it is judged at 54: its window lost 6, the pumps' 4 of it, so it cost its price,
+    // and its line goes on. A judge that took out only the last pump's 2 read 4 against 2 and failed the line.
+    @Test
+    public void everyLaterStepIsTakenOutOfTheEarlierOnesLoss() throws ReflectiveOperationException {
+        start();
+        final Card kinnan = rock();
+        final Card ballista = ballista(1);
+        ai.setLife(60, null);
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+        final Class<?> spent = Class.forName(LoopDriver.class.getName() + "$Spent");
+        final Method arm = LoopDriver.class.getDeclaredMethod("arm", SpellAbility.class, spent, int.class,
+                ComboLines.Line.class);
+        final Method judge = LoopDriver.class.getDeclaredMethod("judgeLife");
+        final Field owed = LoopDriver.class.getDeclaredField("owed");
+        final Field failed = LoopDriver.class.getDeclaredField("failed");
+        arm.setAccessible(true);
+        judge.setAccessible(true);
+        owed.setAccessible(true);
+        failed.setAccessible(true);
+        final ComboLines.Line l = line(KINNAN_BASALT);
+        arm.invoke(driver, untapOf(basalt), spentKind(spent, "CYCLE"), 2, l);
+        ComboLoopBoards.theirResponse(game, opp, BOLT, ballista);
+        for (final int after : new int[] {58, 56}) {
+            arm.invoke(driver, pumpOf(ballista), spentKind(spent, "BALLISTA"), 2, l);
+            ai.setLife(after, null);
+            judge.invoke(driver);
+        }
+        assertEquals(((List<?>) owed.get(driver)).size(), 1, "the untap judged beneath Bolt, or a pump not judged");
+        game.getStack().remove(game.getStack().peek());
+        assertEquals(game.getStack().size(), 1, "Murder alone on the stack");
+        ai.setLife(54, null);
+        judge.invoke(driver);
+        assertTrue(((List<?>) owed.get(driver)).isEmpty(), "the untap not judged once Bolt was gone");
+        assertFalse(((List<?>) failed.get(driver)).contains(KINNAN_BASALT),
+                "the untap's loss read without both pumps' 4 taken out: its line failed");
     }
 
     // The wait is the go-off in response's alone (section 6.6, amended; section 6.5's main phase stays as it was): our
