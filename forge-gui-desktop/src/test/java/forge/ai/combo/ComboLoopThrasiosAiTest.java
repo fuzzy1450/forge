@@ -2174,6 +2174,28 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(plainFloorWith(inverted, draw), base + 18, "inverted You: both in each of nine turns");
     }
 
+    // Nor is an inverted Active read as that turn's player alone (activeOnly): Player.Active inverted fires on the
+    // second card of a player whose turn it is not, so it is read as no ValidPlayer, every player in every turn. In our
+    // Main 1 of a four-player pod, nobody having drawn this turn, the three players whose turn it is not can fire it in
+    // each turn, 15 firings in the floor's five turns and 51 in the plain dig's seventeen, which that turn's player
+    // alone would undercount, 5 and 17: every player is 4 + 4 * 5 = 24 and 4 + 4 * 17 = 72. In our Main 1 of a 1v1,
+    // 4 + 6 = 10 and 4 + 18 = 22, above one player a turn, 3 and 9.
+    @Test
+    public void anInvertedActiveCountsEveryPlayer() {
+        fourPlayerPod();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 1";
+        final String inverted = "Mode$ Drawn | ValidPlayer$ Player.Active | InvertValidPlayer$ True | Number$ 2"
+                + " | TriggerZones$ Battlefield | Execute$ TrigDraw";
+        assertEquals(floorWith(new String[] {inverted, draw}), base + 4 * 5,
+                "inverted Active in a pod: every player in each of five turns, not the turn's player alone");
+        assertEquals(plainFloorWith(inverted, draw), base + 4 * 17,
+                "inverted Active in a pod: every player in each of seventeen turns, not the turn's player alone");
+        start();
+        assertEquals(floorWith(new String[] {inverted, draw}), base + 6, "inverted Active: both, three turns");
+        assertEquals(plainFloorWith(inverted, draw), base + 18, "inverted Active: both, nine turns");
+    }
+
     // Thrasios's next activation (LoopSinks.thrasios), which draws no random number (spec section 7)
     private SpellAbility thrasiosOf(final ComboLines.Line l) {
         final long before = MyRandom.callCount();
