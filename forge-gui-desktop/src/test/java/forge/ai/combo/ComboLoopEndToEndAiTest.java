@@ -24,6 +24,7 @@ import org.testng.annotations.Test;
 import forge.ai.AITest;
 import forge.ai.AiPlayDecision;
 import forge.ai.LobbyPlayerAi;
+import forge.card.mana.ManaAtom;
 import forge.deck.Deck;
 import forge.deck.io.DeckSerializer;
 import forge.game.Game;
@@ -33,6 +34,7 @@ import forge.game.ability.AbilityFactory;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
+import forge.game.mana.Mana;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.GameLossReason;
@@ -120,9 +122,11 @@ public class ComboLoopEndToEndAiTest extends AITest {
      *  each once, in their order; our stack items as each was first seen (a spell its card's name, an ability its
      *  card's name and " ability", a trigger its card's name and " trigger"); among them, our abilities that move
      *  cards off the battlefield, each its card's name, " to " and the zone they go to ("Palinchron to Exile" for
-     *  Deadeye Navigator's flicker, "Palinchron to Hand" for Palinchron's own return); its wall time. */
+     *  Deadeye Navigator's flicker, "Palinchron to Hand" for Palinchron's own return); its wall time; the most items
+     *  of ours on the stack at once after a step; and our abilities among our stack items, each its card's name, a
+     *  space and its API ("Walking Ballista DealDamage" for a ping, "Walking Ballista PutCounter" for a pump). */
     private record Play(int steps, int actions, List<String> phases, List<String> ours, List<String> moves,
-            long millis) {
+            long millis, int deepest, List<String> acts) {
         int count(final String item) {
             int n = 0;
             for (final String s : ours) {
@@ -138,6 +142,17 @@ public class ComboLoopEndToEndAiTest extends AITest {
             int n = 0;
             for (final String s : moves) {
                 if (s.equals(name + " to " + to.name())) {
+                    n++;
+                }
+            }
+            return n;
+        }
+
+        /** How many of our abilities on the stack were the card named {@code name}'s of that API. */
+        int acted(final String name, final ApiType api) {
+            int n = 0;
+            for (final String s : acts) {
+                if (s.equals(name + " " + api)) {
                     n++;
                 }
             }
@@ -224,6 +239,14 @@ public class ComboLoopEndToEndAiTest extends AITest {
     private void lands(final String name, final int n) {
         for (int i = 0; i < n; i++) {
             addCard(name, ai);
+        }
+    }
+
+    /** {@code n} colourless mana floating in our pool, made by our Basalt Monolith ({@link #rock} first). */
+    private void floating(final int n) {
+        final Card basalt = onOurBattlefield(BASALT);
+        for (int i = 0; i < n; i++) {
+            ai.getManaPool().addMana(new Mana((byte) ManaAtom.COLORLESS, basalt, null, ai));
         }
     }
 
@@ -319,9 +342,11 @@ public class ComboLoopEndToEndAiTest extends AITest {
         final Set<String> phases = new LinkedHashSet<>();
         final List<String> ours = new ArrayList<>();
         final List<String> moves = new ArrayList<>();
+        final List<String> acts = new ArrayList<>();
         final Set<Integer> seen = new HashSet<>();
         int steps = 0;
         int actions = 0;
+        int deepest = 0;
         final long from = System.nanoTime();
         while (!game.isGameOver() && !done.test(game) && ph.getTurn() <= lastTurn && steps < maxSteps) {
             final int turn = ph.getTurn();
@@ -334,20 +359,28 @@ public class ComboLoopEndToEndAiTest extends AITest {
                 actions += acted;
                 phases.add(at);
             }
+            int mine = 0;
             for (final SpellAbilityStackInstance si : game.getStack()) {
-                if (seen.add(si.getId()) && ai.equals(si.getActivatingPlayer())) {
+                final boolean ofOurs = ai.equals(si.getActivatingPlayer());
+                mine += ofOurs ? 1 : 0;
+                if (seen.add(si.getId()) && ofOurs) {
                     ours.add(label(si));
                     final String move = move(si);
                     if (move != null) {
                         moves.add(move);
                     }
+                    if (!si.isSpell() && !si.isTrigger()) {
+                        acts.add(ComboTracker.nameOf(si.getSourceCard()) + " " + si.getSpellAbility().getApi());
+                    }
                 }
             }
+            deepest = Math.max(deepest, mine);
         }
         final Play p = new Play(steps, actions, List.copyOf(phases), List.copyOf(ours), List.copyOf(moves),
-                (System.nanoTime() - from) / 1_000_000);
+                (System.nanoTime() - from) / 1_000_000, deepest, List.copyOf(acts));
         Reporter.log(label + ": " + p.steps() + " steps, " + p.actions() + " driver actions in " + p.phases() + ", "
-                + p.millis() + " ms, " + p.ours().size() + " stack items of ours; " + outcome());
+                + p.millis() + " ms, " + p.ours().size() + " stack items of ours, at most " + p.deepest()
+                + " at once; " + outcome());
         return p;
     }
 
@@ -1317,6 +1350,112 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
         assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 3, "the opponent's next turn never came: " + p);
         assertTrue(p.count(THRASIOS + " ability") > 0, "Thrasios never dug: " + p);
+    }
+
+    // ---- the final-fix compliance review's follow-up round 1 ----
+
+    // R30 in response to removal (sections 6.5 and 6.6, amended): theResponseWinsOnTheirTurn's board under the
+    // opponent's Harsh Mentor, which deals 2 to us for each ability of an artifact, creature or land we activate that
+    // is no mana ability: the rock and Ballista with one counter on ours, the opponent at 3, we at 40, their Murder on
+    // Kinnan. The rock line's volley, its cycles, two pumps and three pings at 2 each, is priced at 28, less than our
+    // 40, so the response goes off, and each of its steps waits beneath Harsh Mentor's trigger for it until both have
+    // resolved: no item of ours is ever on the stack beside another, and the opponent loses in their Main 1, Kinnan on
+    // our battlefield and our life at 14 (eight untaps, two pumps and three pings). The response used to act above each
+    // trigger on a board where nothing pending had landed: an untap of a Basalt whose untap was still on the stack,
+    // both charged to one untap's price, so that the line failed; Murder resolved, Kinnan died and the opponent lived.
+    @Test
+    public void aResponseUnderAPunisherTakesOneStepAtATime() {
+        start();
+        ai.setLife(LIFE, null);
+        opp.setLife(3, null);
+        final Card kinnan = rock();
+        ballista(1);
+        addCard(HARSH_MENTOR, opp);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+        final Play p = play("aResponseUnderAPunisherTakesOneStepAtATime",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
+        assertEquals(p.deepest(), 1, "items of ours on the stack at once: " + p);
+        assertOpponentLostByLife(p, opp, OUR_TURN + 1);
+        assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, opp), "not in their Main 1: " + outcome());
+        assertSame(onOurBattlefield(KINNAN), kinnan, "Murder resolved: Kinnan left our battlefield");
+        assertEquals(p.acted(BASALT, ApiType.Untap), 8, "Basalt's untaps: " + p);
+        assertEquals(p.acted(BALLISTA, ApiType.PutCounter), 2, "Ballista's pumps: " + p);
+        assertEquals(p.acted(BALLISTA, ApiType.DealDamage), 3, "Ballista's pings: " + p);
+        assertEquals(ai.getLife(), LIFE - 26, "our life after eight untaps, two pumps and three pings at 2 each: " + p);
+    }
+
+    // The same with ten untapped Forests of ours beside the rock, which could pay for another untap: still one step
+    // at a time, and the same win, our life at 14. The response used to put four untaps of the one Basalt on the stack
+    // at once, the Forests paying for those the pool could not, and ended as the board without them did.
+    @Test
+    public void aResponseUnderAPunisherTakesOneStepAtATimeBesideLands() {
+        start();
+        ai.setLife(LIFE, null);
+        opp.setLife(3, null);
+        final Card kinnan = rock();
+        ballista(1);
+        lands(FOREST, 10);
+        addCard(HARSH_MENTOR, opp);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+        final Play p = play("aResponseUnderAPunisherTakesOneStepAtATimeBesideLands",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
+        assertEquals(p.deepest(), 1, "items of ours on the stack at once: " + p);
+        assertOpponentLostByLife(p, opp, OUR_TURN + 1);
+        assertSame(onOurBattlefield(KINNAN), kinnan, "Murder resolved: Kinnan left our battlefield");
+        assertEquals(p.acted(BASALT, ApiType.Untap), 8, "Basalt's untaps: " + p);
+        assertEquals(ai.getLife(), LIFE - 26, "our life after eight untaps, two pumps and three pings at 2 each: " + p);
+    }
+
+    // R30 in response in our own Main 1: the rock and Ballista with one counter on ours, the opponent at 10 under their
+    // Harsh Mentor, we at 40, 200 mana floating in our pool, their Murder on Ballista. The volley, nine pumps and ten
+    // pings at 2 each, 38, is less than our 40: the response goes off one step at a time, the AI passing while each
+    // waits beneath Harsh Mentor's trigger for it, and the opponent loses in our Main 1, our life at 2. The response
+    // used to put 42 pumps and 43 of the triggers on the stack in one priority window, each priced against our 40, and
+    // we lost for 0 life, the opponent at 9; and a wait that left that window to the stock AI let it ping Ballista's
+    // last counter away while a pump waited, so that Ballista died a 0/0 and the response failed.
+    @Test
+    public void aResponseInOurMainPhaseUnderAPunisherTakesOneStepAtATime() {
+        start();
+        ai.setLife(LIFE, null);
+        opp.setLife(10, null);
+        rock();
+        final Card ballista = ballista(1);
+        addCard(HARSH_MENTOR, opp);
+        floating(200);
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, ballista);
+        final Play p = play("aResponseInOurMainPhaseUnderAPunisherTakesOneStepAtATime",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN);
+        assertEquals(p.deepest(), 1, "items of ours on the stack at once: " + p);
+        assertOpponentLostByLife(p, ai, OUR_TURN);
+        assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai), "not in our Main 1: " + outcome());
+        assertEquals(p.acted(BALLISTA, ApiType.PutCounter), 9, "Ballista's pumps: " + p);
+        assertEquals(p.acted(BALLISTA, ApiType.DealDamage), 10, "Ballista's pings: " + p);
+        assertEquals(p.acted(BASALT, ApiType.Untap), 0, "Basalt's untaps, the pool paying for the volley: " + p);
+        assertEquals(ai.getLife(), LIFE - 38, "our life after nine pumps and ten pings at 2 each: " + p);
+    }
+
+    // Exact lethal in response (section 6.6): their turn, the rock and Ballista with eight counters on ours, the
+    // opponent at 3 under their Harsh Mentor, we at 9, their Murder on Ballista. The volley, three pings at 2 each, 6,
+    // is less than our 9: three pings, one at a time, and the opponent loses in their Main 1, our life at 3. The
+    // response used to put eight pings of ours on the stack at once, six of them the driver's, for a kill of three.
+    @Test
+    public void aVolleyInResponseReachesExactLethalAndNoFurther() {
+        start();
+        ai.setLife(9, null);
+        opp.setLife(3, null);
+        rock();
+        final Card ballista = ballista(8);
+        addCard(HARSH_MENTOR, opp);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, ballista);
+        final Play p = play("aVolleyInResponseReachesExactLethalAndNoFurther",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
+        assertEquals(p.deepest(), 1, "items of ours on the stack at once: " + p);
+        assertOpponentLostByLife(p, opp, OUR_TURN + 1);
+        assertEquals(p.acted(BALLISTA, ApiType.DealDamage), 3, "Ballista's pings: " + p);
+        assertEquals(ai.getLife(), 3, "our life after three pings at 2 each: " + p);
     }
 
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on

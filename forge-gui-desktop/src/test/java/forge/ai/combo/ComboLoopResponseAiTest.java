@@ -19,6 +19,7 @@ import org.testng.annotations.Test;
 import forge.ai.AITest;
 import forge.ai.AiController;
 import forge.ai.LobbyPlayerAi;
+import forge.card.mana.ManaAtom;
 import forge.game.Game;
 import forge.game.GameObject;
 import forge.game.GameStage;
@@ -26,6 +27,7 @@ import forge.game.ability.AbilityFactory;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
+import forge.game.mana.Mana;
 import forge.game.phase.PhaseType;
 import forge.game.player.GameLossReason;
 import forge.game.player.Player;
@@ -64,6 +66,8 @@ public class ComboLoopResponseAiTest extends AITest {
     private static final String MURDER = "Murder";
     private static final String ISLAND = "Island";
     private static final String FOREST = "Forest";
+    private static final String HARSH_MENTOR = "Harsh Mentor";
+    private static final String BOLT = "Lightning Bolt";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
     /** The rock untap of Basalt Monolith and Nyxbloom Ancient. */
@@ -333,6 +337,37 @@ public class ComboLoopResponseAiTest extends AITest {
             stack.resolveStack();
         }
         throw new AssertionError("the stack did not resolve down to " + removal);
+    }
+
+    /** {@code n} colourless mana floating in our pool, made by our Basalt Monolith ({@link #rock} first). */
+    private void floating(final int n) {
+        for (int i = 0; i < n; i++) {
+            ai.getManaPool().addMana(new Mana((byte) ManaAtom.COLORLESS, basalt, null, ai));
+        }
+    }
+
+    /** Our action {@code sa} played through the AI's own play path (PlayerControllerAi.playChosenSpellAbility), and
+     *  the triggers it fired put on the stack above it, as before any player's next priority. */
+    private void played(final SpellAbility sa) {
+        ai.getController().playChosenSpellAbility(sa);
+        game.getStack().addAllTriggeredAbilitiesToStack();
+    }
+
+    /** The stack's top {@code n} items resolved one at a time, the triggers each fires put on the stack after it; the
+     *  state-based actions checked after. */
+    private void resolve(final int n) {
+        for (int i = 0; i < n; i++) {
+            game.getStack().resolveStack();
+            game.getStack().addAllTriggeredAbilitiesToStack();
+        }
+        game.getAction().checkStateEffects(true);
+    }
+
+    /** The AI's choice at this decision (AiController.chooseSpellAbilityToPlay, the whole play path): its first
+     *  ability, or null for a pass. */
+    private static SpellAbility chosen(final AiController brains) {
+        final List<SpellAbility> sas = brains.chooseSpellAbilityToPlay();
+        return sas == null || sas.isEmpty() ? null : sas.get(0);
     }
 
     /** {@code rounds} after {@code n} actions counted this turn, as the driver counts each one it returns
@@ -1143,5 +1178,251 @@ public class ComboLoopResponseAiTest extends AITest {
         theirTurn();
         assertTrue(threatens("Curtains' Call", pieces, theirs, kinnan), "Kinnan, its second target");
         assertFalse(threatens("Curtains' Call", pieces, theirs, other), "two creatures of theirs");
+    }
+
+    // ---- the final-fix compliance review's follow-up round 1 ----
+
+    // The window the go-off in response waits in is the driver's (section 6.6, amended): our Main 1, the rock and
+    // Ballista with one counter on ours, the opponent at 10 under their Harsh Mentor, we at 40, 200 mana floating,
+    // their Murder on Ballista. The AI's first answer is the response's first step, Ballista's pump; with the pump on
+    // the stack and Harsh Mentor's trigger for it above, the AI passes, drawing no random number: the driver used to
+    // pump again there, on a board where the pump had not landed, and a wait that left the window to the stock AI let
+    // it ping Ballista's last counter away while the pump waited. Once both have resolved, with Murder on top again,
+    // the answer is the next pump.
+    @Test
+    public void theAIPassesWhileItsStepWaitsBeneathAPunishersTrigger() {
+        start();
+        rock();
+        final Card ballista = ballista(1);
+        opp.setLife(10, null);
+        ai.setLife(40, null);
+        addCard(HARSH_MENTOR, opp);
+        floating(200);
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, ballista);
+        final AiController brains = ComboLoopBoards.aiOf(ai);
+        final SpellAbility pump = chosen(brains);
+        assertNotNull(pump, "the AI passes");
+        assertSame(pump.getHostCard(), ballista, "Ballista's step first: " + pump);
+        assertEquals(pump.getApi(), ApiType.PutCounter, "a pump first: " + pump);
+        played(pump);
+        assertTrue(game.getStack().peek().isTrigger(), "Harsh Mentor's trigger above the pump: " + game.getStack());
+        final long before = MyRandom.callCount();
+        final SpellAbility above = chosen(brains);
+        assertNull(above, "the AI played above Harsh Mentor's trigger for its pump: " + above);
+        assertEquals(MyRandom.callCount() - before, 0, "the pass drew");
+        resolve(2);
+        assertEquals(ballista.getCounters(CounterEnumType.P1P1), 2, "the pump landed");
+        assertEquals(ai.getLife(), 38, "Harsh Mentor's 2 for the pump");
+        final SpellAbility next = chosen(brains);
+        assertNotNull(next, "Murder on top again: the AI passes");
+        assertEquals(next.getApi(), ApiType.PutCounter, "the next pump: " + next);
+    }
+
+    // R30 above a new threat (sections 6.5 and 6.6, amended): a step the go-off takes while one of its own is still on
+    // the stack is priced against the life we will have once what is pending has resolved. Their Murder on Kinnan,
+    // Ballista with two counters, the opponent at 2 under their Harsh Mentor, 200 mana floating. The response's first
+    // step is a ping (the volley, two pings at 2 each, 4); with it on the stack and Harsh Mentor's trigger for it
+    // above, their Lightning Bolt on Ballista, a 1/1 now, comes above both: a threat, which the go-off answers at once.
+    // The volley read from the board as it stands, a pump and two pings at 2 each, 6, is less than our 7 but not less
+    // than the 5 we will have once that trigger has resolved: no step, where the driver used to pump. The control: at
+    // 9, the pump, 6 being less than 7.
+    @Test
+    public void aStepAboveANewThreatIsPricedAgainstTheLifeWeWillHave() {
+        for (final int life : new int[] {7, 9}) {
+            start();
+            final Card kinnan = rock();
+            final Card ballista = ballista(2);
+            opp.setLife(2, null);
+            ai.setLife(life, null);
+            addCard(HARSH_MENTOR, opp);
+            theirTurn();
+            floating(200);
+            ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+            final SpellAbility ping = answer();
+            assertNotNull(ping, "a response at " + life);
+            assertEquals(ping.getApi(), ApiType.DealDamage, "a ping first at " + life + ": " + ping);
+            played(ping);
+            assertTrue(game.getStack().peek().isTrigger(), "Harsh Mentor's trigger above our ping at " + life);
+            ComboLoopBoards.theirResponse(game, opp, BOLT, ballista);
+            final SpellAbility next = answer();
+            if (life == 7) {
+                assertNull(next, "a step the life we will have does not afford: " + next);
+            } else {
+                assertNotNull(next, "the control at 9: no step");
+                assertEquals(next.getApi(), ApiType.PutCounter, "the control at 9, the pump: " + next);
+            }
+        }
+    }
+
+    // R30's judge measures each step on its own (section 6.5, amended): one the go-off takes above a new threat while
+    // an earlier one is still on the stack beneath it is judged first, and the earlier one after it, on its own cost,
+    // the later one's taken out. Their Murder on Kinnan, Ballista with three counters, the opponent at 3 under their
+    // Harsh Mentor, 200 mana floating, we at 20. The first ping goes on the stack, Harsh Mentor's trigger above it;
+    // their Lightning Bolt on Ballista comes above both, and the go-off answers it with a pump, whose own trigger comes
+    // above it: beneath that the go-off waits. The pump and its trigger resolve, Bolt leaves the stack (as their own
+    // counterspell would take it), and beneath the first ping's trigger the go-off waits again. That trigger resolves,
+    // we lose a life beside it (a cost no price reads; here by hand), and the ping resolves: with Murder on top again
+    // the ping's judge reads 3 life lost while it waited against its price of 2, the pump's 2 taken out of the 5, and
+    // the volley is over for the phase. The control, with no life lost by hand: the next ping.
+    @Test
+    public void anEarlierStepIsJudgedOnItsOwnCostAfterALaterOne() {
+        for (final boolean lost : new boolean[] {true, false}) {
+            start();
+            final Card kinnan = rock();
+            final Card ballista = ballista(3);
+            opp.setLife(3, null);
+            addCard(HARSH_MENTOR, opp);
+            theirTurn();
+            floating(200);
+            ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+            final SpellAbility ping = answer();
+            assertNotNull(ping, "a response");
+            assertEquals(ping.getApi(), ApiType.DealDamage, "a ping first: " + ping);
+            played(ping);
+            ComboLoopBoards.theirResponse(game, opp, BOLT, ballista);
+            final SpellAbility pump = answer();
+            assertNotNull(pump, "no answer to Bolt");
+            assertEquals(pump.getApi(), ApiType.PutCounter, "above Bolt, a pump: " + pump);
+            played(pump);
+            assertTrue(game.getStack().peek().isTrigger(), "Harsh Mentor's trigger above the pump");
+            final SpellAbility abovePump = answer();
+            assertNull(abovePump, "a step above Harsh Mentor's trigger for the pump: " + abovePump);
+            resolve(2);
+            assertEquals(ai.getLife(), 18, "Harsh Mentor's 2 for the pump");
+            game.getStack().remove(game.getStack().peek());
+            assertTrue(game.getStack().peek().isTrigger(), "Harsh Mentor's trigger for the ping on top");
+            final SpellAbility abovePing = answer();
+            assertNull(abovePing, "a step above Harsh Mentor's trigger for the ping: " + abovePing);
+            resolve(1);
+            if (lost) {
+                ai.setLife(ai.getLife() - 1, null);
+            }
+            resolve(1);
+            assertEquals(opp.getLife(), 2, "the first ping landed");
+            assertEquals(ComboTracker.nameOf(game.getStack().peek().getSourceCard()), MURDER, "Murder on top again");
+            final SpellAbility after = answer();
+            if (lost) {
+                assertNull(after, "a 3 the first ping cost while it waited, against its price of 2: " + after);
+                assertNull(driver.respond(), "the volley over: a pass, where the decision is the stock AI's");
+            } else {
+                assertNotNull(after, "the control, no life lost by hand: the volley ended");
+                assertEquals(after.getApi(), ApiType.DealDamage, "the control, the next ping: " + after);
+            }
+        }
+    }
+
+    // The wait is the go-off in response's alone (section 6.6, amended; section 6.5's main phase stays as it was): our
+    // Main 1, the rock under the opponent's Harsh Mentor, Ballista in our hand, the opponent at 2, the go-off running
+    // (its cheap kill, aCheapKillPaysTheRockLinesUntaps's), its untap on the stack and Harsh Mentor's trigger for it
+    // above, no removal answered. The driver answers nothing there, neither a step nor a pass: the decision is the
+    // stock AI's, as before.
+    @Test
+    public void theDriverPassesForNoGoOffButOneInResponse() {
+        start();
+        rock();
+        addCardToZone(BALLISTA, ai, ZoneType.Hand);
+        opp.setLife(2, null);
+        addCard(HARSH_MENTOR, opp);
+        ComboLoopBoards.stepUntil(game, g -> !g.getStack().isEmpty() && g.getStack().peek().isTrigger(), MAX_STEPS);
+        assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai), "our Main 1: " + game.getPhaseHandler().getPhase());
+        assertEquals(game.getStack().size(), 2, "our untap and Harsh Mentor's trigger: " + game.getStack());
+        assertSame(game.getStack().peek().getActivatingPlayer(), opp, "Harsh Mentor's trigger on top");
+        final long before = MyRandom.callCount();
+        assertNull(driver.respond(), "the driver answered above a trigger in our Main 1");
+        assertEquals(MyRandom.callCount() - before, 0, "the answer drew");
+    }
+
+    // Only an opponent's triggered ability is waited beneath: their spell above a step of ours that is still on the
+    // stack is answered at once, as before (section 6.6, amended). Their Murder on Kinnan, Ballista with two counters,
+    // the opponent at 2, we at 3, no punisher; the response's first ping goes on the stack, and their Lightning Bolt
+    // aimed at us comes above it, a threat to none of our cards that would kill us if it resolved first: the driver
+    // acts above it (the refill toward the pump the volley read from the board as it stands needs), where a wait would
+    // let it resolve.
+    @Test
+    public void aSpellAboveOurStepIsAnsweredAtOnce() {
+        start();
+        final Card kinnan = rock();
+        final Card ballista = ballista(2);
+        opp.setLife(2, null);
+        ai.setLife(3, null);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+        final SpellAbility ping = answer();
+        assertNotNull(ping, "a response");
+        assertEquals(ping.getApi(), ApiType.DealDamage, "a ping first: " + ping);
+        played(ping);
+        ComboLoopBoards.theirResponse(game, opp, BOLT, ai);
+        assertFalse(LoopResponse.threatens(ai, game.getStack().peek(), List.of(kinnan, basalt, ballista)),
+                "Lightning Bolt aimed at us threatens a card");
+        assertNotNull(answer(), "the driver waited beneath their Lightning Bolt");
+    }
+
+    // A trigger of the opponent's that threatens a card the response protects is answered at once, as a spell is: the
+    // wait is only beneath one that threatens nothing (section 6.6, amended). Their Murder on Kinnan, Ballista with
+    // three counters, the opponent at 3; the response's first ping goes on the stack, and Flametongue Kavu's trigger,
+    // 4 damage aimed at Ballista (a 2/2 now), comes above it, wrapped as the trigger handler wraps a mandatory trigger:
+    // the driver acts above it.
+    @Test
+    public void aTriggerThatThreatensIsAnsweredAtOnce() {
+        start();
+        final Card kinnan = rock();
+        final Card ballista = ballista(3);
+        opp.setLife(3, null);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+        final SpellAbility ping = answer();
+        assertNotNull(ping, "a response");
+        assertEquals(ping.getApi(), ApiType.DealDamage, "a ping first: " + ping);
+        played(ping);
+        final Card ftk = addCard("Flametongue Kavu", opp);
+        final Trigger trigger = ftk.getTriggers().get(0);
+        final SpellAbility inner = AbilityFactory.getAbility(ftk, trigger.getParam("Execute"));
+        inner.setActivatingPlayer(opp);
+        inner.setTrigger(trigger);
+        inner.getTargets().add(ballista);
+        game.getStack().add(new WrappedAbility(trigger, inner, null));
+        assertTrue(game.getStack().peek().isTrigger(), "Flametongue Kavu's trigger on top");
+        assertTrue(LoopResponse.threatens(ai, game.getStack().peek(), List.of(ballista)), "it threatens Ballista");
+        assertNotNull(answer(), "the driver waited beneath a trigger that threatens Ballista");
+    }
+
+    // R30 counts the price of every step of the go-off's still on the stack (section 6.5, amended): their Murder on
+    // Kinnan, Ballista with five counters, the opponent at 4 under their Harsh Mentor, 200 mana floating. The first
+    // ping goes on the stack, Harsh Mentor's trigger above it; their second Murder, on Ballista, comes above both, and
+    // the go-off answers it with a second ping, its own trigger above it; their third Murder on Ballista comes above
+    // that. The volley read from the board as it stands, a pump and four pings at 2 each, 10, is less than our 13 less
+    // one ping's price, 11, but not less than our 13 less both pings' prices, 9: no step. The control: at 15, the
+    // pump, 10 being less than 11.
+    @Test
+    public void everyStepStillOnTheStackIsPriced() {
+        for (final int life : new int[] {13, 15}) {
+            start();
+            final Card kinnan = rock();
+            final Card ballista = ballista(5);
+            opp.setLife(4, null);
+            ai.setLife(life, null);
+            addCard(HARSH_MENTOR, opp);
+            theirTurn();
+            floating(200);
+            ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+            final SpellAbility first = answer();
+            assertNotNull(first, "a response at " + life);
+            assertEquals(first.getApi(), ApiType.DealDamage, "a ping first at " + life + ": " + first);
+            played(first);
+            ComboLoopBoards.theirResponse(game, opp, MURDER, ballista);
+            final SpellAbility second = answer();
+            assertNotNull(second, "no answer to their second Murder at " + life);
+            assertEquals(second.getApi(), ApiType.DealDamage, "above their second Murder, a ping: " + second);
+            played(second);
+            ComboLoopBoards.theirResponse(game, opp, MURDER, ballista);
+            final SpellAbility next = answer();
+            if (life == 13) {
+                assertNull(next, "a step the life we will have once both pings' triggers resolve does not afford: "
+                        + next);
+            } else {
+                assertNotNull(next, "the control at 15: no step");
+                assertEquals(next.getApi(), ApiType.PutCounter, "the control at 15, the pump: " + next);
+            }
+        }
     }
 }
