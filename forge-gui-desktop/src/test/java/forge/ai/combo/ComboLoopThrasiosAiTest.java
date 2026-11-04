@@ -2558,6 +2558,21 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertNotNull(toTheOracleCast(built), "Nezahal in our hand: the line runs; its actions: " + built);
     }
 
+    // ---- the Oracle window: its review's round 2 ----
+
+    // The plain dig's floor stays uncounted beside a battlefield draw that cannot be counted even when a countable
+    // draw waits in our hand: Nezahal on our battlefield and Jin-Gitaxias in our hand, whose sevens would otherwise
+    // be added to the -1 and read as a floor (LoopSinks.drawsDue), 31 in our Main 1. The control: Jin in our hand
+    // alone keeps 32 there, its seven at four end steps of ours.
+    @Test
+    public void nezahalBesideJinInHandKeepsTheFloorUncounted() {
+        start();
+        addCardToZone(JIN, ai, ZoneType.Hand);
+        assertEquals(plainFloorOf(), LoopSinks.LIBRARY_FLOOR + 7 * 4, "the control: Jin in our hand alone");
+        ComboLoopBoards.ready(addCard(NEZAHAL, ai));
+        assertEquals(plainFloorOf(), Integer.MAX_VALUE, "Nezahal's draws cannot be counted, Jin's seven beside them");
+    }
+
     // Thrasios's next activation (LoopSinks.thrasios), which draws no random number (spec section 7)
     private SpellAbility thrasiosOf(final ComboLines.Line l) {
         final long before = MyRandom.callCount();
