@@ -391,6 +391,17 @@ public class ComboLoopResponseAiTest extends AITest {
         return rounds;
     }
 
+    /** Flametongue Kavu's trigger of the opponent's, its 4 damage aimed at {@code target}, put on the stack wrapped as
+     *  the trigger handler wraps a mandatory trigger. */
+    private void kavuTriggerOn(final Card kavu, final Card target) {
+        final Trigger trigger = kavu.getTriggers().get(0);
+        final SpellAbility inner = AbilityFactory.getAbility(kavu, trigger.getParam("Execute"));
+        inner.setActivatingPlayer(opp);
+        inner.setTrigger(trigger);
+        inner.getTargets().add(target);
+        game.getStack().add(new WrappedAbility(trigger, inner, null));
+    }
+
     /** The constant of that name of the driver's private record of what an action it returned was (LoopDriver.Spent),
      *  for a test that drives the judge of R30 by reflection. */
     private static Object spentKind(final Class<?> spent, final String name) {
@@ -1450,6 +1461,52 @@ public class ComboLoopResponseAiTest extends AITest {
         assertTrue(game.getStack().peek().isTrigger(), "Flametongue Kavu's trigger on top");
         assertTrue(LoopResponse.threatens(ai, game.getStack().peek(), List.of(ballista)), "it threatens Ballista");
         assertNotNull(answer(), "the driver waited beneath a trigger that threatens Ballista");
+    }
+
+    // The wait is for an action of the go-off's own still owed (section 6.6, amended): once every one is judged, an
+    // opponent's trigger that threatens nothing draws no wait, and the decision is the stock AI's. Their Murder on
+    // Kinnan, Ballista with three counters, the opponent at 3, 200 mana floating, no punisher. The response's first
+    // ping goes on the stack, and Flametongue Kavu's trigger, aimed at its own card, comes above it: the ping owed,
+    // the driver waits, a pass. The trigger leaves the stack and the ping resolves; 5 life lost beside it (a cost no
+    // price reads; here by hand) end the volley at the next decision, which answers nothing. The trigger then comes
+    // above Murder with nothing of the go-off's owed: the driver answers null, the stock AI's decision, not a pass.
+    // The control, with no life lost by hand: the next ping.
+    @Test
+    public void aWaitNeedsAnActionOwed() {
+        for (final boolean lost : new boolean[] {true, false}) {
+            start();
+            final Card kinnan = rock();
+            final Card ballista = ballista(3);
+            opp.setLife(3, null);
+            theirTurn();
+            floating(200);
+            ComboLoopBoards.theirSpellOn(game, opp, MURDER, kinnan);
+            final SpellAbility ping = answer();
+            assertNotNull(ping, "a response");
+            assertEquals(ping.getApi(), ApiType.DealDamage, "a ping first: " + ping);
+            played(ping);
+            final Card kavu = addCard("Flametongue Kavu", opp);
+            kavuTriggerOn(kavu, kavu);
+            assertTrue(game.getStack().peek().isTrigger(), "Flametongue Kavu's trigger on top");
+            assertFalse(LoopResponse.threatens(ai, game.getStack().peek(), List.of(kinnan, basalt, ballista)),
+                    "Flametongue Kavu's trigger aimed at its own card threatens a card");
+            final LoopDriver.Answer waited = driver.respond();
+            assertNotNull(waited, "the ping owed: no wait beneath their trigger");
+            assertNull(waited.action(), "the ping owed: a step above their trigger: " + waited);
+            game.getStack().remove(game.getStack().peek());
+            resolve(1);
+            assertEquals(opp.getLife(), 2, "the ping landed");
+            if (lost) {
+                ai.setLife(ai.getLife() - 5, null);
+                assertNull(answer(), "5 life the ping cost, against its price of 0: the volley went on");
+                kavuTriggerOn(kavu, kavu);
+                assertNull(driver.respond(), "a pass with nothing of the go-off's owed: the stock AI's decision taken");
+            } else {
+                final SpellAbility next = answer();
+                assertNotNull(next, "the control, no life lost by hand: the volley ended");
+                assertEquals(next.getApi(), ApiType.DealDamage, "the control, the next ping: " + next);
+            }
+        }
     }
 
     // R30 counts the price of every step of the go-off's still on the stack (section 6.5, amended): their Murder on
