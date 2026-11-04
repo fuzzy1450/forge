@@ -1164,9 +1164,10 @@ public final class LoopDriver {
     // is not over for the phase (judgeDig, R30), so that its window can dig; Oracle's cast is one the driver may make
     // now, at a price in life below what we will have (mayTake: a build for a cast the check would refuse for good is
     // never begun); and its whole cost from here fits what the caps have left (windowFits), read at every decision: at
-    // a boundary the count is exact for a rock line, and mid-cycle, where it errs high by a cycle, a line that reads
-    // as no fit costs nothing, the go-off refilling either way. Otherwise the line waits, Oracle held (holdsOracle),
-    // and at a boundary the walk takes the pool built so far
+    // a boundary the count is exact for a rock line, and mid-cycle, where it counts the whole build from an empty pool,
+    // the pool built so far not read, and the cycle in progress whole, so that it errs high there by about the cycles
+    // already built, a line that reads as no fit costs nothing, the go-off refilling either way. Otherwise the line
+    // waits, Oracle held (holdsOracle), and at a boundary the walk takes the pool built so far
     private boolean oracleLine(final ComboLines.Line l) {
         if (digOver || !LoopSinks.digsForOracle(ai, l) || ai.cantWin() || LoopSinks.drawsUncounted(ai)) {
             return false;
