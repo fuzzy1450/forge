@@ -173,13 +173,7 @@ final class LoopResponse {
         if (lacking > 0) {
             cycles = (lacking + net - 1) / net + (boundary ? 0 : 1);
         }
-        return cycles * cycleActions(ai, l) + cost.pumps() + cost.pings();
-    }
-
-    // the actions one cycle of l takes, each one the driver returns: the flicker's tap of each land Palinchron's untap
-    // puts back, and the flicker; a rock untap's two, the tap and the untap. The response runs these two kinds alone
-    private static int cycleActions(final Player ai, final ComboLines.Line l) {
-        return l.loop() == LoopKind.FLICKER ? LoopCycles.putBack(ai).size() + 1 : 2;
+        return cycles * LoopCycles.actions(ai, l) + cost.pumps() + cost.pings();
     }
 
     // the item's parts that are read, in order: its root (a trigger's wrapped ability) and each sub-ability, each with

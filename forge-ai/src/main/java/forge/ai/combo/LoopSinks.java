@@ -45,20 +45,24 @@ import forge.util.FileSection;
  * removal reads what the volley takes ({@link #volleyCost}) to know whether it fits in what the caps have left (R28).
  *
  * <p>Then Thrasios's dig, step 3 of section 6.4, taken when the stock AI has nothing it wants to play: its {4}, one
- * activation a decision ({@link #thrasios}), while our library holds more than {@link #LIBRARY_FLOOR} cards, a card in
- * it would add to our board ({@link #digWorth}, {@link #addsToBoard}) and our board is short of five times lethal. A
- * dig toward a library-out winner goes on whatever the library holds: toward Thassa's Oracle in our hand while it can
- * win now ({@link #digsForOracle}: its cast not barred, its entering trigger not disabled) until our library holds no
- * more than our devotion to blue and Oracle's own {U}{U} ({@link #oracleThreshold}), when Oracle's cast wins
- * ({@link #oracleCast}); with Laboratory Maniac or Jace, Wielder of Mysteries on our battlefield, to empty and one
- * activation more, whose draw wins. Below the floor only while we can win and no opponent has mana to answer the
- * finish (R22). A dig toward Oracle that stops at the floor keeps, above it, every card our own mandatory draw
- * triggers will draw us until our next draw step ({@link #floor}: Jin-Gitaxias, Core Augur's seven at our end step);
- * a plain dig keeps our next four draw steps and every card those triggers will draw us before the last of them, a
- * permanent card of ours in our hand or library counted as if it were on our battlefield ({@link #plainFloor}: 32
- * with Jin among those cards). A draw on a player's Nth card each turn is counted at its bound, once for each player
- * it can match in each turn (Faerie Mastermind's, on an opponent's second card: 13 in our Main 1 of a 1v1). Neither
- * runs beside a mandatory draw trigger on our battlefield whose draws cannot be counted (Nezahal, Primal Tide's).
+ * activation a decision ({@link #thrasios}), while our library holds more than {@link #plainFloor} cards, a card in it
+ * would add to our board ({@link #digWorth}, {@link #addsToBoard}) and our board is short of five times lethal. The
+ * floor keeps our next four draw steps and every card our own mandatory draw triggers will draw us before the last of
+ * them, a permanent card of ours in our hand or library counted as if it were on our battlefield (32 with
+ * Jin-Gitaxias, Core Augur among those cards); a draw on a player's Nth card each turn is counted at its bound, once
+ * for each player it can match in each turn (Faerie Mastermind's, on an opponent's second card: 13 in our Main 1 of a
+ * 1v1); and no plain dig runs beside a mandatory draw trigger on our battlefield whose draws cannot be counted
+ * (Nezahal, Primal Tide's). With Laboratory Maniac or Jace, Wielder of Mysteries on our battlefield the dig goes to
+ * empty, whatever the library holds, and one activation more, whose draw wins: below {@link #LIBRARY_FLOOR} only while
+ * we can win and no opponent has mana to answer the finish (R22).
+ *
+ * <p>Thassa's Oracle in our hand while it can win now ({@link #digsForOracle}: its cast not barred, its entering
+ * trigger not disabled) is the Oracle line's (section 6.4 step 3, amended 2026-11-04 (the Oracle window)), and no dig
+ * toward it runs in a main phase: the driver builds the pool to what a dig of our whole library costs
+ * ({@link #oracleWindowNeed}) and Oracle's own price ({@link #oraclePool}), casts Oracle ({@link #oracleCast}), and
+ * above its entering trigger digs to empty ({@link #windowDig}), one activation a decision, whatever mana the opponents
+ * have open. The trigger then resolves on an empty library, its count of cards, none, no more than any devotion of ours
+ * to blue, whatever has become of Oracle meanwhile; and a countered Oracle has cost no card.
  *
  * <p>What a step costs us in life is priced by the driver (R30, LoopDriver.lifeCost): Thrasios digs only for none, and
  * the rest of Ballista's volley is priced here ({@link #volleyLife}), which the driver weighs against our life.
@@ -75,9 +79,9 @@ final class LoopSinks {
     static final String THRASIOS = "Thrasios, Triton Hero";
 
     /** Thrasios activates only while our library holds more cards than this (section 6.4 step 3): DrawAi's own floor,
-     *  which refuses a draw at 4 cards or fewer, our next four draw steps (R23); a dig toward a library-out winner may
-     *  go below it ({@link #thrasios}, R22), and the draws our own triggers are due to make raise it ({@link #floor},
-     *  {@link #plainFloor}). */
+     *  which refuses a draw at 4 cards or fewer, our next four draw steps (R23); the dig to empty with Laboratory
+     *  Maniac or Jace may go below it ({@link #thrasios}, R22), the draws our own triggers are due to make raise the
+     *  plain dig's ({@link #plainFloor}), and the Oracle line's window digs to empty ({@link #windowDig}). */
     static final int LIBRARY_FLOOR = 4;
 
     // Thassa's Oracle's own blue pips, its {U}{U}: its devotion to blue once it has entered, which its win counts
@@ -663,26 +667,23 @@ final class LoopSinks {
     }
 
     /**
-     * Thrasios's next activation (section 6.4 step 3), us its activator; null when Thrasios has nothing to do. It is
-     * the {4} of our first Thrasios, Triton Hero on our battlefield whose activation the driver may make now
-     * (LoopDriver.allowed: under Cursed Totem, none), while
+     * Thrasios's next activation in a main phase (section 6.4 step 3), us its activator; null when Thrasios has nothing
+     * to do. It is the {4} of our first Thrasios, Triton Hero on our battlefield whose activation the driver may make
+     * now (LoopDriver.allowed: under Cursed Totem, none), while
      * <ul>
-     * <li>a dig toward Thassa's Oracle runs ({@link #digsForOracle}): our library holds more than
-     * {@link #oracleThreshold} cards, whatever it holds, the library's size being the dig's goal;</li>
-     * <li>with none, a Laboratory Maniac or Jace, Wielder of Mysteries of ours on our battlefield holds its win (a Draw
+     * <li>a Laboratory Maniac or Jace, Wielder of Mysteries of ours on our battlefield holds its win (a Draw
      * replacement that wins instead): a dig to empty, whatever the library holds, and once it is empty one activation
-     * more, whose draw wins;</li>
-     * <li>with neither, our library holds a card worth the dig ({@link #digWorth}) and our board is short of five times
-     * lethal (LoopTracker's decisive).</li>
+     * more, whose draw wins; while our library holds more than {@link #LIBRARY_FLOOR} cards, and below that only while
+     * we can win and no opponent has an untapped permanent with a mana ability, or mana in their pool, to answer the
+     * finish (R22: only a free counterspell can stop it), a draw from an empty library winning for it;</li>
+     * <li>with neither, our library holds more than {@link #plainFloor} cards (our next four draw steps and the draws
+     * due before the last of them, our own triggers' and those of our permanent cards in our hand and library, as if on
+     * our battlefield), a card worth the dig ({@link #digWorth}), and our board is short of five times lethal
+     * (LoopTracker's decisive).</li>
      * </ul>
-     * Each while our library holds more than {@link #LIBRARY_FLOOR} cards, the dig toward Oracle more than
-     * {@link #floor} (the floor and the draws our own triggers can make until our next draw step) and the plain
-     * dig more than {@link #plainFloor} (our next four draw steps and the draws due before the last of them, our own
-     * triggers' and those of our permanent cards in our hand and library, as if on our battlefield); a dig toward a
-     * library-out winner goes on below the floor only while we can win and no opponent has an untapped
-     * permanent with a mana ability, or mana in their pool, to answer the finish (R22: only a free counterspell can
-     * stop it), and otherwise stops at the floor. The dig to empty keeps {@link #LIBRARY_FLOOR}: a draw from an empty
-     * library wins for it.
+     * No dig toward Thassa's Oracle runs here (amended 2026-11-04 (the Oracle window)): while the Oracle line can run
+     * the driver builds for it and casts Oracle first, digging in its window ({@link #windowDig}); otherwise, Oracle in
+     * our hand, the dig is a plain one.
      */
     static SpellAbility thrasios(final Player ai, final ComboLines.Line l) {
         final SpellAbility dig = readyThrasios(ai);
@@ -690,9 +691,6 @@ final class LoopSinks {
             return null;
         }
         final int library = ai.getCardsIn(ZoneType.Library).size();
-        if (oracleDig(ai, l)) {
-            return library > oracleThreshold(ai) && (library > floor(ai) || belowTheFloor(ai)) ? dig : null;
-        }
         if (winsOnEmpty(ai)) {
             return library > LIBRARY_FLOOR || belowTheFloor(ai) ? dig : null;
         }
@@ -700,65 +698,50 @@ final class LoopSinks {
     }
 
     /**
-     * The cards our library keeps when a dig toward Thassa's Oracle stops at the floor (section 6.4 step 3, amended by
-     * the final review's round 1 and on 2026-11-04 for Faerie Mastermind's bound; a plain dig keeps more,
-     * {@link #plainFloor}): {@link #LIBRARY_FLOOR}, and every card our own mandatory draw triggers on our battlefield
-     * will draw us until our next draw step, whatever our library holds, so that the floor still holds after them:
-     * Jin-Gitaxias, Core Augur's seven at our end step, Phyrexian Arena's one at our next upkeep, Faerie Mastermind's
-     * one on an opponent's second card in each turn. A draw is ours to count when there is no OptionalDecider on its
+     * The cards our library keeps when a plain dig stops at the floor (section 6.4 step 3, amended by the final
+     * review's round 1, its compliance review's round 1 and on 2026-11-04 for Faerie Mastermind's bound; the floor of
+     * the dig toward Thassa's Oracle, which counted the draws before our next draw step alone, retired with that dig on
+     * 2026-11-04 (the Oracle window)): enough for our next {@link #LIBRARY_FLOOR} draw steps, R23's four turns of
+     * draws, and every card our own mandatory draw triggers will draw us before the last of them, whatever our library
+     * holds, so that the floor still holds after them. A draw is ours to count when there is no OptionalDecider on its
      * trigger or on its Draw, the Draw's own Defined is us (You, or none) or each player, its NumCards is a plain
      * number, and its trigger is
      * <ul>
      * <li>a phase's (Mode$ Phase): counted once for each of its phases still to come before our next draw step, in the
-     * rest of this turn of ours, in every other player's turn and at our next untap and upkeep, each where its
-     * ValidPlayer takes that turn's player;</li>
+     * rest of this turn of ours, in every other player's turn and at our next untap and upkeep, and once more for each
+     * of its phases in each of the three rounds of turns after that step, each where its ValidPlayer takes that turn's
+     * player;</li>
      * <li>or a Drawn trigger whose Number is a plain number N (Mode$ Drawn, Number$ 2: a player's second card each
      * turn), which the engine fires only when a player's count of the cards drawn this turn reaches N (TriggerDrawn),
-     * so at most once for each player in each turn: counted at that bound, once for each living player its
-     * ValidPlayer can match in each turn from this one to our next, through its draw step, each turn counted once,
-     * whole, by its player, whatever the turn order: the rest of this turn, which a player who has drawn N cards or
-     * more this turn cannot fire again, one turn of each other living player but the one whose turn this is, and our
-     * next. Of what follows a word of its ValidPlayer only Active is read (The Council of Four's Player.Active: that
-     * turn's player alone); the rest only narrows the word, so the count, leaving it out, stays an upper bound.</li>
+     * so at most once for each player in each turn: counted at that bound, once for each living player its ValidPlayer
+     * can match in each turn from this one to the fourth of our draw steps from now, each turn counted once, whole, by
+     * its player, whatever the turn order: the rest of this turn, which a player who has drawn N cards or more this
+     * turn cannot fire again, one turn of each other living player but the one whose turn this is, our next, and three
+     * rounds of each living player's turns. Of what follows a word of its ValidPlayer only Active is read (The Council
+     * of Four's Player.Active: that turn's player alone); the rest only narrows the word, so the count, leaving it out,
+     * stays an upper bound.</li>
      * </ul>
-     * Integer.MAX_VALUE, so that no such dig runs, while a mandatory draw of ours is due on any other trigger, which
-     * waits on what another player does (Nezahal, Primal Tide's, on each noncreature spell an opponent casts; a Drawn
-     * trigger with no Number, on each card an opponent draws), or draws a number not written plainly: its draws cannot
-     * be counted. An optional draw (Rhystic Study's "you may") is the stock AI's to decline, batch 4's library floor in
-     * its confirmTrigger. The triggers' abilities are read from their text, never built. Draws no random number.
-     */
-    static int floor(final Player ai) {
-        return floorOf(drawsDue(ai, false));
-    }
-
-    /**
-     * The cards our library keeps when a plain dig stops at the floor (section 6.4 step 3, amended by the final
-     * review's round 1, its compliance review's round 1 and on 2026-11-04 for Faerie Mastermind's bound): enough for
-     * our next {@link #LIBRARY_FLOOR} draw steps, R23's four turns of draws, and every card our own mandatory draw
-     * triggers will draw us before the last of them, each draw read as {@link #floor} reads it and counted once for
-     * each of its phases still to come before our next draw step and once more for each of its phases in each of the
-     * three rounds of turns after that step, a Drawn trigger's at its bound once more for each player it can match in
-     * each turn of those rounds, each living player's turn once a round (Faerie Mastermind keeps 13 in our Main 1 of a
-     * 1v1, and 55 in a four-player pod's); and with them the draws of the permanent cards of ours in our hand and in
-     * our library, each as if it were on our battlefield now, since the go-off's pool may cast one, or the dig draw
-     * it, once the dig has gone below what its arrival needs. So Jin-Gitaxias, Core Augur's seven at each of our end
-     * steps keeps 32 in our Main 1, wherever Jin is among those cards, where the dig used to stop at four and Jin,
-     * cast after it or drawn by it, decked us. Integer.MAX_VALUE, as {@link #floor}, beside a mandatory draw trigger
-     * on our battlefield whose draws cannot be counted; one on a card in our hand or library is not counted (Nezahal,
-     * Primal Tide's in our library would stop every plain dig). Draws no random number.
+     * Faerie Mastermind's one on an opponent's second card keeps 13 in our Main 1 of a 1v1, and 55 in a four-player
+     * pod's. With them the draws of the permanent cards of ours in our hand and in our library, each as if it were on
+     * our battlefield now, since the go-off's pool may cast one, or the dig draw it, once the dig has gone below what
+     * its arrival needs: so Jin-Gitaxias, Core Augur's seven at each of our end steps keeps 32 in our Main 1, wherever
+     * Jin is among those cards, where the dig used to stop at four and Jin, cast after it or drawn by it, decked us.
+     * Integer.MAX_VALUE, so that no plain dig runs, while a mandatory draw of ours on our battlefield is due on any
+     * other trigger, which waits on what another player does (Nezahal, Primal Tide's, on each noncreature spell an
+     * opponent casts; a Drawn trigger with no Number, on each card an opponent draws), or draws a number not written
+     * plainly: its draws cannot be counted; one on a card in our hand or library is not counted (Nezahal, Primal Tide's
+     * in our library would stop every plain dig). An optional draw (Rhystic Study's "you may") is the stock AI's to
+     * decline, batch 4's library floor in its confirmTrigger. The triggers' abilities are read from their text, never
+     * built. Draws no random number.
      */
     static int plainFloor(final Player ai) {
-        return floorOf(drawsDue(ai, true));
-    }
-
-    // the floor that keeps these draws due above LIBRARY_FLOOR, or Integer.MAX_VALUE when they cannot be counted (-1)
-    private static int floorOf(final long due) {
+        final long due = drawsDue(ai);
         return due < 0 ? Integer.MAX_VALUE : (int) Math.min(LIBRARY_FLOOR + due, Integer.MAX_VALUE);
     }
 
-    // the draws floor counts, or plainFloor with plain, or -1 when one on our battlefield cannot be counted (see floor
-    // and plainFloor)
-    private static long drawsDue(final Player ai, final boolean plain) {
+    // the draws plainFloor counts, those of the triggers on our battlefield and of our permanent cards in our hand and
+    // library (drawsToCome); -1 when one on our battlefield cannot be counted (see plainFloor)
+    private static long drawsDue(final Player ai) {
         final PhaseHandler ph = ai.getGame().getPhaseHandler();
         long due = 0;
         for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
@@ -770,20 +753,20 @@ final class LoopSinks {
                 if (draw == null) {
                     continue;
                 }
-                final long n = draws(ai, t, draw, ph, plain);
+                final long n = draws(ai, t, draw, ph);
                 if (n < 0) {
                     return -1;
                 }
                 due += n;
             }
         }
-        return plain ? due + drawsToCome(ai, ph) : due;
+        return due + drawsToCome(ai, ph);
     }
 
     // the draws plainFloor counts for the permanent cards of ours in our hand and in our library, each as if it were on
     // our battlefield now: those of its triggers that work on the battlefield and are not suppressed, each a countable
-    // mandatory draw of ours, a phase trigger's or a bounded Drawn trigger's (see floor); a draw that cannot be counted
-    // is not
+    // mandatory draw of ours, a phase trigger's or a bounded Drawn trigger's (see plainFloor); a draw that cannot be
+    // counted is not
     private static long drawsToCome(final Player ai, final PhaseHandler ph) {
         long due = 0;
         for (final ZoneType zone : List.of(ZoneType.Hand, ZoneType.Library)) {
@@ -796,7 +779,7 @@ final class LoopSinks {
                         continue;
                     }
                     final Map<String, String> draw = ourDraw(t);
-                    final long n = draw == null ? -1 : draws(ai, t, draw, ph, true);
+                    final long n = draw == null ? -1 : draws(ai, t, draw, ph);
                     if (n > 0) {
                         due += n;
                     }
@@ -860,13 +843,12 @@ final class LoopSinks {
         return v;
     }
 
-    // how often phase trigger t fires before our next draw step (see floor): for each of its phases, in the rest of
-    // this turn of ours (the phases after the current one), in each other player's turn still in the game, and at our
-    // next untap and upkeep, each where its ValidPlayer (any player, when it names none) takes that turn's player; with
-    // plain, before the LIBRARY_FLOOR-th of our draw steps from now (see plainFloor): those, and once more for each of
-    // its phases in every turn of each of the LIBRARY_FLOOR - 1 rounds of turns between our next draw step and that
-    // one, each where its ValidPlayer takes that turn's player
-    private static long firings(final Player ai, final Trigger t, final PhaseHandler ph, final boolean plain) {
+    // how often phase trigger t fires before the LIBRARY_FLOOR-th of our draw steps from now (see plainFloor): for each
+    // of its phases, in the rest of this turn of ours (the phases after the current one), in each other player's turn
+    // still in the game, and at our next untap and upkeep, each where its ValidPlayer (any player, when it names none)
+    // takes that turn's player; and once more for each of its phases in every turn of each of the LIBRARY_FLOOR - 1
+    // rounds of turns between our next draw step and that one, each where its ValidPlayer takes that turn's player
+    private static long firings(final Player ai, final Trigger t, final PhaseHandler ph) {
         long n = 0;
         long round = 0;
         final boolean mine = t.matchesValidParam("ValidPlayer", ai);
@@ -887,37 +869,34 @@ final class LoopSinks {
                 }
             }
         }
-        return plain ? n + (LIBRARY_FLOOR - 1) * round : n;
+        return n + (LIBRARY_FLOOR - 1) * round;
     }
 
-    // the cards trigger t's mandatory Draw of ours, whose params are draw, draws us until floor's horizon ends, or
-    // plainFloor's with plain: its plain number of cards once for each of the trigger's firings, a phase trigger's as
-    // firings counts them and a Drawn trigger's whose Number is a plain number at its bound; -1 when they cannot be
-    // counted: a number of cards not written plainly, a trigger of any other mode, a phase trigger that names no
-    // phase, a Drawn trigger whose Number is missing or not written plainly (see floor)
-    private static long draws(final Player ai, final Trigger t, final Map<String, String> draw, final PhaseHandler ph,
-            final boolean plain) {
+    // the cards trigger t's mandatory Draw of ours, whose params are draw, draws us until plainFloor's horizon ends:
+    // its plain number of cards once for each of the trigger's firings, a phase trigger's as firings counts them and a
+    // Drawn trigger's whose Number is a plain number at its bound; -1 when they cannot be counted: a number of cards
+    // not written plainly, a trigger of any other mode, a phase trigger that names no phase, a Drawn trigger whose
+    // Number is missing or not written plainly (see plainFloor)
+    private static long draws(final Player ai, final Trigger t, final Map<String, String> draw, final PhaseHandler ph) {
         final int n = plainNumber(draw.getOrDefault("NumCards", "1"));
         if (n < 0) {
             return -1;
         }
         if (t.getMode() == TriggerType.Phase) {
-            return t.hasParam("Phase") ? n * firings(ai, t, ph, plain) : -1;
+            return t.hasParam("Phase") ? n * firings(ai, t, ph) : -1;
         }
         final int nth = t.getMode() == TriggerType.Drawn ? plainNumber(t.getParam("Number")) : -1;
-        return nth < 0 ? -1 : n * bound(ai, t, nth, ph, plain);
+        return nth < 0 ? -1 : n * bound(ai, t, nth, ph);
     }
 
-    // how often Drawn trigger t can fire until floor's horizon ends, or plainFloor's with plain: the engine fires it
-    // only when a player's count of the cards drawn this turn reaches nth (TriggerDrawn's Number; Player's count is
-    // reset at each cleanup), so at most once for each player it can match (see valid and activeOnly) in each turn.
-    // Each turn is counted once, whole, by its player, whatever the turn order: this turn, in which a player who has
-    // drawn nth cards or more cannot fire it again; one turn of each other living player but the one whose turn this
-    // is; our next, through its draw step; and with plain, LIBRARY_FLOOR - 1 more of each living player's, the rounds
-    // of turns to the LIBRARY_FLOOR-th of our draw steps from now (firings' rounds). No extra turn is counted, as
-    // firings counts none
-    private static long bound(final Player ai, final Trigger t, final int nth, final PhaseHandler ph,
-            final boolean plain) {
+    // how often Drawn trigger t can fire until plainFloor's horizon ends: the engine fires it only when a player's
+    // count of the cards drawn this turn reaches nth (TriggerDrawn's Number; Player's count is reset at each cleanup),
+    // so at most once for each player it can match (see valid and activeOnly) in each turn. Each turn is counted once,
+    // whole, by its player, whatever the turn order: this turn, in which a player who has drawn nth cards or more
+    // cannot fire it again; one turn of each other living player but the one whose turn this is; our next, through its
+    // draw step; and LIBRARY_FLOOR - 1 more of each living player's, the rounds of turns to the LIBRARY_FLOOR-th of our
+    // draw steps from now (firings' rounds). No extra turn is counted, as firings counts none
+    private static long bound(final Player ai, final Trigger t, final int nth, final PhaseHandler ph) {
         final Player now = ph.getPlayerTurn();
         final boolean active = activeOnly(t);
         final List<Player> valid = valid(ai, t);
@@ -929,7 +908,7 @@ final class LoopSinks {
         }
         for (final Player q : ai.getGame().getPlayers()) {
             if (!q.hasLost()) {
-                final long turns = ((q == ai || q != now) ? 1 : 0) + (plain ? LIBRARY_FLOOR - 1 : 0);
+                final long turns = ((q == ai || q != now) ? 1 : 0) + LIBRARY_FLOOR - 1;
                 n += turns * (active ? (valid.contains(q) ? 1 : 0) : valid.size());
             }
         }
@@ -979,10 +958,12 @@ final class LoopSinks {
         return true;
     }
 
-    /** Thassa's Oracle wins once our library holds this many cards or fewer: our devotion to blue on our battlefield,
-     *  AbilityUtils' own count (Count$Devotion.Blue, read through our first Thrasios's {4}, us its activator: the count
-     *  needs an ability), plus Oracle's own {U}{U}, its devotion once it has entered. With no Thrasios of ours there is
-     *  no dig, and this is Oracle's two alone. */
+    /** Thassa's Oracle in our hand wins once our library holds this many cards or fewer: our devotion to blue on our
+     *  battlefield, AbilityUtils' own count (Count$Devotion.Blue, read through our first Thrasios's {4}, us its
+     *  activator: the count needs an ability), plus Oracle's own {U}{U}, its devotion once it has entered. With no
+     *  Thrasios of ours there is no dig, and this is Oracle's two alone. The hold reads it (LoopDriver.holdsOracle);
+     *  the Oracle line's window reads none, Oracle's pips being in our devotion once it is on our battlefield, and
+     *  digs to empty ({@link #windowDig}). */
     static int oracleThreshold(final Player ai) {
         final Card thrasios = firstNamed(ai, ZoneType.Battlefield, THRASIOS);
         final SpellAbility dig = thrasios == null ? null : digOf(thrasios);
@@ -993,11 +974,12 @@ final class LoopSinks {
         return AbilityUtils.calculateAmount(thrasios, "Count$Devotion.Blue", dig) + ORACLE_PIPS;
     }
 
-    /** Whether a dig toward Thassa's Oracle can run (section 6.4 step 3): our Oracle in our hand, its {U}{U} payable
-     *  from the pool, the kinds loop line {@code l} makes, our untapped lands and Chromatic Orrery
-     *  ({@link LoopPool#payable}); Oracle able to win now, as piece 1 reads its own Oracle lines: its cast not barred
-     *  (Iona, Shield of Emeria naming blue, Void Winnower) and its entering trigger not disabled (Torpor Orb,
-     *  Hushbringer); and a Thrasios of ours ready: its {4} one the driver may make now. */
+    /** Whether the Oracle line can run on loop line {@code l} (section 6.4 step 3, amended 2026-11-04 (the Oracle
+     *  window)): our Oracle in our hand, its {U}{U} payable from the pool, the kinds loop line {@code l} makes, our
+     *  untapped lands and Chromatic Orrery ({@link LoopPool#payable}); Oracle able to win now, as piece 1 reads its own
+     *  Oracle lines: its cast not barred (Iona, Shield of Emeria naming blue, Void Winnower) and its entering trigger
+     *  not disabled (Torpor Orb, Hushbringer); and a Thrasios of ours ready to dig in its window: its {4} one the
+     *  driver may make now. */
     static boolean digsForOracle(final Player ai, final ComboLines.Line l) {
         return oracleDig(ai, l) && readyThrasios(ai) != null;
     }
@@ -1009,6 +991,41 @@ final class LoopSinks {
             cast.setActivatingPlayer(ai);
         }
         return cast;
+    }
+
+    /** What the Oracle line's window spends (section 6.4 step 3, amended 2026-11-04 (the Oracle window)): a dig of our
+     *  whole library, Thrasios's price as the engine prices it now (its {4}, a tax included: Suppression Field's {2})
+     *  once for each card in our library; -1 with no Thrasios of ours ready. */
+    static int oracleWindowNeed(final Player ai) {
+        final SpellAbility dig = readyThrasios(ai);
+        if (dig == null) {
+            return -1;
+        }
+        final long need = (long) ComboExecute.priced(ai, dig).getCMC() * ai.getCardsIn(ZoneType.Library).size();
+        return (int) Math.min(need, Integer.MAX_VALUE);
+    }
+
+    /** The pool the Oracle line builds before it casts Thassa's Oracle: the window's need ({@link #oracleWindowNeed})
+     *  and Oracle's own price as the engine prices it now ({U}{U}, a tax included), the most of that cast the pool can
+     *  pay (Chromatic Orrery's colourless for its blue, a tax's generic), so that the need is left whatever pays it; -1
+     *  with no Thrasios of ours ready, and with no Oracle in our hand. */
+    static int oraclePool(final Player ai) {
+        final int need = oracleWindowNeed(ai);
+        final SpellAbility cast = oracleCast(ai);
+        if (need < 0 || cast == null) {
+            return -1;
+        }
+        return (int) Math.min((long) need + ComboExecute.priced(ai, cast).getCMC(), Integer.MAX_VALUE);
+    }
+
+    /** The Oracle line's next dig in its window, above Thassa's Oracle's entering trigger (section 6.6, amended
+     *  2026-11-04 (the Oracle window)): the {4} of our first ready Thrasios, us its activator, while our library holds
+     *  a card, whatever else it holds and whatever mana the opponents have open (R22, amended: only a counter of the
+     *  trigger stops that finish, where a stop above empty loses to any removal of a blue permanent of ours); null once
+     *  the library is empty, and with no Thrasios ready. No threshold is read: Oracle's pips are in our devotion once
+     *  it is on our battlefield, and an empty library needs none. Draws no random number. */
+    static SpellAbility windowDig(final Player ai) {
+        return ai.getCardsIn(ZoneType.Library).isEmpty() ? null : readyThrasios(ai);
     }
 
     // our first Thrasios on our battlefield whose {4} the driver may make now (LoopDriver.allowed) and that costs us no
@@ -1037,11 +1054,11 @@ final class LoopSinks {
         return null;
     }
 
-    // a dig toward our Thassa's Oracle in our hand: its printed {U}{U} payable (LoopPool.payable), and its win possible
-    // now, as piece 1 reads its own Oracle lines (ComboSignals.deniedNow, through the tracker's view): its cast not
-    // barred by a CantBeCast static (castBarredNow, on a copy of the cast from our hand) and its entering trigger not
-    // disabled (oracleTriggerDisabledNow). An Oracle that cannot win is no library-out winner, and a dig toward it
-    // would only empty our library. With no tracker (no AI of ours decides) there is no dig
+    // the Oracle line's Thassa's Oracle in our hand: its printed {U}{U} payable (LoopPool.payable), and its win
+    // possible now, as piece 1 reads its own Oracle lines (ComboSignals.deniedNow, through the tracker's view): its
+    // cast not barred by a CantBeCast static (castBarredNow, on a copy of the cast from our hand) and its entering
+    // trigger not disabled (oracleTriggerDisabledNow). An Oracle that cannot win is no library-out winner, and a window
+    // dug for it would only empty our library. With no tracker (no AI of ours decides) there is no line
     private static boolean oracleDig(final Player ai, final ComboLines.Line l) {
         final Card oracle = firstNamed(ai, ZoneType.Hand, ComboLines.Winner.ORACLE.card);
         if (oracle == null || !LoopPool.payable(ai, oracle, l)) {
@@ -1068,9 +1085,9 @@ final class LoopSinks {
         return false;
     }
 
-    // R22: a dig below the floor toward a library-out winner, which needs us able to win and no opponent with an
-    // untapped permanent that has a mana ability, or mana in their pool, so that only a free counterspell can stop the
-    // finish
+    // R22: a dig below the floor to empty with Laboratory Maniac or Jace, which needs us able to win and no opponent
+    // with an untapped permanent that has a mana ability, or mana in their pool, so that only a free counterspell can
+    // stop the finish (for Thassa's Oracle R22 is amended, 2026-11-04: its window digs to empty whatever is open)
     private static boolean belowTheFloor(final Player ai) {
         if (ai.cantWin()) {
             return false;

@@ -290,6 +290,21 @@ final class LoopCycles {
         return false;
     }
 
+    /** The actions one cycle of loop line {@code l} takes, every one the driver returns, from one boundary to the next
+     *  ({@link #boundary}): a rock untap's two, the tap and the untap; the flicker's, a tap of each land Palinchron's
+     *  untap puts back ({@link #putBack}) and the flicker; the recast's, those taps, the return and the cast; the cast
+     *  and bounce's four, each piece's tap and cast (fewer when a piece makes no mana in the cycle, so an upper bound).
+     *  What a go-off's caps are measured against when it must fit them (R28's count, LoopResponse.volleyActions, and
+     *  the Oracle line's, LoopDriver). Read from the board as it stands; draws no random number. */
+    static int actions(final Player ai, final ComboLines.Line l) {
+        return switch (l.loop()) {
+            case FLICKER -> putBack(ai).size() + 1;
+            case RECAST -> putBack(ai).size() + 2;
+            case BOUNCE -> 4;
+            default -> 2;
+        };
+    }
+
     /** Whether {@code sa} is a step of loop line {@code l}'s cycle, never the stock AI's spend: a rock's mana ability
      *  or its untap; for the flicker and the recast alike, which each move our Palinchron, a mana ability of a land of
      *  ours, the flicker Deadeye Navigator grants (on Palinchron, or on Deadeye itself), Palinchron's own return and

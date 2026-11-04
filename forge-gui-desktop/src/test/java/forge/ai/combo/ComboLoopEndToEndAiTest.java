@@ -54,8 +54,10 @@ import forge.util.MyRandom;
  * response to removal on the opponent's turn, and the anti-goals hold through the whole game loop: a loop with nothing
  * to buy ends quietly, an opponent whose life the caps cannot shoot down meets the turn's cap with one line in the log
  * and the game goes on, Thrasios never decks us, and a deck holding no line plays as stock, its game log and its random
- * draws alike. One more game measures what a driver action costs against a real precon, the opponent's priorities
- * included: the measure the caps (LoopRounds) are set from.
+ * draws alike. The Oracle line (section 6.4 step 3, amended 2026-11-04 (the Oracle window)) wins in our main phase
+ * beside Jin-Gitaxias, Core Augur, digging in Oracle's window, and countered costs no cards. One more game measures
+ * what a driver action costs against a real precon, the opponent's priorities included: the measure the caps
+ * (LoopRounds) are set from.
  *
  * <p>Every game is played through PhaseHandler.mainLoopStep, every seat deciding as it does in a served game. Nothing
  * of ours is put on the stack by hand; the response tests put the opponent's Murder there
@@ -86,6 +88,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
     private static final String HARSH_MENTOR = "Harsh Mentor";
     private static final String YAVIMAYA_COAST = "Yavimaya Coast";
     private static final String JIN = "Jin-Gitaxias, Core Augur";
+    private static final String ORACLE = "Thassa's Oracle";
     private static final String SCEPTER = "Isochron Scepter";
     private static final String REVERSAL = "Dramatic Reversal";
     private static final String BIRGI = "Birgi, God of Storytelling";
@@ -121,6 +124,10 @@ public class ComboLoopEndToEndAiTest extends AITest {
     private ComboTracker t;
     /** The driver's round record and caps: the shipped caps, the record the driver counts its actions in. */
     private LoopRounds rounds;
+    /** Whether {@link #play} puts the opponent's Counterspell above our cast of Thassa's Oracle the moment the game
+     *  loop first puts it on the stack, once (ComboLoopBoards.theirResponse: nothing paid); {@link #board} clears
+     *  it. */
+    private boolean counterOracle;
 
     /** What a bounded play saw: the steps it took; the driver's actions; the phases they came in ("turn 3 MAIN1"),
      *  each once, in their order; our stack items as each was first seen (a spell its card's name, an ability its
@@ -205,6 +212,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
         t = ComboLoopBoards.aiOf(ai).getComboTracker();
         rounds = new LoopRounds();
         ComboLoopBoards.aiOf(ai).getLoopDriver().useRounds(rounds);
+        counterOracle = false;
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai, OUR_TURN);
         opp.setLife(LIFE, null);
         MyRandom.setRandom(new Random(SEED));
@@ -364,6 +372,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
                 phases.add(at);
             }
             int mine = 0;
+            SpellAbility oracle = null;
             for (final SpellAbilityStackInstance si : game.getStack()) {
                 final boolean ofOurs = ai.equals(si.getActivatingPlayer());
                 mine += ofOurs ? 1 : 0;
@@ -376,7 +385,14 @@ public class ComboLoopEndToEndAiTest extends AITest {
                     if (!si.isSpell() && !si.isTrigger()) {
                         acts.add(ComboTracker.nameOf(si.getSourceCard()) + " " + si.getSpellAbility().getApi());
                     }
+                    if (counterOracle && si.isSpell() && ORACLE.equals(ComboTracker.nameOf(si.getSourceCard()))) {
+                        oracle = si.getSpellAbility();
+                    }
                 }
+            }
+            if (oracle != null) {
+                counterOracle = false;
+                ComboLoopBoards.theirResponse(game, opp, COUNTERSPELL, oracle);
             }
             deepest = Math.max(deepest, mine);
         }
@@ -1502,6 +1518,120 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertEquals(theirs.count(MASTERMIND + " trigger"), 1, "Mastermind's draws in their turn: " + theirs);
         assertEquals(ai.getCardsIn(ZoneType.Library).size(), library - 1 - theirs.count(THRASIOS + " ability"),
                 "our library when our next turn came: " + theirs);
+    }
+
+    // ---- the Oracle window (Evan, 2026-11-04: the Jin brainstorm's option B) ----
+
+    // The Jin brainstorm's residual (its probe p3 (ii); spec section 9, amended 2026-11-04 (the Oracle window)): its
+    // board, Jin-Gitaxias, Core Augur on ours, and Oracle countered by hand the moment it is cast. The Oracle line
+    // builds Thrasios's 4 for each of our thirty cards and Oracle's 2, 122, and casts Oracle with the library whole,
+    // nothing dug before it; countered, it costs no cards: the pool floats on, no plain dig runs (its floor beside Jin
+    // is 32), and the game goes on past our turn 5 at Jin's own clock. (Before it the dig ran to the floor of eleven,
+    // Oracle waited, Jin's sevens left three, and Oracle, cast next turn and countered, left us milled at our turn 5's
+    // end step.)
+    @Test
+    public void besideJinACounteredOracleLeavesTheLibraryWhole() {
+        jinBoard();
+        ComboLoopBoards.ready(addCard(JIN, ai));
+        counterOracle = true;
+        final Play cast = play("besideJinACounteredOracleLeavesTheLibraryWhole, to the counter",
+                g -> ourCardIn(ZoneType.Graveyard, ORACLE) != null && g.getStack().isEmpty());
+        assertEquals(cast.count(ORACLE), 1, "one Oracle cast: " + cast);
+        assertEquals(cast.count(THRASIOS + " ability"), 0, "a dig before the counter: " + cast);
+        assertNotNull(ourCardIn(ZoneType.Graveyard, ORACLE), "Oracle countered: " + cast);
+        assertEquals(ai.getCardsIn(ZoneType.Library).size(), 30, "no card dug: " + cast);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN, "countered in our turn 3: " + outcome());
+        Reporter.log("besideJinACounteredOracleLeavesTheLibraryWhole: " + cast.actions()
+                + " driver actions to the counter");
+        final Play on = play("besideJinACounteredOracleLeavesTheLibraryWhole, on",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 2);
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + on);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 3, "our turn 5 never ended: " + on);
+    }
+
+    // The same board, Oracle not countered (the probe's p3 (iv)): the Oracle line casts Oracle with the library whole
+    // and digs thirty above its trigger, one activation a decision, and the game ends WinsGameSpellEffect in our Main 1
+    // of turn 3, the library at zero: 244 cycle steps, the cast and thirty digs. (Before it the game was won in turn 5,
+    // after Jin's draws had brought our library to Oracle's threshold.)
+    @Test
+    public void besideJinTheOracleLineWinsNow() {
+        jinBoard();
+        ComboLoopBoards.ready(addCard(JIN, ai));
+        final Play p = play("besideJinTheOracleLineWinsNow", g -> false);
+        assertOracleWonInOurMainOne(p);
+        assertEquals(p.count(THRASIOS + " ability"), 30, "thirty digs above the trigger: " + p);
+        assertTrue(p.ours().indexOf(ORACLE) < p.ours().indexOf(THRASIOS + " ability"), "a dig before the cast: " + p);
+        assertEquals(p.deepest(), 2, "more than the trigger and one dig of ours on the stack at once: " + p);
+    }
+
+    // Jin-Gitaxias in our hand (the probe's p3 (i)): the go-off's pool is the Oracle line's, built before the stock
+    // walk is ever asked, so Oracle is cast before Jin and Jin is never cast: not at a hand-off, where the walk used to
+    // cast it at once with the library at 30, nor in the window, where the pool and our two Islands left could pay it;
+    // the game ends WinsGameSpellEffect in our Main 1 of turn 3, Jin in our hand.
+    @Test
+    public void jinInOurHandIsNotCastInTheWindow() {
+        jinBoard();
+        final Card jin = addCardToZone(JIN, ai, ZoneType.Hand);
+        final Play p = play("jinInOurHandIsNotCastInTheWindow", g -> false);
+        assertEquals(p.count(JIN), 0, "Jin cast: " + p);
+        assertOracleWonInOurMainOne(p);
+        assertTrue(ai.getCardsIn(ZoneType.Hand).contains(jin), "Jin in our hand");
+    }
+
+    // The Oracle line's cost on a 60-card library (the Oracle window's measure, in the ledger): Kinnan, Basalt and
+    // Thrasios on ours, two untapped Islands, Thassa's Oracle in hand and a library of thirty Memnites and thirty
+    // Forests in turn, the opponent at 40. The line builds Thrasios's 4 for each of the sixty cards and Oracle's 2,
+    // 242, in 242 cycles of Basalt's tap and untap, casts Oracle and digs sixty above its trigger: 545 driver actions,
+    // inside the turn's cap of 2,000, and the game ends WinsGameSpellEffect in our Main 1.
+    @Test
+    public void theOracleLineDigsASixtyCardLibrary() {
+        board(KINNAN, KINNANS_LIST);
+        fillLibrary(opp, 40);
+        rock();
+        ComboLoopBoards.ready(addCard(THRASIOS, ai));
+        lands(ISLAND, 2);
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        for (int i = 0; i < 30; i++) {
+            addCardToZone(MEMNITE, ai, ZoneType.Library);
+            addCardToZone(FOREST, ai, ZoneType.Library);
+        }
+        final Play p = play("theOracleLineDigsASixtyCardLibrary", g -> false);
+        assertOracleWonInOurMainOne(p);
+        assertEquals(p.count(THRASIOS + " ability"), 60, "sixty digs above the trigger: " + p);
+        assertEquals(p.actions(), 2 * 242 + 1 + 60, "the build, the cast and the digs: " + p);
+    }
+
+    // the Jin brainstorm's board (its probe p3): Kinnan's list, the opponent at 1,000 with two untapped Islands and
+    // forty cards in their library; Kinnan, Basalt and Thrasios on ours, four untapped Islands, Thassa's Oracle in our
+    // hand, and a library of fifteen Memnites and fifteen Forests in turn, Memnite on top
+    private void jinBoard() {
+        board(KINNAN, KINNANS_LIST);
+        fillLibrary(opp, 40);
+        opp.setLife(1_000, null);
+        rock();
+        ComboLoopBoards.ready(addCard(THRASIOS, ai));
+        lands(ISLAND, 4);
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        for (int i = 0; i < 2; i++) {
+            ComboLoopBoards.ready(addCard(ISLAND, opp));
+        }
+        for (int i = 0; i < 15; i++) {
+            addCardToZone(MEMNITE, ai, ZoneType.Library);
+            addCardToZone(FOREST, ai, ZoneType.Library);
+        }
+    }
+
+    // the game over, won by Thassa's Oracle's WinsGameSpellEffect in our Main 1 of the game's third turn, our library
+    // empty, the driver having acted
+    private void assertOracleWonInOurMainOne(final Play p) {
+        assertTrue(game.isGameOver(), "the game went on: " + p + "; " + outcome());
+        assertTrue(ai.hasWon(), "the AI did not win: " + outcome() + "; " + p);
+        assertEquals(game.getOutcome().getWinCondition(), GameEndReason.WinsGameSpellEffect, "the game's end");
+        assertEquals(ai.getOutcome().altWinSourceName, ORACLE, "the card that won");
+        assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai), "not in our Main 1: " + outcome());
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN, "the turn the game ended in: " + outcome());
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty(), "our library: " + ai.getCardsIn(ZoneType.Library));
+        assertTrue(p.actions() > 0, "the driver never acted: " + p);
     }
 
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on

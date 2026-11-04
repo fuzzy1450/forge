@@ -34,28 +34,32 @@ import forge.game.zone.ZoneType;
  * main phase on an empty stack, an executable loop line (the tracker's view: ready and not denied, the one signal that
  * stops the driver) whose pieces are where its cycle needs them ({@link LoopCycles#ready}; several: the highest net a
  * cycle, then the variant id) starts a go-off when its kind can stop, some opponent can lose or Walking Ballista can
- * kill the loss blocker that stops one losing, the board is not five times lethal already (unless Ballista can shoot:
- * a kill this turn comes first), and there is something to spend the mana on: Ballista's step, Thrasios's dig,
- * Thassa's Oracle's cast at the end of a dig toward it, or what the stock AI could spend ({@link LoopPool#stockTarget}
- * above 0) while our hand and battlefield are not those of the last go-off that spent nothing (the futility gate).
- * Ballista's step comes first ({@link LoopSinks#ballista}): the cycle's next step ({@link LoopCycles#next}) refills
- * the pool until it holds what Ballista's action needs, a spend taken at a boundary, and the driver owns every
- * decision while Ballista has a step. Then, once a dig toward Oracle (an Oracle able to win now: its cast not barred,
- * its entering trigger not disabled) has brought our library to Oracle's threshold ({@link LoopSinks#oracleThreshold}),
- * Oracle's cast, at any decision the driver's own check passes it; one the check refuses for its price (a tax, the
- * blue that only Chromatic Orrery lets the pool pay) waits, the decision going on as one with no cast due, so that the
- * refill makes the pool that pays it. Otherwise each decision returns the cycle's next step until, at a boundary, the
- * pool holds the target, where the driver passes the decision to the stock AI's walk, which plays on the pool
- * ({@link #noteStockPlay}); when it plays nothing Thrasios, Triton Hero digs ({@link #afterStockWalk},
- * {@link LoopSinks#thrasios}), one activation a decision, the refill going on to its {4} first, its spend taken at a
- * boundary and the walk not asked again until it has dug, so that what it draws is played before the next
- * activation; with nothing for Thrasios either, the go-off ends. While a dig toward Oracle could run, our hand cast of
- * Oracle waits ({@link #holdsOracle}, ComboHold.vetoesCast), so the stock AI never casts it before the dig has brought
- * our library to Oracle's threshold. Every action passes the driver's own check (playable, not refused by a static,
- * its cost paid by the pool and our untapped lands, its targets legal; never canPlayAndPayFor, whose throttle and
- * stock judges would refuse it) and counts toward the caps ({@link LoopRounds}); a sink's action the check refuses is
- * not taken, and ends nothing. A ping that changed neither its target's life nor its toughness left ends Ballista's
- * volley for the phase (R25).
+ * kill the loss blocker that stops one losing, the board is not five times lethal already (unless Ballista can shoot: a
+ * kill this turn comes first), and there is something to spend the mana on: Ballista's step, Thrasios's dig, Thassa's
+ * Oracle's cast at the head of its line, or what the stock AI could spend ({@link LoopPool#stockTarget} above 0) while
+ * our hand and battlefield are not those of the last go-off that spent nothing (the futility gate). Ballista's step
+ * comes first ({@link LoopSinks#ballista}): the cycle's next step ({@link LoopCycles#next}) refills the pool until it
+ * holds what Ballista's action needs, a spend taken at a boundary, and the driver owns every decision while Ballista
+ * has a step. Then the Oracle line (section 6.4 step 3, amended 2026-11-04 (the Oracle window)), while it can run:
+ * Thassa's Oracle in our hand able to win now, its {U}{U} payable and a Thrasios ready
+ * ({@link LoopSinks#digsForOracle}); we able to win; Thrasios's dig not over for the phase; Oracle's cast one the
+ * driver may make, at a price in life below ours; and the line's whole cost, its build, its cast and one activation for
+ * each card in our library, within what the caps have left, read at the line's start (R28's shape). The refill builds
+ * the pool to what a dig of our whole library costs and Oracle's own price ({@link LoopSinks#oraclePool}), the driver
+ * owning every decision meanwhile, so that the walk neither taps the blue sources nor spends the pool first; at a
+ * boundary there, Oracle's cast, through the driver's own check (one it refuses for its payment waits for the refill).
+ * Nothing is dug before Oracle resolves, so a countered Oracle costs no card: the pool floats on for the rest of the
+ * go-off. Otherwise each decision returns the cycle's next step until, at a boundary, the pool holds the target, where
+ * the driver passes the decision to the stock AI's walk, which plays on the pool ({@link #noteStockPlay}); when it
+ * plays nothing Thrasios, Triton Hero digs ({@link #afterStockWalk}, {@link LoopSinks#thrasios}), one activation a
+ * decision, the refill going on to its {4} first, its spend taken at a boundary and the walk not asked again until it
+ * has dug, so that what it draws is played before the next activation; with nothing for Thrasios either, the go-off
+ * ends. While the Oracle line could run, our hand cast of Oracle waits above Oracle's threshold ({@link #holdsOracle},
+ * ComboHold.vetoesCast), so the stock AI never casts it there: the line casts it and digs in its window. Every action
+ * passes the driver's own check (playable, not refused by a static, its cost paid by the pool and our untapped lands,
+ * its targets legal; never canPlayAndPayFor, whose throttle and stock judges would refuse it) and counts toward the
+ * caps ({@link LoopRounds}); a sink's action the check refuses is not taken, and ends nothing. A ping that changed
+ * neither its target's life nor its toughness left ends Ballista's volley for the phase (R25).
  *
  * <p>A step that fails or gains nothing never burns the caps (R21): at the next decision an action that was skipped
  * (its payment failed) or changed nothing among the pool, our hand, battlefield and stack fails its line for the
@@ -93,6 +97,16 @@ import forge.game.zone.ZoneType;
  * punisher's trigger for that action, Harsh Mentor's), it waits, and the AI passes, the stock AI playing nothing
  * either; above an opponent's spell or activated ability, a new threat among them, it acts at once. The stop rule's
  * parts that read Ballista, the caps and R21's judges hold as in a main phase.
+ *
+ * <p>In the Oracle line's window ({@link #respond}, section 6.6's second case, amended 2026-11-04 (the Oracle window)):
+ * above the entering trigger of the Thassa's Oracle the line cast this phase, on the stack's top (its
+ * AIRespondsToOwnAbility gives us priority above it, and AiController's stack-response block asks the driver there),
+ * Thrasios digs from the floating pool ({@link LoopSinks#windowDig}), one activation a decision, each resolved alone
+ * above the trigger before the next, until our library is empty, whatever mana the opponents have open; then, and
+ * whenever it has no dig to take (Thrasios gone, its dig over, the pool short, a cap), the driver passes, so the stock
+ * AI plays nothing above the trigger either. The trigger then resolves on an empty library: the win, whatever has
+ * become of Oracle meanwhile. Above an opponent's item there the decision is the removal response's, above any other
+ * item of ours the stock's, and the trigger of an Oracle the line did not cast opens no window.
  *
  * <p>The driver draws no random number (a payment it triggers draws as the engine's payer does), reads no clock, and
  * checks that the game is still on before it returns an action. Its turn stamp lifts the runaway throttle for the rest
@@ -195,9 +209,15 @@ public final class LoopDriver {
     // follow-up round 1). One returned while another waits goes on the stack above that one's items (in response,
     // above a new threat), so it is judged first, and what it lost us is taken out of that one's
     private final List<Owed> owed = new ArrayList<>();
-    // whether responseAction's last answer was the wait of a go-off in response for its own action (waits), which
-    // respond answers with a pass
+    // whether responseAction's last answer was the wait of a go-off in response for its own action (waits), or the
+    // Oracle line's window with no dig to take, which respond answers with a pass
     private boolean waiting;
+    // the Oracle line of the phase (section 6.4 step 3, amended 2026-11-04 (the Oracle window)): whether its build has
+    // begun, its fit read at its start; the card id of the Thassa's Oracle it cast, -1 while it has cast none, whose
+    // entering trigger opens its window; and the loop line whose go-off cast it, the window's digs' line
+    private boolean oracleBuild;
+    private int windowOracle = -1;
+    private ComboLines.Line windowLine;
 
     /** The driver of {@code ai}'s loops, made with its AiController: it reads nothing yet, since the player is not yet
      *  registered with its game. */
@@ -216,15 +236,16 @@ public final class LoopDriver {
 
     /**
      * The go-off slot (AiController.getSpellAbilityToPlay, after piece 1's go-off): Walking Ballista's next action once
-     * the pool holds what it needs; else Thassa's Oracle's cast once a dig toward it has brought our library to its
-     * threshold, when the driver's own check passes it (one it refuses waits for the refill below); else, the walk
-     * having chosen nothing at this board, Thrasios's activation once the pool holds its {4};
-     * else the next step of the loop line the go-off runs, its activator us and its targets (a cast's X) set; or null:
-     * at once outside our main phase, above a stack, once the game is over, for a deck holding no loop line, while a
-     * cap or the idle rule stops the driver; when no line can run, a start gate refuses, or the go-off ends; and, with
-     * nothing for Ballista, Oracle or Thrasios, at a boundary with the pool at the target, where the stock walk plays
-     * next. {@code saList} is what the AI may play now (the walk's list); the steps are read from the pieces
-     * themselves.
+     * the pool holds what it needs; else, while the Oracle line can run (amended 2026-11-04 (the Oracle window)),
+     * Thassa's Oracle's cast at a boundary once the pool holds what a dig of our whole library costs and Oracle's own
+     * price ({@link LoopSinks#oraclePool}), when the driver's own check passes it, and the refill toward that pool
+     * before, the walk never asked meanwhile; else, the walk having chosen nothing at this board, Thrasios's activation
+     * once the pool holds its {4}; else the next step of the loop line the go-off runs, its activator us and its
+     * targets (a cast's X) set; or null: at once outside our main phase, above a stack, once the game is over, for a
+     * deck holding no loop line, while a cap or the idle rule stops the driver; when no line can run, a start gate
+     * refuses, or the go-off ends; and, with nothing for Ballista, the Oracle line or Thrasios, at a boundary with the
+     * pool at the target, where the stock walk plays next. {@code saList} is what the AI may play now (the walk's
+     * list); the steps are read from the pieces themselves.
      */
     public SpellAbility mainPhaseAction(final List<SpellAbility> saList) {
         handedToWalk = false;
@@ -278,15 +299,23 @@ public final class LoopDriver {
             }
             return refill(l, ph);
         }
-        if (oracleDue(l)) {
-            // a dig toward Thassa's Oracle has brought our library to its threshold (section 6.4 step 3): its cast
-            // wins, at any decision the driver's own check passes it. One the check refuses for its price, beyond
-            // what the pool and our lands pay now (a tax; the blue that only Chromatic Orrery lets the pool pay),
-            // waits: the decision goes on as one with no cast due, and the refill makes the pool that pays it
-            final SpellAbility cast = spend(l, ph, LoopSinks.oracleCast(ai), Spent.ORACLE);
-            if (cast != null) {
-                return cast;
+        if (oracleLine(l)) {
+            // the Oracle line (section 6.4 step 3, amended 2026-11-04 (the Oracle window)): the refill builds the pool
+            // to what a dig of our whole library costs and Oracle's own price, the driver owning every decision
+            // meanwhile, so that the walk neither taps the blue sources nor spends the pool; at a boundary there,
+            // Oracle's cast, through the driver's own check, one it refuses for its payment (a colour the pool has not
+            // made yet) waiting for the refill. Nothing is dug before Oracle resolves: the window digs (respond)
+            oracleBuild = true;
+            if (boundary && LoopPool.floating(ai) >= LoopSinks.oraclePool(ai)) {
+                final SpellAbility cast = spend(l, ph, LoopSinks.oracleCast(ai), Spent.ORACLE);
+                if (cast != null) {
+                    oracleBuild = false;
+                    windowOracle = cast.getHostCard().getId();
+                    windowLine = l;
+                    return cast;
+                }
             }
+            return refill(l, ph);
         }
         // Thrasios's turn (section 6.4 step 3), once the walk chose nothing at this board: the refill goes on to its
         // {4}, a spend taken at a boundary; else, at a boundary with the pool at the target, the walk's turn
@@ -352,16 +381,18 @@ public final class LoopDriver {
     }
 
     /**
-     * Whether our hand cast {@code sa} of Thassa's Oracle waits for the dig toward it (section 6.4 step 3;
-     * ComboHold.vetoesCast): while a loop line of the deck can run (its pieces where its cycle needs them, ready and
-     * not denied: {@link LoopCycles#ready} and the tracker's own reading), a dig toward Oracle runs on it
-     * ({@link LoopSinks#digsForOracle}: Oracle in our hand and able to win now, its {U}{U} payable, Thrasios ready)
+     * Whether our hand cast {@code sa} of Thassa's Oracle waits for the Oracle line (section 6.4 step 3, amended
+     * 2026-11-04 (the Oracle window): the hold, its shape unchanged, waits for the line's window, where the dig toward
+     * Oracle now runs; ComboHold.vetoesCast): while a loop line of the deck can run (its pieces where its cycle needs
+     * them, ready and not denied: {@link LoopCycles#ready} and the tracker's own reading), the Oracle line could run on
+     * it ({@link LoopSinks#digsForOracle}: Oracle in our hand and able to win now, its {U}{U} payable, Thrasios ready)
      * and our library holds more than {@link LoopSinks#oracleThreshold} cards. Read from the board at every decision,
-     * a go-off running or not, so the stock walk, which runs before Thrasios's first activation, never casts Oracle
-     * early. False for any other spell, for a deck holding no loop line, and while piece 1's own Oracle go-off holds
-     * (R2): while an executable piece-1 line has Oracle as its winner, the go-off (ComboExecute.goOffNow, which reads
-     * those very lines) and the hold (ComboHold.oracleWaits) are piece 1's, and an immediate Consultation win is never
-     * traded for a dig. Draws nothing.
+     * a go-off running or not, so the stock walk never casts Oracle above its threshold: the line casts it itself,
+     * through its own check, and waits too while it does not fit the caps. False for any other spell, for a deck
+     * holding no loop line, and while piece 1's own Oracle go-off holds (R2): while an executable piece-1 line has
+     * Oracle as its winner, the go-off (ComboExecute.goOffNow, which reads those very lines) and the hold
+     * (ComboHold.oracleWaits) are piece 1's, and an immediate Consultation win is never traded for a dig. Draws
+     * nothing.
      */
     public boolean holdsOracle(final SpellAbility sa) {
         if (!ownOracleCast(sa)) {
@@ -388,11 +419,14 @@ public final class LoopDriver {
 
     /**
      * The stack-response slot (AiController.getSpellAbilityToPlay's stack-response block, ahead of the counterspell
-     * pick): the next action of the go-off in response ({@link #responseAction}), as an answer; else, while that go-off
-     * waits for its own action beneath an opponent's triggered ability that threatens nothing it protects (a punisher's
-     * trigger for that action), a pass, so that the stock AI plays nothing in that window either: it would read the
-     * board as the driver would have, nothing pending landed (it pinged Walking Ballista's last counter away while a
-     * pump waited); else null, the stock answer. Null at once for a deck holding no loop line. Draws no random number.
+     * pick): the next action of the go-off in response or of the Oracle line's window ({@link #responseAction}), as an
+     * answer; else, while that go-off waits for its own action beneath an opponent's triggered ability that threatens
+     * nothing it protects (a punisher's trigger for that action), a pass, so that the stock AI plays nothing in that
+     * window either: it would read the board as the driver would have, nothing pending landed (it pinged Walking
+     * Ballista's last counter away while a pump waited); a pass too above the Oracle line's own trigger once the window
+     * has no dig to take (amended 2026-11-04 (the Oracle window)), so that the stock AI neither casts there nor spends
+     * the pool (the brainstorm's probe p2: Jin-Gitaxias, Core Augur); else null, the stock answer. Null at once for a
+     * deck holding no loop line. Draws no random number.
      */
     public Answer respond() {
         final SpellAbility sa = responseAction();
@@ -406,25 +440,27 @@ public final class LoopDriver {
      * Going off in response to removal (section 6.6; AiController.getSpellAbilityToPlay's stack-response block, ahead
      * of the counterspell pick: a win now beats countering the removal), with an opponent's spell or ability on the
      * stack's top: Walking Ballista's next action toward its volley once the pool holds what it needs (a pump at a
-     * boundary, a ping at any decision), else the next step of the loop line that can run (executable, its pieces
-     * where its cycle needs them, not failed for the phase) of an instant-speed kind, a rock untap or the flicker, the
+     * boundary, a ping at any decision), else the next step of the loop line that can run (executable, its pieces where
+     * its cycle needs them, not failed for the phase) of an instant-speed kind, a rock untap or the flicker, the
      * highest net a cycle first, its activator us and its targets set; each through the driver's own check and the
      * caps, as in a main phase. Ballista is the only sink: Thrasios and the stock AI's plays wait for the stack. The
      * go-off in response starts when the item on top threatens a piece of such a line that can run, or a Walking
      * Ballista of ours ({@link LoopResponse#threatens}), and the volley fits in what the caps have left (R28,
-     * {@link LoopResponse#volleyActions}), a count that needs a Ballista of ours on our battlefield (one in our hand
-     * is not cast above the removal); it measures its cycles from its own first boundary (R21: a main-phase go-off's
-     * untap left beneath the removal is paid again above it). It goes on at each decision with an opponent's item on
-     * top while that removal is on the stack, neither read again: the first flicker leaves the removal no target, and
-     * the volley's count, which errs high mid-cycle, is a start's (the caps stop a go-off in response as they stop one
-     * in a main phase). Either way Ballista can shoot ({@link LoopSinks#ballistaCanShoot}: a kill in reach, a ping the
+     * {@link LoopResponse#volleyActions}), a count that needs a Ballista of ours on our battlefield (one in our hand is
+     * not cast above the removal); it measures its cycles from its own first boundary (R21: a main-phase go-off's untap
+     * left beneath the removal is paid again above it). It goes on at each decision with an opponent's item on top
+     * while that removal is on the stack, neither read again: the first flicker leaves the removal no target, and the
+     * volley's count, which errs high mid-cycle, is a start's (the caps stop a go-off in response as they stop one in a
+     * main phase). Either way Ballista can shoot ({@link LoopSinks#ballistaCanShoot}: a kill in reach, a ping the
      * driver may make) and has a step to take toward the volley (none once a ping that changed nothing has ended it,
      * R25). While it goes on it takes one step at a time (the final-fix compliance review's follow-up round 1): at a
-     * decision at which an action it returned is not yet judged and the item on top is an opponent's triggered
-     * ability, not that removal, that threatens nothing it protects ({@link #waits}: a punisher's trigger for that
-     * action), it waits, null, which {@link #respond} answers with a pass. Null otherwise: at once with the game over,
-     * with no opponent's item on top (our own item on top is the stock own-top pass's), for a deck holding no loop
-     * line, and while a cap stops the driver. Draws no random number. AiController asks {@link #respond}.
+     * decision at which an action it returned is not yet judged and the item on top is an opponent's triggered ability,
+     * not that removal, that threatens nothing it protects ({@link #waits}: a punisher's trigger for that action), it
+     * waits, null, which {@link #respond} answers with a pass. Ahead of all of that, above the Oracle line's own
+     * trigger (amended 2026-11-04 (the Oracle window)), the window's dig or its pass ({@link #windowAction}). Null
+     * otherwise: at once with the game over, with no opponent's item on top (any other item of ours on top is the stock
+     * own-top pass's), for a deck holding no loop line, and while a cap stops the driver. Draws no random number.
+     * AiController asks {@link #respond}.
      */
     SpellAbility responseAction() {
         waiting = false;
@@ -433,6 +469,9 @@ public final class LoopDriver {
             return null;
         }
         final SpellAbilityStackInstance top = game.getStack().peek();
+        if (top != null && windowOf(top)) {
+            return windowAction();
+        }
         if (top == null || !LoopResponse.opposes(ai, top)) {
             return null;
         }
@@ -488,6 +527,49 @@ public final class LoopDriver {
     private boolean waits(final SpellAbilityStackInstance top, final ComboTracker.View v) {
         return !owed.isEmpty() && top.isTrigger() && top != respondedTo
                 && !LoopResponse.threatens(ai, top, threatened(v));
+    }
+
+    // whether the stack's top is the Oracle line's own trigger (section 6.6, amended 2026-11-04 (the Oracle window)): a
+    // triggered ability we control, in the phase the line cast its Oracle in, whose host, as the stack holds it, is
+    // that Thassa's Oracle by its card id, which a card keeps as it moves (the object it is now, on our battlefield or
+    // wherever a removal has put it since, never the hand card the cast was read from), and is named Thassa's Oracle.
+    // Oracle's spell on the stack is no trigger, so nothing is dug before it resolves; the trigger of an Oracle the
+    // line did not cast (the stock AI's, piece 1's go-off) opens no window, and its decisions stay theirs
+    private boolean windowOf(final SpellAbilityStackInstance top) {
+        final Card host = top.getSourceCard();
+        return windowOracle >= 0 && stampedNow() && top.isTrigger() && ai.equals(top.getActivatingPlayer())
+                && host != null && host.getId() == windowOracle
+                && ComboLines.Winner.ORACLE.card.equals(ComboTracker.nameOf(host));
+    }
+
+    // the Oracle line's window (section 6.6's second case, amended 2026-11-04 (the Oracle window)), its trigger on the
+    // stack's top: the action returned last judged first (R21's, the dig's and R30's judges, as in a main phase), then
+    // Thrasios's next activation from the floating pool (LoopSinks.windowDig: our library holds a card, a Thrasios
+    // ready), through the driver's own check and the caps; else null with the wait set, which respond answers with a
+    // pass, the stock AI playing nothing above the trigger: once the library is empty, and whenever the dig cannot go
+    // on (its dig over for the phase, Thrasios gone, the pool short of its price, a cap reached). Each activation
+    // resolves alone above the trigger before the next decision here, since the AI passes above its own item. Null, the
+    // stock's, for a deck holding no loop line. No threshold is read and no cycle runs: the pool was built before
+    // Oracle's cast, so a Kinnan or Basalt Monolith removed in response changes nothing
+    private SpellAbility windowAction() {
+        final ComboTracker t = ComboTracker.of(ai);
+        if (t == null || !holdsLoop(t)) {
+            return null;
+        }
+        final PhaseHandler ph = ai.getGame().getPhaseHandler();
+        sync(ph);
+        waiting = true;
+        if (rounds.stoppedForGame() || rounds.stoppedForTurn(ai)) {
+            return null;
+        }
+        judgeLast();
+        judgeDig();
+        judgeLife();
+        final SpellAbility dig = digOver ? null : LoopSinks.windowDig(ai);
+        if (dig == null || LoopPool.floating(ai) < ComboExecute.priced(ai, dig).getCMC()) {
+            return null;
+        }
+        return thrasiosStep(windowLine, ph, dig);
     }
 
     /** Whether the driver returned an action this turn: ComputerUtil.preventRunAwayActivations is lifted for the rest
@@ -743,6 +825,9 @@ public final class LoopDriver {
         dugFrom = -1;
         digOver = false;
         owed.clear();
+        oracleBuild = false;
+        windowOracle = -1;
+        windowLine = null;
     }
 
     // whether the go-off of this step runs a flicker or recast line now: active, on a line of either kind, in the
@@ -844,13 +929,13 @@ public final class LoopDriver {
     // the start gates (section 6.2), read while no go-off runs this phase: the kind can stop, and something to spend
     // the mana on: Walking Ballista's step (on our battlefield, or castable from our hand), what the stock AI could
     // spend while our hand and battlefield are not those of the last go-off that spent nothing (the futility gate holds
-    // back a go-off whose only spender is the stock AI), Thassa's Oracle's cast at the end of a dig toward it, or
-    // Thrasios's dig
+    // back a go-off whose only spender is the stock AI), Thassa's Oracle's cast at the head of its line (oracleLine),
+    // or Thrasios's dig
     private boolean starts(final ComboLines.Line l) {
         if (!l.loop().canStop()) {
             return false;
         }
-        if (ballistaNeed(l) < 0 && !stockSpends(l) && !oracleDue(l) && dig(l) == null) {
+        if (ballistaNeed(l) < 0 && !stockSpends(l) && !oracleLine(l) && dig(l) == null) {
             return false;
         }
         spent = false;
@@ -1071,12 +1156,37 @@ public final class LoopDriver {
         }
     }
 
-    // a dig toward Thassa's Oracle at its end (section 6.4 step 3): the dig runs (LoopSinks.digsForOracle: Oracle able
-    // to win now), we can win, and our library holds Oracle's threshold of cards or fewer (LoopSinks.oracleThreshold),
-    // so Oracle's cast wins
-    private boolean oracleDue(final ComboLines.Line l) {
-        return LoopSinks.digsForOracle(ai, l) && !ai.cantWin()
-                && ai.getCardsIn(ZoneType.Library).size() <= LoopSinks.oracleThreshold(ai);
+    // whether the Oracle line runs on loop line l now (section 6.4 step 3, amended 2026-11-04 (the Oracle window)):
+    // Oracle in our hand able to win now, its {U}{U} payable and a Thrasios ready (LoopSinks.digsForOracle); we can
+    // win; Thrasios's dig is not over for the phase (judgeDig, R30), so that its window can dig; Oracle's cast is one
+    // the driver may make now, at a price in life below what we will have (mayTake: a build for a cast the check would
+    // refuse for good is never begun); and, read at the line's start alone (its build counts down with the caps), its
+    // whole cost fits what the caps have left (windowFits). Otherwise the line waits, Oracle held (holdsOracle)
+    private boolean oracleLine(final ComboLines.Line l) {
+        if (digOver || !LoopSinks.digsForOracle(ai, l) || ai.cantWin()) {
+            return false;
+        }
+        final SpellAbility cast = LoopSinks.oracleCast(ai);
+        return cast != null && mayTake(cast) && (oracleBuild || windowFits(l));
+    }
+
+    // R28's shape for the Oracle line (THE RULE's fit, section 6.4 step 3, amended 2026-11-04 (the Oracle window)): the
+    // actions it takes from this decision, every one the driver returns, at most what the caps have left
+    // (LoopRounds.left): the cycles of loop line l that bring the pool to Oracle's (LoopSinks.oraclePool) at its net a
+    // cycle (LoopCycles.net), each LoopCycles.actions; Oracle's cast; and one Thrasios activation for each card in our
+    // library. At a boundary the pool floating there counts; mid-cycle it does not, and the cycle in progress counts in
+    // full, so the count is never short. False for a line that nets nothing
+    private boolean windowFits(final ComboLines.Line l) {
+        final int pool = LoopSinks.oraclePool(ai);
+        final int net = LoopCycles.net(ai, l);
+        if (pool < 0 || net <= 0) {
+            return false;
+        }
+        final boolean boundary = LoopCycles.boundary(ai, l);
+        final long lacking = pool - (boundary ? LoopPool.floating(ai) : 0L);
+        final long cycles = (lacking > 0 ? (lacking + net - 1) / net : 0) + (boundary ? 0 : 1);
+        final long actions = cycles * LoopCycles.actions(ai, l) + 1 + ai.getCardsIn(ZoneType.Library).size();
+        return actions <= rounds.left(ai);
     }
 
     // our own hand cast of Thassa's Oracle: a spell, not a copy and not a Play-effect cast, whose host is our Oracle in
@@ -1162,7 +1272,7 @@ public final class LoopDriver {
     // battlefield, else into our hand), ends Thrasios's dig for the phase, so Thrasios takes no more activation in it
     // (R21: a step that gains nothing never burns the caps; the {4} it spent is no gain). A draw limit stops it so
     // (Spirit of the Labyrinth, Leovold, Emissary of Trest, Narset, Parter of Veils: a second draw in a turn draws
-    // nothing), as does a countered activation; the plain dig, the dig toward Oracle and the dig to empty alike
+    // nothing), as does a countered activation; the plain dig, the dig to empty and the Oracle line's window alike
     private void judgeDig() {
         if (dugFrom < 0) {
             return;
@@ -1203,17 +1313,11 @@ public final class LoopDriver {
         return sa.canPlay() && sa.checkRestrictions(restrictionHost(ai, sa), ai);
     }
 
-    // the driver's own check of an action it returns (the plan's Calls): allowed, not priced at the whole of the life
-    // we will have once what is pending has resolved, or more (R30, lifeAhead: the stock refusal,
-    // AiController.saSideEffects', which the driver's own pricing narrows), its cost as the engine prices it now paid
-    // by the pool and our untapped lands, and each target it has set one it can target. A skipped action is R21's to
-    // read (judgeLast), which fails its line, not the go-off
+    // the driver's own check of an action it returns (the plan's Calls): one it may take (mayTake), its cost as the
+    // engine prices it now paid by the pool and our untapped lands, and each target it has set one it can target. A
+    // skipped action is R21's to read (judgeLast), which fails its line, not the go-off
     private boolean passes(final SpellAbility sa) {
-        if (!allowed(ai, sa)) {
-            return false;
-        }
-        final int life = lifeCost(ai, sa);
-        if (life > 0 && life >= lifeAhead()) {
+        if (!mayTake(sa)) {
             return false;
         }
         if (!LoopPool.pays(ai, ComboExecute.priced(ai, sa), null)) {
@@ -1230,6 +1334,17 @@ public final class LoopDriver {
             }
         }
         return true;
+    }
+
+    // the part of the driver's own check that no pool can change: allowed, and not priced at the whole of the life we
+    // will have once what is pending has resolved, or more (R30, lifeAhead: the stock refusal,
+    // AiController.saSideEffects', which the driver's own pricing narrows)
+    private boolean mayTake(final SpellAbility sa) {
+        if (!allowed(ai, sa)) {
+            return false;
+        }
+        final int life = lifeCost(ai, sa);
+        return life <= 0 || life < lifeAhead();
     }
 
     // the card a CantBeActivated or CantBeCast static is read against: an ability's host; for a spell an LKI copy of it

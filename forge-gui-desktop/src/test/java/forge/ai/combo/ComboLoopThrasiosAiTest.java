@@ -51,15 +51,19 @@ import forge.util.MyRandom;
  * 2026-10-29-combo-aware-ai-loops-design.md section 6.4 steps 2 and 3, section 6.5; the plan's Task B6, R2, R8, R20 and
  * R22). Below the stock target the driver refills, at it the stock walk plays, paying from the pool; when the walk
  * chooses nothing Thrasios digs, one activation a decision, refilling to its {4} first, while our library holds more
- * than four cards, a card in it would add to our board, and our board is short of five times lethal. A dig toward a
- * library-out winner goes on whatever the library holds: with Thassa's Oracle in hand to our devotion to blue and
- * Oracle's own {U}{U}, the driver holding Oracle from the stock AI meanwhile and casting it there; with Laboratory
- * Maniac on ours to empty and one draw more; below the floor only while we can win and no opponent has mana to answer
- * it. Unless a test says otherwise the board is Kinnan's list registered, the tracker reading the shipped lines, every
- * seat on the Default profile, the AI in its own Main 1 with no AI deadline, Kinnan and Thrasios (ready) and Basalt
- * Monolith on our battlefield, our library built card by card, top first, and the opponent at 20 with nothing.
- * {@link #play} runs the whole game loop, where the stock AI decides too; {@link #drive} plays the driver's own
- * decisions with a walk that never chooses anything, and {@link #slot} the go-off slot's alone.
+ * than its floor, a card in it would add to our board, and our board is short of five times lethal. With Laboratory
+ * Maniac on ours the dig goes to empty and one draw more, whatever the library holds, below the floor only while we can
+ * win and no opponent has mana to answer it. With Thassa's Oracle in hand the Oracle line runs instead (section 6.4
+ * step 3 and section 6.6, amended 2026-11-04 (the Oracle window)): no dig toward Oracle in a main phase; the driver
+ * builds the pool to what a dig of our whole library costs and Oracle's own price, holding Oracle from the stock AI
+ * meanwhile, casts Oracle, and above its entering trigger digs to empty, one activation a decision, then passes, the
+ * stock AI playing nothing there. Unless a test says otherwise the board is Kinnan's list registered, the tracker
+ * reading the shipped lines, every seat on the Default profile, the AI in its own Main 1 with no AI deadline, Kinnan
+ * and Thrasios (ready) and Basalt Monolith on our battlefield, our library built card by card, top first, and the
+ * opponent at 20 with nothing. {@link #play} runs the whole game loop, where the stock AI decides too; {@link #drive}
+ * plays the driver's own decisions with a walk that never chooses anything, and {@link #slot} the go-off slot's alone;
+ * {@link #toTheOracleCast}, {@link #castAndTrigger} and {@link #answers} play the Oracle line's build, its cast and its
+ * window one decision at a time.
  */
 public class ComboLoopThrasiosAiTest extends AITest {
     private static final String KINNAN = "Kinnan, Bonder Prodigy";
@@ -72,6 +76,9 @@ public class ComboLoopThrasiosAiTest extends AITest {
     private static final String MEMNITE = "Memnite";
     private static final String ENDLESS_ONE = "Endless One";
     private static final String COUNTERSPELL = "Counterspell";
+    private static final String MURDER = "Murder";
+    /** Draws its controller a card as it enters: a trigger of ours that is not Thassa's Oracle's. */
+    private static final String VISIONARY = "Elvish Visionary";
     private static final String DIVINATION = "Divination";
     private static final String ISLAND = "Island";
     private static final String FOREST = "Forest";
@@ -434,17 +441,34 @@ public class ComboLoopThrasiosAiTest extends AITest {
      *  is not over and {@code done} does not hold, at most {@link #MAX_STEPS} steps; returns our stack items in the
      *  order the loop put them there, each as first seen. */
     private List<Seen> play(final Predicate<Game> done) {
+        return play(done, false);
+    }
+
+    /** {@link #play}, and with {@code counter} the opponent's Counterspell put above our cast of Thassa's Oracle the
+     *  moment the game loop first puts it on the stack, once (ComboLoopBoards.theirResponse: nothing paid, the opponent
+     *  holding priority). */
+    private List<Seen> play(final Predicate<Game> done, final boolean counter) {
         final List<Seen> seen = new ArrayList<>();
         final Set<Integer> ids = new HashSet<>();
         int poolBefore = pool();
+        boolean countered = !counter;
         for (int step = 0; step < MAX_STEPS && !game.isGameOver() && !done.test(game); step++) {
             game.getPhaseHandler().mainLoopStep();
+            SpellAbility oracle = null;
             for (final SpellAbilityStackInstance si : game.getStack()) {
                 final Card host = si.getSourceCard();
                 if (ids.add(si.getId()) && host != null && ai.equals(si.getActivatingPlayer())) {
-                    seen.add(new Seen(si.getSpellAbility(), host, library(), power(), names(ZoneType.Hand),
-                            poolBefore));
+                    final Seen s = new Seen(si.getSpellAbility(), host, library(), power(), names(ZoneType.Hand),
+                            poolBefore);
+                    seen.add(s);
+                    if (s.cast(ORACLE)) {
+                        oracle = si.getSpellAbility();
+                    }
                 }
+            }
+            if (oracle != null && !countered) {
+                ComboLoopBoards.theirResponse(game, opp, COUNTERSPELL, oracle);
+                countered = true;
             }
             poolBefore = pool();
         }
@@ -615,50 +639,72 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
     }
 
-    // R22 on the Oracle dig's board, made so its threshold lies below the floor: Basalt Monolith and Nyxbloom Ancient
-    // (3430-4131) for Kinnan, so devotion to blue is Thrasios's 1 and Oracle wins from three cards; in our Main 2,
-    // where the stock AI would cast Oracle. The opponent has an untapped Island: Thrasios digs from ten to the floor,
-    // four, and no further, and Oracle is not cast, still held.
+    // R22 amended for Oracle (Evan, 2026-11-04; section 6.4 step 3 and section 6.6, amended 2026-11-04 (the Oracle
+    // window)): the dig in response to Oracle's trigger goes to empty whatever mana the opponents have open, since only
+    // a counter of the trigger can stop that finish, where a stop above empty loses to any removal of a blue permanent
+    // of ours. nyxbloomOracleBoard (Basalt Monolith and Nyxbloom Ancient, 3430-4131, six a cycle; devotion to blue
+    // Thrasios's 1) with the opponent's two untapped Islands, in our Main 2: through the whole game loop Oracle is cast
+    // with our library at ten, nothing dug before it, ten digs then take the library to empty above its trigger, and
+    // the game ends WinsGameSpellEffect. Was noDigBelowTheFloorIntoOpenMana, which pinned R22's Oracle clause: the dig
+    // toward Oracle stopped at the floor, four, into open mana, and Oracle stayed held.
     @Test
-    public void noDigBelowTheFloorIntoOpenMana() {
-        final Card oracle = nyxbloomOracleBoard();
+    public void theWindowDigsToEmptyAgainstOpenMana() {
+        nyxbloomOracleBoard();
         addCard(ISLAND, opp);
-        assertEquals(LoopSinks.oracleThreshold(ai), 3, "Thrasios's {U} and Oracle's {U}{U}");
-        final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN2));
-        assertEquals(only(seen, Seen::dig).size(), 6, "ten to four: " + seen);
-        assertEquals(library(), LoopSinks.LIBRARY_FLOOR, "the floor");
-        assertTrue(only(seen, s -> s.cast(ORACLE)).isEmpty(), "Oracle was cast: " + seen);
-        assertTrue(ai.getCardsIn(ZoneType.Hand).contains(oracle));
-        assertFalse(game.isGameOver());
-        assertTrue(driver.holdsOracle(castOf(oracle)), "still held: four cards, above Oracle's three");
+        addCard(ISLAND, opp);
+        final List<Seen> seen = play(g -> false);
+        final List<Seen> casts = only(seen, s -> s.cast(ORACLE));
+        assertEquals(casts.size(), 1, "one Oracle cast: " + seen);
+        assertEquals(casts.get(0).library(), 10, "cast with the library whole: " + seen);
+        assertTrue(only(seen.subList(0, seen.indexOf(casts.get(0))), Seen::dig).isEmpty(),
+                "a dig before the cast: " + seen);
+        assertWonBy(ORACLE, seen);
+        assertEquals(only(seen, Seen::dig).size(), 10, "ten to empty, above the trigger: " + seen);
+        assertTrue(ai.getCardsIn(ZoneType.Library).isEmpty());
     }
 
-    // The Oracle dig (section 6.4 step 3): Thassa's Oracle in hand, two untapped Islands and a library of ten Forests,
-    // in our Main 2, where the stock AI would cast Oracle (in Main 1 it waits for Main 2 whatever the hold). Devotion
-    // to blue is Kinnan's and Thrasios's 2, so Oracle wins from four cards. The stock AI never casts Oracle, from
-    // before the go-off's first decision on; Thrasios digs from ten to four, a Forest onto our battlefield each time;
-    // at four the driver casts Oracle, and the game ends WinsGameSpellEffect.
+    // The Oracle line (section 6.4 step 3 and section 6.6, amended 2026-11-04 (the Oracle window)): Thassa's Oracle in
+    // hand, two untapped Islands and a library of ten Forests, in our Main 2. Devotion to blue is Kinnan's and
+    // Thrasios's 2, so Oracle's threshold is four, and Oracle is held from before the go-off's first decision. The
+    // driver digs nothing first: every action before the cast is Basalt Monolith's, until at a boundary the pool holds
+    // what a dig of our whole library costs, Thrasios's 4 for each of the ten cards, and Oracle's own 2 ({U}{U}, which
+    // the Islands pay): 42, after 42 cycles of Basalt's tap and untap. It casts Oracle with the library at ten. Above
+    // Oracle's entering trigger the stack-response slot answers Thrasios's activation, one a decision, each resolved
+    // alone above the trigger, the library falling from ten to none, and then a pass; the trigger resolves on the empty
+    // library and the game ends WinsGameSpellEffect, the pool's 2 left. Was theOracleDigHoldsOracleAndWins, which
+    // pinned the dig first: ten to four in the main phase, then Oracle's cast at its threshold.
     @Test
-    public void theOracleDigHoldsOracleAndWins() {
-        start();
-        moveToMain2(game, ai);
-        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
-        addCard(ISLAND, ai);
-        addCard(ISLAND, ai);
-        library(FOREST, 10);
+    public void theOracleLineCastsOracleFirstAndDigsInResponse() {
+        final Card oracle = oracleBoard(10);
         assertTrue(LoopSinks.digsForOracle(ai, line(KINNAN_BASALT)));
         assertEquals(LoopSinks.oracleThreshold(ai), 4, "Kinnan's {U}, Thrasios's {U} and Oracle's {U}{U}");
         assertTrue(driver.holdsOracle(castOf(oracle)), "held before the go-off's first decision");
-        final List<Seen> dug = play(g -> library() == 4 && g.getStack().isEmpty());
-        assertEquals(only(dug, Seen::dig).size(), 6, "ten to four: " + dug);
-        assertTrue(only(dug, s -> s.cast(ORACLE)).isEmpty(), "the stock AI cast Oracle: " + dug);
-        assertTrue(ai.getCardsIn(ZoneType.Hand).contains(oracle));
-        final SpellAbility cast = act();
-        assertNotNull(cast, "the driver casts Oracle at four");
-        assertTrue(cast.isSpell());
+        final List<SpellAbility> built = new ArrayList<>();
+        final SpellAbility cast = toTheOracleCast(built);
+        assertNotNull(cast, "the driver never cast Oracle; its actions: " + built);
         assertSame(cast.getHostCard(), oracle);
-        ai.getController().playChosenSpellAbility(cast);
-        assertWonBy(ORACLE, play(g -> false));
+        for (final SpellAbility sa : built) {
+            assertSame(sa.getHostCard(), basalt, "an action before the cast that is not Basalt's: " + built);
+        }
+        assertEquals(built.size(), 2 * 42, "42 cycles of Basalt's tap and untap");
+        assertEquals(library(), 10, "no dig before the cast");
+        assertEquals(pool(), 4 * 10 + 2, "the pool at the cast: Thrasios's 4 a card and Oracle's 2");
+        assertTrue(basalt.isUntapped(), "the cast at a boundary");
+        final SpellAbilityStackInstance top = castAndTrigger(cast);
+        assertTrue(top.isTrigger() && ai.equals(top.getActivatingPlayer()), "our trigger on top: " + top);
+        assertEquals(ComboTracker.nameOf(top.getSourceCard()), ORACLE);
+        assertEquals(pool(), 4 * 10 + 2, "the Islands paid Oracle's {U}{U}");
+        final List<LoopDriver.Answer> answers = answers(MAX_ACTIONS);
+        assertEquals(answers.size(), 11, "ten digs and a pass: " + answers);
+        for (int i = 0; i < 10; i++) {
+            assertSame(answers.get(i).action(), digOf(thrasios), "the window's answer " + i + ": " + answers);
+        }
+        assertNotNull(answers.get(10), "the stock's answer after the dig, not a pass");
+        assertNull(answers.get(10).action(), "a pass once the library is empty");
+        assertEquals(library(), 0, "dug to empty");
+        assertEquals(pool(), 2);
+        resolveTheTrigger();
+        assertWonBy(ORACLE, List.of());
     }
 
     // Cursed Totem (activated abilities of creatures can't be activated) stops Thrasios, and the stock plays go on:
@@ -782,20 +828,6 @@ public class ComboLoopThrasiosAiTest extends AITest {
 
     // ---- beyond the plan's tests ----
 
-    // R22's other half on the Oracle dig's below-the-floor board (Basalt, Nyxbloom and Thrasios; Oracle wins from
-    // three cards): with no opponent able to answer, Thrasios digs past the floor to three, and the driver casts
-    // Oracle there, at its threshold and not one card sooner; the game ends WinsGameSpellEffect.
-    @Test
-    public void theOracleDigGoesBelowTheFloorWhenNoOpponentHasMana() {
-        nyxbloomOracleBoard();
-        final List<Seen> seen = play(g -> false);
-        assertWonBy(ORACLE, seen);
-        assertEquals(only(seen, Seen::dig).size(), 7, "ten to three: " + seen);
-        final List<Seen> casts = only(seen, s -> s.cast(ORACLE));
-        assertEquals(casts.size(), 1, "one Oracle cast: " + seen);
-        assertEquals(casts.get(0).library(), 3, "cast at the threshold, below the floor");
-    }
-
     // R22 for Laboratory Maniac's dig: the opponent's untapped Island, Laboratory Maniac on ours, a library of six
     // Forests. Thrasios digs to the floor and no further, the game still on.
     @Test
@@ -829,12 +861,14 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertSame(thrasiosOf(l), digOf(thrasios), "five cards: above the floor");
     }
 
-    // The hold's edge: our library above Oracle's threshold holds Oracle, at the threshold it does not, the driver
-    // then casting it itself. Thassa's Oracle in hand, two Islands, Kinnan, Basalt and Thrasios (a threshold of 4), in
-    // our Main 2: five cards, held and the stock cast vetoed, the reading drawing nothing; four, neither, and no dig
-    // either, Oracle's cast being due. Only our hand cast of Oracle is held: not another spell, nor a cast of an Oracle
-    // from our graveyard. And none while no loop line can run (the opponent's Null Rod denies the rock lines) or
-    // Thrasios cannot dig (the opponent's Cursed Totem).
+    // The hold's edge (its shape unchanged, amended 2026-11-04 (the Oracle window): it waits for the Oracle line's
+    // window): our library above Oracle's threshold holds Oracle, at the threshold it does not. Thassa's Oracle in
+    // hand, two Islands, Kinnan, Basalt and Thrasios (a threshold of 4), in our Main 2: five cards, held and the stock
+    // cast vetoed, the reading drawing nothing, and no dig toward Oracle in a main phase, the line digging in its
+    // window; four, neither held nor dug for. Only our hand cast of Oracle is held: not another spell, nor a cast of an
+    // Oracle from our graveyard. And none while no loop line can run (the opponent's Null Rod denies the rock lines) or
+    // Thrasios cannot dig (the opponent's Cursed Totem). Its dig half, at four "nor a dig: Oracle's cast is due",
+    // pinned the dig toward Oracle's stop at the threshold, retired with that dig.
     @Test
     public void theOracleHoldEndsAtTheThreshold() {
         start();
@@ -849,13 +883,14 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertTrue(driver.holdsOracle(castOf(oracle)), "five cards, above the threshold");
         assertEquals(MyRandom.callCount() - before, 0, "the hold drew");
         assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "five cards: a main-phase dig toward Oracle");
         assertFalse(driver.holdsOracle(castOf(counterspell)), "no other spell is held");
         assertFalse(driver.holdsOracle(castOf(buried)), "nor an Oracle cast from anywhere but our hand");
         game.getAction().moveToGraveyard(ai.getCardsIn(ZoneType.Library).get(0), null);
         assertEquals(library(), 4);
         assertFalse(driver.holdsOracle(castOf(oracle)), "at the threshold: no hold");
         assertFalse(ComboHold.vetoesCast(ai, castOf(oracle)));
-        assertNull(thrasiosOf(line(KINNAN_BASALT)), "nor a dig: Oracle's cast is due");
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "four cards: a main-phase dig toward Oracle");
         library(FOREST, 1);
         assertTrue(driver.holdsOracle(castOf(oracle)), "five again");
         final Card rod = addCard("Null Rod", opp);
@@ -922,8 +957,10 @@ public class ComboLoopThrasiosAiTest extends AITest {
     }
 
     // Chromatic Orrery lets the loop's colourless mana pay Oracle's {U}{U} (spec section 9): Kinnan, Basalt, Thrasios
-    // and Orrery on ours, no land at all, Thassa's Oracle in hand and a library of ten Forests. The dig toward Oracle
-    // could run, Thrasios digs for it, and Oracle is held.
+    // and Orrery on ours, no land at all, Thassa's Oracle in hand and a library of ten Forests. The Oracle line can run
+    // and holds Oracle; no dig toward Oracle runs in a main phase (amended 2026-11-04 (the Oracle window)): the
+    // go-off's first decision is the line's build, Basalt's tap. Its old dig half, "the dig toward Oracle runs", pinned
+    // the main-phase dig toward Oracle, retired.
     @Test
     public void chromaticOrreryLetsTheLoopPayOraclesBluePips() {
         start();
@@ -932,62 +969,64 @@ public class ComboLoopThrasiosAiTest extends AITest {
         library(FOREST, 10);
         final ComboLines.Line l = line(KINNAN_BASALT);
         assertTrue(LoopSinks.digsForOracle(ai, l), "no land, but the loop's mana pays {U}{U} through Orrery");
-        assertSame(thrasiosOf(l), digOf(thrasios), "the dig toward Oracle runs");
         assertTrue(driver.holdsOracle(castOf(oracle)), "and holds Oracle");
+        assertNull(thrasiosOf(l), "a main-phase dig toward Oracle");
+        assertSame(act(), manaOf(basalt), "the line's build");
     }
 
-    // Oracle's cast through Chromatic Orrery waits for the pool that pays it: Orrery's board with a library of four,
-    // Oracle's threshold, in our Main 2. No land pays Oracle's {U}{U} and the pool is empty, so the driver's first
-    // decision is not the cast, which would fail its payment, but Basalt's tap; then the cast, the pool's colourless
-    // paying the blue through Orrery, and the game ends WinsGameSpellEffect.
+    // Oracle's cast through Chromatic Orrery is paid from the line's pool (section 6.4 step 3, amended 2026-11-04 (the
+    // Oracle window)): Orrery's board with a library of four, in our Main 2. No land pays Oracle's {U}{U}, so the pool
+    // the line builds holds it beside the window's need: Thrasios's 4 for each of the four cards and Oracle's 2, 18 at
+    // a boundary, after 18 cycles of Basalt's tap and untap. The cast takes its {U}{U} through Orrery and leaves the
+    // window's 16 at least; above the trigger the driver digs four and passes, and the game ends WinsGameSpellEffect.
+    // Was theOracleCastThroughChromaticOrreryWaitsForThePool, which pinned the cast at the first pool that paid it, 4,
+    // at Oracle's threshold.
     @Test
-    public void theOracleCastThroughChromaticOrreryWaitsForThePool() {
+    public void theOracleLinePaysOraclesBlueFromItsPoolThroughOrrery() {
         start();
         moveToMain2(game, ai);
         addCard("Chromatic Orrery", ai);
         final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
         library(FOREST, 4);
-        final SpellAbility tap = act();
-        assertSame(tap, manaOf(basalt), "the cast waits for the pool: " + tap);
-        playAndResolve(tap);
-        final SpellAbility cast = act();
-        assertNotNull(cast, "Oracle's cast from the pool");
-        assertTrue(cast.isSpell());
+        final List<SpellAbility> built = new ArrayList<>();
+        final SpellAbility cast = toTheOracleCast(built);
+        assertNotNull(cast, "the driver never cast Oracle; its actions: " + built);
         assertSame(cast.getHostCard(), oracle);
-        ai.getController().playChosenSpellAbility(cast);
-        assertWonBy(ORACLE, play(g -> false));
+        assertEquals(pool(), 4 * 4 + 2, "the pool at the cast: " + built);
+        assertEquals(built.size(), 2 * 18, "18 cycles of Basalt's tap and untap");
+        castAndTrigger(cast);
+        assertTrue(pool() >= 4 * 4, "the window's need kept: " + pool());
+        final List<LoopDriver.Answer> answers = answers(MAX_ACTIONS);
+        assertEquals(answers.size(), 5, "four digs and a pass: " + answers);
+        assertNull(answers.get(4).action(), "a pass: " + answers);
+        assertEquals(library(), 0, "dug to empty");
+        resolveTheTrigger();
+        assertWonBy(ORACLE, List.of());
     }
 
-    // Oracle's cast passes the driver's own check, its price as the engine prices it now (the plan's rules), and a
-    // cast the check refuses ends nothing. Under the opponent's Sphere of Resistance (spells cost {1} more) Oracle
-    // costs {1}{U}{U}, which our two Islands alone do not pay; Thassa's Oracle in hand, our library of five Forests.
-    // The go-off builds to the stock target, Oracle's 2, and the walk plays (its round spends the pool); our library
-    // then milled to Oracle's threshold of four, the driver does not return the cast, which would fail its payment:
-    // it refills, Basalt's tap, the go-off running on, and then casts Oracle, the pool paying the {1}.
+    // A tax on Oracle's cast is built for (section 6.4 step 3, amended 2026-11-04 (the Oracle window)): under the
+    // opponent's Sphere of Resistance (spells cost {1} more) Oracle costs {1}{U}{U}, which our two Islands alone do not
+    // pay; the Oracle line's board with a library of five. The line builds to Thrasios's 4 for each of the five cards
+    // and Oracle's 3, 23, casts Oracle, the pool paying what the Islands do not, and keeps the window's 20 at least:
+    // five digs, a pass, and the game ends WinsGameSpellEffect. Was aTaxedOracleCastWaitsForThePoolToPayIt, which
+    // pinned a cast the check refused for its price waiting for the refill that paid it, at Oracle's threshold.
     @Test
-    public void aTaxedOracleCastWaitsForThePoolToPayIt() {
-        start();
-        moveToMain2(game, ai);
-        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
-        addCard(ISLAND, ai);
-        addCard(ISLAND, ai);
-        library(FOREST, 5);
+    public void aTaxedOracleCastIsPaidFromTheBuild() {
+        final Card oracle = oracleBoard(5);
         addCard("Sphere of Resistance", opp);
         assertEquals(ComboExecute.priced(ai, LoopSinks.oracleCast(ai)).getCMC(), 3, "Oracle's {U}{U} and the tax");
-        assertEquals(slot(MAX_ACTIONS).size(), 4, "built to Oracle's 2, then the walk's turn");
-        driver.noteStockPlay(castOf(oracle));
-        ai.getManaPool().clearPool(false);
-        game.getAction().moveToGraveyard(ai.getCardsIn(ZoneType.Library).get(0), null);
-        assertEquals(library(), 4, "Oracle's threshold");
-        final SpellAbility tap = act();
-        assertSame(tap, manaOf(basalt), "the cast waits for the pool: " + tap);
-        playAndResolve(tap);
-        final SpellAbility cast = act();
-        assertNotNull(cast, "the refused cast ended nothing: Oracle's cast, the pool paying its {1}");
-        assertTrue(cast.isSpell());
+        final List<SpellAbility> built = new ArrayList<>();
+        final SpellAbility cast = toTheOracleCast(built);
+        assertNotNull(cast, "the driver never cast Oracle; its actions: " + built);
         assertSame(cast.getHostCard(), oracle);
-        ai.getController().playChosenSpellAbility(cast);
-        assertWonBy(ORACLE, play(g -> false));
+        assertEquals(pool(), 4 * 5 + 3, "the pool at the cast: " + built);
+        castAndTrigger(cast);
+        assertTrue(pool() >= 4 * 5, "the window's need kept: " + pool());
+        final List<LoopDriver.Answer> answers = answers(MAX_ACTIONS);
+        assertEquals(answers.size(), 6, "five digs and a pass: " + answers);
+        assertNull(answers.get(5).action(), "a pass: " + answers);
+        resolveTheTrigger();
+        assertWonBy(ORACLE, List.of());
     }
 
     // A dig below the floor reads the opponents' mana to answer it (R22): Laboratory Maniac on ours and a library of
@@ -1131,7 +1170,8 @@ public class ComboLoopThrasiosAiTest extends AITest {
     // Oracle's threshold, in our Main 2. Ballista pings the Angel first; with that ping undone (its damage removed) the
     // volley is over for the phase and the Angel stands, so we still cannot win. The go-off goes on for the other
     // opponent (our 12 power short of five times their 3), and the driver refills toward the stock target, casting no
-    // Oracle, which could not win.
+    // Oracle, which could not win, nor building the Oracle line's pool for it (amended 2026-11-04 (the Oracle window)):
+    // two cycles to Oracle's {U}{U}, then the walk's turn.
     @Test
     public void noOracleCastWhileWeCannotWin() {
         pod();
@@ -1161,6 +1201,10 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertTrue(ai.cantWin(), "the Angel stands");
         assertNotNull(next, "the go-off goes on for the other opponent");
         assertSame(next, manaOf(basalt), "a refill, no Oracle cast: " + next);
+        playAndResolve(next);
+        final List<SpellAbility> rest = slot(MAX_ACTIONS);
+        assertTrue(only(rest, ComboLoopThrasiosAiTest::isOracleCast).isEmpty(), "Oracle was cast: " + rest);
+        assertEquals(rest.size(), 3, "to the stock target, Oracle's {U}{U}, then the walk's turn: " + rest);
     }
 
     // A dig toward Thassa's Oracle needs Oracle able to win now, as piece 1 reads its own Oracle lines: on the Oracle
@@ -1219,27 +1263,31 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertTrue(ai.getCardsIn(ZoneType.Hand).contains(oracle));
     }
 
-    // The futility gate never holds back Oracle's winning cast: on the below-the-floor board (Basalt, Nyxbloom and
-    // Thrasios; Oracle wins from three cards) with a library of four and the opponent's untapped Island, the go-off
-    // builds to the stock target (Oracle's {U}{U}), the walk chooses nothing (Oracle held) and Thrasios keeps the
-    // floor: a futile build, its fingerprint kept. One card of our library milled (our hand and battlefield as they
-    // were), Oracle's cast is due, and the same board starts a go-off that casts it.
+    // The futility gate never holds back the Oracle line (section 6.2, amended 2026-11-04 (the Oracle window): Thassa's
+    // Oracle's cast at the head of its line still starts a go-off): the Oracle line's board with room for 40 actions,
+    // where the line takes 95 (84 cycle steps, the cast and ten digs) and does not fit. The go-off builds to the stock
+    // target, Oracle's {U}{U}, the walk chooses nothing (Oracle held) and ten Forests hold nothing worth a plain dig: a
+    // futile build, its fingerprint kept, and the same board starts no go-off again. Our library milled to three, our
+    // hand and battlefield as they were, the line fits, 28 of the 36 actions left (twelve cycles from the pool's 2 to
+    // 14, the cast and three digs), and the same board starts a go-off that casts Oracle. Was
+    // theOracleCastStartsAGoOffPastTheFutilityGate, whose futile build was the dig toward Oracle's stop at the floor.
     @Test
-    public void theOracleCastStartsAGoOffPastTheFutilityGate() {
-        final Card oracle = nyxbloomOracleBoard();
-        addCard(ISLAND, opp);
-        while (library() > 4) {
+    public void theOracleLineStartsAGoOffPastTheFutilityGate() {
+        final Card oracle = oracleBoard(10);
+        driver.useRounds(new LoopRounds(40, LoopRounds.GAME_CAP));
+        final List<Act> acts = drive(MAX_ACTIONS);
+        assertEquals(acts.size(), 4, "built to Oracle's 2, then the walk's turn: " + acts);
+        assertEquals(asks, 1, "the walk's turn, once");
+        assertTrue(only(acts, Act::dig).isEmpty(), "a dig: " + acts);
+        assertNull(act(), "the futile build is not repeated");
+        while (library() > 3) {
             game.getAction().moveToGraveyard(ai.getCardsIn(ZoneType.Library).get(0), null);
         }
-        final List<Act> acts = drive(MAX_ACTIONS);
-        assertTrue(only(acts, Act::dig).isEmpty(), "Thrasios kept the floor: " + acts);
-        assertNull(act(), "the futile build is not repeated");
-        game.getAction().moveToGraveyard(ai.getCardsIn(ZoneType.Library).get(0), null);
-        assertEquals(library(), 3, "Oracle's threshold");
-        final SpellAbility cast = act();
-        assertNotNull(cast, "a go-off past the futility gate");
-        assertTrue(cast.isSpell());
+        final List<SpellAbility> built = new ArrayList<>();
+        final SpellAbility cast = toTheOracleCast(built);
+        assertNotNull(cast, "a go-off past the futility gate; its actions: " + built);
         assertSame(cast.getHostCard(), oracle, "Oracle's cast: " + cast);
+        assertEquals(built.size(), 2 * 12, "twelve cycles from the pool's 2 to 14");
     }
 
     // Thrasios's turn (the walk chose nothing at the target, the refill going on to Thrasios's {4} without asking it
@@ -1498,24 +1546,6 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "the floor is four");
     }
 
-    // The floor's reading (LoopSinks.floor), in our Main 1: four with no draw trigger of ours; one more for Phyrexian
-    // Arena (a draw at our next upkeep, before our draw step) and seven more for Jin-Gitaxias (at our end step);
-    // Rhystic Study's optional draw adds nothing; and beside Nezahal, Primal Tide, whose draws wait on the opponents'
-    // spells, no dig that stops at the floor runs.
-    @Test
-    public void theFloorCountsTheDrawsOurTriggersAreDue() {
-        start();
-        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR, "no draw trigger of ours");
-        addCard("Phyrexian Arena", ai);
-        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 1, "Phyrexian Arena's one at our next upkeep");
-        ComboLoopBoards.ready(addCard(JIN, ai));
-        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 8, "and Jin's seven at our end step");
-        addCard(RHYSTIC, ai);
-        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 8, "an optional draw adds nothing");
-        ComboLoopBoards.ready(addCard(NEZAHAL, ai));
-        assertEquals(floorOf(), Integer.MAX_VALUE, "Nezahal's draws cannot be counted");
-    }
-
     // Finding 1, R30: a draw that costs us life ends Thrasios's dig for the phase. The opponent's Fate Unraveler deals
     // 1 to us for each card we draw, which no price of the activation reads: a library of ten Memnites, one activation
     // draws one, its 1 damage is measured at the next decision, and Thrasios digs no more (the floor alone would have
@@ -1533,132 +1563,105 @@ public class ComboLoopThrasiosAiTest extends AITest {
 
     // ---- the final review's round 1: what its mutation pass found untested ----
 
-    // The floor reads a count as it is written (LoopSinks.floor's plain number): a whole number of one to three digits,
-    // each read in base ten, one card when none is written; any other count cannot be read, and beside it no dig that
-    // stops at the floor runs, beside a count it can read or not. Each draw here is our upkeep trigger's, once before
-    // our next draw step.
+    // The plain dig's floor reads a count as it is written (LoopSinks.plainFloor's plain number): a whole number of one
+    // to three digits, each read in base ten, one card when none is written; any other count cannot be read, and beside
+    // it no plain dig runs, beside a count it can read or not. Each draw here is our upkeep trigger's, once at each of
+    // our next four upkeeps. Moved from the floor of the dig toward Thassa's Oracle, retired 2026-11-04 (the Oracle
+    // window), which counted it once, before our next draw step.
     @Test
-    public void theFloorReadsAPlainNumberOfCardsAsWritten() {
+    public void thePlainDigsFloorReadsAPlainNumberOfCardsAsWritten() {
         start();
         final int base = LoopSinks.LIBRARY_FLOOR;
         final String up = phaseTrigger("Upkeep", "You");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 2"}), base + 2, "2");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You"}), base + 1, "no NumCards: one card");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | NumCards$ 3"}), base + 3, "no Defined: us");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 19"}), base + 19, "19");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 10"}), base + 10, "10");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 123"}), base + 123, "123");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 0"}), base, "0");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 1234"}), Integer.MAX_VALUE,
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You | NumCards$ 2"), base + 2 * 4, "2");
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You"), base + 4, "no NumCards: one card");
+        assertEquals(plainFloorWith(up, "DB$ Draw | NumCards$ 3"), base + 3 * 4, "no Defined: us");
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You | NumCards$ 19"), base + 19 * 4, "19");
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You | NumCards$ 10"), base + 10 * 4, "10");
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You | NumCards$ 123"), base + 123 * 4, "123");
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You | NumCards$ 0"), base, "0");
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You | NumCards$ 1234"), Integer.MAX_VALUE,
                 "four digits are no plain number");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ X"}), Integer.MAX_VALUE, "X");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 5."}), Integer.MAX_VALUE, "5.");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 7"},
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You | NumCards$ X"), Integer.MAX_VALUE, "X");
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You | NumCards$ 5."), Integer.MAX_VALUE, "5.");
+        assertEquals(plainFloorWithEach(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 7"},
                 new String[] {up, "DB$ Draw | Defined$ You | NumCards$ X"}), Integer.MAX_VALUE,
                 "a count that cannot be read, beside one that can");
     }
 
-    // The floor counts a draw of ours that is mandatory: not one with a may on its trigger or on its Draw, nor one with
-    // an UnlessCost, nor an opponent's draw, nor, as spec section 9 reads it, the triggered player's; a draw by each
-    // player is ours too. A mandatory draw of ours on a trigger of another mode, or on a phase trigger that names no
-    // phase, cannot be counted. A suppressed trigger draws nothing, nor does one that works from another zone.
+    // The plain dig's floor counts a draw of ours that is mandatory: not one with a may on its trigger or on its Draw,
+    // nor one with an UnlessCost, nor an opponent's draw, nor, as spec section 9 reads it, the triggered player's; a
+    // draw by each player is ours too. A mandatory draw of ours on a trigger of another mode, or on a phase trigger
+    // that names no phase, cannot be counted. A suppressed trigger draws nothing, nor does one that works from another
+    // zone. Each draw that counts here is our upkeep trigger's three, at each of our next four upkeeps. Moved from the
+    // floor of the dig toward Thassa's Oracle, retired 2026-11-04 (the Oracle window).
     @Test
-    public void theFloorCountsOnlyWhatWeMustDraw() {
+    public void thePlainDigsFloorCountsOnlyWhatWeMustDraw() {
         start();
         final int base = LoopSinks.LIBRARY_FLOOR;
         final String up = phaseTrigger("Upkeep", "You");
-        assertEquals(floorWith(new String[] {up + " | OptionalDecider$ You", "DB$ Draw | Defined$ You | NumCards$ 3"}),
-                base, "a may on the trigger");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 3 | OptionalDecider$ You"}),
-                base, "a may on the Draw");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ You | NumCards$ 3 | UnlessCost$ 1"}), base,
+        assertEquals(plainFloorWith(up + " | OptionalDecider$ You", "DB$ Draw | Defined$ You | NumCards$ 3"), base,
+                "a may on the trigger");
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You | NumCards$ 3 | OptionalDecider$ You"), base,
+                "a may on the Draw");
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ You | NumCards$ 3 | UnlessCost$ 1"), base,
                 "an UnlessCost");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ Player | NumCards$ 3"}), base + 3,
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ Player | NumCards$ 3"), base + 3 * 4,
                 "each player draws");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ Opponent | NumCards$ 3"}), base,
-                "an opponent draws");
-        assertEquals(floorWith(new String[] {up, "DB$ Draw | Defined$ TriggeredPlayer | NumCards$ 3"}), base,
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ Opponent | NumCards$ 3"), base, "an opponent draws");
+        assertEquals(plainFloorWith(up, "DB$ Draw | Defined$ TriggeredPlayer | NumCards$ 3"), base,
                 "the triggered player draws");
-        assertEquals(floorWith(new String[] {"Mode$ SpellCast | Phase$ Upkeep | ValidPlayer$ You"
-                + " | TriggerZones$ Battlefield | Execute$ TrigDraw", "DB$ Draw | Defined$ You | NumCards$ 3"}),
-                Integer.MAX_VALUE, "another mode, whatever else it says");
-        assertEquals(floorWith(new String[] {"Mode$ Phase | ValidPlayer$ You | TriggerZones$ Battlefield"
-                + " | Execute$ TrigDraw", "DB$ Draw | Defined$ You | NumCards$ 3"}), Integer.MAX_VALUE,
-                "a phase trigger of no phase");
+        assertEquals(plainFloorWith("Mode$ SpellCast | Phase$ Upkeep | ValidPlayer$ You | TriggerZones$ Battlefield"
+                + " | Execute$ TrigDraw", "DB$ Draw | Defined$ You | NumCards$ 3"), Integer.MAX_VALUE,
+                "another mode, whatever else it says");
+        assertEquals(plainFloorWith("Mode$ Phase | ValidPlayer$ You | TriggerZones$ Battlefield | Execute$ TrigDraw",
+                "DB$ Draw | Defined$ You | NumCards$ 3"), Integer.MAX_VALUE, "a phase trigger of no phase");
         final Card host = addCard(MEMNITE, ai);
         host.setSVar("TrigDraw", "DB$ Draw | Defined$ You | NumCards$ 3");
         final Trigger trigger = TriggerHandler.parseTrigger(up, host, true);
         host.addTrigger(trigger);
-        assertEquals(floorOf(), base + 3, "the control");
+        assertEquals(plainFloorOf(), base + 3 * 4, "the control");
         trigger.setSuppressed(true);
-        assertEquals(floorOf(), base, "a suppressed trigger draws nothing");
+        assertEquals(plainFloorOf(), base, "a suppressed trigger draws nothing");
         trigger.setSuppressed(false);
-        assertEquals(floorOf(), base + 3, "and draws again once it is not");
+        assertEquals(plainFloorOf(), base + 3 * 4, "and draws again once it is not");
         game.getAction().moveToGraveyard(host, null);
-        assertEquals(floorWith(new String[] {up.replace("Battlefield", "Graveyard"), "DB$ Draw | Defined$ You"}),
-                base, "a trigger that works from another zone draws nothing here");
+        assertEquals(plainFloorWith(up.replace("Battlefield", "Graveyard"), "DB$ Draw | Defined$ You"), base,
+                "a trigger that works from another zone draws nothing here");
     }
 
-    // The floor counts each draw once for each firing before our next draw step: at our next untap and upkeep (not at
-    // our draw step), in the rest of this turn of ours, and in each other player's turn still in the game, where the
-    // trigger's players take that turn's player.
+    // The plain dig's floor counts each draw once for each firing before the fourth of our draw steps from now: at our
+    // next untap and upkeep (not at our draw step), in the rest of this turn of ours, in each other player's turn still
+    // in the game, where the trigger's players take that turn's player, and once more for each of those phases in each
+    // of the three rounds of turns after our next draw step. A draw of three: four firings, twelve cards, for a phase
+    // of ours or of the opponent's still to come before our next draw step, three, nine, for one that is not, and
+    // eight, 24, for each player's. Moved from the floor of the dig toward Thassa's Oracle, retired 2026-11-04 (the
+    // Oracle window), which counted the firings before our next draw step alone.
     @Test
-    public void theFloorCountsEachFiringBeforeOurNextDrawStep() {
+    public void thePlainDigsFloorCountsEachFiringOfEachPhase() {
         start();
         final int base = LoopSinks.LIBRARY_FLOOR;
         final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
-        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "Player"), draw}), base + 6,
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "Player"), draw), base + 3 * 8,
                 "each player's upkeep: ours and the opponent's");
-        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "Opponent"), draw}), base + 3,
-                "the opponent's alone");
-        assertEquals(floorWith(new String[] {phaseTrigger("Untap", "You"), draw}), base + 3, "our next untap");
-        assertEquals(floorWith(new String[] {phaseTrigger("Draw", "You"), draw}), base,
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "Opponent"), draw), base + 3 * 4, "the opponent's alone");
+        assertEquals(plainFloorWith(phaseTrigger("Untap", "You"), draw), base + 3 * 4, "our next untap");
+        assertEquals(plainFloorWith(phaseTrigger("Draw", "You"), draw), base + 3 * 3,
                 "our draw step comes after our next draw");
-        assertEquals(floorWith(new String[] {phaseTrigger("Main1", "You"), draw}), base,
+        assertEquals(plainFloorWith(phaseTrigger("Main1", "You"), draw), base + 3 * 3,
                 "this phase is not still to come");
-        assertEquals(floorWith(new String[] {phaseTrigger("End of Turn", "You"), draw}), base + 3,
-                "the rest of our turn");
-        assertEquals(floorWith(new String[] {phaseTrigger("End of Turn", "Opponent"), draw}), base + 3,
+        assertEquals(plainFloorWith(phaseTrigger("End of Turn", "You"), draw), base + 3 * 4, "the rest of our turn");
+        assertEquals(plainFloorWith(phaseTrigger("End of Turn", "Opponent"), draw), base + 3 * 4,
                 "the opponent's end step, not ours");
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp, 4);
-        assertEquals(floorWith(new String[] {phaseTrigger("End of Turn", "You"), draw}), base,
+        assertEquals(plainFloorWith(phaseTrigger("End of Turn", "You"), draw), base + 3 * 3,
                 "in the opponent's turn our end step comes after our next draw");
-        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "You"), draw}), base + 3, "our next upkeep");
-    }
-
-    // A player who has lost has no more turns: in a three-player game an upkeep trigger of each opponent's counts once
-    // for each opponent still in the game.
-    @Test
-    public void theFloorCountsNoTurnOfAPlayerWhoHasLost() {
-        pod();
-        final Player third = game.getPlayers().get(2);
-        final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
-        final int base = LoopSinks.LIBRARY_FLOOR;
-        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "Opponent"), draw}), base + 6, "two opponents");
-        third.concede();
-        assertTrue(third.hasLost(), "the third player conceded");
-        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "Opponent"), draw}), base + 3, "one is left");
-    }
-
-    // The dig toward Thassa's Oracle keeps what our own triggers will draw too: Jin-Gitaxias on ours (his seven at our
-    // end step) and the opponent's untapped Island (so no dig goes below the floor, R22): ten cards are not above Jin's
-    // floor of eleven, twelve are.
-    @Test
-    public void theOracleDigKeepsTheDueDrawsToo() {
-        nyxbloomOracleBoard();
-        ComboLoopBoards.ready(addCard(JIN, ai));
-        addCard(ISLAND, opp);
-        final ComboLines.Line l = line(BASALT_NYXBLOOM);
-        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 7, "the floor and Jin's seven");
-        assertTrue(library() > LoopSinks.oracleThreshold(ai), "the library is above Oracle's threshold");
-        assertNull(thrasiosOf(l), "ten cards are not above Jin's eleven: no dig toward Oracle");
-        library(FOREST, 2);
-        assertSame(thrasiosOf(l), digOf(thrasios), "twelve are");
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "You"), draw), base + 3 * 4, "our next upkeep");
     }
 
     // The dig to empty keeps the floor of four, whatever our triggers will draw: Laboratory Maniac wins on a draw from
     // an empty library, Jin's seven among them. Jin on ours, the opponent's untapped Island, eight cards: the dig goes
-    // on, below the plain dig's floor and the dig toward Oracle's.
+    // on, below the plain dig's floor.
     @Test
     public void theDigToEmptyKeepsTheFloorOfFour() {
         start();
@@ -1667,7 +1670,6 @@ public class ComboLoopThrasiosAiTest extends AITest {
         addCard(ISLAND, opp);
         library(MEMNITE, 8);
         assertEquals(plainFloorOf(), LoopSinks.LIBRARY_FLOOR + 7 * 4, "the plain dig's floor");
-        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 7, "the dig toward Oracle's floor");
         assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "above four: the dig to empty");
     }
 
@@ -1699,59 +1701,74 @@ public class ComboLoopThrasiosAiTest extends AITest {
     }
 
     // Thassa's Oracle is not cast at a price of our whole life (the stock refusal's mirror): the opponent's Eidolon of
-    // the Great Revel deals 2 to us for it, its trigger resolving before Oracle does. At our 2 the driver does not cast
-    // Oracle; at our 3 it does.
+    // the Great Revel deals 2 to us for it, its trigger resolving before Oracle does; nyxbloomOracleBoard's library
+    // milled to three. At our 2 the Oracle line does not run (amended 2026-11-04 (the Oracle window): it builds for no
+    // cast the driver may not make): the go-off builds to the stock target, one cycle of six, then passes the decision
+    // to the walk, and never casts Oracle, where a build for the refused cast would run on to the turn's cap. At our 3
+    // the line builds its pool, Thrasios's 4 for each of the three cards and Oracle's 2, 14 at least (18 at the third
+    // boundary, six a cycle), and casts Oracle.
     @Test
     public void oracleIsNotCastAtAPriceOfOurWholeLife() {
-        final SpellAbility refused = oracleCastAtLife(2);
-        assertTrue(refused == null || !refused.isSpell(), "Oracle's cast costs 2 life, all we have: " + refused);
-        final SpellAbility cast = oracleCastAtLife(3);
-        assertNotNull(cast, "a life more: a go-off that casts Oracle");
-        assertTrue(cast.isSpell(), "a cast: " + cast);
+        oracleAtLife(2);
+        final List<SpellAbility> refused = slot(MAX_ACTIONS);
+        assertTrue(only(refused, ComboLoopThrasiosAiTest::isOracleCast).isEmpty(),
+                "Oracle's cast costs 2 life, all we have: " + refused);
+        assertEquals(refused.size(), 2, "one cycle to the stock target, Oracle's {U}{U}, then the walk's turn: "
+                + refused);
+        oracleAtLife(3);
+        final List<SpellAbility> built = new ArrayList<>();
+        final SpellAbility cast = toTheOracleCast(built);
+        assertNotNull(cast, "a life more: a go-off that casts Oracle; its actions: " + built);
         assertEquals(ComboTracker.nameOf(cast.getHostCard()), ORACLE, "Oracle's cast: " + cast);
+        assertTrue(pool() >= 4 * 3 + 2, "the window's need and Oracle's 2 built first: " + pool());
     }
 
     // ---- the final review's round 1: what its mutation pass's round 2 found untested ----
 
-    // A trigger of several phases fires at each of them: the floor counts its draw once for each of its phases still to
-    // come before our next draw step. In our Main 1 a trigger of our upkeep and end step fires at this turn's end step
-    // and at our next upkeep; one of each of our main phases (Main1,Main2, as the scripts write "at the beginning of
-    // each of your main phases") at this turn's Main 2 alone.
+    // A trigger of several phases fires at each of them: the plain dig's floor counts its draw once for each of its
+    // phases still to come before our next draw step and once more for each of its phases in each of the three rounds
+    // after it. In our Main 1 a trigger of our upkeep and end step fires at this turn's end step and at our next
+    // upkeep, then twice a round, eight firings; one of each of our main phases (Main1,Main2, as the scripts write "at
+    // the beginning of each of your main phases") at this turn's Main 2 alone, then twice a round, seven. Moved from
+    // the floor of the dig toward Thassa's Oracle, retired 2026-11-04 (the Oracle window), which counted two and one.
     @Test
-    public void theFloorCountsEachPhaseOfATriggerOnce() {
+    public void thePlainDigsFloorCountsEachPhaseOfATriggerOnce() {
         start();
         final int base = LoopSinks.LIBRARY_FLOOR;
         final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
-        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep,End of Turn", "You"), draw}), base + 6,
-                "this turn's end step and our next upkeep");
-        assertEquals(floorWith(new String[] {phaseTrigger("Main1,Main2", "You"), draw}), base + 3,
-                "this turn's Main 2: its Main 1 is not still to come");
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep,End of Turn", "You"), draw), base + 3 * 8,
+                "this turn's end step and our next upkeep, then two a round");
+        assertEquals(plainFloorWith(phaseTrigger("Main1,Main2", "You"), draw), base + 3 * 7,
+                "this turn's Main 2, its Main 1 not still to come, then two a round");
     }
 
     // ---- the final review's round 1: what its mutation pass's round 3 found untested ----
 
-    // Only our own triggers raise the floor (section 6.4: our own mandatory draw triggers on our battlefield): a draw
-    // on the opponent's battlefield draws them, its Defined You being its controller, and one that names each player
-    // is left uncounted (section 9), nor does a trigger of theirs of another mode, which would make the floor
-    // uncountable were it ours, make anything of it. The control: the same upkeep draw on ours.
+    // Only our own triggers raise the plain dig's floor (section 6.4: our own mandatory draw triggers): a draw on the
+    // opponent's battlefield draws them, its Defined You being its controller, and one that names each player is left
+    // uncounted (section 9), nor does a trigger of theirs of another mode, which would make the floor uncountable were
+    // it ours, make anything of it. The control: the same upkeep draw on ours, three at each of our next four upkeeps.
+    // Moved from the floor of the dig toward Thassa's Oracle, retired 2026-11-04 (the Oracle window).
     @Test
-    public void anOpponentsDrawTriggersRaiseNoFloorOfOurs() {
+    public void anOpponentsDrawTriggersRaiseNoPlainFloorOfOurs() {
         start();
         final int base = LoopSinks.LIBRARY_FLOOR;
         final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
-        assertEquals(floorWithTheirs(phaseTrigger("Upkeep", "You"), draw), base, "their upkeep draw draws them");
-        assertEquals(floorWithTheirs(phaseTrigger("Upkeep", "You"), "DB$ Draw | Defined$ Player | NumCards$ 3"), base,
-                "a draw by each player at their upkeep is not counted (section 9)");
-        assertEquals(floorWithTheirs("Mode$ SpellCast | Phase$ Upkeep | ValidPlayer$ You"
+        assertEquals(plainFloorWithTheirs(phaseTrigger("Upkeep", "You"), draw), base, "their upkeep draw draws them");
+        assertEquals(plainFloorWithTheirs(phaseTrigger("Upkeep", "You"), "DB$ Draw | Defined$ Player | NumCards$ 3"),
+                base, "a draw by each player at their upkeep is not counted (section 9)");
+        assertEquals(plainFloorWithTheirs("Mode$ SpellCast | Phase$ Upkeep | ValidPlayer$ You"
                 + " | TriggerZones$ Battlefield | Execute$ TrigDraw", draw), base, "another mode of theirs");
-        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "You"), draw}), base + 3, "the control: ours");
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "You"), draw), base + 3 * 4, "the control: ours");
     }
 
-    // The floor draws no random number (section 7: nothing the driver reads draws one) with the draw triggers it counts
-    // in play, which is the path its readers of a trigger take: each player's upkeep draw of 3 (ours at our next
-    // upkeep, the opponent's at theirs) and our own end step's, in our Main 1, 6 and 3 on the floor of 4.
+    // The plain dig's floor draws no random number (section 7: nothing the driver reads draws one) with the draw
+    // triggers it counts in play, which is the path its readers of a trigger take: each player's upkeep draw of 3 (ours
+    // and the opponent's, eight firings to the fourth of our draw steps) and our own end step's (four), in our Main 1,
+    // 24 and 12 on the floor of 4. Moved from the floor of the dig toward Thassa's Oracle, retired 2026-11-04 (the
+    // Oracle window).
     @Test
-    public void theFloorDrawsNoRandomNumber() {
+    public void thePlainDigsFloorDrawsNoRandomNumber() {
         start();
         final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
         final Card upkeep = addCard(MEMNITE, ai);
@@ -1761,17 +1778,18 @@ public class ComboLoopThrasiosAiTest extends AITest {
         end.setSVar("TrigDraw", draw);
         end.addTrigger(TriggerHandler.parseTrigger(phaseTrigger("End of Turn", "You"), end, true));
         final long before = MyRandom.callCount();
-        final int floor = floorOf();
-        assertEquals(MyRandom.callCount() - before, 0, "the floor drew");
-        assertEquals(floor, LoopSinks.LIBRARY_FLOOR + 9, "each player's upkeep and our end step");
+        final int floor = plainFloorOf();
+        assertEquals(MyRandom.callCount() - before, 0, "the plain dig's floor drew");
+        assertEquals(floor, LoopSinks.LIBRARY_FLOOR + 3 * 8 + 3 * 4, "each player's upkeep and our end step");
     }
 
-    // Only the triggers on our battlefield raise the floor (as LoopSinks.floor's javadoc says and the final review's
-    // round 1 ruled, "our battlefield's" draw triggers): a mandatory upkeep draw of 3 on a card of ours in our
-    // graveyard, or in the command zone, where the trigger works from there, draws nothing here; the control, the
-    // same draw on our battlefield.
+    // No draw trigger of ours in our graveyard or the command zone raises the plain dig's floor, which reads our
+    // battlefield, and our permanent cards in our hand and library as if they were on it: a mandatory upkeep draw of 3
+    // on a card of ours in our graveyard, or in the command zone, where the trigger works from there, draws nothing
+    // here; the control, the same draw on our battlefield. Moved from the floor of the dig toward Thassa's Oracle,
+    // retired 2026-11-04 (the Oracle window), which read our battlefield alone.
     @Test
-    public void onlyTheTriggersOnOurBattlefieldRaiseTheFloor() {
+    public void aDrawTriggerInOurGraveyardOrCommandZoneRaisesNoPlainFloor() {
         start();
         final int base = LoopSinks.LIBRARY_FLOOR;
         final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
@@ -1780,9 +1798,9 @@ public class ComboLoopThrasiosAiTest extends AITest {
             host.setSVar("TrigDraw", draw);
             host.addTrigger(TriggerHandler.parseTrigger(
                     phaseTrigger("Upkeep", "You").replace("Battlefield", zone.name()), host, true));
-            assertEquals(floorOf(), base, "a draw that works from our " + zone + " is not on our battlefield");
+            assertEquals(plainFloorOf(), base, "a draw that works from our " + zone + " is not counted");
         }
-        assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "You"), draw}), base + 3, "the control");
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "You"), draw), base + 3 * 4, "the control");
     }
 
     // ---- the final-fix compliance review's round 1 ----
@@ -1791,8 +1809,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
     // steps, R23's four turns of draws, and every card our own mandatory draw triggers will draw us before the last of
     // them. In our Main 1: four with no draw trigger of ours; Phyrexian Arena's one at each of our next four upkeeps,
     // four more; Jin-Gitaxias's seven at this turn's end step and at those of our next three turns, 28 more; Rhystic
-    // Study's optional draw nothing; and beside Nezahal, Primal Tide, whose draws cannot be counted, no plain dig. The
-    // dig toward Thassa's Oracle keeps its own floor (LoopSinks.floor), the draws before our next draw step alone.
+    // Study's optional draw nothing; and beside Nezahal, Primal Tide, whose draws cannot be counted, no plain dig.
     @Test
     public void thePlainDigsFloorKeepsFourTurnsOfOurDraws() {
         start();
@@ -1802,7 +1819,6 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(plainFloorOf(), base + 4, "Phyrexian Arena's one at each of our next four upkeeps");
         ComboLoopBoards.ready(addCard(JIN, ai));
         assertEquals(plainFloorOf(), base + 4 + 28, "and Jin's seven at four end steps of ours");
-        assertEquals(floorOf(), base + 1 + 7, "the dig toward Oracle's floor: before our next draw step");
         addCard(RHYSTIC, ai);
         assertEquals(plainFloorOf(), base + 32, "an optional draw adds nothing");
         ComboLoopBoards.ready(addCard(NEZAHAL, ai));
@@ -1810,9 +1826,9 @@ public class ComboLoopThrasiosAiTest extends AITest {
     }
 
     // The plain dig's floor counts each draw once for each firing before the fourth of our draw steps from now: those
-    // before our next draw step, as the floor of the dig toward Oracle counts them, and once more for each of the
-    // trigger's phases in each of the three rounds of turns after that step, where the trigger's players take that
-    // turn's player. A draw of three, in our Main 1 and then in the opponent's.
+    // before our next draw step, and once more for each of the trigger's phases in each of the three rounds of turns
+    // after that step, where the trigger's players take that turn's player. A draw of three, in our Main 1 and then in
+    // the opponent's.
     @Test
     public void thePlainDigsFloorCountsEachFiringBeforeOurFourthDrawStep() {
         start();
@@ -1853,7 +1869,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
 
     // The plain dig's floor counts the draw triggers of our permanent cards in our hand and in our library as if each
     // were on our battlefield now, since the go-off's pool may cast one, or the dig draw it: Jin-Gitaxias in our hand
-    // keeps 32, and in our library 32, where the dig toward Oracle's floor counts our battlefield alone. Not counted:
+    // keeps 32, and in our library 32. Not counted:
     // Jin in exile or our graveyard; the opponent's Jins in their hand and library; a draw of ours that works from
     // another zone than the battlefield, on a card of ours in our hand; one on a card that is no permanent (a sorcery
     // of ours), or a suppressed one; and the draws that cannot be counted, which off our battlefield stop no plain dig:
@@ -1866,12 +1882,10 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final int base = LoopSinks.LIBRARY_FLOOR;
         final Card inHand = addCardToZone(JIN, ai, ZoneType.Hand);
         assertEquals(plainFloorOf(), base + 28, "Jin in our hand");
-        assertEquals(floorOf(), base, "the dig toward Oracle's floor, Jin in our hand");
         game.getAction().exile(inHand, null, null);
         assertEquals(plainFloorOf(), base, "Jin in exile");
         final Card inLibrary = addCardToZone(JIN, ai, ZoneType.Library);
         assertEquals(plainFloorOf(), base + 28, "Jin in our library");
-        assertEquals(floorOf(), base, "the dig toward Oracle's floor, Jin in our library");
         game.getAction().moveToGraveyard(inLibrary, null);
         assertEquals(plainFloorOf(), base, "Jin in our graveyard");
         addCardToZone(JIN, opp, ZoneType.Hand);
@@ -1899,9 +1913,9 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(plainFloorOf(), base, "Nezahal's draws, not counted off our battlefield");
     }
 
-    // The plain dig stops at that floor: Jin-Gitaxias in our hand, 32 Memnites, no dig; one more Memnite, the dig. The
-    // dig toward Oracle does not count Jin in our hand: nyxbloomOracleBoard's ten cards and the opponent's untapped
-    // Island (so no dig goes below the floor), and the dig toward Oracle goes on above the floor of four.
+    // The plain dig stops at that floor: Jin-Gitaxias in our hand, 32 Memnites, no dig; one more Memnite, the dig. (Its
+    // second half, the dig toward Oracle above the floor of four beside Jin in our hand, retired with that dig on
+    // 2026-11-04 (the Oracle window).)
     @Test
     public void jinInOurHandStopsThePlainDigAtItsFloor() {
         start();
@@ -1910,11 +1924,6 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertNull(thrasiosOf(line(KINNAN_BASALT)), "32 cards are not above Jin's 32");
         library(MEMNITE, 1);
         assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "33 are");
-        nyxbloomOracleBoard();
-        addCardToZone(JIN, ai, ZoneType.Hand);
-        addCard(ISLAND, opp);
-        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR, "the dig toward Oracle's floor");
-        assertSame(thrasiosOf(line(BASALT_NYXBLOOM)), digOf(thrasios), "the dig toward Oracle above it");
     }
 
     // ---- Faerie Mastermind's bound (Evan, 2026-11-04) ----
@@ -1922,121 +1931,107 @@ public class ComboLoopThrasiosAiTest extends AITest {
     // Spec section 6.4, amended 2026-11-04 (Faerie Mastermind's bound): a mandatory draw of ours on a trigger that
     // fires on a player's Nth card each turn (Mode$ Drawn with a plain Number$) is counted at its bound. The engine
     // fires it only when a player's count of the cards drawn this turn reaches N (TriggerDrawn), so at most once for
-    // each player it can match in each turn; each turn of a floor's horizon counts once, whole, by its player. Faerie
-    // Mastermind draws us one on an opponent's second card. In our Main 1 of a 1v1, nobody having drawn this turn, the
-    // floor's horizon is this turn, the opponent's and our next through its draw step: three firings, 4 + 3 = 7. The
-    // plain dig's adds the three rounds of two turns to the fourth of our draw steps: nine, 4 + 9 = 13. In the
-    // opponent's Main 1 it is their turn and our next, 4 + 2 = 6, and eight turns to our fourth draw step, 4 + 8 = 12.
+    // each player it can match in each turn; each turn of the plain dig's floor's horizon counts once, whole, by its
+    // player. Faerie Mastermind draws us one on an opponent's second card. In our Main 1 of a 1v1, nobody having drawn
+    // this turn, the horizon is this turn, the opponent's and our next through its draw step, and the three rounds of
+    // two turns after to the fourth of our draw steps: nine firings, 4 + 9 = 13. In the opponent's Main 1 it is their
+    // turn, our next and the three rounds: eight turns, 4 + 8 = 12. (The floor of the dig toward Thassa's Oracle, its
+    // horizon our next draw step, 7 and 6 here, retired on 2026-11-04 (the Oracle window).)
     @Test
     public void mastermindsDrawIsCountedAtItsBound() {
         start();
         addCard(MASTERMIND, ai);
         final int base = LoopSinks.LIBRARY_FLOOR;
-        assertEquals(floorOf(), base + 3, "our Main 1: this turn, the opponent's and our next");
         assertEquals(plainFloorOf(), base + 9, "our Main 1: nine turns to our fourth draw step");
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp, 4);
-        assertEquals(floorOf(), base + 2, "the opponent's Main 1: their turn and our next");
         assertEquals(plainFloorOf(), base + 8, "the opponent's Main 1: eight turns to our fourth draw step");
     }
 
     // The bound in a four-player pod: in our Main 1, nobody having drawn this turn, each of the three opponents can
-    // fire Mastermind once in each turn. The floor's horizon is this turn, the three opponents' and our next: five
-    // turns, 3 * 5 = 15 firings, 4 + 15 = 19. The plain dig's adds three rounds of four turns, seventeen turns:
-    // 3 * 17 = 51, 4 + 51 = 55. So beside Mastermind in a pod the plain dig keeps 55 cards (spec section 9). A player
-    // who has lost has no more turns and draws no more cards: once one opponent concedes, two are left, in four turns,
-    // 4 + 2 * 4 = 12, and in thirteen, 4 + 2 * 13 = 30.
+    // fire Mastermind once in each turn. The plain dig's floor's horizon is this turn, the three opponents' and our
+    // next, and three rounds of four turns: seventeen turns, 3 * 17 = 51 firings, 4 + 51 = 55. So beside Mastermind in
+    // a pod the plain dig keeps 55 cards (spec section 9). A player who has lost has no more turns and draws no more
+    // cards: once one opponent concedes, two are left, in thirteen turns, 4 + 2 * 13 = 30.
     @Test
     public void mastermindsBoundInAFourPlayerPod() {
         fourPlayerPod();
         assertEquals(game.getPlayers().size(), 4, "four players");
         addCard(MASTERMIND, ai);
         final int base = LoopSinks.LIBRARY_FLOOR;
-        assertEquals(floorOf(), base + 3 * 5, "three opponents in each of five turns");
         assertEquals(plainFloorOf(), base + 3 * 17, "three opponents in each of seventeen turns");
         final Player third = game.getPlayers().get(3);
         third.concede();
         assertTrue(third.hasLost(), "the fourth player conceded");
-        assertEquals(floorOf(), base + 2 * 4, "two opponents in each of four turns");
         assertEquals(plainFloorOf(), base + 2 * 13, "two opponents in each of thirteen turns");
     }
 
     // King T'Challa draws us one whenever a player draws their second card each turn (ValidPlayer$ Player): ours too,
     // which Thrasios's dig can itself make. In our Main 1 of a 1v1, nobody having drawn this turn, both players can
-    // fire it once in each turn: two in each of the floor's three turns, 4 + 6 = 10, and in each of the plain dig's
-    // nine, 4 + 18 = 22. Once we have drawn two cards this turn we cannot fire it again this turn: 4 + 5 = 9 and
-    // 4 + 17 = 21.
+    // fire it once in each turn: two in each of the plain dig's nine, 4 + 18 = 22. Once we have drawn two cards this
+    // turn we cannot fire it again this turn: 4 + 17 = 21.
     @Test
     public void kingTChallaCountsOurOwnSecondCardToo() {
         start();
         addCard(TCHALLA, ai);
         final int base = LoopSinks.LIBRARY_FLOOR;
-        assertEquals(floorOf(), base + 2 * 3, "both players in each of three turns");
         assertEquals(plainFloorOf(), base + 2 * 9, "both players in each of nine turns");
         library(MEMNITE, 2);
         ai.drawCards(2);
         assertEquals(ai.getNumDrawnThisTurn(), 2, "we drew our second card this turn");
-        assertEquals(floorOf(), base + 5, "not us in the rest of this turn");
-        assertEquals(plainFloorOf(), base + 17, "nor in the plain dig's");
+        assertEquals(plainFloorOf(), base + 17, "not us in the rest of this turn");
     }
 
     // The Council of Four draws us one whenever a player draws their second card during their own turn (ValidPlayer$
     // Player.Active). A property that narrows ValidPlayer may be read tighter, as the turn's player, and Active is: it
-    // fires at most once a turn, for that turn's player. In our Main 1 of a 1v1: once in each of the floor's three
-    // turns, 4 + 3 = 7, and in each of the plain dig's nine, 4 + 9 = 13. In a four-player pod: five turns, 4 + 5 = 9,
-    // and seventeen, 4 + 17 = 21, where every player in every turn would be 4 + 20 and 4 + 68.
+    // fires at most once a turn, for that turn's player. In our Main 1 of a 1v1: once in each of the plain dig's nine
+    // turns, 4 + 9 = 13. In a four-player pod: seventeen, 4 + 17 = 21, where every player in every turn would be 4 +
+    // 68.
     @Test
     public void theCouncilOfFourCountsOneFiringATurn() {
         start();
         addCard(COUNCIL, ai);
         final int base = LoopSinks.LIBRARY_FLOOR;
-        assertEquals(floorOf(), base + 3, "a 1v1: once in each of three turns");
         assertEquals(plainFloorOf(), base + 9, "a 1v1: once in each of nine turns");
         fourPlayerPod();
         addCard(COUNCIL, ai);
-        assertEquals(floorOf(), base + 5, "a pod: once in each of five turns");
         assertEquals(plainFloorOf(), base + 17, "a pod: once in each of seventeen turns");
     }
 
     // The players a bounded draw can match are read from its ValidPlayer's words, each part's word alone and of its
     // properties Active: a draw of one on our own second card (ValidPlayer$ You) counts us alone, once in each turn,
-    // 4 + 3 = 7 and 4 + 9 = 13, in our Main 1 of a 1v1, nobody having drawn this turn; one that names no player counts
-    // any player's second card, as King T'Challa's does, 4 + 6 = 10 and 4 + 18 = 22; one on an opponent's second card
-    // during their own turn (Opponent.Active) counts the opponent's turns alone, not this one: the floor's one,
-    // 4 + 1 = 5, and the plain dig's four, 4 + 4 = 8; and a property other than Active is not read, which keeps the
-    // count an upper bound: Player.Opponent counts us too, as Player does, 4 + 6 = 10.
+    // 4 + 9 = 13, in our Main 1 of a 1v1, nobody having drawn this turn; one that names no player counts any player's
+    // second card, as King T'Challa's does, 4 + 18 = 22; one on an opponent's second card during their own turn
+    // (Opponent.Active) counts the opponent's turns alone, not this one: four, 4 + 4 = 8; and a property other than
+    // Active is not read, which keeps the count an upper bound: Player.Opponent counts us too, as Player does, 4 + 18.
     @Test
     public void theBoundReadsTheWordsOfValidPlayer() {
         start();
         final int base = LoopSinks.LIBRARY_FLOOR;
         final String draw = "DB$ Draw | Defined$ You | NumCards$ 1";
         final String you = "Mode$ Drawn | ValidPlayer$ You | Number$ 2 | TriggerZones$ Battlefield | Execute$ TrigDraw";
-        assertEquals(floorWith(new String[] {you, draw}), base + 3, "You: us in each of three turns");
         assertEquals(plainFloorWith(you, draw), base + 9, "You: us in each of nine turns");
         final String any = "Mode$ Drawn | Number$ 2 | TriggerZones$ Battlefield | Execute$ TrigDraw";
-        assertEquals(floorWith(new String[] {any, draw}), base + 6, "no player named: both in each of three turns");
         assertEquals(plainFloorWith(any, draw), base + 18, "no player named: both in each of nine turns");
         final String theirs = you.replace("You", "Opponent.Active");
-        assertEquals(floorWith(new String[] {theirs, draw}), base + 1, "Opponent.Active: the opponent's next turn");
         assertEquals(plainFloorWith(theirs, draw), base + 4, "Opponent.Active: the opponent's four turns");
-        assertEquals(floorWith(new String[] {you.replace("You", "Player.Opponent"), draw}), base + 6,
-                "Player.Opponent: its property not read, both in each of three turns");
+        assertEquals(plainFloorWith(you.replace("You", "Player.Opponent"), draw), base + 18,
+                "Player.Opponent: its property not read, both in each of nine turns");
     }
 
     // The Unagi of Kyoshi Island draws us two whenever an opponent draws their second card each turn: Mastermind's
-    // firings, two cards each. In our Main 1 of a 1v1, 4 + 2 * 3 = 10 and 4 + 2 * 9 = 22.
+    // firings, two cards each. In our Main 1 of a 1v1, 4 + 2 * 9 = 22.
     @Test
     public void theUnagiCountsTwoCardsAFiring() {
         start();
         addCard(UNAGI, ai);
-        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 2 * 3, "three firings of two");
         assertEquals(plainFloorOf(), LoopSinks.LIBRARY_FLOOR + 2 * 9, "nine firings of two");
     }
 
     // In the current turn a player who has already drawn N cards or more cannot fire the trigger again, and is not
     // counted in it. Mastermind in our Main 1 of a 1v1, the opponent drawing one card at a time: with one drawn their
-    // second is still to come, 4 + 3 = 7; with two, this turn's firing is spent, 4 + 2 = 6 and 4 + 8 = 12, while a
-    // draw on an opponent's third card (Number$ 3) can still fire this turn, three more, 4 + 2 + 3 = 9; with three, the
-    // same 6. The Council of Four alike, this turn's player us: once we have drawn two, 4 + 2 = 6.
+    // second is still to come, 4 + 9 = 13; with two, this turn's firing is spent, 4 + 8 = 12, while a draw on an
+    // opponent's third card (Number$ 3) can still fire this turn, nine more, 4 + 8 + 9 = 21; with three, the same 12.
+    // The Council of Four alike, this turn's player us: once we have drawn two, 4 + 8 = 12.
     @Test
     public void aPlayerWhoHasDrawnTheirNthCardIsNotCountedThisTurn() {
         start();
@@ -2044,84 +2039,76 @@ public class ComboLoopThrasiosAiTest extends AITest {
         opp.drawCards(1);
         final Card mastermind = addCard(MASTERMIND, ai);
         final int base = LoopSinks.LIBRARY_FLOOR;
-        assertEquals(floorOf(), base + 3, "one drawn: their second is still to come");
+        assertEquals(plainFloorOf(), base + 9, "one drawn: their second is still to come");
         opp.drawCards(1);
         assertEquals(opp.getNumDrawnThisTurn(), 2, "the opponent drew their second card this turn");
-        assertEquals(floorOf(), base + 2, "two drawn: not in the rest of this turn");
-        assertEquals(plainFloorOf(), base + 8, "nor in the plain dig's");
+        assertEquals(plainFloorOf(), base + 8, "two drawn: not in the rest of this turn");
         final String third = "Mode$ Drawn | ValidPlayer$ Opponent | Number$ 3 | TriggerZones$ Battlefield"
                 + " | Execute$ TrigDraw";
-        assertEquals(floorWith(new String[] {third, "DB$ Draw | Defined$ You"}), base + 2 + 3,
+        assertEquals(plainFloorWith(third, "DB$ Draw | Defined$ You"), base + 8 + 9,
                 "their third card is still to come");
         opp.drawCards(1);
-        assertEquals(floorOf(), base + 2, "three drawn: the same");
+        assertEquals(plainFloorOf(), base + 8, "three drawn: the same");
         game.getAction().moveToGraveyard(mastermind, null);
         addCard(COUNCIL, ai);
         library(MEMNITE, 2);
         ai.drawCards(2);
-        assertEquals(floorOf(), base + 2, "The Council of Four, this turn's player us with two drawn");
+        assertEquals(plainFloorOf(), base + 8, "The Council of Four, this turn's player us with two drawn");
     }
 
-    // Every other mandatory draw trigger of ours stays uncountable, as before the bound: beside Mastermind's 7, the
+    // Every other mandatory draw trigger of ours stays uncountable, as before the bound: beside Mastermind's 13, the
     // control, a Drawn trigger with no Number$ (a draw on each card an opponent draws), one whose Number$ is no plain
     // number, a bounded one whose NumCards is no plain number, and a trigger of another mode that carries a Number$;
     // Nezahal, Primal Tide's draw on each noncreature spell an opponent casts; and Trouble in Pairs, whose draw on an
     // opponent's second card each turn is bounded but whose draws on their attack and on their second spell are not.
-    // No dig that stops at a floor runs beside any of them. A second bounded draw beside Mastermind's adds its own
-    // three: 4 + 6 = 10.
+    // No plain dig runs beside any of them. A second bounded draw beside Mastermind's adds its own nine: 4 + 18 = 22.
     @Test
     public void aDrawTriggerWithNoBoundStaysUncountable() {
         start();
         addCard(MASTERMIND, ai);
         final int base = LoopSinks.LIBRARY_FLOOR;
-        assertEquals(floorOf(), base + 3, "the control: Mastermind's bound");
+        assertEquals(plainFloorOf(), base + 9, "the control: Mastermind's bound");
         final String draw = "DB$ Draw | Defined$ You | NumCards$ 1";
         final String drawn = "Mode$ Drawn | ValidPlayer$ Opponent | TriggerZones$ Battlefield | Execute$ TrigDraw";
-        assertEquals(floorWith(new String[] {drawn, draw}), Integer.MAX_VALUE, "no Number$: each card they draw");
-        assertEquals(plainFloorWith(drawn, draw), Integer.MAX_VALUE, "the plain dig's floor, no Number$");
-        assertEquals(floorWith(new String[] {drawn + " | Number$ X", draw}), Integer.MAX_VALUE, "Number$ X");
-        assertEquals(floorWith(new String[] {drawn + " | Number$ 2", "DB$ Draw | Defined$ You | NumCards$ X"}),
+        assertEquals(plainFloorWith(drawn, draw), Integer.MAX_VALUE, "no Number$: each card they draw");
+        assertEquals(plainFloorWith(drawn + " | Number$ X", draw), Integer.MAX_VALUE, "Number$ X");
+        assertEquals(plainFloorWith(drawn + " | Number$ 2", "DB$ Draw | Defined$ You | NumCards$ X"),
                 Integer.MAX_VALUE, "a bounded draw of NumCards$ X");
-        assertEquals(floorWith(new String[] {drawn.replace("Drawn", "SpellCast") + " | Number$ 2", draw}),
-                Integer.MAX_VALUE, "another mode, a Number$ beside it");
-        assertEquals(floorWith(new String[] {drawn + " | Number$ 2", draw}), base + 6,
-                "the control: a second bounded draw, its own three");
+        assertEquals(plainFloorWith(drawn.replace("Drawn", "SpellCast") + " | Number$ 2", draw), Integer.MAX_VALUE,
+                "another mode, a Number$ beside it");
+        assertEquals(plainFloorWith(drawn + " | Number$ 2", draw), base + 9 + 9,
+                "the control: a second bounded draw, its own nine");
         final Card nezahal = addCard(NEZAHAL, ai);
-        assertEquals(floorOf(), Integer.MAX_VALUE, "Nezahal's draws cannot be counted");
-        assertEquals(plainFloorOf(), Integer.MAX_VALUE, "nor by the plain dig's floor");
+        assertEquals(plainFloorOf(), Integer.MAX_VALUE, "Nezahal's draws cannot be counted");
         game.getAction().moveToGraveyard(nezahal, null);
         addCard(TROUBLE, ai);
-        assertEquals(floorOf(), Integer.MAX_VALUE, "Trouble in Pairs: its draws on an attack and on a second spell");
-        assertEquals(plainFloorOf(), Integer.MAX_VALUE, "nor by the plain dig's floor");
+        assertEquals(plainFloorOf(), Integer.MAX_VALUE,
+                "Trouble in Pairs: its draws on an attack and on a second spell");
     }
 
     // The plain dig's floor counts Mastermind on a card of ours in our hand or library as if it were on our
-    // battlefield now, as it counts a phase trigger there, and the dig toward Oracle's floor does not (spec section
-    // 6.4: our battlefield alone). On our battlefield, the control, 7 and 13; in our hand, 4 and 13; in our library, 4
-    // and 13. The opponent's Mastermind in their hand adds nothing to ours.
+    // battlefield now, as it counts a phase trigger there (spec section 6.4). On our battlefield, the control, 13; in
+    // our hand, 13; in our library, 13. The opponent's Mastermind in their hand adds nothing to ours.
     @Test
     public void mastermindInOurHandOrLibraryRaisesThePlainDigsFloorAlone() {
         start();
         final int base = LoopSinks.LIBRARY_FLOOR;
         final Card onOurs = addCard(MASTERMIND, ai);
-        assertEquals(floorOf(), base + 3, "the control: on our battlefield");
-        assertEquals(plainFloorOf(), base + 9, "the control: the plain dig's");
+        assertEquals(plainFloorOf(), base + 9, "the control: on our battlefield");
         game.getAction().exile(onOurs, null, null);
         final Card inHand = addCardToZone(MASTERMIND, ai, ZoneType.Hand);
-        assertEquals(floorOf(), base, "in our hand: the dig toward Oracle's floor");
-        assertEquals(plainFloorOf(), base + 9, "in our hand: the plain dig's");
+        assertEquals(plainFloorOf(), base + 9, "in our hand");
         game.getAction().exile(inHand, null, null);
         addCardToZone(MASTERMIND, ai, ZoneType.Library);
-        assertEquals(floorOf(), base, "in our library: the dig toward Oracle's floor");
-        assertEquals(plainFloorOf(), base + 9, "in our library: the plain dig's");
+        assertEquals(plainFloorOf(), base + 9, "in our library");
         addCardToZone(MASTERMIND, opp, ZoneType.Hand);
         assertEquals(plainFloorOf(), base + 9, "the opponent's Mastermind in their hand");
     }
 
     // The bounded readers draw no random number (spec section 7: nothing the driver reads draws one), read here inside
-    // one MyRandom.callCount() bracket around both floors, as floorOf and plainFloorOf bracket each: Mastermind, King
-    // T'Challa, The Council of Four and The Unagi on our battlefield in our Main 1 of a 1v1, 3 + 6 + 3 + 6 = 18 cards
-    // on the floor's 4 and 9 + 18 + 9 + 18 = 54 on the plain dig's.
+    // one MyRandom.callCount() bracket around the plain dig's floor, as plainFloorOf brackets it: Mastermind, King
+    // T'Challa, The Council of Four and The Unagi on our battlefield in our Main 1 of a 1v1, 9 + 18 + 9 + 18 = 54 cards
+    // on the floor of 4.
     @Test
     public void theBoundedReadersDrawNoRandomNumber() {
         start();
@@ -2129,10 +2116,8 @@ public class ComboLoopThrasiosAiTest extends AITest {
             addCard(name, ai);
         }
         final long before = MyRandom.callCount();
-        final int floor = LoopSinks.floor(ai);
         final int plain = LoopSinks.plainFloor(ai);
-        assertEquals(MyRandom.callCount() - before, 0, "the floors drew");
-        assertEquals(floor, LoopSinks.LIBRARY_FLOOR + 3 + 6 + 3 + 6, "the four triggers' draws, the floor's");
+        assertEquals(MyRandom.callCount() - before, 0, "the plain dig's floor drew");
         assertEquals(plain, LoopSinks.LIBRARY_FLOOR + 9 + 18 + 9 + 18, "the four triggers' draws, the plain dig's");
     }
 
@@ -2154,10 +2139,9 @@ public class ComboLoopThrasiosAiTest extends AITest {
     // An inverted ValidPlayer (InvertValidPlayer: CardTraitBase.matchesValidParam then matches the players its
     // ValidPlayer does not) is read as if it named none, every living player, not by its word. ValidPlayer$ You
     // inverted fires on an opponent's second card. In our Main 1 of a four-player pod, nobody having drawn this turn,
-    // the three opponents can fire it in each of the floor's five turns, 15 firings, and of the plain dig's seventeen,
-    // 51, which its word read alone, us, would undercount, 5 and 17: every player is 4 + 4 * 5 = 24 and
-    // 4 + 4 * 17 = 72. In our Main 1 of a 1v1, both players in each of three turns, 4 + 6 = 10, and of nine,
-    // 4 + 18 = 22, above the opponent's 3 and 9.
+    // the three opponents can fire it in each of the plain dig's seventeen turns, 51 firings, which its word read
+    // alone, us, would undercount, 17: every player is 4 + 4 * 17 = 72. In our Main 1 of a 1v1, both players in each of
+    // nine turns, 4 + 18 = 22, above the opponent's 9.
     @Test
     public void anInvertedValidPlayerCountsEveryPlayer() {
         fourPlayerPod();
@@ -2165,21 +2149,17 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final String draw = "DB$ Draw | Defined$ You | NumCards$ 1";
         final String inverted = "Mode$ Drawn | ValidPlayer$ You | InvertValidPlayer$ True | Number$ 2"
                 + " | TriggerZones$ Battlefield | Execute$ TrigDraw";
-        assertEquals(floorWith(new String[] {inverted, draw}), base + 4 * 5,
-                "inverted You in a pod: every player in each of five turns, not us alone");
         assertEquals(plainFloorWith(inverted, draw), base + 4 * 17,
                 "inverted You in a pod: every player in each of seventeen turns, not us alone");
         start();
-        assertEquals(floorWith(new String[] {inverted, draw}), base + 6, "inverted You: both in each of three turns");
         assertEquals(plainFloorWith(inverted, draw), base + 18, "inverted You: both in each of nine turns");
     }
 
     // Nor is an inverted Active read as that turn's player alone (activeOnly): Player.Active inverted fires on the
     // second card of a player whose turn it is not, so it is read as no ValidPlayer, every player in every turn. In our
     // Main 1 of a four-player pod, nobody having drawn this turn, the three players whose turn it is not can fire it in
-    // each turn, 15 firings in the floor's five turns and 51 in the plain dig's seventeen, which that turn's player
-    // alone would undercount, 5 and 17: every player is 4 + 4 * 5 = 24 and 4 + 4 * 17 = 72. In our Main 1 of a 1v1,
-    // 4 + 6 = 10 and 4 + 18 = 22, above one player a turn, 3 and 9.
+    // each turn, 51 firings in the plain dig's seventeen, which that turn's player alone would undercount, 17: every
+    // player is 4 + 4 * 17 = 72. In our Main 1 of a 1v1, 4 + 18 = 22, above one player a turn, 9.
     @Test
     public void anInvertedActiveCountsEveryPlayer() {
         fourPlayerPod();
@@ -2187,27 +2167,309 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final String draw = "DB$ Draw | Defined$ You | NumCards$ 1";
         final String inverted = "Mode$ Drawn | ValidPlayer$ Player.Active | InvertValidPlayer$ True | Number$ 2"
                 + " | TriggerZones$ Battlefield | Execute$ TrigDraw";
-        assertEquals(floorWith(new String[] {inverted, draw}), base + 4 * 5,
-                "inverted Active in a pod: every player in each of five turns, not the turn's player alone");
         assertEquals(plainFloorWith(inverted, draw), base + 4 * 17,
                 "inverted Active in a pod: every player in each of seventeen turns, not the turn's player alone");
         start();
-        assertEquals(floorWith(new String[] {inverted, draw}), base + 6, "inverted Active: both, three turns");
         assertEquals(plainFloorWith(inverted, draw), base + 18, "inverted Active: both, nine turns");
     }
 
     // A bounded draw whose ValidPlayer is You counts us alone in a pod too: once in each turn, on our own second card,
     // not once for each opponent, whom a 1v1 cannot tell from us (one opponent, as many turns). In our Main 1 of a
-    // four-player pod, nobody having drawn this turn: the floor's five turns, 4 + 5 = 9, and the plain dig's
-    // seventeen, 4 + 17 = 21, where the three opponents would be 4 + 15 = 19 and 4 + 51 = 55.
+    // four-player pod, nobody having drawn this turn: the plain dig's seventeen turns, 4 + 17 = 21, where the three
+    // opponents would be 4 + 51 = 55.
     @Test
     public void aDrawOnOurOwnSecondCardCountsUsAloneInAPod() {
         fourPlayerPod();
         final int base = LoopSinks.LIBRARY_FLOOR;
         final String draw = "DB$ Draw | Defined$ You | NumCards$ 1";
         final String you = "Mode$ Drawn | ValidPlayer$ You | Number$ 2 | TriggerZones$ Battlefield | Execute$ TrigDraw";
-        assertEquals(floorWith(new String[] {you, draw}), base + 5, "You in a pod: us in each of five turns");
         assertEquals(plainFloorWith(you, draw), base + 17, "You in a pod: us in each of seventeen turns");
+    }
+
+    // ---- the Oracle window (Evan, 2026-11-04: the Jin brainstorm's option B) ----
+
+    // A countered Oracle costs no cards (section 6.4 step 3, amended 2026-11-04 (the Oracle window)): the Oracle line's
+    // board, in our Main 2, and the opponent's Counterspell put above our Oracle the moment it is cast. Through the
+    // whole game loop Oracle is cast with our library at ten, nothing dug before it, and countered; the pool floats on
+    // for the rest of the go-off, whose walk has nothing to play and whose plain dig finds nothing worth it in ten
+    // Forests, so Main 2 ends with the library whole and Oracle in our graveyard. (Before it the dig ran first, ten to
+    // four, and Oracle, cast at four and countered, cost six cards.)
+    @Test
+    public void aCounteredOracleCostsNoCards() {
+        oracleBoard(10);
+        final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN2), true);
+        final List<Seen> casts = only(seen, s -> s.cast(ORACLE));
+        assertEquals(casts.size(), 1, "one Oracle cast: " + seen);
+        assertEquals(casts.get(0).library(), 10, "cast with the library whole: " + seen);
+        assertTrue(only(seen, Seen::dig).isEmpty(), "a dig: " + seen);
+        assertEquals(library(), 10, "no card dug");
+        assertEquals(count(ZoneType.Graveyard, ORACLE), 1, "Oracle countered");
+        assertFalse(game.isGameOver());
+    }
+
+    // Oracle removed in the window still wins (section 6.6, amended 2026-11-04 (the Oracle window); the brainstorm's
+    // probe p1): the Oracle line's board, in our Main 2, its Oracle cast and its trigger on the stack, the window digs
+    // five. Then the opponent's Murder on Oracle, the object on our battlefield, comes above the trigger, where the
+    // driver answers nothing (it threatens no loop piece: the stock's decision), and destroys it. With the trigger on
+    // top again the window digs on, five more, to empty, and passes; the trigger resolves on an empty library, our
+    // devotion to blue Kinnan's and Thrasios's 2, at least its 0 cards, and the game ends WinsGameSpellEffect.
+    @Test
+    public void oracleRemovedInTheWindowStillWins() {
+        oracleBoard(10);
+        toTheWindow();
+        final List<LoopDriver.Answer> first = answers(5);
+        assertEquals(first.size(), 5, "five answers: " + first);
+        for (final LoopDriver.Answer a : first) {
+            assertSame(a.action(), digOf(thrasios), "a dig: " + first);
+        }
+        assertEquals(library(), 5);
+        final Card onOurs = onOurBattlefield(ORACLE);
+        assertNotNull(onOurs, "Oracle on our battlefield");
+        ComboLoopBoards.theirResponse(game, opp, MURDER, onOurs);
+        assertNull(driver.respond(), "an answer above their Murder");
+        game.getStack().resolveStack();
+        game.getAction().checkStateEffects(true);
+        assertNull(onOurBattlefield(ORACLE), "Murder destroyed Oracle");
+        assertTrue(game.getStack().peek().isTrigger(), "Oracle's trigger on top again: " + game.getStack());
+        final List<LoopDriver.Answer> rest = answers(MAX_ACTIONS);
+        assertEquals(rest.size(), 6, "five more digs and a pass: " + rest);
+        for (int i = 0; i < 5; i++) {
+            assertSame(rest.get(i).action(), digOf(thrasios), "a dig: " + rest);
+        }
+        assertNotNull(rest.get(5), "the stock's answer, not a pass");
+        assertNull(rest.get(5).action(), "a pass: " + rest);
+        assertEquals(library(), 0, "dug to empty");
+        resolveTheTrigger();
+        assertWonBy(ORACLE, List.of());
+    }
+
+    // The stock AI plays nothing in the window (section 6.6, amended 2026-11-04 (the Oracle window); the brainstorm's
+    // probe p2, where with Oracle's trigger on top the stock AI's pick was Jin-Gitaxias's cast): Thassa's Oracle and
+    // Jin-Gitaxias, Core Augur in hand, four untapped Islands, 200 colourless floating and a library of ten Forests, in
+    // our Main 1. The pool holds the line's 42 already, so through the whole game loop the first item of ours is
+    // Oracle's cast, with the library at ten; above its trigger the driver digs ten and passes, and the stock AI never
+    // casts Jin, whose {8}{U}{U} the pool and our two Islands left could pay: the game ends WinsGameSpellEffect, Jin in
+    // our hand. (Before it the walk cast Jin at the go-off's first hand-off.)
+    @Test
+    public void theStockWalkNeverPlaysInTheWindow() {
+        start();
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        final Card jin = addCardToZone(JIN, ai, ZoneType.Hand);
+        for (int i = 0; i < 4; i++) {
+            addCard(ISLAND, ai);
+        }
+        floatColourless(200);
+        library(FOREST, 10);
+        final List<Seen> seen = play(g -> false);
+        assertTrue(only(seen, s -> s.cast(JIN)).isEmpty(), "Jin cast: " + seen);
+        assertFalse(seen.isEmpty(), "nothing of ours on the stack");
+        assertTrue(seen.get(0).cast(ORACLE), "Oracle's cast first: " + seen);
+        assertEquals(seen.get(0).library(), 10, "cast with the library whole: " + seen);
+        assertWonBy(ORACLE, seen);
+        assertEquals(only(seen, Seen::dig).size(), 10, "ten digs above the trigger: " + seen);
+        assertTrue(ai.getCardsIn(ZoneType.Hand).contains(jin), "Jin in our hand");
+    }
+
+    // The Oracle line runs only when its whole cost fits what the caps have left (section 6.4 step 3, amended
+    // 2026-11-04 (the Oracle window), R28's shape): on the Oracle line's board it takes 95 actions, 42 cycles of
+    // Basalt's tap and untap for the pool of 42, Oracle's cast and ten digs. With room for 94 the line waits: the
+    // go-off builds to the stock target, Oracle's {U}{U}, and passes the decision to the walk, no cast and no dig,
+    // Oracle held. With room for 95 it runs: the go-off casts Oracle after its 84 cycle steps.
+    @Test
+    public void theOracleLineWaitsForTheCapsToFit() {
+        final Card oracle = oracleBoard(10);
+        driver.useRounds(new LoopRounds(94, LoopRounds.GAME_CAP));
+        final List<SpellAbility> acts = slot(MAX_ACTIONS);
+        assertEquals(acts.size(), 4, "built to Oracle's 2, then the walk's turn: " + acts);
+        assertTrue(only(acts, ComboLoopThrasiosAiTest::isOracleCast).isEmpty(), "Oracle was cast: " + acts);
+        assertEquals(library(), 10, "no dig");
+        assertTrue(driver.holdsOracle(castOf(oracle)), "Oracle held");
+        assertTrue(ComboHold.vetoesCast(ai, castOf(oracle)));
+        oracleBoard(10);
+        driver.useRounds(new LoopRounds(95, LoopRounds.GAME_CAP));
+        final List<SpellAbility> built = new ArrayList<>();
+        assertNotNull(toTheOracleCast(built), "room for 95: the line runs; its actions: " + built);
+        assertEquals(built.size(), 2 * 42, "42 cycles of Basalt's tap and untap");
+    }
+
+    // No dig toward Oracle runs in a main phase any more (section 6.4 step 3, amended 2026-11-04 (the Oracle window)):
+    // on the Oracle line's board Thrasios's reading is no dig, ten Forests holding nothing worth a plain dig; and with
+    // a library of ten Memnites instead, which a plain dig would dig for, the whole game loop casts Oracle first, the
+    // library at ten, every Thrasios activation coming above its trigger, and the game ends WinsGameSpellEffect.
+    @Test
+    public void noDigTowardOracleRunsInAMainPhase() {
+        oracleBoard(10);
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "a main-phase dig toward Oracle");
+        start();
+        moveToMain2(game, ai);
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCard(ISLAND, ai);
+        addCard(ISLAND, ai);
+        library(MEMNITE, 10);
+        assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "ten Memnites: worth a plain dig");
+        final List<Seen> seen = play(g -> false);
+        final List<Seen> casts = only(seen, s -> s.cast(ORACLE));
+        assertEquals(casts.size(), 1, "one Oracle cast: " + seen);
+        assertEquals(casts.get(0).library(), 10, "cast with the library whole: " + seen);
+        assertTrue(only(seen.subList(0, seen.indexOf(casts.get(0))), Seen::dig).isEmpty(),
+                "a dig before the cast: " + seen);
+        assertWonBy(ORACLE, seen);
+        assertEquals(only(seen, Seen::dig).size(), 10, "ten above the trigger: " + seen);
+    }
+
+    // The window is the Oracle line's alone, and its trigger's (section 6.6, amended 2026-11-04 (the Oracle window)):
+    // above the trigger of an Oracle the driver did not cast, the stack-response slot answers nothing, the stock's
+    // decision, even with the pool and Thrasios able to dig: the Oracle line's board, 42 colourless floating, Oracle
+    // cast by hand through the AI's own play path, resolved and its trigger on top. On the same board the line's own
+    // Oracle cast and its trigger on the stack, another trigger of ours above it (Elvish Visionary's draw, the
+    // Visionary put onto our battlefield) draws no answer either; that trigger resolved, the line's trigger on top
+    // again, the slot answers Thrasios's activation.
+    @Test
+    public void theWindowIsTheOracleLinesAlone() {
+        final Card oracle = oracleBoard(10);
+        floatColourless(42);
+        final SpellAbilityStackInstance top = castAndTrigger(castOf(oracle));
+        assertTrue(top.isTrigger(), "Oracle's trigger on top: " + top);
+        assertNull(driver.respond(), "a window for an Oracle the driver did not cast");
+        oracleBoard(10);
+        toTheWindow();
+        game.getAction().moveToPlay(addCardToZone(VISIONARY, ai, ZoneType.Hand), null, null);
+        game.getAction().checkStateEffects(true);
+        game.getStack().addAllTriggeredAbilitiesToStack();
+        assertEquals(ComboTracker.nameOf(game.getStack().peek().getSourceCard()), VISIONARY,
+                "the Visionary's trigger on top: " + game.getStack());
+        assertNull(driver.respond(), "an answer above another trigger of ours");
+        game.getStack().resolveStack();
+        game.getAction().checkStateEffects(true);
+        final LoopDriver.Answer a = driver.respond();
+        assertNotNull(a, "no window for the line's Oracle");
+        assertSame(a.action(), digOf(thrasios));
+    }
+
+    // A window whose dig has stopped still passes (section 6.6, amended 2026-11-04 (the Oracle window)): the Oracle
+    // line's board, the window digs three; the opponent's Murder on Thrasios comes above the trigger and destroys it.
+    // With the trigger on top again and no Thrasios to dig with, the driver passes, so the stock AI plays nothing there
+    // either; the trigger resolves on seven cards, more than our devotion to blue, and the game goes on.
+    @Test
+    public void aWindowWithNoDigLeftPasses() {
+        oracleBoard(10);
+        toTheWindow();
+        assertEquals(answers(3).size(), 3);
+        assertEquals(library(), 7);
+        ComboLoopBoards.theirResponse(game, opp, MURDER, thrasios);
+        game.getStack().resolveStack();
+        game.getAction().checkStateEffects(true);
+        assertNull(onOurBattlefield(THRASIOS), "Murder destroyed Thrasios");
+        final List<LoopDriver.Answer> rest = answers(MAX_ACTIONS);
+        assertEquals(rest.size(), 1, "one answer: " + rest);
+        assertNotNull(rest.get(0), "the stock's answer, not a pass");
+        assertNull(rest.get(0).action(), "a pass: " + rest);
+        assertEquals(library(), 7);
+        resolveTheTrigger();
+        assertFalse(game.isGameOver(), "seven cards, more than our devotion to blue");
+    }
+
+    // A window dig that moves no card ends the window's dig, as a main phase's does (R21, judgeDig; section 6.6,
+    // amended 2026-11-04 (the Oracle window)): the opponent's Spirit of the Labyrinth (each player can't draw more than
+    // one card each turn) and the Oracle line's board with a library of ten Memnites, in our Main 2. Oracle cast and
+    // its trigger on the stack, the window's first dig draws a Memnite, the turn's one draw; its second draws nothing,
+    // and the window passes: two digs and a pass, the pool's 34 left, where a window that kept no library size would
+    // spend the whole pool for nothing. The trigger resolves on nine cards and the game goes on.
+    @Test
+    public void aWindowDigThatMovesNoCardEndsTheDig() {
+        start();
+        moveToMain2(game, ai);
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCard(ISLAND, ai);
+        addCard(ISLAND, ai);
+        library(MEMNITE, 10);
+        addCard("Spirit of the Labyrinth", opp);
+        toTheWindow();
+        final List<LoopDriver.Answer> answers = answers(MAX_ACTIONS);
+        assertEquals(answers.size(), 3, "two digs and a pass: " + answers);
+        assertNull(answers.get(2).action(), "a pass: " + answers);
+        assertEquals(library(), 9, "one card drawn");
+        assertEquals(pool(), 4 * 10 + 2 - 2 * 4, "two digs paid");
+        resolveTheTrigger();
+        assertFalse(game.isGameOver());
+    }
+
+    // The window passes once a cap stops the driver (section 6.5's caps; section 6.6, amended 2026-11-04 (the Oracle
+    // window)), so the stock AI plays nothing above the trigger then either: the Oracle line played to its window, then
+    // room for two actions in the turn. Two digs; the third is refused, with the cap's one line in the game log, and
+    // the answer is a pass, and so is the next.
+    @Test
+    public void theWindowPassesWhenACapStopsIt() {
+        oracleBoard(10);
+        toTheWindow();
+        driver.useRounds(new LoopRounds(2, LoopRounds.GAME_CAP));
+        final List<LoopDriver.Answer> answers = answers(MAX_ACTIONS);
+        assertEquals(answers.size(), 3, "two digs and a pass: " + answers);
+        assertNotNull(answers.get(2), "the stock's answer, not a pass");
+        assertNull(answers.get(2).action(), "a pass: " + answers);
+        assertEquals(logged("Loop driver: stopped for the turn at 2 actions."), 1);
+        final LoopDriver.Answer again = driver.respond();
+        assertNotNull(again, "the stock's answer once the cap has stopped the driver");
+        assertNull(again.action(), "a pass");
+        assertEquals(library(), 8);
+    }
+
+    // A tax on Thrasios is built for (section 6.4 step 3, amended 2026-11-04 (the Oracle window): Thrasios's price as
+    // the engine prices it now): under the opponent's Suppression Field (abilities that are no mana abilities cost {2}
+    // more) Thrasios's {4} costs 6 and Basalt's untap 5, with Nyxbloom Ancient beside Kinnan and Basalt (a cycle makes
+    // 10 and its untap costs 5); Thassa's Oracle in hand, two Islands and a library of five Forests, in our Main 2. The
+    // line builds Thrasios's 6 for each of the five cards and Oracle's 2, 32 (35 at the seventh boundary), casts Oracle
+    // and digs five above its trigger, each at 6, and the game ends WinsGameSpellEffect, where a window priced at the
+    // printed {4} would stop a card short.
+    @Test
+    public void aTaxOnThrasiosIsBuiltForTheWholeWindow() {
+        start();
+        ComboLoopBoards.ready(addCard(NYXBLOOM, ai));
+        moveToMain2(game, ai);
+        addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCard(ISLAND, ai);
+        addCard(ISLAND, ai);
+        library(FOREST, 5);
+        addCard("Suppression Field", opp);
+        assertEquals(ComboExecute.priced(ai, digOf(thrasios)).getCMC(), 6, "Thrasios's 4 and the tax");
+        final List<SpellAbility> built = new ArrayList<>();
+        final SpellAbility cast = toTheOracleCast(built);
+        assertNotNull(cast, "the driver never cast Oracle; its actions: " + built);
+        assertTrue(pool() >= 6 * 5 + 2, "the pool at the cast: " + pool());
+        castAndTrigger(cast);
+        final List<LoopDriver.Answer> answers = answers(MAX_ACTIONS);
+        assertEquals(answers.size(), 6, "five digs and a pass: " + answers);
+        assertNull(answers.get(5).action(), "a pass: " + answers);
+        assertEquals(library(), 0, "dug to empty");
+        resolveTheTrigger();
+        assertWonBy(ORACLE, List.of());
+    }
+
+    // The Oracle line waits while Thrasios's dig is over for the phase (section 6.4 step 3, amended 2026-11-04 (the
+    // Oracle window): its window could not dig): the opponent's Fate Unraveler deals 1 to us for each card we draw,
+    // which no price reads; two Islands and a library of ten Memnites, in our Main 1. The plain dig draws a Memnite,
+    // its 1 damage is measured, and Thrasios digs no more this phase (R30). Thassa's Oracle then in our hand, the
+    // go-off never casts it this phase; in our Main 2, the Unraveler gone, the line runs and casts it.
+    @Test
+    public void aDigOverForThePhaseHoldsTheOracleLine() {
+        start();
+        addCard(ISLAND, ai);
+        addCard(ISLAND, ai);
+        final Card unraveler = addCard(UNRAVELER, opp);
+        library(MEMNITE, 10);
+        final List<Act> acts = driveWithTriggers(MAX_ACTIONS);
+        assertEquals(only(acts, Act::dig).size(), 1, "one dig, its draw costing 1 life: " + acts);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        assertTrue(LoopSinks.digsForOracle(ai, line(KINNAN_BASALT)), "the line could run but for the dig");
+        final List<SpellAbility> built = new ArrayList<>();
+        assertNull(toTheOracleCast(built), "the line ran with Thrasios's dig over for the phase: " + built);
+        game.getAction().moveToGraveyard(unraveler, null);
+        moveToMain2(game, ai);
+        ai.getManaPool().clearPool(false);
+        built.clear();
+        final SpellAbility cast = toTheOracleCast(built);
+        assertNotNull(cast, "Main 2: the line runs; its actions: " + built);
+        assertSame(cast.getHostCard(), oracle);
     }
 
     // Thrasios's next activation (LoopSinks.thrasios), which draws no random number (spec section 7)
@@ -2225,14 +2487,6 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final SpellAbility sa = driver.mainPhaseAction(List.of());
         assertEquals(MyRandom.callCount() - before, 0, "a driver decision drew");
         return sa;
-    }
-
-    // the floor (LoopSinks.floor), which draws no random number (spec section 7), whatever trigger it reads
-    private int floorOf() {
-        final long before = MyRandom.callCount();
-        final int floor = LoopSinks.floor(ai);
-        assertEquals(MyRandom.callCount() - before, 0, "the floor drew");
-        return floor;
     }
 
     // the plain dig's floor (LoopSinks.plainFloor), which draws no random number (spec section 7), whatever trigger it
@@ -2275,9 +2529,9 @@ public class ComboLoopThrasiosAiTest extends AITest {
                 + " | TriggerZones$ Battlefield | Execute$ TrigDraw";
     }
 
-    // our floor with each pair {a trigger, its TrigDraw's text} one more trigger of ours, each on a Memnite of ours
-    // put onto our battlefield for the reading and then put into our graveyard
-    private int floorWith(final String[]... triggers) {
+    // our plain dig's floor with each pair {a trigger, its TrigDraw's text} one more trigger of ours, each on a Memnite
+    // of ours put onto our battlefield for the reading and then put into our graveyard
+    private int plainFloorWithEach(final String[]... triggers) {
         final List<Card> hosts = new ArrayList<>();
         for (final String[] tr : triggers) {
             final Card host = addCard(MEMNITE, ai);
@@ -2285,34 +2539,119 @@ public class ComboLoopThrasiosAiTest extends AITest {
             host.addTrigger(TriggerHandler.parseTrigger(tr[0], host, true));
             hosts.add(host);
         }
-        final int floor = floorOf();
+        final int floor = plainFloorOf();
         for (final Card host : hosts) {
             game.getAction().moveToGraveyard(host, null);
         }
         return floor;
     }
 
-    // our floor with that trigger, whose TrigDraw is that text, on a Memnite of the opponent's put onto their
-    // battlefield for the reading and then into their graveyard
-    private int floorWithTheirs(final String trigger, final String drawText) {
+    // our plain dig's floor with that trigger, whose TrigDraw is that text, on a Memnite of the opponent's put onto
+    // their battlefield for the reading and then into their graveyard
+    private int plainFloorWithTheirs(final String trigger, final String drawText) {
         final Card host = addCard(MEMNITE, opp);
         host.setSVar("TrigDraw", drawText);
         host.addTrigger(TriggerHandler.parseTrigger(trigger, host, true));
-        final int floor = floorOf();
+        final int floor = plainFloorOf();
         game.getAction().moveToGraveyard(host, null);
         return floor;
     }
 
-    // the go-off slot's first decision on nyxbloomOracleBoard's board with our library milled to three cards, Oracle's
-    // threshold, the opponent's Eidolon of the Great Revel out and our life at that
-    private SpellAbility oracleCastAtLife(final int life) {
+    // the Oracle line's board: start's, in our Main 2, Thassa's Oracle in hand, two untapped Islands and a library of
+    // that many Forests; returns Oracle
+    private Card oracleBoard(final int forests) {
+        start();
+        moveToMain2(game, ai);
+        final Card oracle = addCardToZone(ORACLE, ai, ZoneType.Hand);
+        addCard(ISLAND, ai);
+        addCard(ISLAND, ai);
+        library(FOREST, forests);
+        return oracle;
+    }
+
+    // whether sa is a cast of Thassa's Oracle
+    private static boolean isOracleCast(final SpellAbility sa) {
+        return sa != null && sa.isSpell() && ORACLE.equals(ComboTracker.nameOf(sa.getHostCard()));
+    }
+
+    // plays the go-off slot's decisions (LoopDriver.mainPhaseAction) through the AI's own play path, each resolved and
+    // the state-based actions checked before each, until a decision returns a cast of Thassa's Oracle, which it returns
+    // unplayed, the actions before it in built; null when a decision returns nothing first, or after MAX_ACTIONS
+    // actions. Each decision draws no random number (act)
+    private SpellAbility toTheOracleCast(final List<SpellAbility> built) {
+        while (built.size() < MAX_ACTIONS) {
+            game.getAction().checkStateEffects(true);
+            final SpellAbility sa = act();
+            if (sa == null || isOracleCast(sa)) {
+                return sa;
+            }
+            built.add(sa);
+            playAndResolve(sa);
+        }
+        return null;
+    }
+
+    // our cast of Thassa's Oracle played through the AI's own play path; with Oracle's spell on the stack's top the
+    // stack-response slot answers nothing, so no dig is taken before Oracle resolves; then Oracle resolved and its
+    // entering trigger put on the stack (the brainstorm probe's idiom); returns the stack's top
+    private SpellAbilityStackInstance castAndTrigger(final SpellAbility cast) {
+        ai.getController().playChosenSpellAbility(cast);
+        assertTrue(game.getStack().peek().isSpell(), "Oracle's spell on the stack: " + game.getStack());
+        assertNull(driver.respond(), "an answer above our own Oracle's spell");
+        game.getStack().resolveStack();
+        game.getStack().addAllTriggeredAbilitiesToStack();
+        return game.getStack().peek();
+    }
+
+    // the Oracle line played to its window: the go-off slot's decisions to its cast of Thassa's Oracle
+    // (toTheOracleCast), played and resolved, its trigger then on the stack's top (castAndTrigger); fails the test when
+    // the go-off casts no Oracle
+    private void toTheWindow() {
+        final List<SpellAbility> built = new ArrayList<>();
+        final SpellAbility cast = toTheOracleCast(built);
+        assertNotNull(cast, "the driver never cast Oracle; its actions: " + built);
+        castAndTrigger(cast);
+    }
+
+    // asks the stack-response slot (LoopDriver.respond) at each decision while the stack holds anything, as the
+    // AiController asks it above an item, the state-based actions checked before each: each answer's action played
+    // through the AI's own play path and resolved alone, above what lies beneath (Oracle's trigger), the triggers it
+    // caused then put on the stack; until an answer is a pass (no action), there is none (null, the stock's), the game
+    // is over, or max answers. Returns the answers in order, the last of them the pass or the null that ended it. Each
+    // decision draws no random number
+    private List<LoopDriver.Answer> answers(final int max) {
+        final List<LoopDriver.Answer> out = new ArrayList<>();
+        while (out.size() < max && !game.isGameOver() && !game.getStack().isEmpty()) {
+            game.getAction().checkStateEffects(true);
+            final long before = MyRandom.callCount();
+            final LoopDriver.Answer a = driver.respond();
+            assertEquals(MyRandom.callCount() - before, 0, "a window decision drew");
+            out.add(a);
+            if (a == null || a.action() == null) {
+                break;
+            }
+            ai.getController().playChosenSpellAbility(a.action());
+            game.getStack().resolveStack();
+            game.getStack().addAllTriggeredAbilitiesToStack();
+        }
+        return out;
+    }
+
+    // the stack's top resolved (Oracle's trigger), the state-based actions checked after it
+    private void resolveTheTrigger() {
+        game.getStack().resolveStack();
+        game.getAction().checkStateEffects(true);
+    }
+
+    // nyxbloomOracleBoard's board with our library milled to three cards, Oracle's threshold, the opponent's Eidolon of
+    // the Great Revel out and our life at that
+    private void oracleAtLife(final int life) {
         nyxbloomOracleBoard();
         addCard(EIDOLON, opp);
         while (library() > 3) {
             game.getAction().moveToGraveyard(ai.getCardsIn(ZoneType.Library).get(0), null);
         }
         ai.setLife(life, null);
-        return act();
     }
 
     // R22's board: Basalt Monolith and Nyxbloom Ancient (3430-4131; no Kinnan) and Thrasios, ready, on ours, in our
