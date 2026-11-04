@@ -374,6 +374,18 @@ public class ComboLoopBounceAiTest extends AITest {
         assertEquals(oneCycle(SOL_RING, MANA_VAULT), 5);
     }
 
+    // A cast and bounce cycle is four actions (the Oracle line's fit counts them, LoopCycles.actions): Sol Ring's tap
+    // and cast, Mana Vault's tap and cast.
+    @Test
+    public void aBounceCycleTakesFourActions() {
+        start();
+        bouncer();
+        addCard(SOL_RING, ai);
+        hand(MANA_VAULT);
+        endlessOne();
+        assertEquals(LoopCycles.actions(ai, line(RING_VAULT)), 4);
+    }
+
     // As Mana Vault is cast, Hullbreaker Horror's trigger is chosen for the cycle: its one chosen mode is the bounce of
     // a nonland permanent (its target on the battlefield), aimed at our Sol Ring, which it returns to our hand while
     // Mana Vault resolves onto our battlefield.

@@ -400,6 +400,19 @@ public class ComboLoopPalinchronAiTest extends AITest {
         assertEquals(untapped(islands) + untapped(forests), 7, "Palinchron's untap put all seven back");
     }
 
+    // A return and recast cycle is one tap of each land Palinchron's untap puts back, the return and the cast (the
+    // Oracle line's fit counts them, LoopCycles.actions); the flicker's, those taps and the flicker.
+    @Test
+    public void aRecastCycleTakesATapEachLandTheReturnAndTheCast() {
+        start();
+        recast();
+        lands(ISLAND, 4);
+        lands(FOREST, 3);
+        endlessOne();
+        assertEquals(LoopCycles.putBack(ai).size(), 7, "the lands Palinchron's untap puts back");
+        assertEquals(LoopCycles.actions(ai, line(RECAST)), 9);
+    }
+
     // Four Islands, tripled, make 12, one more than the cycle's 11: the recast nets 1, and runs. Three make 9: the net
     // is -2, and the line is not ready.
     @Test
