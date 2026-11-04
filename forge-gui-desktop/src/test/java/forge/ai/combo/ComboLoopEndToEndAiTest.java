@@ -793,9 +793,11 @@ public class ComboLoopEndToEndAiTest extends AITest {
     }
 
     // Finding 4, the anti-goal "decking itself" with Jin-Gitaxias, Core Augur on ours: thrasiosNeverDecksUs's board
-    // beside Jin, whose trigger draws us seven at our end step, whatever our library holds. Thrasios stops at the floor
-    // and Jin's seven, eleven cards, and Jin's draw leaves four: the opponent's turn comes and the game goes on, where
-    // the dig used to stop at four and Jin's draw decked us.
+    // beside Jin, whose trigger draws us seven at each of our end steps, whatever our library holds, with fifty cards.
+    // The plain dig keeps our next four draw steps and every card Jin draws us before the last of them, four and Jin's
+    // seven four times, 32 (amended by the final-fix compliance review's round 1), and Jin's draw leaves 25: the
+    // opponent's turn comes and the game goes on, where the dig used to stop at four and Jin's draw decked us, and
+    // then, at eleven, Jin's draw left four, one turn of draws.
     @Test
     public void jinNeverDecksUs() {
         board(KINNAN, KINNANS_LIST);
@@ -803,7 +805,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
         rock();
         ComboLoopBoards.ready(addCard(THRASIOS, ai));
         ComboLoopBoards.ready(addCard(JIN, ai));
-        for (int i = 0; i < 15; i++) {
+        for (int i = 0; i < 25; i++) {
             addCardToZone(MEMNITE, ai, ZoneType.Library);
             addCardToZone(FOREST, ai, ZoneType.Library);
         }
@@ -811,7 +813,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
         final int library = ai.getCardsIn(ZoneType.Library).size();
         assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
         assertSame(game.getPhaseHandler().getPlayerTurn(), opp, "the opponent's turn never came: " + p);
-        assertTrue(library >= LoopSinks.LIBRARY_FLOOR, "our library after Jin's draw: " + library + "; " + p);
+        assertTrue(library >= 25, "our library after Jin's draw: " + library + "; " + p);
         assertTrue(p.count(THRASIOS + " ability") > 0, "Thrasios never dug: " + p);
     }
 
@@ -1240,6 +1242,81 @@ public class ComboLoopEndToEndAiTest extends AITest {
         game.getStack().add(new WrappedAbility(trigger, inner, null));
         final Card anew = game.getAction().moveToPlay(game.getAction().exile(burnt, null, null), null, null);
         assertTrue(refuses(bounceOf(anew), List.of(anew)), "the trigger's damage names the card it was");
+    }
+
+    // Its finding 2, spec section 4's anti-goal "decking itself" beside Jin-Gitaxias, Core Augur: round 2's board (a),
+    // Jin on ours, Kinnan, Basalt and Thrasios, eighteen Islands above four Memnites (worth a dig, no win), the
+    // opponent at 1,000 so that no attack of ours ends the game. A plain dig keeps our next four draw steps and every
+    // card Jin draws us before the last of them, 32, so with 22 cards it does not run, and the game goes on past our
+    // turn 5, where the dig took the library to eleven and Jin's sevens milled us at our turn 5's end step.
+    @Test
+    public void besideJinADigThatFindsNoWinLeavesUsFourTurns() {
+        board(KINNAN, KINNANS_LIST);
+        fillLibrary(opp, 40);
+        opp.setLife(1_000, null);
+        rock();
+        ComboLoopBoards.ready(addCard(THRASIOS, ai));
+        ComboLoopBoards.ready(addCard(JIN, ai));
+        for (int i = 0; i < 18; i++) {
+            addCardToZone(ISLAND, ai, ZoneType.Library);
+        }
+        for (int i = 0; i < 4; i++) {
+            addCardToZone(MEMNITE, ai, ZoneType.Library);
+        }
+        final Play p = play("besideJinADigThatFindsNoWinLeavesUsFourTurns",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 2);
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 3, "the opponent's next turn never came: " + p);
+    }
+
+    // The same anti-goal with Jin in our hand (round 2's board (c), the skeptic's): Kinnan, Basalt and Thrasios on
+    // ours, two Islands, Jin-Gitaxias in our hand, a library of 25 Memnites and 25 Forests in turn, the opponent at
+    // 1,000. The plain dig keeps what Jin would draw us were it on our battlefield, since the go-off's pool can cast
+    // it: it stops at 32, and the game goes on past our turn 5, where the dig ran below what Jin's arrival needed and
+    // Jin's sevens milled us by our turn 5's end step.
+    @Test
+    public void jinInOurHandRaisesThePlainDigsFloor() {
+        board(KINNAN, KINNANS_LIST);
+        fillLibrary(opp, 40);
+        opp.setLife(1_000, null);
+        rock();
+        ComboLoopBoards.ready(addCard(THRASIOS, ai));
+        lands(ISLAND, 2);
+        addCardToZone(JIN, ai, ZoneType.Hand);
+        for (int i = 0; i < 25; i++) {
+            addCardToZone(MEMNITE, ai, ZoneType.Library);
+            addCardToZone(FOREST, ai, ZoneType.Library);
+        }
+        final Play p = play("jinInOurHandRaisesThePlainDigsFloor", g -> g.getPhaseHandler().getTurn() > OUR_TURN + 2);
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 3, "the opponent's next turn never came: " + p);
+        assertTrue(p.count(THRASIOS + " ability") > 0, "Thrasios never dug: " + p);
+    }
+
+    // And with Jin in our library near its bottom (round 2's board (b)): Kinnan, Basalt and Thrasios on ours, two
+    // Islands, a library of 25 Memnites and 25 Forests in turn with Jin-Gitaxias the 46th of its 51 cards, the opponent
+    // at 1,000. The plain dig keeps what Jin would draw us were it on our battlefield, since the dig may draw it and
+    // the go-off's pool cast it: it stops at 32, above Jin, and the game goes on past our turn 5, where the dig ran at
+    // the floor of four, drew Jin near the bottom, the stock walk cast it, and its seven decked us.
+    @Test
+    public void jinInOurLibraryRaisesThePlainDigsFloor() {
+        board(KINNAN, KINNANS_LIST);
+        fillLibrary(opp, 40);
+        opp.setLife(1_000, null);
+        rock();
+        ComboLoopBoards.ready(addCard(THRASIOS, ai));
+        lands(ISLAND, 2);
+        for (int i = 0; i < 50; i++) {
+            if (i == 45) {
+                addCardToZone(JIN, ai, ZoneType.Library);
+            }
+            addCardToZone(i % 2 == 0 ? MEMNITE : FOREST, ai, ZoneType.Library);
+        }
+        final Play p = play("jinInOurLibraryRaisesThePlainDigsFloor",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 2);
+        assertFalse(game.isGameOver(), "the game ended: " + outcome() + "; " + p);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 3, "the opponent's next turn never came: " + p);
+        assertTrue(p.count(THRASIOS + " ability") > 0, "Thrasios never dug: " + p);
     }
 
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on

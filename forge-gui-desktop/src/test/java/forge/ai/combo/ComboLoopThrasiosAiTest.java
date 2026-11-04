@@ -1424,18 +1424,19 @@ public class ComboLoopThrasiosAiTest extends AITest {
 
     // ---- the final review's round 1 ----
 
-    // Finding 4 (spec section 6.4, amended): the floor counts the cards our own mandatory draw triggers will draw us
-    // before our next draw step. Jin-Gitaxias, Core Augur on ours draws seven at our end step, whatever our library
-    // holds: a library of fourteen Memnites, Thrasios digs while it holds more than eleven (four, and Jin's seven),
-    // three activations, and stops at eleven, so that Jin's draw leaves four.
+    // Finding 4 (spec section 6.4, amended): the plain dig's floor keeps our next four draw steps and every card our
+    // own mandatory draw triggers will draw us before the last of them (amended by the final-fix compliance review's
+    // round 1). Jin-Gitaxias, Core Augur on ours draws seven at each of our end steps, whatever our library holds: a
+    // library of 35 Memnites, Thrasios digs while it holds more than 32 (four, and Jin's seven at this turn's end step
+    // and at each of the three after it), three activations, and stops at 32.
     @Test
     public void jinsEndStepDrawRaisesTheFloor() {
         start();
         ComboLoopBoards.ready(addCard(JIN, ai));
-        library(MEMNITE, 14);
+        library(MEMNITE, 35);
         final List<Seen> seen = play(g -> !g.getPhaseHandler().is(PhaseType.MAIN1));
         assertEquals(only(seen, Seen::dig).size(), 3, "Thrasios's activations: " + seen);
-        assertEquals(library(), LoopSinks.LIBRARY_FLOOR + 7, "the floor and Jin's seven");
+        assertEquals(library(), LoopSinks.LIBRARY_FLOOR + 7 * 4, "the floor and Jin's sevens");
         assertNull(thrasiosOf(line(KINNAN_BASALT)), "then none");
     }
 
@@ -1623,7 +1624,7 @@ public class ComboLoopThrasiosAiTest extends AITest {
 
     // The dig to empty keeps the floor of four, whatever our triggers will draw: Laboratory Maniac wins on a draw from
     // an empty library, Jin's seven among them. Jin on ours, the opponent's untapped Island, eight cards: the dig goes
-    // on.
+    // on, below the plain dig's floor and the dig toward Oracle's.
     @Test
     public void theDigToEmptyKeepsTheFloorOfFour() {
         start();
@@ -1631,7 +1632,8 @@ public class ComboLoopThrasiosAiTest extends AITest {
         ComboLoopBoards.ready(addCard(JIN, ai));
         addCard(ISLAND, opp);
         library(MEMNITE, 8);
-        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 7, "the plain dig's floor");
+        assertEquals(plainFloorOf(), LoopSinks.LIBRARY_FLOOR + 7 * 4, "the plain dig's floor");
+        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR + 7, "the dig toward Oracle's floor");
         assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "above four: the dig to empty");
     }
 
@@ -1749,6 +1751,138 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertEquals(floorWith(new String[] {phaseTrigger("Upkeep", "You"), draw}), base + 3, "the control");
     }
 
+    // ---- the final-fix compliance review's round 1 ----
+
+    // Its finding 2 (spec section 6.4, amended): the plain dig's floor (LoopSinks.plainFloor) keeps our next four draw
+    // steps, R23's four turns of draws, and every card our own mandatory draw triggers will draw us before the last of
+    // them. In our Main 1: four with no draw trigger of ours; Phyrexian Arena's one at each of our next four upkeeps,
+    // four more; Jin-Gitaxias's seven at this turn's end step and at those of our next three turns, 28 more; Rhystic
+    // Study's optional draw nothing; and beside Nezahal, Primal Tide, whose draws cannot be counted, no plain dig. The
+    // dig toward Thassa's Oracle keeps its own floor (LoopSinks.floor), the draws before our next draw step alone.
+    @Test
+    public void thePlainDigsFloorKeepsFourTurnsOfOurDraws() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        assertEquals(plainFloorOf(), base, "no draw trigger of ours");
+        addCard("Phyrexian Arena", ai);
+        assertEquals(plainFloorOf(), base + 4, "Phyrexian Arena's one at each of our next four upkeeps");
+        ComboLoopBoards.ready(addCard(JIN, ai));
+        assertEquals(plainFloorOf(), base + 4 + 28, "and Jin's seven at four end steps of ours");
+        assertEquals(floorOf(), base + 1 + 7, "the dig toward Oracle's floor: before our next draw step");
+        addCard(RHYSTIC, ai);
+        assertEquals(plainFloorOf(), base + 32, "an optional draw adds nothing");
+        ComboLoopBoards.ready(addCard(NEZAHAL, ai));
+        assertEquals(plainFloorOf(), Integer.MAX_VALUE, "Nezahal's draws cannot be counted");
+    }
+
+    // The plain dig's floor counts each draw once for each firing before the fourth of our draw steps from now: those
+    // before our next draw step, as the floor of the dig toward Oracle counts them, and once more for each of the
+    // trigger's phases in each of the three rounds of turns after that step, where the trigger's players take that
+    // turn's player. A draw of three, in our Main 1 and then in the opponent's.
+    @Test
+    public void thePlainDigsFloorCountsEachFiringBeforeOurFourthDrawStep() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "You"), draw), base + 3 * (1 + 3), "our next four upkeeps");
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "Player"), draw), base + 3 * (2 + 3 * 2),
+                "each player's upkeep: ours and the opponent's");
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "Opponent"), draw), base + 3 * (1 + 3), "the opponent's");
+        assertEquals(plainFloorWith(phaseTrigger("Draw", "You"), draw), base + 3 * 3,
+                "our draw step: after each of our next three draws");
+        assertEquals(plainFloorWith(phaseTrigger("Main1", "You"), draw), base + 3 * 3,
+                "our Main 1: this one is not still to come");
+        assertEquals(plainFloorWith(phaseTrigger("End of Turn", "You"), draw), base + 3 * (1 + 3), "our end steps");
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep,End of Turn", "You"), draw), base + 3 * (2 + 3 * 2),
+                "two phases of ours");
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp, 4);
+        assertEquals(plainFloorWith(phaseTrigger("End of Turn", "You"), draw), base + 3 * 3,
+                "in the opponent's turn our end step comes after our next draw step");
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "You"), draw), base + 3 * (1 + 3),
+                "in the opponent's turn: our next upkeep");
+    }
+
+    // A player who has lost has no more turns in the rounds the plain dig's floor counts either: in a three-player
+    // game an upkeep draw of each opponent's counts for each opponent still in the game.
+    @Test
+    public void thePlainDigsFloorCountsNoTurnOfAPlayerWhoHasLost() {
+        pod();
+        final Player third = game.getPlayers().get(2);
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "Opponent"), draw), base + 3 * (2 + 3 * 2),
+                "two opponents");
+        third.concede();
+        assertTrue(third.hasLost(), "the third player conceded");
+        assertEquals(plainFloorWith(phaseTrigger("Upkeep", "Opponent"), draw), base + 3 * (1 + 3), "one is left");
+    }
+
+    // The plain dig's floor counts the draw triggers of our permanent cards in our hand and in our library as if each
+    // were on our battlefield now, since the go-off's pool may cast one, or the dig draw it: Jin-Gitaxias in our hand
+    // keeps 32, and in our library 32, where the dig toward Oracle's floor counts our battlefield alone. Not counted:
+    // Jin in exile or our graveyard; the opponent's Jins in their hand and library; a draw of ours that works from
+    // another zone than the battlefield, on a card of ours in our hand; one on a card that is no permanent (a sorcery
+    // of ours), or a suppressed one; and the draws that cannot be counted, which off our battlefield stop no plain dig:
+    // a count not written plainly, a draw of another mode, a phase trigger of no phase, and Nezahal, Primal Tide's in
+    // our hand and library. A draw that names no zone works on the battlefield and is counted, and one that names no
+    // number of cards draws one.
+    @Test
+    public void thePlainDigsFloorCountsOurPermanentCardsInHandAndLibrary() {
+        start();
+        final int base = LoopSinks.LIBRARY_FLOOR;
+        final Card inHand = addCardToZone(JIN, ai, ZoneType.Hand);
+        assertEquals(plainFloorOf(), base + 28, "Jin in our hand");
+        assertEquals(floorOf(), base, "the dig toward Oracle's floor, Jin in our hand");
+        game.getAction().exile(inHand, null, null);
+        assertEquals(plainFloorOf(), base, "Jin in exile");
+        final Card inLibrary = addCardToZone(JIN, ai, ZoneType.Library);
+        assertEquals(plainFloorOf(), base + 28, "Jin in our library");
+        assertEquals(floorOf(), base, "the dig toward Oracle's floor, Jin in our library");
+        game.getAction().moveToGraveyard(inLibrary, null);
+        assertEquals(plainFloorOf(), base, "Jin in our graveyard");
+        addCardToZone(JIN, opp, ZoneType.Hand);
+        addCardToZone(JIN, opp, ZoneType.Library);
+        assertEquals(plainFloorOf(), base, "the opponent's Jins");
+        final String draw = "DB$ Draw | Defined$ You | NumCards$ 3";
+        final String up = phaseTrigger("Upkeep", "You");
+        assertEquals(plainFloorInHand(MEMNITE, up, draw, false), base + 3 * 4, "the control: a permanent of ours");
+        assertEquals(plainFloorInHand(MEMNITE, up.replace(" | TriggerZones$ Battlefield", ""), draw, false),
+                base + 3 * 4, "a draw that names no zone");
+        assertEquals(plainFloorInHand(MEMNITE, up.replace("Battlefield", "Graveyard"), draw, false), base,
+                "a draw that works from our graveyard");
+        assertEquals(plainFloorInHand(DIVINATION, up, draw, false), base, "a sorcery's");
+        assertEquals(plainFloorInHand(MEMNITE, up, draw, true), base, "a suppressed one");
+        assertEquals(plainFloorInHand(MEMNITE, up, "DB$ Draw | Defined$ You", false), base + 4,
+                "no NumCards: one card at each of our next four upkeeps");
+        assertEquals(plainFloorInHand(MEMNITE, up, "DB$ Draw | Defined$ You | NumCards$ X", false), base,
+                "a count not written plainly");
+        assertEquals(plainFloorInHand(MEMNITE, "Mode$ SpellCast | Phase$ Upkeep | ValidPlayer$ You"
+                + " | TriggerZones$ Battlefield | Execute$ TrigDraw", draw, false), base, "a draw of another mode");
+        assertEquals(plainFloorInHand(MEMNITE, "Mode$ Phase | ValidPlayer$ You | TriggerZones$ Battlefield"
+                + " | Execute$ TrigDraw", draw, false), base, "a phase trigger of no phase");
+        addCardToZone(NEZAHAL, ai, ZoneType.Hand);
+        addCardToZone(NEZAHAL, ai, ZoneType.Library);
+        assertEquals(plainFloorOf(), base, "Nezahal's draws, not counted off our battlefield");
+    }
+
+    // The plain dig stops at that floor: Jin-Gitaxias in our hand, 32 Memnites, no dig; one more Memnite, the dig. The
+    // dig toward Oracle does not count Jin in our hand: nyxbloomOracleBoard's ten cards and the opponent's untapped
+    // Island (so no dig goes below the floor), and the dig toward Oracle goes on above the floor of four.
+    @Test
+    public void jinInOurHandStopsThePlainDigAtItsFloor() {
+        start();
+        addCardToZone(JIN, ai, ZoneType.Hand);
+        library(MEMNITE, 32);
+        assertNull(thrasiosOf(line(KINNAN_BASALT)), "32 cards are not above Jin's 32");
+        library(MEMNITE, 1);
+        assertSame(thrasiosOf(line(KINNAN_BASALT)), digOf(thrasios), "33 are");
+        nyxbloomOracleBoard();
+        addCardToZone(JIN, ai, ZoneType.Hand);
+        addCard(ISLAND, opp);
+        assertEquals(floorOf(), LoopSinks.LIBRARY_FLOOR, "the dig toward Oracle's floor");
+        assertSame(thrasiosOf(line(BASALT_NYXBLOOM)), digOf(thrasios), "the dig toward Oracle above it");
+    }
+
     // Thrasios's next activation (LoopSinks.thrasios), which draws no random number (spec section 7)
     private SpellAbility thrasiosOf(final ComboLines.Line l) {
         final long before = MyRandom.callCount();
@@ -1771,6 +1905,40 @@ public class ComboLoopThrasiosAiTest extends AITest {
         final long before = MyRandom.callCount();
         final int floor = LoopSinks.floor(ai);
         assertEquals(MyRandom.callCount() - before, 0, "the floor drew");
+        return floor;
+    }
+
+    // the plain dig's floor (LoopSinks.plainFloor), which draws no random number (spec section 7), whatever trigger it
+    // reads, wherever its card is
+    private int plainFloorOf() {
+        final long before = MyRandom.callCount();
+        final int floor = LoopSinks.plainFloor(ai);
+        assertEquals(MyRandom.callCount() - before, 0, "the plain dig's floor drew");
+        return floor;
+    }
+
+    // our plain dig's floor with that trigger, whose TrigDraw is that text, on a Memnite of ours put onto our
+    // battlefield for the reading and then into our graveyard
+    private int plainFloorWith(final String trigger, final String drawText) {
+        final Card host = addCard(MEMNITE, ai);
+        host.setSVar("TrigDraw", drawText);
+        host.addTrigger(TriggerHandler.parseTrigger(trigger, host, true));
+        final int floor = plainFloorOf();
+        game.getAction().moveToGraveyard(host, null);
+        return floor;
+    }
+
+    // our plain dig's floor with that trigger, whose TrigDraw is that text, suppressed or not, on a card of that name
+    // of ours put into our hand for the reading and then exiled
+    private int plainFloorInHand(final String name, final String trigger, final String drawText,
+            final boolean suppressed) {
+        final Card host = addCardToZone(name, ai, ZoneType.Hand);
+        host.setSVar("TrigDraw", drawText);
+        final Trigger parsed = TriggerHandler.parseTrigger(trigger, host, true);
+        parsed.setSuppressed(suppressed);
+        host.addTrigger(parsed);
+        final int floor = plainFloorOf();
+        game.getAction().exile(host, null, null);
         return floor;
     }
 
