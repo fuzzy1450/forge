@@ -2310,6 +2310,27 @@ public class ComboLoopThrasiosAiTest extends AITest {
         assertNull(driver.respond(), "a window for an Oracle the line did not cast");
     }
 
+    // The fit counts the build's last cycle whole (section 6.4 step 3, amended 2026-11-04 (the Oracle window)): the
+    // Oracle board with Nyxbloom Ancient beside Basalt (a cycle nets 7) and a library of eleven: the build to 46 (44
+    // for the dig, Oracle's 2) takes seven cycles, not six and a part, so 7 * 2 + 1 + 11 = 26 actions: room for 25
+    // builds one cycle, to Oracle's 2, and Oracle is held; room for 26 casts it.
+    @Test
+    public void theFitRoundsTheBuildsCyclesUp() {
+        final Card oracle = oracleBoard(11);
+        ComboLoopBoards.ready(addCard(NYXBLOOM, ai));
+        driver.useRounds(new LoopRounds(25, LoopRounds.GAME_CAP));
+        final List<SpellAbility> acts = slot(MAX_ACTIONS);
+        assertEquals(acts.size(), 2, "built to Oracle's 2 and no further, one cycle: " + acts);
+        assertTrue(only(acts, ComboLoopThrasiosAiTest::isOracleCast).isEmpty(), "Oracle was cast: " + acts);
+        assertEquals(library(), 11, "no dig");
+        assertTrue(driver.holdsOracle(castOf(oracle)), "Oracle held");
+        oracleBoard(11);
+        ComboLoopBoards.ready(addCard(NYXBLOOM, ai));
+        driver.useRounds(new LoopRounds(26, LoopRounds.GAME_CAP));
+        final List<SpellAbility> built = new ArrayList<>();
+        assertNotNull(toTheOracleCast(built), "room for 26: the line runs; its actions: " + built);
+    }
+
     // No dig toward Oracle runs in a main phase any more (section 6.4 step 3, amended 2026-11-04 (the Oracle window)):
     // on the Oracle line's board Thrasios's reading is no dig, ten Forests holding nothing worth a plain dig; and with
     // a library of ten Memnites instead, which a plain dig would dig for, the whole game loop casts Oracle first, the
