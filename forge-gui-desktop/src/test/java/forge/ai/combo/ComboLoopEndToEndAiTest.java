@@ -88,6 +88,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
     private static final String REVERSAL = "Dramatic Reversal";
     private static final String BIRGI = "Birgi, God of Storytelling";
     private static final String WRATH = "Wrath of God";
+    private static final String NEZAHAL = "Nezahal, Primal Tide";
     private static final String EIDOLON = "Eidolon of the Great Revel";
     /** The flicker of Palinchron and Deadeye Navigator. */
     private static final String FLICKER = "1409-3542";
@@ -117,12 +118,26 @@ public class ComboLoopEndToEndAiTest extends AITest {
 
     /** What a bounded play saw: the steps it took; the driver's actions; the phases they came in ("turn 3 MAIN1"),
      *  each once, in their order; our stack items as each was first seen (a spell its card's name, an ability its
-     *  card's name and " ability", a trigger its card's name and " trigger"); its wall time. */
-    private record Play(int steps, int actions, List<String> phases, List<String> ours, long millis) {
+     *  card's name and " ability", a trigger its card's name and " trigger"); among them, our abilities that move
+     *  cards off the battlefield, each its card's name, " to " and the zone they go to ("Palinchron to Exile" for
+     *  Deadeye Navigator's flicker, "Palinchron to Hand" for Palinchron's own return); its wall time. */
+    private record Play(int steps, int actions, List<String> phases, List<String> ours, List<String> moves,
+            long millis) {
         int count(final String item) {
             int n = 0;
             for (final String s : ours) {
                 if (s.equals(item)) {
+                    n++;
+                }
+            }
+            return n;
+        }
+
+        /** How many of our abilities moved the card named {@code name} off the battlefield to {@code to}. */
+        int moved(final String name, final ZoneType to) {
+            int n = 0;
+            for (final String s : moves) {
+                if (s.equals(name + " to " + to.name())) {
                     n++;
                 }
             }
@@ -227,7 +242,12 @@ public class ComboLoopEndToEndAiTest extends AITest {
 
     /** Our first card on our battlefield by its printed name (ComboTracker.nameOf), or null. */
     private Card onOurBattlefield(final String name) {
-        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+        return ourCardIn(ZoneType.Battlefield, name);
+    }
+
+    /** Our first card in that zone by its printed name (ComboTracker.nameOf), or null. */
+    private Card ourCardIn(final ZoneType zone, final String name) {
+        for (final Card c : ai.getCardsIn(zone)) {
             if (name.equals(ComboTracker.nameOf(c))) {
                 return c;
             }
@@ -268,6 +288,18 @@ public class ComboLoopEndToEndAiTest extends AITest {
         return si.isSpell() ? name : si.isTrigger() ? name + " trigger" : name + " ability";
     }
 
+    // an ability of ours on the stack that moves cards off the battlefield (a ChangeZone from it): its card's name,
+    // " to " and the zone it moves them to; null for a spell, a trigger or any other ability
+    private static String move(final SpellAbilityStackInstance si) {
+        final SpellAbility sa = si.getSpellAbility();
+        if (si.isSpell() || si.isTrigger() || sa.getApi() != ApiType.ChangeZone || !sa.hasParam("Destination")
+                || !"Battlefield".equals(sa.getParam("Origin"))) {
+            return null;
+        }
+        return ComboTracker.nameOf(si.getSourceCard()) + " to "
+                + ZoneType.smartValueOf(sa.getParam("Destination")).name();
+    }
+
     /** {@link #play(String, Predicate, int)} to {@link #MAX_STEPS}. */
     private Play play(final String label, final Predicate<Game> done) {
         return play(label, done, MAX_STEPS);
@@ -286,6 +318,7 @@ public class ComboLoopEndToEndAiTest extends AITest {
         final int lastTurn = ph.getTurn() + MAX_TURNS;
         final Set<String> phases = new LinkedHashSet<>();
         final List<String> ours = new ArrayList<>();
+        final List<String> moves = new ArrayList<>();
         final Set<Integer> seen = new HashSet<>();
         int steps = 0;
         int actions = 0;
@@ -304,10 +337,14 @@ public class ComboLoopEndToEndAiTest extends AITest {
             for (final SpellAbilityStackInstance si : game.getStack()) {
                 if (seen.add(si.getId()) && ai.equals(si.getActivatingPlayer())) {
                     ours.add(label(si));
+                    final String move = move(si);
+                    if (move != null) {
+                        moves.add(move);
+                    }
                 }
             }
         }
-        final Play p = new Play(steps, actions, List.copyOf(phases), List.copyOf(ours),
+        final Play p = new Play(steps, actions, List.copyOf(phases), List.copyOf(ours), List.copyOf(moves),
                 (System.nanoTime() - from) / 1_000_000);
         Reporter.log(label + ": " + p.steps() + " steps, " + p.actions() + " driver actions in " + p.phases() + ", "
                 + p.millis() + " ms, " + p.ours().size() + " stack items of ours; " + outcome());
@@ -717,7 +754,9 @@ public class ComboLoopEndToEndAiTest extends AITest {
     // An untargeted removal: the opponent's Wrath of God, Palinchron and Deadeye paired, seven Islands, no Ballista. A
     // flicker saves nothing from it, since it destroys what is there when it resolves, and the stock reading, which
     // takes in every creature it would destroy, reads the new Palinchron as threatened after each flicker: for a deck
-    // holding the flicker line nothing is flickered, Wrath resolves, and our next turn comes within the bound.
+    // holding the flicker line nothing is flickered. Palinchron's own {2}{U}{U} return to our hand does save it, and
+    // once made cannot be made again, so it stays the stock's (the final-fix compliance review's round 1): Palinchron
+    // is returned to our hand, Wrath destroys Deadeye Navigator, and our next turn comes within the bound.
     @Test
     public void aWrathDrawsNoFlicker() {
         start();
@@ -727,8 +766,10 @@ public class ComboLoopEndToEndAiTest extends AITest {
         ComboLoopBoards.theirSpellOn(game, opp, WRATH);
         final Play p = play("aWrathDrawsNoFlicker", g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
         assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 2, "our next turn never came: " + p);
-        assertEquals(p.count(PALINCHRON + " ability"), 0, "Palinchron's flickers: " + p);
-        assertNull(onOurBattlefield(PALINCHRON), "Wrath of God did not resolve");
+        assertEquals(p.moved(PALINCHRON, ZoneType.Exile), 0, "Palinchron's flickers: " + p);
+        assertNull(onOurBattlefield(DEADEYE), "Wrath of God did not resolve: " + p);
+        assertEquals(p.moved(PALINCHRON, ZoneType.Hand), 1, "Palinchron's returns to our hand: " + p);
+        assertNotNull(ourCardIn(ZoneType.Hand, PALINCHRON), "Palinchron is not in our hand: " + p);
     }
 
     // The blink refusal's reading (LoopDriver.refusesBlink): with the opponent's Murder aimed at Palinchron as it is
@@ -950,12 +991,18 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertFalse(refuses(List.of(palinchron)), "Curtains' Call's second target is Palinchron");
     }
 
-    // LoopDriver.refusesBlink(ai, retrieval), which draws no random number (spec section 7): every reading of the
+    // LoopDriver.refusesBlink for Deadeye Navigator's flicker of the retrieval's first card, a save that returns it to
+    // the battlefield at once
+    private boolean refuses(final List<Card> retrieval) {
+        return refuses(flickerOf(retrieval.get(0)), retrieval);
+    }
+
+    // LoopDriver.refusesBlink(ai, sa, retrieval), which draws no random number (spec section 7): every reading of the
     // stack the tests make is bracketed, an opponent's spell, a triggered ability, a part after the first and an
     // item of ours among them
-    private boolean refuses(final List<Card> retrieval) {
+    private boolean refuses(final SpellAbility sa, final List<Card> retrieval) {
         final long before = MyRandom.callCount();
-        final boolean refused = LoopDriver.refusesBlink(ai, retrieval);
+        final boolean refused = LoopDriver.refusesBlink(ai, sa, retrieval);
         assertEquals(MyRandom.callCount() - before, 0, "the blink refusal drew");
         return refused;
     }
@@ -1005,6 +1052,45 @@ public class ComboLoopEndToEndAiTest extends AITest {
         throw new AssertionError(c + " has no flicker");
     }
 
+    // a save of c's own built from its text as a script writes one: an activated move of c from the battlefield to
+    // that zone, remembering it, then those parts in their order (at least one), each a sub-ability's text
+    private static SpellAbility saveOf(final Card c, final String to, final String... parts) {
+        for (int i = 0; i < parts.length; i++) {
+            c.setSVar("TestPart" + i, parts[i] + (i + 1 < parts.length ? " | SubAbility$ TestPart" + (i + 1) : ""));
+        }
+        return AbilityFactory.getAbility("AB$ ChangeZone | Cost$ 1 | Defined$ Self | Origin$ Battlefield"
+                + " | Destination$ " + to + " | RememberChanged$ True | SubAbility$ TestPart0", c);
+    }
+
+    // a part after a save that moves the card the save moved (Remembered) on to that zone
+    private static String moveOn(final String zone) {
+        return "DB$ ChangeZone | Defined$ Remembered | Origin$ All | Destination$ " + zone;
+    }
+
+    // the card's own exile of itself: its activated ChangeZone to exile that no static grants (Nezahal, Primal Tide's,
+    // whose delayed trigger returns it at the beginning of the next end step)
+    private static SpellAbility exileOf(final Card c) {
+        for (final SpellAbility sa : c.getNonManaAbilities()) {
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.ChangeZone && sa.getGrantorStatic() == null
+                    && "Exile".equals(sa.getParam("Destination"))) {
+                return sa;
+            }
+        }
+        throw new AssertionError(c + " has no exile of its own");
+    }
+
+    // the card's own return to our hand: its activated ChangeZone to the hand that no static grants (Palinchron's
+    // {2}{U}{U})
+    private static SpellAbility bounceOf(final Card c) {
+        for (final SpellAbility sa : c.getNonManaAbilities()) {
+            if (sa.isActivatedAbility() && sa.getApi() == ApiType.ChangeZone && sa.getGrantorStatic() == null
+                    && "Hand".equals(sa.getParam("Destination"))) {
+                return sa;
+            }
+        }
+        throw new AssertionError(c + " has no return to hand");
+    }
+
     // ---- the final review's round 1: what its mutation pass's round 3 found untested ----
 
     // The blink refusal draws no random number, for a deck holding the flicker line or not (section 7: where the stock
@@ -1025,6 +1111,135 @@ public class ComboLoopEndToEndAiTest extends AITest {
         t.useLines(List.of());
         assertFalse(refuses(List.of(palinchron)), "a deck holding no flicker line");
         assertEquals(MyRandom.callCount() - before, 0, "the refusal drew, a deck holding no line");
+    }
+
+    // ---- the final-fix compliance review's round 1 ----
+
+    // Its finding 1: the opponent's Wrath of God, which targets nothing, against Palinchron unpaired, four Islands for
+    // its {2}{U}{U}, no Ballista. Palinchron's own return to our hand saves it, a card in our hand being on no
+    // battlefield when Wrath resolves, and once made it cannot be made again, so for a deck holding the flicker line it
+    // stays the stock's: Palinchron is returned to our hand once and our next turn comes within the bound, where the
+    // blink refusal let Wrath destroy it.
+    @Test
+    public void aWrathLeavesPalinchronsReturnToHandToTheStock() {
+        start();
+        ComboLoopBoards.ready(addCard(PALINCHRON, ai));
+        lands(ISLAND, 4);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, WRATH);
+        final Play p = play("aWrathLeavesPalinchronsReturnToHandToTheStock",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 2, "our next turn never came: " + p);
+        assertEquals(p.moved(PALINCHRON, ZoneType.Hand), 1, "Palinchron's returns to our hand: " + p);
+        assertNotNull(ourCardIn(ZoneType.Hand, PALINCHRON), "Wrath of God destroyed Palinchron: " + p);
+    }
+
+    // The hook in ChangeZoneAi (LoopDriver.refusesBlink) through the AI's own reading of Palinchron's return to our
+    // hand. Against the opponent's Wrath of God the return saves Palinchron: the stock's yes, for the deck holding the
+    // flicker line as for a deck holding no line. Against their Murder aimed at Palinchron, which has left the
+    // battlefield and come back since (Murder's target is gone, and it will fizzle), the return saves it from nothing:
+    // the deck holding the flicker line is refused it, where the stock reading, which compares card ids, says yes.
+    // Nothing is drawn in any of the four.
+    @Test
+    public void theHookKeepsTheStocksReturnToHandFromARemovalThatTargetsNothing() {
+        start();
+        final Card palinchron = ComboLoopBoards.ready(addCard(PALINCHRON, ai));
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, WRATH);
+        assertEquals(weighs(bounceOf(palinchron)), AiPlayDecision.WillPlay, "Wrath, the flicker line's deck");
+        t.useLines(List.of());
+        assertEquals(weighs(bounceOf(palinchron)), AiPlayDecision.WillPlay, "Wrath, a deck holding no line");
+        start();
+        final Card aimed = ComboLoopBoards.ready(addCard(PALINCHRON, ai));
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, aimed);
+        final Card back = game.getAction().moveToPlay(game.getAction().exile(aimed, null, null), null, null);
+        game.getAction().checkStaticAbilities();
+        assertEquals(weighs(bounceOf(back)), AiPlayDecision.CantPlayAi, "Murder's target is gone: no return");
+        t.useLines(List.of());
+        assertEquals(weighs(bounceOf(back)), AiPlayDecision.WillPlay, "the stock reads card ids: yes");
+    }
+
+    // The blink refusal's reading of the save (LoopDriver.refusesBlink). Against the opponent's Wrath of God, which
+    // targets nothing, Deadeye Navigator's flicker of Palinchron, which returns it to the battlefield at once, saves it
+    // from nothing and is refused, while Palinchron's own return to our hand and Nezahal, Primal Tide's exile until
+    // the next end step do save the card and are not. Of saves written as scripts write them, an exile whose part
+    // after it puts the card into our hand saves it; a return to our hand whose part after it puts the card back onto
+    // the battlefield does not, and is refused, as are an exile whose third part does and one whose part after it puts
+    // every card it exiled onto the battlefield (a ChangeZoneAll). Their Murder above Wrath, aimed
+    // at Deadeye Navigator, names Palinchron as no target, and Palinchron's return is still not refused. For a deck
+    // holding no flicker line nothing is refused. With their Murder aimed at Palinchron as it is now, its return is not
+    // refused; once Palinchron has left the battlefield and come back (Murder's target gone), its return is refused,
+    // Murder still naming the card it was.
+    @Test
+    public void theBlinkRefusalRefusesOnlyAFlickerFromARemovalThatTargetsNothing() {
+        start();
+        final Card palinchron = paired();
+        final Card nezahal = ComboLoopBoards.ready(addCard(NEZAHAL, ai));
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, WRATH);
+        assertTrue(refuses(flickerOf(palinchron), List.of(palinchron)), "a flicker from Wrath of God");
+        assertFalse(refuses(bounceOf(palinchron), List.of(palinchron)), "a return to our hand from Wrath of God");
+        assertFalse(refuses(exileOf(nezahal), List.of(nezahal)), "an exile until the end step from Wrath of God");
+        assertFalse(refuses(saveOf(palinchron, "Exile", moveOn("Hand")), List.of(palinchron)),
+                "an exile, then to our hand");
+        assertTrue(refuses(saveOf(palinchron, "Hand", moveOn("Battlefield")), List.of(palinchron)),
+                "a return to our hand, then onto the battlefield at once");
+        assertTrue(refuses(saveOf(palinchron, "Exile", "DB$ Pump | Defined$ Remembered | NumAtt$ +1",
+                moveOn("Battlefield")), List.of(palinchron)), "an exile, a pump, then onto the battlefield at once");
+        assertTrue(refuses(saveOf(palinchron, "Exile", "DB$ ChangeZoneAll | ChangeType$ Card.IsRemembered"
+                + " | Origin$ Exile | Destination$ Battlefield"), List.of(palinchron)),
+                "an exile, then all it exiled onto the battlefield at once");
+        ComboLoopBoards.theirResponse(game, opp, MURDER, palinchron.getPairedWith());
+        assertFalse(refuses(bounceOf(palinchron), List.of(palinchron)), "Murder names Deadeye, not Palinchron");
+        t.useLines(List.of());
+        assertFalse(refuses(flickerOf(palinchron), List.of(palinchron)), "a deck holding no flicker line");
+        start();
+        final Card aimed = ComboLoopBoards.ready(addCard(PALINCHRON, ai));
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, aimed);
+        assertFalse(refuses(bounceOf(aimed), List.of(aimed)), "Murder aims at Palinchron as it is now");
+        final Card back = game.getAction().moveToPlay(game.getAction().exile(aimed, null, null), null, null);
+        assertTrue(refuses(bounceOf(back), List.of(back)), "Murder aims at the card Palinchron was");
+    }
+
+    // Whose item and which removal: our own Murder aimed at Palinchron as it is now is no opponent's, and a return of
+    // Palinchron to our hand is refused while it names the card; and beside the opponent's Wrath of God, their Murder
+    // aimed at the card Palinchron was refuses the return too, a cost spec section 9 names (the return would have
+    // saved Palinchron from Wrath). A part that names Palinchron after one that targets nothing counts, and a trigger's
+    // wrapped ability: their Severed Strands, and Flametongue Kavu's trigger, each aimed at the card it was.
+    @Test
+    public void aRemovalWhoseTargetIsGoneOrOursRefusesTheReturnToHand() {
+        start();
+        final Card palinchron = ComboLoopBoards.ready(addCard(PALINCHRON, ai));
+        ComboLoopBoards.theirSpellOn(game, ai, MURDER, palinchron);
+        assertTrue(refuses(bounceOf(palinchron), List.of(palinchron)), "our own Murder names Palinchron");
+        start();
+        final Card aimed = ComboLoopBoards.ready(addCard(PALINCHRON, ai));
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, aimed);
+        final Card back = game.getAction().moveToPlay(game.getAction().exile(aimed, null, null), null, null);
+        ComboLoopBoards.theirResponse(game, opp, WRATH);
+        assertTrue(refuses(bounceOf(back), List.of(back)), "Murder names the card it was, beneath Wrath of God");
+        start();
+        final Card struck = ComboLoopBoards.ready(addCard(PALINCHRON, ai));
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, "Severed Strands", struck);
+        final Card again = game.getAction().moveToPlay(game.getAction().exile(struck, null, null), null, null);
+        assertFalse(game.getStack().peek().getSpellAbility().usesTargeting(), "the gain of life targets nothing");
+        assertTrue(refuses(bounceOf(again), List.of(again)), "Severed Strands's destroy names the card it was");
+        start();
+        final Card burnt = ComboLoopBoards.ready(addCard(PALINCHRON, ai));
+        theirTurn();
+        final Card ftk = addCard("Flametongue Kavu", opp);
+        final Trigger trigger = ftk.getTriggers().get(0);
+        final SpellAbility inner = AbilityFactory.getAbility(ftk, trigger.getParam("Execute"));
+        inner.setActivatingPlayer(opp);
+        inner.setTrigger(trigger);
+        inner.getTargets().add(burnt);
+        game.getStack().add(new WrappedAbility(trigger, inner, null));
+        final Card anew = game.getAction().moveToPlay(game.getAction().exile(burnt, null, null), null, null);
+        assertTrue(refuses(bounceOf(anew), List.of(anew)), "the trigger's damage names the card it was");
     }
 
     // Arcane Wizardry's main deck as the opponent's: three Islands, two Swamps and two Mountains of it untapped on

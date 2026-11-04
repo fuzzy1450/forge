@@ -100,7 +100,10 @@ import forge.game.zone.ZoneType;
  * cast of the cycle's piece in hand waits for the cycle ({@link #holdsCycleCast}, ComboHold.vetoesCast), so the stock
  * walk, which plays at the cycle's boundary, never casts it. For a deck holding the flicker line the stock flicker
  * that saves a card from removal (ChangeZoneAi) is refused once no opponent's item targets the card as the object it is
- * now ({@link #refusesBlink}), so a flicker that saved Palinchron is not made again with each untap paying the next.
+ * now ({@link #refusesBlink}), so a flicker that saved Palinchron is not made again with each untap paying the next;
+ * a save that does not return the card to the battlefield at once, a return to our hand or an exile until a later
+ * step, is refused only while an item on the stack names the card as a target by its card id, as the stock reading
+ * does: the removal whose target left and came back, or an item of ours.
  */
 public final class LoopDriver {
     private static final String KINNAN = "Kinnan, Bonder Prodigy";
@@ -540,17 +543,24 @@ public final class LoopDriver {
     }
 
     /**
-     * Whether the stock flicker of {@code retrieval}, cards of ours ChangeZoneAi would exile and return to save them
-     * from what the stack threatens (its blink-to-save), is refused (spec section 9's stock flicker loop, fixed by the
-     * final review's round 1): for a deck holding the flicker line (1409-3542), while no opponent's item on the stack
-     * targets one of them as the object it is now ({@link LoopResponse#targetsNow}). After one flicker the removal's
-     * target is the card that left, and it fizzles; the stock threat reader compares card ids, which a flicker keeps,
-     * so it would flicker the new card again, and Palinchron, whose untap pays the next flicker, without end. A removal
-     * that targets nothing (destroy all) takes what is on the battlefield when it resolves, which a flicker does not
-     * save; the rare one a new object escapes (Settle the Wreckage's exile of the attacking creatures) is refused too.
-     * False, the stock choice, for every other deck, and for a player no AI of ours decides for. Draws nothing.
+     * Whether the stock save {@code sa} of {@code retrieval}, cards of ours ChangeZoneAi would move off our battlefield
+     * to save them from what the stack threatens (its blink-to-save: a flicker, an exile until a later step, a return
+     * to our hand), is refused (spec section 9's stock flicker loop, fixed by the final review's round 1 and scoped by
+     * its compliance review's round 1): for a deck holding the flicker line (1409-3542), while no opponent's item on
+     * the stack targets one of them as the object it is now ({@link LoopResponse#targetsNow}), when {@code sa} returns
+     * them to the battlefield at once (returnsAtOnce: Deadeye Navigator's flicker), or else when an item on the stack,
+     * anyone's, targets one of them by its card id, as it is now or as it was before it left the battlefield and came
+     * back ({@link LoopResponse#aimedAt}), so a removal whose target is gone, or an item of ours. After one flicker
+     * the removal's target is the card that left, and it fizzles; the stock threat reader compares card ids, which a
+     * flicker keeps, so it would flicker the new card again, and Palinchron, whose untap pays the next flicker, without
+     * end, or return to our hand a card the fizzling removal threatens no more. A removal that targets nothing (destroy
+     * all) takes what is on the battlefield when it resolves: a flicker does not save the card from it, and is refused
+     * (with the rare removal a new object escapes, Settle the Wreckage's exile of the attacking creatures); a return to
+     * our hand (Palinchron's own {2}{U}{U}) or an exile until a later step (Nezahal, Primal Tide's) does save it, and,
+     * made once, cannot loop, so it stays the stock's, but beside a removal whose target is gone. False, the stock
+     * choice, for every other deck, and for a player no AI of ours decides for. Draws nothing.
      */
-    public static boolean refusesBlink(final Player ai, final Iterable<Card> retrieval) {
+    public static boolean refusesBlink(final Player ai, final SpellAbility sa, final Iterable<Card> retrieval) {
         final ComboTracker t = ComboTracker.of(ai);
         if (t == null || !holds(t, FLICKER_LINE)) {
             return false;
@@ -560,7 +570,28 @@ public final class LoopDriver {
                 return false;
             }
         }
-        return true;
+        if (returnsAtOnce(sa)) {
+            return true;
+        }
+        for (final Card c : retrieval) {
+            if (LoopResponse.aimedAt(ai, c)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // whether the save sa returns what it moves to the battlefield at once: one of its sub-abilities moves cards onto
+    // the battlefield (its Destination the battlefield: Deadeye Navigator's flicker, an exile and then a return, a
+    // ChangeZone or a ChangeZoneAll); never a return to a hand that stays there, nor an exile whose return waits for a
+    // later step (a delayed trigger's, Nezahal, Primal Tide's)
+    private static boolean returnsAtOnce(final SpellAbility sa) {
+        for (SpellAbility s = sa.getSubAbility(); s != null; s = s.getSubAbility()) {
+            if ("Battlefield".equals(s.getParam("Destination"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

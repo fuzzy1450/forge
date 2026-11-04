@@ -1324,11 +1324,13 @@ public class ChangeZoneAi extends SpellAbilityAi {
                     return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
                 // Combo-aware AI, piece 2 (spec 2026-10-29-combo-aware-ai-loops-design.md section 9, fixed by the final
-                // review's round 1): for a deck holding the flicker loop line, a blink saves a card only while an
-                // opponent's item targets it as the object it is now (LoopDriver.refusesBlink). The reading above
-                // compares card ids, which a blink keeps, so Palinchron, whose untap pays for the next flicker, was
-                // flickered without end. Inert, so stock, for every other deck. Draws nothing
-                if (LoopDriver.refusesBlink(ai, retrieval)) {
+                // review's round 1, scoped by its compliance review's round 1): for a deck holding the flicker loop
+                // line, a save is refused while no opponent's item targets the card as the object it is now, if it
+                // returns the card to the battlefield at once or an item still targets the card as it was
+                // (LoopDriver.refusesBlink). The reading above compares card ids, which a blink keeps, so Palinchron,
+                // whose untap pays for the next flicker, was flickered without end. Inert, so stock, for every other
+                // deck. Draws nothing
+                if (LoopDriver.refusesBlink(ai, sa, retrieval)) {
                     return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
             }

@@ -125,6 +125,33 @@ final class LoopResponse {
     }
 
     /**
+     * Whether an item on the stack, anyone's, targets our card {@code c} as an object it has been, as the stock threat
+     * reader matches a target (the final-fix compliance review's round 1, LoopDriver.refusesBlink): a part of it, its
+     * root (a trigger's wrapped ability) or a sub-ability, holds a target that is {@code c} by card id (Card.equals),
+     * the object it is now or one it was before it left the battlefield and came back, whether or not it can still be
+     * targeted. Reads targets alone, so it draws no random number.
+     */
+    static boolean aimedAt(final Player ai, final Card c) {
+        for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
+            SpellAbility root = si.getSpellAbility();
+            if (root.isWrapper()) {
+                root = ((WrappedAbility) root).getWrappedAbility();
+            }
+            for (SpellAbility s = root; s != null; s = s.getSubAbility()) {
+                if (!s.usesTargeting()) {
+                    continue;
+                }
+                for (final GameObject o : s.getTargets()) {
+                    if (o instanceof Card target && c.equals(target)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
      * The actions Walking Ballista's volley takes from the board as it stands, every one the driver returns (R28: a
      * go-off in response starts only when they fit in what the caps have left): the volley's pumps and pings
      * ({@link LoopSinks#volleyCost}), and the cycles of loop line {@code l} that make the mana they cost, at its
