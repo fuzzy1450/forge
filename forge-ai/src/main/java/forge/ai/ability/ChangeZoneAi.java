@@ -2141,6 +2141,24 @@ public class ChangeZoneAi extends SpellAbilityAi {
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 
+    /**
+     * Whether one of the dead-card picks of {@link #chooseCardToHiddenOriginChangeZone} decides this search, by the
+     * keys of those branches: Praetor's Grasp's exile, Isochron Scepter's imprint, and the owner's own Scapeshift
+     * search ({@code player} the searched library's owner). Upstream's deck plan pick, which AiController asks before
+     * it calls that method, answers searches of those kinds too, in a tutor storm deck (an exile from a library or
+     * from the hand) and a Dark Depths deck (a land onto the battlefield): for these three AiController leaves the
+     * search to the fork's pick, as before the merge of upstream 626aa9f0735 (its rule R5: the fork's hook decides
+     * first at a meeting point). Draws nothing.
+     */
+    public static boolean deadCardPickDecides(final ZoneType destination, final SpellAbility sa, final Player player,
+                                              final Player decider) {
+        if (ZoneType.Exile.equals(destination)) {
+            return SpecialCardAi.PraetorsGrasp.isGrasp(sa) || SpecialCardAi.IsochronScepter.isImprint(sa);
+        }
+        return ZoneType.Battlefield.equals(destination) && player != null && player.equals(decider)
+                && SpecialCardAi.Scapeshift.isOwnResolution(decider, sa);
+    }
+
     public static Card chooseCardToHiddenOriginChangeZone(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList, Player player, final Player decider) {
         if (SpecialCardAi.Reshape.isReshape(sa) && sa.getHostCard() != null
                 && decider.equals(sa.getHostCard().getOwner())) {

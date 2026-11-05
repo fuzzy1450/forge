@@ -3820,10 +3820,14 @@ public class AiController {
                     return giftsPick;
                 }
             }
-            // the win card of a cheating spell, the creature to put into the graveyard: what the deck is built for
-            final Card forCombo = deckPlan(player).combos.choose(player, destination, origin, fetchList);
-            if (forCombo != null) {
-                return forCombo;
+            // the win card of a cheating spell, the creature to put into the graveyard: what the deck is built for;
+            // except for a search a dead-card pick of ChangeZoneAi decides (Praetor's Grasp, Isochron Scepter's
+            // imprint, our own Scapeshift), which the fork's pick keeps (ChangeZoneAi.deadCardPickDecides)
+            if (!ChangeZoneAi.deadCardPickDecides(destination, sa, player2, decider)) {
+                final Card forCombo = deckPlan(player).combos.choose(player, destination, origin, fetchList);
+                if (forCombo != null) {
+                    return forCombo;
+                }
             }
         }
 
