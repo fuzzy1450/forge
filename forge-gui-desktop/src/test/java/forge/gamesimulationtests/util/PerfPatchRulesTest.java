@@ -728,7 +728,9 @@ public class PerfPatchRulesTest extends GameSimulationTest {
     }
 
     // =====================================================================================
-    // hashCode rewrites must be bit-identical to Objects.hash(Class, id)
+    // hashCode rewrites must be bit-identical to Objects.hash(class name, id): the fork keys them by the class
+    // NAME's hash, the same in every JVM, where Class.hashCode() is an identity hash that changes from one launch to
+    // the next (MTG_DeckMaker stored game 973410; CardQueriesTest pins the same formula for all four trait classes)
     // =====================================================================================
 
     @Test
@@ -737,10 +739,10 @@ public class PerfPatchRulesTest extends GameSimulationTest {
         Player p = game.getPlayers().get(0);
         Card cove = addCard("Tranquil Cove", p);
         ReplacementEffect re = cove.getReplacementEffects().get(0);
-        Assert.assertEquals(re.hashCode(), Objects.hash(ReplacementEffect.class, re.getId()));
+        Assert.assertEquals(re.hashCode(), Objects.hash(ReplacementEffect.class.getName(), re.getId()));
 
         Card bears = addCardToZone("Grizzly Bears", p, ZoneType.Hand);
         SpellAbility sa = bears.getSpellAbilities().get(0);
-        Assert.assertEquals(sa.hashCode(), Objects.hash(SpellAbility.class, sa.getId()));
+        Assert.assertEquals(sa.hashCode(), Objects.hash(SpellAbility.class.getName(), sa.getId()));
     }
 }
