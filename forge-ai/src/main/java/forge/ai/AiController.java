@@ -969,8 +969,18 @@ public class AiController {
     private final java.util.Map<Card, Integer> failedPayments = new java.util.HashMap<>();
     private int failedPaymentsTurn = -1;
     private forge.game.phase.PhaseType failedPaymentsPhase;
+    // every failed payment counted here so far in the game: PlayerControllerAi.playWithRollback reads it to leave
+    // such a cast to this rule, never also to upstream's failedCasts, whose one failure would end a card's tries for
+    // the turn and take away the retry above
+    private int rolledBackPayments;
+
+    /** How many failed payments {@link #rememberFailedCast} has counted so far in the game. */
+    public int getRolledBackPaymentCount() {
+        return rolledBackPayments;
+    }
 
     public void rememberFailedCast(final Card c) {
+        rolledBackPayments++;
         final forge.game.phase.PhaseHandler ph = game.getPhaseHandler();
         if (ph.getTurn() != failedPaymentsTurn || ph.getPhase() != failedPaymentsPhase) {
             failedPayments.clear();

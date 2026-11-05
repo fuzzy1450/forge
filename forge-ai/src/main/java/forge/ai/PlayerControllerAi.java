@@ -1047,6 +1047,8 @@ public class PlayerControllerAi extends PlayerController {
         final int hostId = sa.getHostCard().getId();
         final int failedBefore = game.getStack().getIllegalAdditionCount(sa.getHostCard());
         final String key = AiController.castKey(sa);
+        // the seed-11 rollback's count of failed payments before this cast (see the last branch)
+        final int paymentsBefore = getAi().getRolledBackPaymentCount();
 
         final boolean played = ComputerUtil.handlePlayingSpellAbility(player, sa, chooseTargets);
 
@@ -1060,8 +1062,13 @@ public class PlayerControllerAi extends PlayerController {
             }
             return false;
         }
-        if (!played && !sa.isCopied() && !sa.isTrigger()) {
-            getAi().noteFailedCast(key); // it did not go on the stack: not again this turn, or the AI picks it forever
+        if (!played && !sa.isCopied() && !sa.isTrigger()
+                && getAi().getRolledBackPaymentCount() == paymentsBefore) {
+            // it did not go on the stack: not again this turn, or the AI picks it forever. A failed payment that
+            // ComputerUtil's seed-11 rollback took back is left to that rollback's own rule instead
+            // (AiController.rememberFailedCast: a card is refused for the rest of the phase once its payment has
+            // failed twice in it, so a failure that came from a random draw gets its one retry)
+            getAi().noteFailedCast(key);
         }
         return played;
     }
