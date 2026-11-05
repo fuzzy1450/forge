@@ -254,6 +254,13 @@ public class ComboLoopEndToEndAiTest extends AITest {
         }
     }
 
+    /** {@code n} tapped lands of ours named {@code name}. */
+    private void tappedLands(final String name, final int n) {
+        for (int i = 0; i < n; i++) {
+            addCard(name, ai).setTapped(true);
+        }
+    }
+
     /** {@code n} colourless mana floating in our pool, made by our Basalt Monolith ({@link #rock} first). */
     private void floating(final int n) {
         final Card basalt = onOurBattlefield(BASALT);
@@ -768,15 +775,20 @@ public class ComboLoopEndToEndAiTest extends AITest {
 
     // Finding 3 (spec section 9's stock flicker loop): B10's probe board, Palinchron and Deadeye Navigator paired,
     // seven Islands, no Walking Ballista (the driver has no response to make), the opponent's Murder on Palinchron on
-    // their turn. The stock blink-to-save flickers Palinchron once, which saves it: Murder's target is gone, and it
-    // fizzles. For a deck holding the flicker line a card is flickered to save it only while an opponent's item targets
-    // it as the object it is now, so the new Palinchron is not flickered again (the stock reading compares card ids,
-    // which a flicker keeps: 429 flickers in 3,000 steps), and our next turn comes within the bound.
+    // their turn, here with four of the seven Islands tapped. The stock blink-to-save flickers Palinchron once, which
+    // saves it: Murder's target is gone, and it fizzles. For a deck holding the flicker line a card is flickered to
+    // save it only while an opponent's item targets it as the object it is now, so the new Palinchron is not flickered
+    // again (the stock reading compares card ids, which a flicker keeps: 429 flickers in 3,000 steps), nor returned to
+    // our hand by its own {2}{U}{U} once its untap has put the seven Islands back, and our next turn comes within the
+    // bound. The four tapped Islands keep that return out of reach for the first save: since upstream's transitive
+    // SortKey (c802c6da7b9, #12502) the stock tries it, the higher mana value, ahead of the flicker, and with all seven
+    // untapped it saves Palinchron by the return (sevenUntappedIslandsSavePalinchronByItsReturn).
     @Test
     public void theStockFlickerSavesPalinchronOnce() {
         start();
         final Card palinchron = paired();
-        lands(ISLAND, 7);
+        lands(ISLAND, 3);
+        tappedLands(ISLAND, 4);
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
         final Play p = play("theStockFlickerSavesPalinchronOnce",
@@ -786,14 +798,16 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertEquals(p.count(PALINCHRON + " ability"), 1, "Palinchron's flickers: " + p);
     }
 
-    // The same with Ballista on ours (one counter) and the opponent at 100,000: the volley cannot fit in what the caps
-    // have left (R28), so the driver declines Murder, and the stock blink-to-save flickers Palinchron once.
+    // The same (four of the seven Islands tapped) with Ballista on ours (one counter) and the opponent at 100,000: the
+    // volley cannot fit in what the caps have left (R28), so the driver declines Murder, and the stock blink-to-save
+    // flickers Palinchron once.
     @Test
     public void aDeclinedResponseFlickersOnce() {
         start();
         opp.setLife(100_000, null);
         final Card palinchron = paired();
-        lands(ISLAND, 7);
+        lands(ISLAND, 3);
+        tappedLands(ISLAND, 4);
         ballista(1);
         theirTurn();
         ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
@@ -804,12 +818,36 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertEquals(p.count(PALINCHRON + " ability"), 1, "Palinchron's flickers: " + p);
     }
 
+    // theStockFlickerSavesPalinchronOnce's board as it was before the merge of upstream's 626aa9f0735: all seven
+    // Islands untapped. Both stock saves are approved, and since upstream's transitive SortKey (c802c6da7b9, #12502)
+    // the stock tries Palinchron's own {2}{U}{U} return to our hand, the higher mana value, ahead of Deadeye's {1}{U}
+    // flicker, which the comparator before it put first (Palinchron flickered once and on our battlefield): Palinchron
+    // is returned to our hand once and never flickered, Murder fizzles, and our next turn comes within the bound.
+    @Test
+    public void sevenUntappedIslandsSavePalinchronByItsReturn() {
+        start();
+        final Card palinchron = paired();
+        lands(ISLAND, 7);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, MURDER, palinchron);
+        final Play p = play("sevenUntappedIslandsSavePalinchronByItsReturn",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 2, "our next turn never came: " + p);
+        assertEquals(p.moved(PALINCHRON, ZoneType.Exile), 0, "Palinchron's flickers: " + p);
+        assertEquals(p.moved(PALINCHRON, ZoneType.Hand), 1, "Palinchron's returns to our hand: " + p);
+        assertNotNull(ourCardIn(ZoneType.Hand, PALINCHRON), "Palinchron is not in our hand: " + p);
+        assertNotNull(onOurBattlefield(DEADEYE), "Deadeye Navigator left our battlefield: " + p);
+    }
+
     // An untargeted removal: the opponent's Wrath of God, Palinchron and Deadeye paired, seven Islands, no Ballista. A
     // flicker saves nothing from it, since it destroys what is there when it resolves, and the stock reading, which
     // takes in every creature it would destroy, reads the new Palinchron as threatened after each flicker: for a deck
     // holding the flicker line nothing is flickered. Palinchron's own {2}{U}{U} return to our hand does save it, and
     // once made cannot be made again, so it stays the stock's (the final-fix compliance review's round 1): Palinchron
-    // is returned to our hand, Wrath destroys Deadeye Navigator, and our next turn comes within the bound.
+    // is returned to our hand, Wrath destroys Deadeye Navigator, and our next turn comes within the bound. Since
+    // upstream's transitive SortKey (c802c6da7b9, #12502) the stock tries the return, the higher mana value, ahead of
+    // the flicker, so on this board the flicker is never its first try and the refusal is not what keeps it unmade:
+    // aWrathDrawsNoFlickerFromTwoIslands reads that.
     @Test
     public void aWrathDrawsNoFlicker() {
         start();
@@ -823,6 +861,26 @@ public class ComboLoopEndToEndAiTest extends AITest {
         assertNull(onOurBattlefield(DEADEYE), "Wrath of God did not resolve: " + p);
         assertEquals(p.moved(PALINCHRON, ZoneType.Hand), 1, "Palinchron's returns to our hand: " + p);
         assertNotNull(ourCardIn(ZoneType.Hand, PALINCHRON), "Palinchron is not in our hand: " + p);
+    }
+
+    // aWrathDrawsNoFlicker's removal with Palinchron's own return out of reach: Palinchron and Deadeye paired, two
+    // Islands, no Ballista, the opponent's Wrath of God. The flicker alone can be paid, and Palinchron's untap puts
+    // the two Islands back to pay the next (spec section 9's stock flicker loop), so the stock, reading the new
+    // Palinchron as threatened after each flicker, would flicker it without end. For a deck holding the flicker line
+    // nothing is flickered: Wrath destroys Palinchron and Deadeye Navigator, and our next turn comes within the bound.
+    @Test
+    public void aWrathDrawsNoFlickerFromTwoIslands() {
+        start();
+        paired();
+        lands(ISLAND, 2);
+        theirTurn();
+        ComboLoopBoards.theirSpellOn(game, opp, WRATH);
+        final Play p = play("aWrathDrawsNoFlickerFromTwoIslands",
+                g -> g.getPhaseHandler().getTurn() > OUR_TURN + 1);
+        assertEquals(game.getPhaseHandler().getTurn(), OUR_TURN + 2, "our next turn never came: " + p);
+        assertEquals(p.moved(PALINCHRON, ZoneType.Exile), 0, "Palinchron's flickers: " + p);
+        assertNull(onOurBattlefield(DEADEYE), "Wrath of God did not resolve: " + p);
+        assertNull(onOurBattlefield(PALINCHRON), "Palinchron is still on our battlefield: " + p);
     }
 
     // The blink refusal's reading (LoopDriver.refusesBlink): with the opponent's Murder aimed at Palinchron as it is
