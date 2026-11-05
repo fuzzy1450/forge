@@ -2883,11 +2883,15 @@ public class AiController {
     public DeckPlan deckPlan(final Player p) {
         if (flatMcDeckPlan == null) {
             flatMcDeckPlan = DeckPlan.forSetting(getProperty(AiProps.FLAT_MC_DECK_PLAN), p);
-            if (flatMcDeckPlan.archetype != DeckPlan.Archetype.MIDRANGE || !flatMcDeckPlan.combos.isEmpty()) {
-                FlatMonteCarloStats.notePlan(flatMcDeckPlan.toString());
-            }
-            for (final ComboPlan.Combo combo : flatMcDeckPlan.combos.getCombos()) {
-                FlatMonteCarloStats.notePlan("combo:" + combo.kind);
+            // the benchmark report's counters are JVM-wide statics: a game played under a SimScope (the sim harness,
+            // beside the other games of its serve JVM) keeps out of them; they decide nothing
+            if (SimScope.current() == null) {
+                if (flatMcDeckPlan.archetype != DeckPlan.Archetype.MIDRANGE || !flatMcDeckPlan.combos.isEmpty()) {
+                    FlatMonteCarloStats.notePlan(flatMcDeckPlan.toString());
+                }
+                for (final ComboPlan.Combo combo : flatMcDeckPlan.combos.getCombos()) {
+                    FlatMonteCarloStats.notePlan("combo:" + combo.kind);
+                }
             }
         }
         return flatMcDeckPlan;

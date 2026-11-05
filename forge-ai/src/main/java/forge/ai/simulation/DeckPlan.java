@@ -2,6 +2,7 @@ package forge.ai.simulation;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -13,6 +14,7 @@ import forge.game.card.Card;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
+import forge.util.SimScope;
 
 /**
  * What the AI's own deck is trying to do, worked out once from the whole list before the first decision and then
@@ -146,12 +148,28 @@ public final class DeckPlan {
             return NONE;
         }
         final String key = s + "#" + deckKey(player);
-        DeckPlan plan = KNOWN.get(key);
+        final Map<String, DeckPlan> known = knownPlans();
+        DeckPlan plan = known.get(key);
         if (plan == null) {
             plan = read(s, player);
-            KNOWN.put(key, plan);
+            known.put(key, plan);
         }
         return plan;
+    }
+
+    /**
+     * The plans already worked out: the JVM's {@link #KNOWN}, or, in a game played under a SimScope (the sim harness,
+     * one serve JVM running many games side by side), that game's own. Reading a deck builds its cards' spell
+     * abilities (CardState makes the land, permanent and Aura spells on first use, each taking a SpellAbility id), so a
+     * game that found the plan another game of the same list left in KNOWN would skip those ids, and every later id
+     * of that game, and every collection ordered by them, would differ from a game that read its deck: the same seed
+     * would play a different game depending on which game of the JVM ran first. Under a scope every game reads its
+     * deck once, at the same point of its every run, as the first game of a fresh JVM does; a Monte Carlo copy or a
+     * simulation seat, which plays under the game's own scope, still shares the real game's plan.
+     */
+    private static Map<String, DeckPlan> knownPlans() {
+        final SimScope scope = SimScope.current();
+        return scope == null ? KNOWN : scope.scratch(DeckPlan.class, HashMap::new);
     }
 
     private static DeckPlan read(final String s, final Player player) {
