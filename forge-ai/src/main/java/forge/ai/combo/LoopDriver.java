@@ -8,6 +8,7 @@ import java.util.List;
 import forge.ai.ComputerUtil;
 import forge.ai.LoopTracker;
 import forge.ai.PlayerControllerAi;
+import forge.ai.SpecialCardAi;
 import forge.game.Game;
 import forge.game.GameObject;
 import forge.game.ability.AbilityKey;
@@ -127,6 +128,12 @@ import forge.game.zone.ZoneType;
  * a save that does not return the card to the battlefield at once, a return to our hand or an exile until a later
  * step, is refused only while an item on the stack names the card as a target by its card id, as the stock reading
  * does: the removal whose target left and came back, or an item of ours.
+ *
+ * <p>Outside any go-off (section 6.7, amended 2026-11-04 (the commander cast in Main 1)): for a deck holding a loop
+ * line, our own commander's cast, from our command zone or our hand, is not held for Main 2 in our Main 1 while the
+ * commander is a piece of a loop line the deck holds and real mana pays the cast ({@link #commanderInMainOne}, which
+ * PermanentCreatureAi's phase rule asks through ComboHold.liftsMainTwoWait), so Kinnan, Bonder Prodigy comes down
+ * on its first {G}{U} turn rather than after the Main-2 spells the stock spell order puts ahead of it.
  */
 public final class LoopDriver {
     private static final String KINNAN = "Kinnan, Bonder Prodigy";
@@ -416,6 +423,46 @@ public final class LoopDriver {
             }
         }
         return false;
+    }
+
+    /**
+     * Whether our own commander's cast {@code sa} is not held for Main 2 in our Main 1 (spec section 6.7, amended
+     * 2026-11-04 (the commander cast in Main 1); PermanentCreatureAi.checkPhaseRestrictions asks it through
+     * ComboHold.liftsMainTwoWait, beside Neera's commander lift and ahead of PermanentAi's wait for Main 2, and true
+     * passes that phase rule): for a deck holding a loop line ({@link #holdsLoop}) of which our commander is a piece,
+     * by its printed name among the pieces of the deck's lines as the tracker matched them, the commander's own spell
+     * (not a copy, not a Play-effect cast, we its activator), from our command zone or our hand, in our Main 1 on an
+     * empty stack, when real mana pays the cast now: SpecialCardAi.CommanderCastCeiling.affordable (G1: the
+     * engine's test-mode price, the commander tax included, against the mana our untapped sources make, each pip
+     * its colour), read last. So an unpayable window answers false, and the stock wait refuses the cast at a point
+     * where the stock path draws nothing (the API AI's template answers MissingPhaseRestrictions before the
+     * throttle, checkApiLogic and canPayCost). True only passes the phase rule: the stock checkApiLogic, saSideEffects
+     * and canPayCost still judge the cast, and it still sorts among the spells the walk may play in Main 1. So Kinnan,
+     * Bonder Prodigy, a piece of the rock untap with Basalt Monolith, is cast on its first {G}{U} turn, where the
+     * stock AI held it for Main 2 and Walking Ballista's {X}{X} or Basalt Monolith, sorted ahead of it there, took
+     * the mana (the Kinnan cast diagnosis's gate 1). Every other cast keeps the stock wait: a piece that is not our
+     * commander (Basalt Monolith, a Kinnan we do not command), and every cast of a deck holding no loop line or of a
+     * commander that is no piece of a loop line the deck holds, which decide and draw as stock. Draws nothing: G1
+     * draws none for a cost that asks no controller, and the loop pieces that can be a commander, Kinnan and
+     * Sakashima of a Thousand Faces, cost mana alone.
+     */
+    public static boolean commanderInMainOne(final Player ai, final SpellAbility sa) {
+        if (sa == null || !sa.isSpell() || sa.isCopied() || sa.isCastFromPlayEffect()
+                || !ai.equals(sa.getActivatingPlayer())) {
+            return false;
+        }
+        final Card host = sa.getHostCard();
+        if (host == null || !host.isCommander() || !ai.equals(host.getOwner())
+                || !(host.isInZone(ZoneType.Command) || host.isInZone(ZoneType.Hand))) {
+            return false;
+        }
+        final Game game = ai.getGame();
+        if (!game.getPhaseHandler().is(PhaseType.MAIN1, ai) || !game.getStack().isEmpty()) {
+            return false;
+        }
+        final ComboTracker t = ComboTracker.of(ai);
+        return t != null && loopPiece(t, ComboTracker.nameOf(host))
+                && SpecialCardAi.CommanderCastCeiling.affordable(ai, sa);
     }
 
     /**
@@ -1411,6 +1458,17 @@ public final class LoopDriver {
     private static boolean holdsLoop(final ComboTracker t) {
         for (final ComboLines.Line l : t.deckLines()) {
             if (l.isLoop()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // whether a loop line the deck holds names that card among its pieces, so that the deck holds a loop line
+    // (holdsLoop) of which that card is a piece
+    private static boolean loopPiece(final ComboTracker t, final String name) {
+        for (final ComboLines.Line l : t.deckLines()) {
+            if (l.isLoop() && l.names().contains(name)) {
                 return true;
             }
         }

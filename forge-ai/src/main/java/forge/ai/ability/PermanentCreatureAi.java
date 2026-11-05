@@ -2,7 +2,7 @@ package forge.ai.ability;
 
 import com.google.common.collect.Lists;
 import forge.ai.*;
-import forge.ai.combo.ComboExecute;
+import forge.ai.combo.ComboHold;
 import forge.game.Game;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
@@ -119,10 +119,13 @@ public class PermanentCreatureAi extends PermanentAi {
         // Combo-aware AI (follow-up 2, G1; spec 2026-10-22-combo-aware-ai-core-design.md section 6.4): our own hand
         // cast of Thassa's Oracle is not held for Main 2 (PermanentAi's wait) in our Main 1 once its go-off is ready,
         // so the go-off sequencer (AiController.getSpellAbilityToPlay, ComboExecute.goOffFirst) casts it there, ahead
-        // of a Main-1 play that would spend the go-off's mana (Rampant Growth, Carpet of Flowers). A name compare
-        // first: inert for every other card, and for a deck holding no Oracle line. Draws nothing. See
-        // ComboExecute.goOffInMainOne.
-        if (ComboExecute.goOffInMainOne(ai, sa)) {
+        // of a Main-1 play that would spend the go-off's mana (Rampant Growth, Carpet of Flowers). Piece 2 (spec
+        // 2026-10-29-combo-aware-ai-loops-design.md section 6.7, amended 2026-11-04 (the commander cast in Main 1)):
+        // nor is our own commander's cast, from the command zone or our hand, while it is a piece of a loop line the
+        // deck holds and real mana pays it (G1), so Kinnan, Bonder Prodigy comes down on its first {G}{U} turn. One
+        // call for both, a name or commander test first: inert for every other card, and for a deck holding neither
+        // line. Draws nothing. See ComboHold.liftsMainTwoWait.
+        if (ComboHold.liftsMainTwoWait(ai, sa)) {
             return true;
         }
 

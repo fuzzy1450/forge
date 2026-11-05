@@ -25,7 +25,9 @@ import forge.game.zone.ZoneType;
  * and a winner that wins from the battlefield is cast freely: casting it is progress. A piece of a live loop line
  * (piece 2, spec 2026-10-29-combo-aware-ai-loops-design.md section 6.7) is protected as piece 1's pieces are, and its
  * own cast is never held: the loop needs it on the battlefield. The one exception is a cast its own cycle makes: while
- * a cast and bounce cycle runs, the cycle casts its pieces itself.
+ * a cast and bounce cycle runs, the cycle casts its pieces itself. Nor is our own commander held for Main 2 in our
+ * Main 1 while it is a piece of a loop line the deck holds and real mana pays its cast ({@link #liftsMainTwoWait};
+ * section 6.7, amended 2026-11-04 (the commander cast in Main 1)).
  *
  * <p>Each method answers for one hook beside the stock code, and answers the stock decision (false, or the list it was
  * given) at once for a deck holding no combo line. Nothing here draws a random number or keeps any state, and
@@ -71,6 +73,19 @@ public final class ComboHold {
             return oracleWaits(ai, sa) || loopHoldsOracle(ai, sa);
         }
         return loopHoldsCycleCast(ai, sa) || wheelWaits(ai, sa, host);
+    }
+
+    /**
+     * Whether PermanentAi's wait for Main 2 is lifted for our cast {@code sa} in our Main 1
+     * (PermanentCreatureAi.checkPhaseRestrictions, after Neera's commander lift and ahead of that wait; true passes
+     * the phase rule), one call for both families: piece 1's, our hand cast of Thassa's Oracle once its go-off is
+     * ready ({@link ComboExecute#goOffInMainOne}); piece 2's, our own commander's cast while it is a piece of a loop
+     * line the deck holds and real mana pays it (spec 2026-10-29-combo-aware-ai-loops-design.md section 6.7, amended
+     * 2026-11-04 (the commander cast in Main 1): {@link LoopDriver#commanderInMainOne}). False at once for any other
+     * card, and for a deck holding neither line, so the stock wait answers as before. Draws nothing.
+     */
+    public static boolean liftsMainTwoWait(final Player ai, final SpellAbility sa) {
+        return ComboExecute.goOffInMainOne(ai, sa) || LoopDriver.commanderInMainOne(ai, sa);
     }
 
     // our hand cast of a piece of the cast and bounce the loop driver's go-off runs waits for its cycle, which casts it

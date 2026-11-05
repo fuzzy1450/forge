@@ -148,7 +148,8 @@ public final class ComboExecute {
      * sequencer ({@link #goOffFirst}) then has Oracle approved there, ahead of the walk, so no Main-1 play (Rampant
      * Growth, Carpet of Flowers) spends the go-off's mana first and leaves it for a turn. False at once for any other
      * card and for a deck holding no line that Thassa's Oracle wins; then, and while the go-off is not ready, the
-     * stock wait answers as before. Draws nothing.
+     * stock wait answers as before. Draws nothing. Asked through {@link ComboHold#liftsMainTwoWait}, the one call
+     * PermanentCreatureAi makes for both families' lifts.
      */
     public static boolean goOffInMainOne(final Player ai, final SpellAbility sa) {
         if (!ownHandCast(ai, sa, Winner.ORACLE.card)) {
