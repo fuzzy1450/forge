@@ -122,6 +122,15 @@ import java.util.stream.Collectors;
  */
 public class SpecialCardAi {
 
+    // Player.canSearchLibraryWith(sa, target) was deleted upstream in c176445a915 (#12477, merged 2026-11-05):
+    // the search permission is now getSearchableLibrary(sa, target) != null (null while searching is not allowed:
+    // CantSearchLibrary, or our own spell or ability with "Spells and abilities you control can't cause you to
+    // search your library"; the top four cards under LimitSearchLibrary). The same answer as the deleted method
+    // for every call below, whose ability and target player are never null.
+    private static boolean canSearchLibrary(final Player searcher, final SpellAbility sa, final Player target) {
+        return searcher.getSearchableLibrary(sa, target) != null;
+    }
+
     // Card.getBasicSpells() was deleted upstream in the merge of 2026-09-19;
     // this is its body verbatim, kept here because the dead-card work below asks
     // the same question of a card some chooser may offer us.
@@ -5804,7 +5813,7 @@ public class SpecialCardAi {
             final SpellAbility searchSa = discardSa == null ? null : discardSa.getSubAbility(); // DBSearch
             if (discardSa == null || searchSa == null
                     || !chooser.canDiscardBy(discardSa, true)
-                    || !chooser.canSearchLibraryWith(searchSa, chooser)
+                    || !canSearchLibrary(chooser, searchSa, chooser)
                     || chooser.hasKeyword("LimitSearchLibrary") // Aven Mindcensor: the top cards may hold no basic
                     || !chooser.getCardsIn(ZoneType.Library).anyMatch(Card::isBasicLand)) {
                 return false; // no basic sure to be fetched: the discard would be pure card loss
@@ -14788,7 +14797,7 @@ public class SpecialCardAi {
             }
             // something worth a creature, from a library we may search and can afford to thin
             final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
-            if (!ai.canSearchLibraryWith(sa, ai) || library.size() < 3
+            if (!canSearchLibrary(ai, sa, ai) || library.size() < 3
                     || !library.anyMatch(c -> !c.isLand() && !NAME.equals(c.getName()))) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
@@ -20454,7 +20463,7 @@ public class SpecialCardAi {
     // - LAND, at the end step of the opponent whose next turn is ours, or in our own Main 2 with a
     //   land drop left: no land card in hand, and fewer than LAND_FLOOR lands or a nonland card in
     //   hand whose mana value exceeds our land count; the search ours to make and unpunished
-    //   (canSearchLibraryWith, no LimitSearchLibrary, no opposing SearchedLibrary trigger or
+    //   (getSearchableLibrary, no LimitSearchLibrary, no opposing SearchedLibrary trigger or
     //   ControlOpponentsSearchingLibrary static, no Shuffled trigger that matches us: Long-Term
     //   Plans' searchPunished, a private copy, skeptic amendment 1), and a library of MIN_LIBRARY
     //   or more cards holding a basic (skeptic amendment 2: never fetch the draw that decks us);
@@ -20472,9 +20481,9 @@ public class SpecialCardAi {
     // leaves the original to fizzle): stock behaviour, as for every instant of the carrier. A
     // replicated search fetches more basics, and Wort taps two green creatures in our Main 2.
     // RNG parity: nothing here draws (HonestMana, the test-mode calculateManaCost, getValidCards,
-    // canTarget, canSearchLibraryWith, evaluateCreature, parameter reads), so a false readmit is
+    // canTarget, getSearchableLibrary, evaluateCreature, parameter reads), so a false readmit is
     // the old filter exactly. Nothing is held or remembered. Its writes: the activator on a hand SA
-    // with none yet (Grab the Reins' ensureActivator; canTarget and canSearchLibraryWith read it)
+    // with none yet (Grab the Reins' ensureActivator; canTarget and getSearchableLibrary read it)
     // and, in chooseModes only, the Return mode's target (reset on every routed evaluation, set on
     // approval only).
     public static class EvolutionCharm {
@@ -20562,7 +20571,7 @@ public class SpecialCardAi {
                     && (ai.getMaxLandPlaysInfinite() || ai.getLandsPlayedThisTurn() < ai.getMaxLandPlays());
         }
 
-        // canTarget and canSearchLibraryWith read the activator; set it on a hand SA that has none yet,
+        // canTarget and getSearchableLibrary read the activator; set it on a hand SA that has none yet,
         // as getOriginalAndAltCostAbilities sets it right after the RemoveDeck filter. It trickles down
         // to the Choices subs.
         private static void ensureActivator(final Player ai, final SpellAbility sa, final Parts parts) {
@@ -20645,7 +20654,7 @@ public class SpecialCardAi {
         // a library of MIN_LIBRARY or more cards holding a basic, searched by us with nobody profiting
         private static boolean searchable(final Player ai, final AbilitySub search, final Card host) {
             final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
-            if (library.size() < MIN_LIBRARY || !ai.canSearchLibraryWith(search, ai)
+            if (library.size() < MIN_LIBRARY || !canSearchLibrary(ai, search, ai)
                     || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)) {
                 return false;
             }
@@ -31718,7 +31727,7 @@ public class SpecialCardAi {
     //   ValidPlayer matches us (Widespread Panic: the closing shuffle fires it).
     // A cast is then three cards of our own library, one of them to our hand and two to our graveyard (the
     // carriers' recursion: Underworld Breach, Yawgmoth's Will, Sevinne's Reclamation, Reanimate), at {2}{U}
-    // for one card. The stock checks stay where they are: an unsearchable library (canSearchLibraryWith:
+    // for one card. The stock checks stay where they are: an unsearchable library (getSearchableLibrary:
     // Stranglehold, Leonin Arbiter, Ashiok) and the timing gate in hiddenOriginCanPlayAI, an opponent the sub
     // cannot target (Leyline of Sanctity) at its TargetingFailed.
     // handles() reads the source name, the host's name or the card state's name, so a face-down cast from
@@ -31841,7 +31850,7 @@ public class SpecialCardAi {
     // A cast is then four different-named cards of our own library, two of them to our hand and two to
     // our graveyard (the carriers' recursion: Reanimate, Yawgmoth's Will, Underworld Breach, Sevinne's
     // Reclamation), at {3}{U} for one card. The stock checks stay where they are: an unsearchable library
-    // (canSearchLibraryWith: Stranglehold, Leonin Arbiter, Ashiok) in hiddenOriginCanPlayAI, an opponent
+    // (getSearchableLibrary: Stranglehold, Leonin Arbiter, Ashiok) in hiddenOriginCanPlayAI, an opponent
     // the sub cannot target (Leyline of Sanctity) at its TargetingFailed.
     // handles() reads the source name, the host's name or the card state's name, so a face-down cast from
     // exile (a Gonti-class thief) meets the floor too (HourOfEternity.isHour's idiom, rule B3-3); the
@@ -35772,7 +35781,7 @@ public class SpecialCardAi {
     //   it counts the words of Produced$ (Command Tower or Arcane Signet 2, a Talisman 3), and an
     //   approval in an unpayable window would reach canPayCost's isManaSourceReserved roll;
     // - the search is ours to make and nobody profits from it, else CantPlayAi: a
-    //   CantSearchLibrary effect (canSearchLibraryWith: Stranglehold, Leonin Arbiter), Aven
+    //   CantSearchLibrary effect (getSearchableLibrary: Stranglehold, Leonin Arbiter), Aven
     //   Mindcensor's LimitSearchLibrary (the top four only), an opposing SearchedLibrary trigger
     //   (Ob Nixilis, Unshackled: a creature and 10 life; Archivist of Oghma; Wan Shi Tong; River
     //   Song), Opposition Agent's ControlOpponentsSearchingLibrary (it takes the pick), or a
@@ -35811,7 +35820,7 @@ public class SpecialCardAi {
             if (mana.total() < host.getCMC() || mana.colour(MagicColor.BLUE) < bluePips) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
-            if (!ai.canSearchLibraryWith(sa, ai) || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)) {
+            if (!canSearchLibrary(ai, sa, ai) || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
@@ -47543,7 +47552,7 @@ public class SpecialCardAi {
             int bestOverlap = -1;
             int bestLibrary = -1;
             for (final Player p : ai.getOpponents()) {
-                if (!sa.canTarget(p) || !ai.canSearchLibraryWith(sa, p)) {
+                if (!sa.canTarget(p) || !canSearchLibrary(ai, sa, p)) {
                     continue;
                 }
                 final int library = p.getCardsIn(ZoneType.Library).size();
@@ -48040,7 +48049,9 @@ public class SpecialCardAi {
         //   (canProduce, as the lists read it: Combo letters, ColorIdentity through the commander,
         //   Any as all five, Chosen as the chosen colour); a reflected one (Exotic Orchard) counts
         //   none but is usable.
-        // - PAYMENT FILTERS (getGenericCostToActivate > 0; getAIPlayableMana keeps only
+        // - PAYMENT FILTERS (getManaToActivate > 0: any mana in the activation cost since upstream
+        //   4ddcfe30639, so the Shadowmoor filter lands' {W/U} as well as a Signet's {1}, as the
+        //   payment's own groupSourcesByManaColor reads it; getAIPlayableMana keeps only
         //   isFilterManaAbility, so Prismatic Lens's, Abstergo Entertainment's and Three Tree
         //   Mascot's Any for {1} are no payment source at all, neither counted nor filters): their
         //   colours must be covered, and each adds one to the total the cost needs.
@@ -48103,7 +48114,7 @@ public class SpecialCardAi {
                         }
                         final boolean reflected = ma.getApi() == ApiType.ManaReflected;
                         final int listed = listed(ma, mp, reflected);
-                        if (ComputerUtilMana.getGenericCostToActivate(ma) > 0) {
+                        if (ComputerUtilMana.getManaToActivate(ma) > 0) {
                             col.filters++;
                             col.filterMask |= listed;
                             continue;
@@ -50535,7 +50546,7 @@ public class SpecialCardAi {
                     topCmc = Math.max(topCmc, c.getCMC());
                 }
             }
-            if (topCmc < MIN_FETCH_CMC || !ai.canSearchLibraryWith(sa, ai)) {
+            if (topCmc < MIN_FETCH_CMC || !canSearchLibrary(ai, sa, ai)) {
                 return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
             }
             final Card sac = chooseSacrifice(ai, CardLists.filter(ai.getCardsIn(ZoneType.Battlefield),
@@ -52703,7 +52714,7 @@ public class SpecialCardAi {
     // Declines: outside the window or under a live mana hold (AnotherTime); the engine's price over the
     // honest count, in total or in green (CantAfford); then CantPlayAi for a library search the
     // opponents punish or take over (B3-7: SearchedLibrary triggers, ControlOpponentsSearchingLibrary,
-    // our LimitSearchLibrary, any Shuffled trigger our shuffle fires, canSearchLibraryWith), an opposing
+    // our LimitSearchLibrary, any Shuffled trigger our shuffle fires, getSearchableLibrary), an opposing
     // permanent that triggers on a land entering or a land going to a graveyard and is not limited to
     // its own controller's lands (Ankh of Mishra, Dingus Egg, Zo-Zu the Punisher), a battlefield effect
     // on nonbasic lands (Blood Moon, Magus of the Moon, Harbinger of the Seas, Back to Basics), The
@@ -52790,7 +52801,7 @@ public class SpecialCardAi {
                     || mana.colour(MagicColor.GREEN) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.GREEN)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
-            if (!ai.canSearchLibraryWith(sa, ai) || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)
+            if (!canSearchLibrary(ai, sa, ai) || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)
                     || landPunished(ai) || nonbasicHosed(ai) || tabernacleOut(ai)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
@@ -65709,7 +65720,7 @@ public class SpecialCardAi {
     // - our own Main 2 on an empty stack (the lands arrive tapped; Main 1's mana stays the hand's);
     // - every vote at the table (optional extra votes too: an upper bound, 2 in 1v1) could be Mines:
     //   at least that many nonland cards the AI casts (not AI:RemoveDeck:All) in our graveyard;
-    // - every vote could be Redhorn: the search is ours (canSearchLibraryWith, no
+    // - every vote could be Redhorn: the search is ours (getSearchableLibrary, no
     //   LimitSearchLibrary), at least that many basic lands in our library, and nobody punishes the
     //   search or our shuffle (Long-Term Plans' searchPunished, a private copy);
     // - each Redhorn vote takes a card off our library, which must keep LIBRARY_MARGIN more, unless
@@ -65720,7 +65731,7 @@ public class SpecialCardAi {
     //   reductions) against HonestMana (G2, held sources skipped, restrictions read on the root sa)
     //   in total and in green, never getAvailableManaEstimate (it counts the words of Produced$).
     // The stock fallthrough drew no random number and no decline here does either: the phase and
-    // stack, vote counts, zone scans, isCardRemAIDeck, canSearchLibraryWith and hasKeyword, trigger
+    // stack, vote counts, zone scans, isCardRemAIDeck, getSearchableLibrary and hasKeyword, trigger
     // and static parameter reads and SVar text (never ensureAbility: a built ability takes an id),
     // cantLoseCheck, calculateManaCost(test) and HonestMana (its one write is setActivatingPlayer on
     // the mana abilities it reads). Nothing is held past a decline: no target, no X, no memory set,
@@ -65761,7 +65772,7 @@ public class SpecialCardAi {
                 return new AiAbilityDecision(0, AiPlayDecision.MissingNeededCards);
             }
             // each Redhorn Pass vote must find a basic, in a search nobody limits or punishes
-            if (!ai.canSearchLibraryWith(sa, ai) || ai.hasKeyword("LimitSearchLibrary")
+            if (!canSearchLibrary(ai, sa, ai) || ai.hasKeyword("LimitSearchLibrary")
                     || CardLists.count(ai.getCardsIn(ZoneType.Library), CardPredicates.BASIC_LANDS) < maxVotes
                     || searchPunished(ai)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
@@ -65913,7 +65924,7 @@ public class SpecialCardAi {
             if (live.hasSVar("EndOfTurnLeavePlay")) {
                 return false; // a body that leaves at end of turn: exiling every land would be pure loss
             }
-            if (ai.hasKeyword("LimitSearchLibrary") || !ai.canSearchLibraryWith(sa, ai)) {
+            if (ai.hasKeyword("LimitSearchLibrary") || !canSearchLibrary(ai, sa, ai)) {
                 return false; // Aven Mindcensor / can't search: a smaller body, or a 0/0 (ChangeZoneEffect :1023-1038)
             }
             final CardCollectionView library = ai.getCardsIn(ZoneType.Library);
@@ -67225,7 +67236,7 @@ public class SpecialCardAi {
     //      host.getFirstSpellAbility(): row 77) is not covered by G2 (HonestMana, held sources
     //      skipped, restrictions read on this spell) in total and in black, CantAfford;
     //   4. the search is not ours to make, or somebody profits from it, CantPlayAi:
-    //      canSearchLibraryWith (Stranglehold, Leonin Arbiter), LimitSearchLibrary (Aven
+    //      getSearchableLibrary (Stranglehold, Leonin Arbiter), LimitSearchLibrary (Aven
     //      Mindcensor's top four), searchPunished (Long-Term Plans', a private verbatim copy:
     //      Ob Nixilis, Unshackled; Opposition Agent; Widespread Panic);
     //   5. a pick already waits in the library, CantPlayAi: our graveyard holds a tutor whose spell
@@ -67292,7 +67303,7 @@ public class SpecialCardAi {
                     || mana.colour(MagicColor.BLACK) < cost.getUnpaidShards(forge.card.mana.ManaCostShard.BLACK)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
-            if (!ai.canSearchLibraryWith(sa, ai) || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)) {
+            if (!canSearchLibrary(ai, sa, ai) || ai.hasKeyword("LimitSearchLibrary") || searchPunished(ai)) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             if (pickPending(ai)) {
@@ -70387,7 +70398,7 @@ public class SpecialCardAi {
     //   loss that LifeLoseAi judges once (Ancient Craving, Cruel Bargain), and no part mills or exiles
     //   (Demonic Bargain exiles 13 a copy), so a Dig's rest stays in the library and our copies spend only the
     //   cards they take;
-    // - our searches: no LimitSearchLibrary keyword and canSearchLibraryWith on every ChangeZone part (rule
+    // - our searches: no LimitSearchLibrary keyword and getSearchableLibrary on every ChangeZone part (rule
     //   B3-7: Aven Mindcensor or Stranglehold would cap or stop ours while the opponent's copy searches freely);
     // - their payoff: no opposing permanent pays off what the copies make: a draw (Drawn trigger or draw
     //   replacement, PromiseOfPower.drawPunished, which also catches our draw punishers), a card entering the
@@ -70469,7 +70480,7 @@ public class SpecialCardAi {
                     if (!"Library".equals(part.getParam("Origin")) || !keeps(destination)) {
                         return stock;
                     }
-                    if (ai.hasKeyword("LimitSearchLibrary") || !ai.canSearchLibraryWith(part, ai)) {
+                    if (ai.hasKeyword("LimitSearchLibrary") || !canSearchLibrary(ai, part, ai)) {
                         return stock;
                     }
                     search |= !part.hasParam("Defined");
@@ -71627,7 +71638,8 @@ public class SpecialCardAi {
             final Map<forge.game.ability.AbilityKey, Object> repParams = forge.game.ability.AbilityKey.mapFromAffected(x);
             repParams.put(forge.game.ability.AbilityKey.Cause, sa);
             repParams.put(forge.game.ability.AbilityKey.EffectOnly, true);
-            repParams.put(forge.game.ability.AbilityKey.ETB, false);
+            // not entering: no ETB key (upstream ccff857b4f3 removed AbilityKey.ETB, which nothing read) and, as the
+            // stock put of a counter on a permanent already in play, no Destination
             repParams.put(forge.game.ability.AbilityKey.CounterMap, table.column(x));
             return ai.getGame().getReplacementHandler()
                     .getReplacementList(ReplacementType.AddCounter, repParams, null).isEmpty();

@@ -2096,8 +2096,9 @@ public class ComputerUtilMana {
 
     /**
      * Amount of mana that has to be paid to activate a mana ability.
+     * Package-private for SpecialCardAi's converge payment model, which sorts sources as this payment does.
      */
-    private static int getManaToActivate(final SpellAbility ma) {
+    static int getManaToActivate(final SpellAbility ma) {
         final ManaCost manaCost = getManaCostToActivate(ma);
         return manaCost == null ? 0 : manaCost.getCMC();
     }
