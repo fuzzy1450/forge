@@ -801,10 +801,14 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
 
     /**
      * Cache stamp of the static ability list: the manual counter plus the list's own change stamp, so the cache
-     * also notices a mutation that bypasses addStaticAbility/removeStaticAbility/copyFrom (both only ever grow).
+     * also notices a mutation that bypasses addStaticAbility/removeStaticAbility/copyFrom (both only ever grow),
+     * plus the card's trait version (Card.traitsChanged, which only grows too). That version also moves when an
+     * installed keyword's own trait lists are written, as CardFactoryUtil.setupKeywordedAbilities writes them once
+     * the keywords are installed, and when the state's type is written; no other input of the cache sees either, so
+     * a read before such a write would otherwise keep serving the list built before it.
      */
     private int staticAbilitiesStamp() {
-        return staticAbilitiesVersion + staticAbilities.version();
+        return staticAbilitiesVersion + staticAbilities.version() + card.getTraitVersion();
     }
 
     private FCollection<StaticAbility> buildStaticAbilities() {
@@ -903,9 +907,9 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         return result.shareCopy();
     }
 
-    /** Same as staticAbilitiesStamp(), for the replacement effect list. */
+    /** Same as staticAbilitiesStamp(), for the replacement effect list, the card's trait version included. */
     private int replacementEffectsStamp() {
-        return replacementEffectsVersion + replacementEffects.version();
+        return replacementEffectsVersion + replacementEffects.version() + card.getTraitVersion();
     }
 
     /** Everything besides the tables, lists and keywords that decides what buildReplacementEffects returns. */
@@ -918,6 +922,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         if (rulesHost) {
             if (type.hasSubtype("Adventure")) flags |= 16;
             if (type.hasSubtype("Omen")) flags |= 32;
+            if (type.isVengeance()) flags |= 512; // the build's third global rule (1b777913647)
             // Card.updateReplacementEffects
             if (card.getCounters(CounterEnumType.SHIELD) > 0) flags |= 64;
             if (card.getCounters(CounterEnumType.STUN) > 0) flags |= 128;

@@ -7209,6 +7209,11 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         traitVersion++;
     }
 
+    /** The version {@link #traitsChanged} moves (it only grows): CardState's trait caches are stamped with it. */
+    public final int getTraitVersion() {
+        return traitVersion;
+    }
+
     public final FCollectionView<StaticAbility> getStaticAbilities() {
         final CardState state = currentState;
         if (noStaticAbilitiesState == state && noStaticAbilitiesVersion == traitVersion
