@@ -45,7 +45,7 @@ import forge.util.MyRandom;
  * probe boards: a two-player Commander game, the AI (player 1) in its own Main 1 of game turn 3 with no AI deadline,
  * both seats on the Default profile, our commander in our command zone (initVariantsZones, whose effect casts it from
  * there) and the registered deck the tracker reads, each library holding 30 lands; the opponent's commander is Azami,
- * Lady of Scrolls. The smoke's whole game is ComboLoopSmokeGameTest's.
+ * Lady of Scrolls, unless a board names another. The smoke's whole game is ComboLoopSmokeGameTest's.
  */
 public class ComboLoopCommanderAiTest extends AITest {
     private static final String KINNAN = "Kinnan, Bonder Prodigy";
@@ -59,10 +59,13 @@ public class ComboLoopCommanderAiTest extends AITest {
     private static final String ISLAND = "Island";
     private static final String AZAMI = "Azami, Lady of Scrolls";
     private static final String MULDROTHA = "Muldrotha, the Gravetide";
+    private static final String FBLTHP = "Fblthp, Impossibly Lost";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
     /** The rock untap of Grim Monolith and Nyxbloom Ancient, which names no Kinnan. */
     private static final String GRIM_NYXBLOOM = "2585-3430";
+    /** Piece 1's line of Demonic Consultation and Fblthp, Impossibly Lost: no loop line. */
+    private static final String CONSULTATION_FBLTHP = "742-8266";
 
     private Game game;
     private Player ai;
@@ -70,6 +73,11 @@ public class ComboLoopCommanderAiTest extends AITest {
     /** The board (the class comment): {@code commander}, unless null, our commander in our command zone, and
      *  {@code main}, one copy each, the rest of our registered deck; nothing placed yet. */
     private void start(final String commander, final String... main) {
+        startAgainst(AZAMI, commander, main);
+    }
+
+    /** {@link #start}'s board with {@code theirCommander} the opponent's commander, in their command zone. */
+    private void startAgainst(final String theirCommander, final String commander, final String... main) {
         final Deck ours = new Deck("ours");
         if (commander != null) {
             ours.getOrCreate(DeckSection.Commander).add(commander, 1);
@@ -78,7 +86,7 @@ public class ComboLoopCommanderAiTest extends AITest {
             ours.getMain().add(name, 1);
         }
         final Deck theirs = new Deck("theirs");
-        theirs.getOrCreate(DeckSection.Commander).add(AZAMI, 1);
+        theirs.getOrCreate(DeckSection.Commander).add(theirCommander, 1);
         theirs.getMain().add(ISLAND, 40);
         final List<RegisteredPlayer> players = Lists.newArrayList(
                 RegisteredPlayer.forCommander(theirs).setPlayer(new LobbyPlayerAi("p2", null)),
@@ -375,5 +383,118 @@ public class ComboLoopCommanderAiTest extends AITest {
                 "Kinnan is a piece of a loop line the deck holds");
         assertEquals(apiAnswer(cast), AiPlayDecision.MissingPhaseRestrictions);
         assertNull(pick(), "the stock pass");
+    }
+
+    // ------------------------------------------------------------------ the reader's own conditions, one at a time
+
+    /** The smoke's board with Kinnan, our commander, in our command zone and {G}{U} open: his cast, which the lift
+     *  passes (the control of the tests below, each of which changes one thing about it). */
+    private SpellAbility liftedKinnanCast() {
+        start(KINNAN, BASALT, LoopSinks.BALLISTA, ISLAND, FOREST);
+        lands(FOREST, ISLAND);
+        settle();
+        final SpellAbility cast = castOf(commander());
+        assertTrue(LoopDriver.commanderInMainOne(ai, cast), "the lift does not pass our commander's cast");
+        assertTrue(ComboHold.liftsMainTwoWait(ai, cast));
+        return cast;
+    }
+
+    // The lift is for our Main 1 alone: not our Main 2, nor the opponent's Main 1. Through PermanentCreatureAi both are
+    // moot (PermanentAi's wait passes a cast outside our Main 1, and outside our main phases the timing refuses a
+    // sorcery-speed cast earlier still), so the reader's own answer is pinned.
+    @Test
+    public void ourCommanderIsLiftedInOurMainOneAlone() {
+        final SpellAbility cast = liftedKinnanCast();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai, 3);
+        assertFalse(LoopDriver.commanderInMainOne(ai, cast), "lifted in our Main 2");
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, game.getPlayers().get(0), 3);
+        assertFalse(LoopDriver.commanderInMainOne(ai, cast), "lifted in the opponent's Main 1");
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai, 3);
+        assertTrue(LoopDriver.commanderInMainOne(ai, cast), "not lifted in our Main 1 again");
+    }
+
+    // Only on an empty stack: with the opponent's spell on it the lift is not passed (through PermanentCreatureAi moot
+    // as well: above a stack the template refuses a sorcery-speed cast before the phase rule).
+    @Test
+    public void ourCommanderIsLiftedOnAnEmptyStackAlone() {
+        final SpellAbility cast = liftedKinnanCast();
+        ComboLoopBoards.theirSpellOn(game, game.getPlayers().get(0), "Lightning Bolt", ai);
+        assertFalse(LoopDriver.commanderInMainOne(ai, cast), "lifted with a spell on the stack");
+    }
+
+    // Only the commander's own spell: not a copy of it, not a cast a Play effect makes, not one another player
+    // activates, no spell at all (null), and not an ability of the commander's (Kinnan's {5}{G}{U} dig, which seven
+    // lands pay, so that only the spell test refuses it).
+    @Test
+    public void onlyOurCommandersOwnSpellIsLifted() {
+        final SpellAbility cast = liftedKinnanCast();
+        cast.setCopied(true);
+        assertFalse(LoopDriver.commanderInMainOne(ai, cast), "lifted for a copy");
+        cast.setCopied(false);
+        cast.setCastFromPlayEffect(true);
+        assertFalse(LoopDriver.commanderInMainOne(ai, cast), "lifted for a Play effect's cast");
+        cast.setCastFromPlayEffect(false);
+        cast.setActivatingPlayer(game.getPlayers().get(0));
+        assertFalse(LoopDriver.commanderInMainOne(ai, cast), "lifted for the opponent's activation");
+        cast.setActivatingPlayer(ai);
+        assertTrue(LoopDriver.commanderInMainOne(ai, cast), "not lifted once the cast is ours again");
+        assertFalse(LoopDriver.commanderInMainOne(ai, null), "lifted for no spell");
+        lands(FOREST, FOREST, FOREST, ISLAND, ISLAND);
+        settle();
+        SpellAbility dig = null;
+        for (final SpellAbility sa : cast.getHostCard().getSpellAbilities()) {
+            if (sa.isActivatedAbility()) {
+                dig = sa;
+            }
+        }
+        assertTrue(dig != null && !dig.isSpell(), "Kinnan has no activated ability");
+        dig.setActivatingPlayer(ai);
+        assertTrue(SpecialCardAi.CommanderCastCeiling.affordable(ai, dig), "seven lands do not pay {5}{G}{U}");
+        assertFalse(LoopDriver.commanderInMainOne(ai, dig), "lifted for an ability of our commander's");
+        assertTrue(LoopDriver.commanderInMainOne(ai, cast), "the cast is not lifted beside seven lands");
+    }
+
+    // The opponent's Kinnan, their commander, in our hand (a steal): our deck holds the rock untap line he is a piece
+    // of and {G}{U} is open, but he is not our commander (we do not own him), so his cast waits for Main 2.
+    @Test
+    public void anotherPlayersCommanderInOurHandIsNotLifted() {
+        startAgainst(KINNAN, THRASIOS, KINNAN, BASALT, ISLAND, FOREST);
+        lands(FOREST, ISLAND);
+        final Player opp = game.getPlayers().get(0);
+        final Card stolen = opp.getCommanders().get(0);
+        assertEquals(stolen.getName(), KINNAN);
+        opp.getZone(ZoneType.Command).remove(stolen);
+        ai.getZone(ZoneType.Hand).add(stolen);
+        settle();
+        assertTrue(stolen.isCommander() && stolen.isInZone(ZoneType.Hand), stolen + " is not a commander in hand");
+        assertEquals(stolen.getOwner(), opp, "we own the opponent's commander");
+        final SpellAbility cast = stolen.getFirstSpellAbility();
+        cast.setActivatingPlayer(ai);
+        assertTrue(SpecialCardAi.CommanderCastCeiling.affordable(ai, cast), "{G}{U} does not pay Kinnan");
+        assertEquals(heldLoopsNaming(KINNAN), List.of(KINNAN_BASALT), "the deck holds Kinnan's loop line");
+        assertFalse(LoopDriver.commanderInMainOne(ai, cast), "lifted for the opponent's commander");
+        assertFalse(ComboHold.liftsMainTwoWait(ai, cast));
+    }
+
+    // Our commander a piece of a line the deck holds that is no LOOP line: Fblthp, Impossibly Lost, a legendary
+    // creature, with Demonic Consultation, piece 1's line. {1}{U} is open, but only a loop line lifts the wait (and
+    // piece 1's own lift is for Thassa's Oracle's hand cast).
+    @Test
+    public void aCommanderThatIsAPieceOfANonLoopLineIsNotLifted() {
+        start(FBLTHP, CONSULTATION, ISLAND, FOREST);
+        lands(FOREST, ISLAND);
+        settle();
+        final List<String> named = new ArrayList<>();
+        for (final ComboLines.Line l : aic().getComboTracker().deckLines()) {
+            if (!l.isLoop() && l.names().contains(FBLTHP)) {
+                named.add(l.variant().id());
+            }
+        }
+        assertEquals(named, List.of(CONSULTATION_FBLTHP), "the deck holds piece 1's line of Fblthp");
+        assertTrue(heldLoops().isEmpty(), "the deck holds loop lines " + heldLoops());
+        final SpellAbility cast = castOf(commander());
+        assertTrue(SpecialCardAi.CommanderCastCeiling.affordable(ai, cast), "a Forest and an Island do not pay {1}{U}");
+        assertFalse(LoopDriver.commanderInMainOne(ai, cast), "lifted for a piece of a line that is no loop line");
+        assertFalse(ComboHold.liftsMainTwoWait(ai, cast));
     }
 }
