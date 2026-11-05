@@ -58,6 +58,7 @@ public class ComboLoopCommanderAiTest extends AITest {
     private static final String FOREST = "Forest";
     private static final String ISLAND = "Island";
     private static final String AZAMI = "Azami, Lady of Scrolls";
+    private static final String MULDROTHA = "Muldrotha, the Gravetide";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
     /** The rock untap of Grim Monolith and Nyxbloom Ancient, which names no Kinnan. */
@@ -354,5 +355,25 @@ public class ComboLoopCommanderAiTest extends AITest {
         assertNull(pick(), "the stock pass");
         assertEquals(heldLoopsNaming(BASALT), List.of(KINNAN_BASALT),
                 "Basalt is a piece of the loop line the deck holds");
+    }
+
+    // Kinnan, our commander, in our graveyard beside Muldrotha, the Gravetide, whose static lets us cast a creature
+    // spell from our graveyard in our turn: a cast from a zone that is neither our command zone nor our hand keeps
+    // the stock wait. Only the statics are applied here: the state-based actions would return our commander to our
+    // command zone.
+    @Test
+    public void ourCommanderCastFromAnotherZoneWaitsForMainTwo() {
+        start(KINNAN, BASALT, ISLAND, FOREST);
+        lands(FOREST, ISLAND);
+        ComboLoopBoards.ready(addCard(MULDROTHA, ai));
+        final Card kinnan = moved(commander(), ZoneType.Graveyard);
+        game.getAction().checkStaticAbilities();
+        final SpellAbility cast = castOf(kinnan);
+        assertTrue(cast.canPlay(), "Muldrotha does not let us cast Kinnan from our graveyard");
+        assertTrue(SpecialCardAi.CommanderCastCeiling.affordable(ai, cast), "a Forest and an Island do not pay {G}{U}");
+        assertEquals(heldLoopsNaming(KINNAN), List.of(KINNAN_BASALT),
+                "Kinnan is a piece of a loop line the deck holds");
+        assertEquals(apiAnswer(cast), AiPlayDecision.MissingPhaseRestrictions);
+        assertNull(pick(), "the stock pass");
     }
 }
