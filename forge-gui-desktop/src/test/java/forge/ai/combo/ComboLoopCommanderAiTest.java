@@ -482,6 +482,32 @@ public class ComboLoopCommanderAiTest extends AITest {
         assertFalse(ComboHold.liftsMainTwoWait(ai, cast));
     }
 
+    // While another player controls us (a mind-slave turn; Opposition Agent while we search), we have no tracker:
+    // ComboTracker.of(ai) is null, so the lift has no lines to read and answers false, throwing nothing, as piece 1's
+    // Oracle lift does (ComboExecuteAiTest.aControlledPlayerHasNoGoOffInMainOne). Our commander's cast keeps the
+    // stock wait: the API AI's phase rule refuses it, and canPlaySa, asked of the controller made for our master,
+    // answers CantPlayAi, drawing nothing. Once control ends, the lift passes again.
+    @Test
+    public void aControlledPlayerHasNoLift() {
+        final SpellAbility cast = liftedKinnanCast();
+        assertEquals(apiAnswer(cast), AiPlayDecision.WillPlay, "the control: our commander's cast is held for Main 2");
+        final long timestamp = game.getNextTimestamp();
+        ai.addController(timestamp, game.getPlayers().get(0));
+        try {
+            assertTrue(ai.isControlled());
+            assertNull(ComboTracker.of(ai));
+            assertFalse(LoopDriver.commanderInMainOne(ai, cast), "a controlled player's commander was lifted");
+            assertFalse(ComboHold.liftsMainTwoWait(ai, cast));
+            assertEquals(apiAnswer(cast), AiPlayDecision.MissingPhaseRestrictions,
+                    "a controlled player's commander is not held for Main 2");
+            assertEquals(drawlessCanPlaySa(cast), AiPlayDecision.CantPlayAi);
+        } finally {
+            ai.removeController(timestamp);
+        }
+        assertFalse(ai.isControlled());
+        assertTrue(LoopDriver.commanderInMainOne(ai, cast), "not lifted once control ended");
+    }
+
     // Our commander a piece of a line the deck holds that is no LOOP line: Fblthp, Impossibly Lost, a legendary
     // creature, with Demonic Consultation, piece 1's line. {1}{U} is open, but only a loop line lifts the wait (and
     // piece 1's own lift is for Thassa's Oracle's hand cast).
