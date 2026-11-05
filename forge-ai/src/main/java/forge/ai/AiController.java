@@ -25,6 +25,7 @@ import forge.ai.ability.ChangeZoneAi;
 import forge.ai.ability.ConniveAi;
 import forge.ai.ability.LearnAi;
 import forge.ai.combo.ComboExecute;
+import forge.ai.combo.ComboFetch;
 import forge.ai.combo.ComboHold;
 import forge.ai.combo.ComboLines;
 import forge.ai.combo.ComboTracker;
@@ -3794,6 +3795,21 @@ public class AiController {
         }
 
         if (decider == player && sa.getApi() != ApiType.Learn) {
+            // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): our own search for a
+            // combo line of ours takes its missing piece (ComboFetch.searchPick, and Gifts Ungiven's completers) ahead
+            // of the deck plan's pick below, which decides only when no line of ours has a pick; null, so upstream's
+            // choice, for a deck holding no line. ChangeZoneAi asks the same two first, for the simulation picker that
+            // reaches it without this method. Draws nothing.
+            final Card forLine = ComboFetch.searchPick(sa, destination, fetchList, player2, decider);
+            if (forLine != null) {
+                return forLine;
+            }
+            if (SpecialCardAi.GiftsUngiven.handles(sa)) {
+                final Card giftsPick = ComboFetch.giftsPick(decider, fetchList);
+                if (giftsPick != null) {
+                    return giftsPick;
+                }
+            }
             // the win card of a cheating spell, the creature to put into the graveyard: what the deck is built for
             final Card forCombo = deckPlan(player).combos.choose(player, destination, origin, fetchList);
             if (forCombo != null) {

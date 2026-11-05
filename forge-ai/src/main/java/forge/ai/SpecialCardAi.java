@@ -31568,6 +31568,16 @@ public class SpecialCardAi {
                     CardPredicates.nameNotEquals(sa.getHostCard().getName()));
             lib.sort(CardLists.CmcComparatorInv);
 
+            // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): Intuition's three cards
+            // hand us a one-short combo line's missing piece, whichever the opponent picks; null = the deck plan's pile,
+            // then the stock pile below. Ahead of the deck plan: it decides only when no line of ours has a pile.
+            if (IntuitionPile.handles(sa)) {
+                final CardCollection comboPile = ComboFetch.intuitionPile(ai);
+                if (comboPile != null) {
+                    return comboPile;
+                }
+            }
+
             if (ai.getController() instanceof PlayerControllerAi) {
                 // A deck built around a combo (madness, Psychatog, storm...) knows what it is missing: ask for that, whatever the profile says.
                 final CardCollection planned = ((PlayerControllerAi) ai.getController()).getAi().deckPlan(ai)
@@ -31582,15 +31592,6 @@ public class SpecialCardAi {
 
             // figure out how many of each card we have in deck
             Map<String, Long> cardAmount = lib.stream().collect(Collectors.groupingBy(Card::getName, Collectors.counting()));
-
-            // Combo-aware AI piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): Intuition's three cards
-            // hand us a one-short combo line's missing piece, whichever the opponent picks; null = the stock pile below.
-            if (IntuitionPile.handles(sa)) {
-                final CardCollection comboPile = ComboFetch.intuitionPile(ai);
-                if (comboPile != null) {
-                    return comboPile;
-                }
-            }
 
             // Trix: see if we can complete the combo (if it looks like we might win shortly or if we need to get a Donate stat)
             boolean donateComboMightWin = false;
