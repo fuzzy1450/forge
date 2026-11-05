@@ -8,10 +8,10 @@ import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.expectThrows;
 
 import java.util.ArrayList;
-import java.util.ConcurrentModificationException;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.NoSuchElementException;
 
 import org.testng.annotations.Test;
 
@@ -107,11 +107,14 @@ public class FCollectionCopyAndGetTest {
         assertEquals(c.hashCode(), new FCollection<Key>().hashCode());
         assertEquals(c.toString(), "[]");
 
-        // an iterator taken now still fails fast once the collection changes
+        // an iterator taken now walks the collection as it was when taken: since upstream's snapshot iterators
+        // (dc72214fe7f, #12297) it no longer fails fast once the collection changes, so one taken while it is empty
+        // has nothing to return, whatever is added after
         final Iterator<Key> before = c.iterator();
         final Key first = new Key(-1);
         assertTrue(c.add(first));
-        expectThrows(ConcurrentModificationException.class, before::next);
+        assertFalse(before.hasNext());
+        expectThrows(NoSuchElementException.class, before::next);
         assertTrue(c.remove(first));
         assertTrue(c.isEmpty());
 
