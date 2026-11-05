@@ -61,7 +61,7 @@ public class RollDiceAi extends SpellAbilityAi {
         }
 
         if (cost != null && (sa.getPayCosts().hasManaCost() || sa.getPayCosts().hasTapCost())) {
-            boolean result = ph.getNextTurn() == aiPlayer && ph.is(PhaseType.END_OF_TURN);
+            boolean result = ph.isPlayerNextTurn(aiPlayer) && ph.is(PhaseType.END_OF_TURN);
             // Dead-card batch 4, row 54: myrkuls_edict.txt is the only script with this logic. This default
             // refuses the sorcery at every own-turn consult (it accepts only at the opponent's end step).
             // Unlike rows 80, 96 and 34 the router sits inside the default and runs only on its refusal, so
