@@ -230,4 +230,28 @@ public class GameRunnerTest {
         Assert.assertTrue(DECIDED.contains(next.endReason()), next.toString());
         Assert.assertNull(next.error(), next.toString());
     }
+
+    /**
+     * Upstream's Flat Monte Carlo search (#12308) decides on wall-clock budgets (FLAT_MC_DECISION_BUDGET_MS,
+     * FLAT_MC_TURN_BUDGET_MS) and only the GUI's HostedMatch and the SimulateMatch CLI switch it on: in a game the runner
+     * plays it is off on the game and for every seat, so a seed follows its own stream, never the machine's speed. The
+     * observer throws once it has looked, so no game is played.
+     */
+    @Test(timeOut = 300_000)
+    public void flatMonteCarloIsOffOnTheGameAndForEverySeat() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        AtomicReference<String> seen = new AtomicReference<>();
+        GameResult r = runner.play(spec(7_000_000L, 300), g -> {
+            StringBuilder sb = new StringBuilder();
+            sb.append(g.getAIFlatMonteCarlo()).append(',').append(g.getAIFlatMonteCarloMax()).append(',')
+                    .append(g.getAIFlatMonteCarloLite());
+            for (forge.game.player.Player p : g.getPlayers()) {
+                sb.append(',').append(((forge.ai.PlayerControllerAi) p.getController()).getAi().flatMonteCarloActive());
+            }
+            seen.set(sb.toString());
+            throw new IllegalStateException("looked");
+        });
+        Assert.assertEquals(seen.get(), "false,false,false,false,false", r.toString());
+        Assert.assertEquals(r.endReason(), "Error", r.toString());
+    }
 }

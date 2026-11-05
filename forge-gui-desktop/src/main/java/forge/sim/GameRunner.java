@@ -426,6 +426,12 @@ public class GameRunner {
                     // drawn from the seeded stream, so the game would follow the clock instead of its seed.
                     g.AI_TIMEOUT = Integer.MAX_VALUE;
                     g.AI_CAN_USE_TIMEOUT = false;
+                    // No Flat Monte Carlo search either, for the same reason: its budgets (FLAT_MC_DECISION_BUDGET_MS,
+                    // FLAT_MC_TURN_BUDGET_MS) are wall-clock. Off already (Game's default; only the GUI's HostedMatch
+                    // and the SimulateMatch CLI switch it on), and pinned here so no later default can turn it on.
+                    g.AI_FLAT_MONTE_CARLO = false;
+                    g.AI_FLAT_MONTE_CARLO_MAX = false;
+                    g.AI_FLAT_MONTE_CARLO_LITE = false;
                     g.subscribeToEvents(stats);
                     game = g;
                     observer.accept(g);                               // the records' subscriber attaches here (harness-in-engine spec 3.2)
