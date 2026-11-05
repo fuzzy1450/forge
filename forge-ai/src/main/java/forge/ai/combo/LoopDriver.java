@@ -434,9 +434,12 @@ public final class LoopDriver {
      * (not a copy, not a Play-effect cast, we its activator), from our command zone or our hand, in our Main 1 on an
      * empty stack, when real mana pays the cast now: SpecialCardAi.CommanderCastCeiling.affordable (G1: the
      * engine's test-mode price, the commander tax included, against the mana our untapped sources make, each pip
-     * its colour), read last. So an unpayable window answers false, and the stock wait refuses the cast at a point
+     * its colour), read last. So a window G1 refuses answers false, and the stock wait refuses the cast at a point
      * where the stock path draws nothing (the API AI's template answers MissingPhaseRestrictions before the
-     * throttle, checkApiLogic and canPayCost). True only passes the phase rule: the stock checkApiLogic, saSideEffects
+     * throttle, checkApiLogic and canPayCost). But G1 is a ceiling, not a payability test: it counts one multicolour
+     * source toward each colour it can make, so a window it over-counts (Command Tower beside Sol Ring, for {G}{U})
+     * answers true, and canPayCost's test payment draws there before it refuses the cast, where the stock wait drew
+     * nothing (spec section 9). True only passes the phase rule: the stock checkApiLogic, saSideEffects
      * and canPayCost still judge the cast, and it still sorts among the spells the walk may play in Main 1. So Kinnan,
      * Bonder Prodigy, a piece of the rock untap with Basalt Monolith, is cast on its first {G}{U} turn, where the
      * stock AI held it for Main 2 and Walking Ballista's {X}{X} or Basalt Monolith, sorted ahead of it there, took

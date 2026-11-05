@@ -7,6 +7,7 @@ import static org.testng.Assert.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 import org.testng.annotations.Test;
 
@@ -15,6 +16,7 @@ import com.google.common.collect.Lists;
 import forge.ai.AITest;
 import forge.ai.AiController;
 import forge.ai.AiPlayDecision;
+import forge.ai.ComputerUtilCost;
 import forge.ai.LobbyPlayerAi;
 import forge.ai.SpecialCardAi;
 import forge.ai.SpellApiToAi;
@@ -41,11 +43,13 @@ import forge.util.MyRandom;
  * cast (LoopDriver.commanderInMainOne, through ComboHold.liftsMainTwoWait, from
  * PermanentCreatureAi.checkPhaseRestrictions), so the walk casts it there. Every other cast keeps PermanentAi's wait
  * for Main 2, the diagnosis's gate 1, and a deck holding no loop line, a commander that is no piece of a line the deck
- * holds and an unpayable window play as stock, decision for decision and draw for draw. The boards are the diagnosis's
- * probe boards: a two-player Commander game, the AI (player 1) in its own Main 1 of game turn 3 with no AI deadline,
- * both seats on the Default profile, our commander in our command zone (initVariantsZones, whose effect casts it from
- * there) and the registered deck the tracker reads, each library holding 30 lands; the opponent's commander is Azami,
- * Lady of Scrolls, unless a board names another. The smoke's whole game is ComboLoopSmokeGameTest's.
+ * holds and a window G1 (SpecialCardAi.CommanderCastCeiling.affordable) refuses play as stock, decision for decision
+ * and draw for draw. G1 is a ceiling, not a payability test: a window it over-counts is lifted, and the payment then
+ * refuses the cast after drawing (spec section 9). The boards are the diagnosis's probe boards: a two-player Commander
+ * game, the AI (player 1) in its own Main 1 of game turn 3 with no AI deadline, both seats on the Default profile, our
+ * commander in our command zone (initVariantsZones, whose effect casts it from there) and the registered deck the
+ * tracker reads, each library holding 30 lands; the opponent's commander is Azami, Lady of Scrolls, unless a board
+ * names another. The smoke's whole game is ComboLoopSmokeGameTest's.
  */
 public class ComboLoopCommanderAiTest extends AITest {
     private static final String KINNAN = "Kinnan, Bonder Prodigy";
@@ -60,6 +64,8 @@ public class ComboLoopCommanderAiTest extends AITest {
     private static final String AZAMI = "Azami, Lady of Scrolls";
     private static final String MULDROTHA = "Muldrotha, the Gravetide";
     private static final String FBLTHP = "Fblthp, Impossibly Lost";
+    private static final String COMMAND_TOWER = "Command Tower";
+    private static final String SOL_RING = "Sol Ring";
     /** The rock untap of Kinnan and Basalt Monolith. */
     private static final String KINNAN_BASALT = "129-4131";
     /** The rock untap of Grim Monolith and Nyxbloom Ancient, which names no Kinnan. */
@@ -496,5 +502,42 @@ public class ComboLoopCommanderAiTest extends AITest {
         assertTrue(SpecialCardAi.CommanderCastCeiling.affordable(ai, cast), "a Forest and an Island do not pay {1}{U}");
         assertFalse(LoopDriver.commanderInMainOne(ai, cast), "lifted for a piece of a line that is no loop line");
         assertFalse(ComboHold.liftsMainTwoWait(ai, cast));
+    }
+
+    // ------------------------------------------------------------------ G1 is a ceiling (spec section 9)
+
+    // G1 (SpecialCardAi.CommanderCastCeiling.affordable) is a ceiling, not a payability test: it counts a multicolour
+    // source toward each colour it can make. Command Tower beside Sol Ring: {G}{U} passes it (three mana, a G and a
+    // U), though real mana cannot pay it (the Tower makes one colour, Sol Ring {C}{C}). So the lift passes the phase
+    // rule and canPlaySa approves the cast, drawing nothing, and canPayCost's test payment draws (isManaSourceReserved)
+    // before it refuses it, where the stock wait refuses the cast at the phase rule, drawing nothing. Kinnan is not
+    // cast either way; the walk's pick is a pass both ways, the lifted one drawing.
+    @Test
+    public void aWindowG1OverCountsIsLiftedAndDrawsAtThePayment() {
+        start(KINNAN, BASALT, COMMAND_TOWER, SOL_RING, ISLAND, FOREST);
+        lands(COMMAND_TOWER);
+        ComboLoopBoards.ready(addCard(SOL_RING, ai));
+        settle();
+        assertEquals(heldLoops(), List.of(KINNAN_BASALT), "the deck holds Kinnan's loop line alone");
+        final SpellAbility cast = castOf(commander());
+        assertTrue(SpecialCardAi.CommanderCastCeiling.affordable(ai, cast),
+                "G1 refuses {G}{U} on Command Tower and Sol Ring");
+        assertTrue(LoopDriver.commanderInMainOne(ai, cast), "the lift does not pass the window G1 over-counts");
+        assertEquals(drawlessCanPlaySa(cast), AiPlayDecision.WillPlay);
+        long before = MyRandom.callCount();
+        assertFalse(ComputerUtilCost.canPayCost(cast, ai, false), "real mana pays {G}{U} on the Tower and Sol Ring");
+        assertTrue(MyRandom.callCount() - before > 0, "canPayCost's test payment drew nothing");
+        final ComboTracker t = aic().getComboTracker();
+        t.useLines(List.of());
+        assertEquals(drawlessCanPlaySa(cast), AiPlayDecision.CantPlayAi);
+        MyRandom.setRandom(new Random(7));
+        before = MyRandom.callCount();
+        assertNull(pick(), "the stock pick is not a pass");
+        assertEquals(MyRandom.callCount() - before, 0L, "the stock pick drew");
+        t.useLines(ComboLines.shipped());
+        MyRandom.setRandom(new Random(7));
+        before = MyRandom.callCount();
+        assertNull(pick(), "the lifted pick is not a pass");
+        assertTrue(MyRandom.callCount() - before > 0, "the lifted pick drew nothing");
     }
 }
