@@ -2706,19 +2706,32 @@ public class ComboExecuteAiTest extends AITest {
         }
     }
 
+    /** A green and blue card in our own hand beside the emptier, Prime Speaker Zegana. Since upstream's 1679040e455
+     *  (#12415) the stock payer first orders a shard's sources by the colours its own hand holds
+     *  (ComputerUtilMana.sparingSourcesFirst: a source whose use leaves a colour of the payer's hand with no untapped
+     *  source goes last), and for Rhystic Study's {1} that payer is us: with the emptier's black alone in our hand it
+     *  keeps the Swamp, as the line's hold does, and the board tells nothing. With green and blue beside the black,
+     *  each open land is the last source of a colour our hand holds, the sparing order ties, and the order greenHand's
+     *  sort gives stands: the stock spends the Swamp again. */
+    private void sparingTie() {
+        addCardToZone("Prime Speaker Zegana", ai, ZoneType.Hand);
+    }
+
     private boolean held(final Card c) {
         return AiCardMemory.isRememberedCard(ai, c, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
     }
 
     /** Review Focus 4 at the payment itself (follow-up 3, H4; beyond the plan's tests). Our Thassa's Oracle cast and on
-     *  our stack, its {U}{U} paid, Demonic Consultation in hand, the Swamp and a Forest untapped, the opponent's Rhystic
-     *  Study and a hand of green cards. The {1} leaves Consultation's {B} payable, so it is paid. With no line the stock
-     *  payer pays it with the Swamp, keeping the Forest for the green hand it reads, and Consultation's {B} is gone.
-     *  With the line it is paid from the Forest: the Swamp is held for Consultation while the {1} is paid. */
+     *  our stack, its {U}{U} paid, Demonic Consultation and Prime Speaker Zegana in hand (sparingTie), the Swamp and a
+     *  Forest untapped, the opponent's Rhystic Study and a hand of green cards. The {1} leaves Consultation's {B}
+     *  payable, so it is paid. With no line the stock payer pays it with the Swamp, keeping the Forest for the green
+     *  hand it reads, and Consultation's {B} is gone. With the line it is paid from the Forest: the Swamp is held for
+     *  Consultation while the {1} is paid. */
     @Test
     public void rhysticsOneIsPaidFromTheSpareLand() {
         oracleCast("Forest");
         greenHand(opp);
+        sparingTie();
         SpellAbility rhystic = rhysticDraw();
         t.useLines(List.of());
         assertTrue(paysUnless(rhystic), "stock does not pay: this board tells nothing");
@@ -2728,9 +2741,25 @@ public class ComboExecuteAiTest extends AITest {
 
         oracleCast("Forest");
         greenHand(opp);
+        sparingTie();
         rhystic = rhysticDraw();
         assertTrue(paysUnless(rhystic), "the {1} was declined");
         assertFalse(t.find("Swamp", ZoneType.Battlefield).isTapped(), "the {1} took Consultation's Swamp");
+        assertTrue(t.find("Forest", ZoneType.Battlefield).isTapped());
+    }
+
+    /** rhysticsOneIsPaidFromTheSpareLand's board as it was before the merge of upstream's 626aa9f0735, no Zegana in our
+     *  hand: with no line the stock payer now pays Rhystic Study's {1} from the Forest and keeps the Swamp for our
+     *  Consultation's black (upstream's sparing order, 1679040e455, #12415; sparingTie), where it paid it from the
+     *  Swamp, keeping the Forest for the opponent's green hand. */
+    @Test
+    public void theSparingPayerKeepsTheEmptiersSwamp() {
+        oracleCast("Forest");
+        greenHand(opp);
+        final SpellAbility rhystic = rhysticDraw();
+        t.useLines(List.of());
+        assertTrue(paysUnless(rhystic), "stock does not pay");
+        assertFalse(t.find("Swamp", ZoneType.Battlefield).isTapped(), "stock spent the Swamp");
         assertTrue(t.find("Forest", ZoneType.Battlefield).isTapped());
     }
 
@@ -2889,6 +2918,7 @@ public class ComboExecuteAiTest extends AITest {
     public void rhysticsOneIsPaidFromASpareLandListedFirst() {
         oracleCastBehind("Forest");
         greenHand(opp);
+        sparingTie();
         final SpellAbility rhystic = rhysticDraw();
         assertEquals(untappedLands(), List.of("Forest", "Swamp"), "not the Forest first");
         t.useLines(List.of());
@@ -2897,6 +2927,7 @@ public class ComboExecuteAiTest extends AITest {
 
         oracleCastBehind("Forest");
         greenHand(opp);
+        sparingTie();
         assertTrue(paysUnless(rhysticDraw()), "the {1} was declined");
         assertEquals(untappedLands(), List.of("Swamp"), "the {1} took Consultation's Swamp");
         assertTrue(AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL),
@@ -2904,8 +2935,9 @@ public class ComboExecuteAiTest extends AITest {
     }
 
     /** Line 1295-3093 alone, mid go-off: our Thassa's Oracle's trigger on our stack (its {U}{U} paid, our two Islands
-     *  tapped), Tainted Pact in hand, {@code open} untapped on our battlefield in that order, a singleton library, and
-     *  the opponent's Rhystic Study and hand of green cards. Returns Rhystic's draw. */
+     *  tapped), Tainted Pact and Prime Speaker Zegana in hand (sparingTie), {@code open} untapped on our battlefield in
+     *  that order, a singleton library, and the opponent's Rhystic Study and hand of green cards. Returns Rhystic's
+     *  draw. */
     private SpellAbility pactAtTheTrigger(final String... open) {
         start(ORACLE_PACT);
         final Card oracle = hand(ORACLE);
@@ -2914,6 +2946,7 @@ public class ComboExecuteAiTest extends AITest {
         lands(open);
         singletonLibrary();
         greenHand(opp);
+        sparingTie();
         enters(oracle);
         assertEquals(ids(t.executable()), List.of("1295-3093"));
         return rhysticDraw();
