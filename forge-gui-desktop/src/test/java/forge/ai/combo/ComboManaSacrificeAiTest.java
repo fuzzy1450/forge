@@ -329,10 +329,10 @@ public class ComboManaSacrificeAiTest extends AITest {
                 new PlayerCollection(ai));
     }
 
-    /** Oracle cast and on our stack, its Islands tapped, Pact in hand, one Island, the Altar and a Craw Wurm open,
-     *  Rhystic Study asking {1}: the {B} the Altar makes for Pact comes off Oracle, in play by then, so paying the {1}
-     *  with the Island would leave Pact's {1} unpaid and Oracle spent for nothing. Stock pays. */
-    private SpellAbility rhysticOnOracle() {
+    /** Oracle cast and on our stack, or its trigger there, its Islands tapped, Pact in hand, one Island, the Altar and
+     *  a Craw Wurm open, Rhystic Study asking {1}: the {B} the Altar makes for Pact comes off Oracle, in play by then,
+     *  so paying the {1} with the Island would leave Pact's {1} unpaid and Oracle spent for nothing. Stock pays. */
+    private SpellAbility rhysticOnOracle(final boolean itsTrigger) {
         commanderGame();
         tracker().useLines(lines(ORACLE_PACT));
         addCardToZone(PACT, ai, ZoneType.Hand);
@@ -340,28 +340,44 @@ public class ComboManaSacrificeAiTest extends AITest {
         ready("Island").setTapped(true);
         ready("Island").setTapped(true);
         List.of("Island", ALTAR, WURM).forEach(this::ready);
-        castOnStack(ORACLE);
+        if (itsTrigger) {
+            game.getAction().moveTo(ZoneType.Battlefield, addCardToZone(ORACLE, ai, ZoneType.Hand), null,
+                    AbilityKey.newMap());
+            game.getAction().checkStateEffects(true);
+            game.getStack().addAllTriggeredAbilitiesToStack();
+        } else {
+            castOnStack(ORACLE);
+        }
+        assertEquals(game.getStack().peek().getSourceCard().getName(), ORACLE, "the harness: Oracle on the stack");
         return rhysticDraw();
     }
 
+    /** The go-off's two windows: the read must see Oracle on the stack as it sees Oracle on the battlefield. */
     @Test(timeOut = 120_000)
     public void rhysticsOneIsDeclinedWhenTheEmptierNeedsOraclesSacrifice() {
-        SpellAbility rhystic = rhysticOnOracle();
-        tracker().useLines(List.of());
-        assertTrue(paysUnless(rhystic), "stock does not pay: this board tells nothing");
+        for (final boolean itsTrigger : List.of(false, true)) {
+            SpellAbility rhystic = rhysticOnOracle(itsTrigger);
+            tracker().useLines(List.of());
+            assertTrue(paysUnless(rhystic), "stock does not pay: this board tells nothing");
 
-        rhystic = rhysticOnOracle();
-        assertFalse(paysUnless(rhystic), "the {1} took Pact's mana");
+            rhystic = rhysticOnOracle(itsTrigger);
+            assertFalse(paysUnless(rhystic), "the {1} took Pact's mana");
+        }
     }
 
     /** Our Main 2 at 1 life before an opposing Colossal Dreadmaw that tramples over our Craw Wurm: DANGER is line
      *  742-1295's only signal. Oracle in hand, the library holding Consultation; Island, Island, Sol Ring, the Altar
      *  and the Wurm in play. Returns the library's Consultation. */
     private Card dangerBoard() {
+        return dangerBoard(ORACLE, CONSULTATION);
+    }
+
+    /** The danger board, one piece in hand and the other, returned, in the library. */
+    private Card dangerBoard(final String held, final String missing) {
         commanderGame();
         tracker().useLines(lines(ORACLE_CONSULTATION));
-        addCardToZone(ORACLE, ai, ZoneType.Hand);
-        final Card consultation = addCardToZone(CONSULTATION, ai, ZoneType.Library);
+        addCardToZone(held, ai, ZoneType.Hand);
+        final Card piece = addCardToZone(missing, ai, ZoneType.Library);
         SINGLETON.forEach(n -> addCardToZone(n, ai, ZoneType.Library));
         List.of("Island", "Island", "Sol Ring", ALTAR, WURM).forEach(this::ready);
         ai.setLife(1, null);
@@ -369,7 +385,7 @@ public class ComboManaSacrificeAiTest extends AITest {
         assertEquals(ComboSignals.abandon(ai, tracker().deckLines().get(0), tracker()), ComboSignals.Signal.DANGER);
         assertFalse(ComboSignals.surerKillNow(ai));
         assertEquals(tracker().oneShort(), List.of());
-        return consultation;
+        return piece;
     }
 
     private Card pick(final ZoneType destination, final SpellAbility tutor) {
@@ -385,11 +401,14 @@ public class ComboManaSacrificeAiTest extends AITest {
     /** Danger's win in time reads the go-off's mana as goOffNow reads it, so the piece a fetch takes is one the go-off
      *  then goes ahead with: in this turn's main phase and, at the end step before our turn, in our next one.
      *  ComboFetch is asked itself: with no line upstream's deck plan takes the pair's piece for a tutor as well, but
-     *  not for a dig or a scry. */
+     *  not for a dig or a scry. Oracle may be the piece fetched: what enters is then a card of our library. */
     @Test(timeOut = 120_000)
     public void dangersWinInTimeReadsTheEmptierWithOracleInPlay() {
         Card consultation = dangerBoard();
         assertSame(pick(ZoneType.Hand, tutor("Demonic Tutor")), consultation);
+
+        final Card oracle = dangerBoard(CONSULTATION, ORACLE);
+        assertSame(pick(ZoneType.Hand, tutor("Demonic Tutor")), oracle);
 
         consultation = dangerBoard();
         game.getPhaseHandler().devModeSet(PhaseType.END_OF_TURN, opp);
