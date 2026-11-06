@@ -3094,6 +3094,14 @@ public class AiController {
         final ComboPlan combos = deckPlan(player).combos;
         final boolean massReanimation = combos.isMassReanimationDeck(player);
         final boolean darkDepths = combos.has(ComboPlan.Kind.DARK_DEPTHS);
+        // Upstream's tutor storm holds below keep a deck's fast mana, its cheap fodder, Infernal Tutor and its take-life
+        // finisher for StormSolver, their only release, which runs under Flat Monte Carlo alone (and which upstream ships
+        // switched on). With Flat MC off, every game of the sim harness (GameRunner pins it), nothing could release them
+        // and those cards would simply be dead: the walk treats them as stock there, and the Storm block falls to the
+        // stock minimum storm count. A rollout's game has the flag off by design (GameCopier) and holds as the game it
+        // copies does. False at once for a deck that reads as no tutor storm; draws nothing.
+        final boolean stormHolds = combos.has(ComboPlan.Kind.TUTOR_STORM)
+                && (flatMonteCarloActive() || game.isSimulationCopy());
         final long aiId = AITimeoutTracker.key(game.getId(), player.getId());
         final long timeoutNanos = TimeUnit.SECONDS.toNanos(game.getAITimeout());
         AITimeoutTracker.begin(aiId, timeoutNanos);
@@ -3121,7 +3129,7 @@ public class AiController {
                         // a storm card that takes the last life of the opponent is always worth casting; a deck built around
                         // finding it with tutors keeps it until then, any other deck casts it from the minimum storm count on
                         if (!ComboPlan.stormIsLethal(player, sa.getHostCard())
-                                && ((combos.has(ComboPlan.Kind.TUTOR_STORM) && ComboPlan.takesLifePerCopy(sa.getHostCard()))
+                                && ((stormHolds && ComboPlan.takesLifePerCopy(sa.getHostCard()))
                                 || game.getView().getStormCount() < this.getIntProperty(AiProps.MIN_COUNT_FOR_STORM_SPELLS))) {
                             // skip evaluating Storm unless we reached the minimum Storm count
                             continue;
@@ -3129,11 +3137,11 @@ public class AiController {
                     }
 
                     // a tutor storm deck keeps its rituals and moxen for the turn the solver finds the kill
-                    if (combos.holdsForKill(sa) || combos.wastesTutor(sa) || combos.wastesFodder(sa)) {
+                    if (stormHolds && (combos.holdsForKill(sa) || combos.wastesTutor(sa) || combos.wastesFodder(sa))) {
                         continue;
                     }
                     // a take-life storm finisher is never cast unless it kills, even when it is the only spell left in hand
-                    if (combos.has(ComboPlan.Kind.TUTOR_STORM) && sa.isSpell() && sa.getHostCard() != null
+                    if (stormHolds && sa.isSpell() && sa.getHostCard() != null
                             && ComboPlan.isStormFinisher(sa.getHostCard())
                             && ComboPlan.takesLifePerCopy(sa.getHostCard())
                             && !ComboPlan.stormIsLethal(player, sa.getHostCard())) {
