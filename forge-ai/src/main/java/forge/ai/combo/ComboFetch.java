@@ -593,7 +593,8 @@ public final class ComboFetch {
     // refused): taxes and reductions included, and the commander tax on a commander cast from our command zone, which
     // the engine adds there (CostAdjustment.adjust). Next turn's are read at today's prices: a tax on this turn's spells
     // (Damping Sphere's) is counted, the safe side. The sources are read against the first such piece's first spell (in
-    // Line.names order, the emptier first), else the draw's. A piece on our battlefield or our stack is cast already.
+    // Line.names order, the emptier first), else the draw's, a sacrifice for Thassa's Oracle's emptier with Oracle on
+    // the battlefield by then, as goOffNow reads it. A piece on our battlefield or our stack is cast already.
     // Never asked for a loop line, which has no winner: fetchable reads piece 1's lines alone under danger
     private static boolean winsInTime(final ComboTracker.View v, final ComboLines.Line l, final Fit fit,
             final boolean nextTurn) {
@@ -631,11 +632,12 @@ public final class ComboFetch {
             }
         }
         if (!ComboExecute.drawsAfter(w)) {
-            return spell != null && mana(ai, spell, nextTurn).pays(costs.toArray(new ManaCost[0]));
+            return spell != null && mana(ai, spell, oracleBefore(v, w, spell), nextTurn)
+                    .pays(costs.toArray(new ManaCost[0]));
         }
-        final ComboMana mana = spell == null ? null : mana(ai, spell, nextTurn);
+        final ComboMana mana = spell == null ? null : mana(ai, spell, null, nextTurn);
         for (final SpellAbility draw : ComboExecute.followUpDraws(v, before)) {
-            final ComboMana m = mana != null ? mana : mana(ai, draw, nextTurn);
+            final ComboMana m = mana != null ? mana : mana(ai, draw, null, nextTurn);
             final List<ManaCost> withDraw = new ArrayList<>(costs);
             withDraw.add(ComboExecute.priced(ai, draw));
             if (m.pays(withDraw.toArray(new ManaCost[0]))) {
@@ -645,10 +647,18 @@ public final class ComboFetch {
         return false;
     }
 
+    // our Thassa's Oracle when it comes ahead of spell, its emptier, and so can be given up for it
+    // (ComboExecute.goOffNow); null for any other winner, and for Oracle's own spell
+    private static Card oracleBefore(final ComboTracker.View v, final ComboLines.Winner w, final SpellAbility spell) {
+        return w != ComboLines.Winner.ORACLE || w.card.equals(ComboTracker.nameOf(spell.getHostCard())) ? null
+                : v.card(w.card);
+    }
+
     // the mana for sa of the main phase a fetched piece arrives for: this turn's, made now with the held sources left
-    // out, or our next turn's untapped mana
-    private static ComboMana mana(final Player ai, final SpellAbility sa, final boolean nextTurn) {
-        return nextTurn ? ComboMana.nextTurn(ai, sa) : ComboMana.of(ai, sa, true);
+    // out, or our next turn's untapped mana; a sacrifice for sa is read with entering on the battlefield (null: as it
+    // is)
+    private static ComboMana mana(final Player ai, final SpellAbility sa, final Card entering, final boolean nextTurn) {
+        return nextTurn ? ComboMana.nextTurn(ai, sa, entering) : ComboMana.of(ai, sa, sa, entering, true);
     }
 
     // the missing piece of the first fetchable line, by the tracker's rank, that the fetch may take and that the cards

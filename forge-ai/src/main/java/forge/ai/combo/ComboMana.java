@@ -35,15 +35,16 @@ import forge.game.zone.ZoneType;
  * battlefield source we control whose mana ability canPlay() (untapped, not summoning-sick, its restrictions met), has
  * no mana in its own cost, meets its conditions, may be spent on {@code sa}, is no "activate only as an instant"
  * ability (Lion's Eye Diamond: the AI's payer never taps one) and, when it sacrifices another permanent, gives up one
- * the AI's payer would give up for {@code sa} (ManaSacrifice.worthItBeforePaying: Phyrexian Altar's only creature, a
- * Craw Wurm, buys no Demonic Consultation), less the sources isManaSourceReserved holds when {@code skipHeld}. A source
- * makes one activation's mana: a fixed production its symbols (Karoo's "U B" a
- * {U} and a {B}), a choice production its amount of one kind among its letters (Command Tower one of its colours,
- * Gilded Lotus three of one colour), "AnyDifferent" one coloured and the rest generic only (an under-count), a
- * reflected, special or letterless production generic only. A source with several abilities of one mana each is one
- * mana of any of their kinds (Talisman's {C}, {U} or {B}); one whose abilities make more is tried ability by ability.
- * {@link #nextTurn} reads our next turn's mana instead (follow-up 2, G4): the same sources, whether or not they can be
- * activated now, and no pool.
+ * the AI's payer would give up for what it pays (ManaSacrifice.worthItBeforePaying: for {@code sa}, Phyrexian Altar's
+ * only creature, a Craw Wurm, buying no Constructed game's Demonic Consultation; for a go-off, what the payer gives up
+ * at the emptier's moment, {@link #of(Player, SpellAbility, SpellAbility, Card, boolean)}), less the sources
+ * isManaSourceReserved holds when {@code skipHeld}. A source makes one activation's mana: a fixed production its
+ * symbols (Karoo's "U B" a {U} and a {B}), a choice production its amount of one kind among its letters (Command Tower
+ * one of its colours, Gilded Lotus three of one colour), "AnyDifferent" one coloured and the rest generic only (an
+ * under-count), a reflected, special or letterless production generic only. A source with several abilities of one
+ * mana each is one mana of any of their kinds (Talisman's {C}, {U} or {B}); one whose abilities make more is tried
+ * ability by ability. {@link #nextTurn} reads our next turn's mana instead (follow-up 2, G4): the same sources, whether
+ * or not they can be activated now, and no pool.
  *
  * <p>A cost's coloured, colourless and hybrid pips must each meet a source of a kind that pays it (Hall's condition
  * over the kinds demanded, which is exact for one mana a source), and the sources must number its whole mana value.
@@ -82,14 +83,23 @@ final class ComboMana {
 
     /** The mana {@code ai} can make now for {@code sa}, held sources left out when {@code skipHeld}. */
     static ComboMana of(final Player ai, final SpellAbility sa, final boolean skipHeld) {
-        return read(ai, sa, null, skipHeld, false);
+        return read(ai, sa, sa, null, skipHeld, false);
     }
 
-    /** {@link #of}, for {@code sa} and a spell cast after it from the same mana: a source that sacrifices another
-     *  permanent counts only when the AI's payer would give that up for {@code then} as well (an under-count where it
-     *  would pay {@code sa} alone: the payer's order among its sources is not read). */
-    static ComboMana of(final Player ai, final SpellAbility sa, final SpellAbility then, final boolean skipHeld) {
-        return read(ai, sa, then, skipHeld, false);
+    /**
+     * {@link #of}, where a sacrifice pays {@code paidFor}, the last spell of the costs read, once {@code entering} is
+     * on the battlefield: a source that sacrifices another permanent counts when the AI's payer would give one up for
+     * {@code paidFor} at that moment, {@code entering} among them (null: the battlefield as it is). The go-off's own
+     * read: Thassa's Oracle's emptier is paid with Oracle in play and its trigger on the stack, so the payer can give
+     * up Oracle, which loses nothing, and keep the creature a read of today's board would have asked it for. In a
+     * Commander game it does (Consultation's worth of 202, the key card bonus in it, against Oracle's 125 and the
+     * margin of 60); in a Constructed game, at 52, it does not. A false "ready" on a source only Oracle's own cost
+     * needs, the fodder too dear for Oracle (Island, Swamp, Sol Ring, Phyrexian Altar and a Craw Wurm), is the safe
+     * side: the payer refuses the cast, and nothing is spent.
+     */
+    static ComboMana of(final Player ai, final SpellAbility sa, final SpellAbility paidFor, final Card entering,
+            final boolean skipHeld) {
+        return read(ai, sa, paidFor, entering, skipHeld, false);
     }
 
     /** The mana {@code ai} can make for {@code sa} in its own next turn, untapped (follow-up 2, G4: a piece put on top
@@ -100,12 +110,19 @@ final class ComboMana {
      *  mana, which empties before that turn, and no held source, the AI's card memory resetting at each end step
      *  (PlayerControllerAi.resetAtEndOfTurn). A land still to be played is not counted (the hand sources' under-count). */
     static ComboMana nextTurn(final Player ai, final SpellAbility sa) {
-        return read(ai, sa, null, false, true);
+        return nextTurn(ai, sa, null);
     }
 
-    // the mana of the sources, now (the pool, then each source whose mana ability canPlay()) or in our next turn
-    private static ComboMana read(final Player ai, final SpellAbility sa, final SpellAbility then,
-            final boolean skipHeld, final boolean nextTurn) {
+    /** {@link #nextTurn}, a sacrifice for {@code sa} read with {@code entering} on the battlefield by then (the
+     *  go-off's read, {@link #of(Player, SpellAbility, SpellAbility, Card, boolean)}). */
+    static ComboMana nextTurn(final Player ai, final SpellAbility sa, final Card entering) {
+        return read(ai, sa, sa, entering, false, true);
+    }
+
+    // the mana of the sources, now (the pool, then each source whose mana ability canPlay()) or in our next turn; a
+    // source is read against sa, its sacrifice against paidFor with entering on the battlefield
+    private static ComboMana read(final Player ai, final SpellAbility sa, final SpellAbility paidFor,
+            final Card entering, final boolean skipHeld, final boolean nextTurn) {
         final ComboMana m = new ComboMana();
         if (!nextTurn) {
             final ManaPool pool = ai.getManaPool();
@@ -131,8 +148,8 @@ final class ComboMana {
                 }
                 ma.setActivatingPlayer(ai);
                 if ((!nextTurn && !ma.canPlay()) || ma.getPayCosts().hasManaCost() || !ma.metConditions()
-                        || !spendable(mp, sa) || instantSpeed(ma) || !ManaSacrifice.worthItBeforePaying(ai, ma, sa)
-                        || !ManaSacrifice.worthItBeforePaying(ai, ma, then)) {
+                        || !spendable(mp, sa) || instantSpeed(ma)
+                        || !ManaSacrifice.worthItBeforePaying(ai, ma, paidFor, entering)) {
                     continue;
                 }
                 final int amount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma);

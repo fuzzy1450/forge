@@ -98,18 +98,25 @@ public final class ManaSacrifice {
      * {@link #worthIt} for a reading ahead of the payment, which must draw nothing: the same rule, with what would be
      * given up read as what the AI would miss least ({@link #chooseFodder}, the payment's own last resort), since the
      * payment's first choice shuffles (ComputerUtil.getCardPreference's SacMe list, which costs nothing here either
-     * way). Keeps nothing, and writes nothing.
+     * way). {@code entering}, unless null, is a card of ours not on the battlefield yet that will be there at the
+     * payment: it can be given up too when it fits the cost's type, valued as it reads now, a creature off the
+     * battlefield being as summoning-sick as one that has just entered. Keeps nothing, and writes nothing.
      */
-    public static boolean worthItBeforePaying(final Player ai, final SpellAbility ma, final SpellAbility paidFor) {
+    public static boolean worthItBeforePaying(final Player ai, final SpellAbility ma, final SpellAbility paidFor,
+            final Card entering) {
         final CostSacrifice part = sacrificePart(ma);
         if (part == null || ai == null || !ai.isAI() || paidFor == null || paidFor.isManaAbility()) {
             return true;
         }
         try {
             final int amount = part.getAbilityAmount(ma);
-            final CardCollection fodder = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
-                    part.getType().split(";"), ai, ma.getHostCard(), ma);
+            final String[] types = part.getType().split(";");
+            final CardCollection fodder = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), types, ai,
+                    ma.getHostCard(), ma);
             fodder.removeIf(c -> !c.canBeSacrificedBy(ma, false) || AiCardMemory.isRememberedCard(ai, c, MemorySet.PAYS_SAC_COST));
+            if (entering != null && entering.isValid(types, ai, ma.getHostCard(), ma)) {
+                fodder.add(entering);
+            }
             if (fodder.size() < amount) {
                 return true; // the payment code will find out that nothing can be sacrificed
             }

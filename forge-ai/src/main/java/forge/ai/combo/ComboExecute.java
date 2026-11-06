@@ -95,10 +95,12 @@ public final class ComboExecute {
     /**
      * Whether Thassa's Oracle goes off now (section 6.4): an {@link ComboTracker#executable} line whose winner is
      * Oracle, not denied this turn (its emptier castable at Oracle's trigger this turn), has its emptier in our hand,
-     * and the mana we can make now ({@code ComboMana.of(ai, oracleCast, emptier, true)}) pays Oracle's cost and the
-     * emptier's together, each source assigned to one pip: {U}{U} and Consultation's {B} or Pact's {1}{B}, each cost as the engine
-     * prices it now ({@link #priced}, follow-up 2, G3: under an opponent's Thalia, Guardian of Thraben, Consultation's
-     * {1}{B}).
+     * and the mana we can make now pays Oracle's cost and the emptier's together, each source assigned to one pip:
+     * {U}{U} and Consultation's {B} or Pact's {1}{B}, each cost as the engine prices it now ({@link #priced}, follow-up
+     * 2, G3: under an opponent's Thalia, Guardian of Thraben, Consultation's {1}{B}). A source that sacrifices a
+     * permanent is read as the payer will meet it at the emptier's moment ({@link ComboMana#of(Player, SpellAbility,
+     * SpellAbility, Card, boolean)}): Oracle is in play by then, and its trigger on the stack, so it can be the
+     * sacrifice itself.
      */
     public static boolean goOffNow(final Player ai, final SpellAbility oracleCast) {
         final ComboTracker t = ComboTracker.of(ai);
@@ -179,8 +181,9 @@ public final class ComboExecute {
             if (oracle == null) {
                 oracle = priced(ai, oracleCast);
             }
-            // read for this emptier: the payer asks of a sacrifice what the spell it pays for is worth
-            if (ComboMana.of(ai, oracleCast, emptier, true).pays(oracle, priced(ai, emptier))) {
+            // read for this emptier: the payer asks of a sacrifice what the spell it pays for is worth, Oracle in play
+            final Card entering = oracleCast.getHostCard();
+            if (ComboMana.of(ai, oracleCast, emptier, entering, true).pays(oracle, priced(ai, emptier))) {
                 return true;
             }
         }
@@ -193,7 +196,8 @@ public final class ComboExecute {
      * Oracle cast and still on our stack, or its entering trigger there) and the cost only stops a draw for opponents
      * of ours ({@link #opponentsDraw}: an opponent's Rhystic Study, "you may draw a card unless that player pays {1}").
      * Each line of {@link #goOffNow}'s (executable, Oracle its winner, not denied this turn) with its emptier in our
-     * hand, whose engine price the mana we can make now pays alone, is read in turn:
+     * hand, whose engine price the mana we can make now pays alone, read as {@link #goOffNow} reads it (a sacrifice can
+     * give up an Oracle still on our stack, in play by the emptier's moment), is read in turn:
      * <ul>
      * <li>kept, when some of our sources pay that emptier alone while the rest and the floating pool pay the unless
      * cost's mana ({@link ComboMana#hold}): the first kept line's sources are held from the payer (payHolding) and the
@@ -218,7 +222,8 @@ public final class ComboExecute {
             return null;
         }
         final ComboTracker.View v = t.view();
-        if (!v.triggerOnOurStack(Winner.ORACLE.card) && !oracleCastOnOurStack(ai)) {
+        final Card oracleOnStack = oracleCastOnOurStack(ai);
+        if (!v.triggerOnOurStack(Winner.ORACLE.card) && oracleOnStack == null) {
             return null;
         }
         ManaCost unless = null;
@@ -232,7 +237,7 @@ public final class ComboExecute {
             if (emptier == null) {
                 continue;
             }
-            final ComboMana mana = ComboMana.of(ai, emptier, true);
+            final ComboMana mana = ComboMana.of(ai, emptier, emptier, oracleOnStack, true);
             final ManaCost emptierCost = priced(ai, emptier);
             if (!mana.pays(emptierCost)) {
                 continue;
@@ -296,16 +301,16 @@ public final class ComboExecute {
         return Iterables.getFirst(v.card(e.card).getSpells(), null);
     }
 
-    // our Thassa's Oracle cast and still on our stack: its emptier is still to be cast after its trigger
-    private static boolean oracleCastOnOurStack(final Player ai) {
+    // our Thassa's Oracle cast and still on our stack, its emptier still to be cast after its trigger, or null
+    private static Card oracleCastOnOurStack(final Player ai) {
         for (final SpellAbilityStackInstance si : ai.getGame().getStack()) {
             final Card host = si.getSourceCard();
             if (si.isSpell() && host != null && ai.equals(si.getActivatingPlayer())
                     && Winner.ORACLE.card.equals(ComboTracker.nameOf(host))) {
-                return true;
+                return host;
             }
         }
-        return false;
+        return null;
     }
 
     // the unless cost only stops a draw for opponents of ours, which cannot stop a go-off: sa is a Draw, untargeted,
