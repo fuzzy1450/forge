@@ -95,8 +95,8 @@ public final class ComboExecute {
     /**
      * Whether Thassa's Oracle goes off now (section 6.4): an {@link ComboTracker#executable} line whose winner is
      * Oracle, not denied this turn (its emptier castable at Oracle's trigger this turn), has its emptier in our hand,
-     * and the mana we can make now ({@code ComboMana.of(ai, oracleCast, true)}) pays Oracle's cost and the emptier's
-     * together, each source assigned to one pip: {U}{U} and Consultation's {B} or Pact's {1}{B}, each cost as the engine
+     * and the mana we can make now ({@code ComboMana.of(ai, oracleCast, emptier, true)}) pays Oracle's cost and the
+     * emptier's together, each source assigned to one pip: {U}{U} and Consultation's {B} or Pact's {1}{B}, each cost as the engine
      * prices it now ({@link #priced}, follow-up 2, G3: under an opponent's Thalia, Guardian of Thraben, Consultation's
      * {1}{B}).
      */
@@ -167,7 +167,6 @@ public final class ComboExecute {
      *  denied now, or its emptier barred at Oracle's trigger this turn. An executable line whose window this turn is
      *  barred (Deafening Silence after a noncreature spell this turn) waits for a later turn, Oracle held for it. */
     static boolean goOffNow(final Player ai, final SpellAbility oracleCast, final ComboTracker.View v) {
-        ComboMana mana = null;
         ManaCost oracle = null;
         for (final ComboLines.Line l : v.executable()) {
             if (l.winner() != ComboLines.Winner.ORACLE || v.deniedThisTurn(l)) {
@@ -177,11 +176,11 @@ public final class ComboExecute {
             if (emptier == null) {
                 continue;
             }
-            if (mana == null) {
-                mana = ComboMana.of(ai, oracleCast, true);
+            if (oracle == null) {
                 oracle = priced(ai, oracleCast);
             }
-            if (mana.pays(oracle, priced(ai, emptier))) {
+            // read for this emptier: the payer asks of a sacrifice what the spell it pays for is worth
+            if (ComboMana.of(ai, oracleCast, emptier, true).pays(oracle, priced(ai, emptier))) {
                 return true;
             }
         }

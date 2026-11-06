@@ -94,6 +94,37 @@ public final class ManaSacrifice {
         }
     }
 
+    /**
+     * {@link #worthIt} for a reading ahead of the payment, which must draw nothing: the same rule, with what would be
+     * given up read as what the AI would miss least ({@link #chooseFodder}, the payment's own last resort), since the
+     * payment's first choice shuffles (ComputerUtil.getCardPreference's SacMe list, which costs nothing here either
+     * way). Keeps nothing, and writes nothing.
+     */
+    public static boolean worthItBeforePaying(final Player ai, final SpellAbility ma, final SpellAbility paidFor) {
+        final CostSacrifice part = sacrificePart(ma);
+        if (part == null || ai == null || !ai.isAI() || paidFor == null || paidFor.isManaAbility()) {
+            return true;
+        }
+        try {
+            final int amount = part.getAbilityAmount(ma);
+            final CardCollection fodder = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                    part.getType().split(";"), ai, ma.getHostCard(), ma);
+            fodder.removeIf(c -> !c.canBeSacrificedBy(ma, false) || AiCardMemory.isRememberedCard(ai, c, MemorySet.PAYS_SAC_COST));
+            if (fodder.size() < amount) {
+                return true; // the payment code will find out that nothing can be sacrificed
+            }
+            int cost = 0;
+            for (int i = 0; i < amount; i++) {
+                final Card c = chooseFodder(ai, fodder);
+                cost += sacrificeValue(ai, c);
+                fodder.remove(c);
+            }
+            return cost <= FODDER_MAX * amount || worth(ai, paidFor) >= cost + MARGIN;
+        } catch (final RuntimeException e) {
+            return true; // a refinement only, as in worthIt
+        }
+    }
+
     /** Whether the mana of this ability can be planned on: something that costs next to nothing can be given up. */
     public static boolean hasExpendableFodder(final Player p, final SpellAbility ma) {
         final CostSacrifice part = sacrificePart(ma);
