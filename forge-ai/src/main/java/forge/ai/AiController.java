@@ -963,7 +963,8 @@ public class AiController {
     // at once, again and again until PhaseHandler's 999-actions cap (a skip lasts one choice, see
     // getSpellAbilityToPlay, and an alternative-cost copy never carries it). Two failures in a phase end its tries:
     // every spell and ability of the card is refused for the rest of the phase, as the stock failure branch skips
-    // all of a card's spells. Nothing here is read or written while no payment has failed (the map stays empty).
+    // all of a card's spells. The map stays empty until a payment fails or a cast is given up before its payment
+    // (rememberAbandonedCast), so until then the check at each cast is one isEmpty.
     private static final int FAILED_CAST_TRIES = 2;
     // (by card, for the phase; upstream's failedCasts above keeps its own by cast, for the turn)
     private final java.util.Map<Card, Integer> failedPayments = new java.util.HashMap<>();

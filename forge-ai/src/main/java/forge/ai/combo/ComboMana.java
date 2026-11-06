@@ -96,10 +96,14 @@ final class ComboMana {
      * {@code paidFor} at that moment, {@code entering} among them (null: the battlefield as it is). The go-off's own
      * read: Thassa's Oracle's emptier is paid with Oracle in play and its trigger on the stack, so the payer can give
      * up Oracle, which loses nothing, and keep the creature a read of today's board would have asked it for. In a
-     * Commander game it does (Consultation's worth of 202, the key card bonus in it, against Oracle's 125 and the
-     * margin of 60); in a Constructed game, at 52, it does not. A false "ready" on a source only Oracle's own cost
-     * needs, the fodder too dear for Oracle (Island, Swamp, Sol Ring, Phyrexian Altar and a Craw Wurm), is the safe
-     * side: the payer refuses the cast, and nothing is spent.
+     * Commander game on a plain board it does (Consultation's worth of 202, the key card bonus in it, against Oracle's
+     * 125 and the margin of 60); in a Constructed game, at 52, it does not. The read takes Oracle's value off the
+     * battlefield, the 125 of ManaSacrifice.worthItBeforePaying, so under our own anthem or haste it reads ready where
+     * the payer refuses: at the payment Oracle is 145 under Glorious Anthem, past Consultation's 142, and 156 under Fervor
+     * or Rising of the Day, past Tainted Pact's 154 too, and Oracle's trigger resolves on a full library. That false
+     * "ready" is not the safe side. A false "ready" on a source only Oracle's own cost needs, the fodder too dear for
+     * Oracle (Island, Swamp, Sol Ring, Phyrexian Altar and a Craw Wurm), is: the payer refuses the cast, and nothing is
+     * spent.
      */
     static ComboMana of(final Player ai, final SpellAbility sa, final SpellAbility paidFor, final Card entering,
             final boolean skipHeld) {

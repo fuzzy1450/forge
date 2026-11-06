@@ -99,8 +99,11 @@ public final class ManaSacrifice {
      * given up read as what the AI would miss least ({@link #chooseFodder}, the payment's own last resort), since the
      * payment's first choice shuffles (ComputerUtil.getCardPreference's SacMe list, which costs nothing here either
      * way). {@code entering}, unless null, is a card of ours not on the battlefield yet that will be there at the
-     * payment: it can be given up too when it fits the cost's type, valued as it reads now, a creature off the
-     * battlefield being as summoning-sick as one that has just entered. Keeps nothing, and writes nothing.
+     * payment: it can be given up too when it fits the cost's type, valued as it reads now. A creature off the battlefield
+     * is as summoning-sick as one that has just entered, so that is its value at the payment on a plain board, but no
+     * static ability reaches it here: under our own anthem or haste it reads less than the payer will read it (Thassa's
+     * Oracle 125, against 145 under Glorious Anthem and 156 under Fervor), and this can answer yes where the payer
+     * then refuses. Keeps nothing, and writes nothing.
      */
     public static boolean worthItBeforePaying(final Player ai, final SpellAbility ma, final SpellAbility paidFor,
             final Card entering) {
