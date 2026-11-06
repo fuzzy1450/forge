@@ -981,6 +981,20 @@ public class AiController {
 
     public void rememberFailedCast(final Card c) {
         rolledBackPayments++;
+        countFailedCast(c);
+    }
+
+    /**
+     * A cast ComputerUtil gave up before its payment (no Charm mode, too few deferred targets) counts toward the card's
+     * tries as a failed payment does, whoever made the cast. It is no rolled-back payment: the game loop's
+     * PlayerControllerAi.playWithRollback still keeps it in upstream's failedCasts as well, so that cast is refused for
+     * the turn at its first failure, as upstream has it, and every play of the card for the phase at its second.
+     */
+    public void rememberAbandonedCast(final Card c) {
+        countFailedCast(c);
+    }
+
+    private void countFailedCast(final Card c) {
         final forge.game.phase.PhaseHandler ph = game.getPhaseHandler();
         if (ph.getTurn() != failedPaymentsTurn || ph.getPhase() != failedPaymentsPhase) {
             failedPayments.clear();

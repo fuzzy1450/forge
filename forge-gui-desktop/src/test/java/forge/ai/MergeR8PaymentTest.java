@@ -32,6 +32,7 @@ public class MergeR8PaymentTest extends AITest {
     private static final String ELVES = "Llanowar Elves";
     private static final String BEARS = "Grizzly Bears";
     private static final String BOLT = "Lightning Bolt";
+    private static final String CHARM = "Bant Charm";
     private static final String WRAITH = "Street Wraith";
 
     private Game game;
@@ -219,6 +220,74 @@ public class MergeR8PaymentTest extends AITest {
         brain.rememberFailedCast(host);
         assertEquals("two in the new phase end its tries", AiPlayDecision.CantPlaySa, payability(sa));
     }
+    /** Our spell of {@code name} in hand, read again: a cast given up left its old object in the stack zone's copy. */
+    private SpellAbility again(final String name) {
+        final SpellAbility sa = first(ai, ZoneType.Hand, name).getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+        return sa;
+    }
+
+    /**
+     * The two exits before the payment (ComputerUtil.abandonBeforePayment) count toward the card's two tries a phase,
+     * whoever called: too few deferred targets, here, and no Charm mode below. They are no rolled-back payment, so the
+     * game loop's playWithRollback also keeps them in upstream's memory (the two tests after these).
+     */
+    @Test(timeOut = 120_000)
+    public void aCastGivenUpForItsTargetsCountsTowardTheTwoTries() throws Exception {
+        start();
+        addCard("Mountain", ai);
+        spellIn(BOLT);
+
+        assertFalse(ComputerUtil.handlePlayingSpellAbility(ai, again(BOLT), s -> { }));
+        assertEquals(1, count(ai, ZoneType.Hand, BOLT));
+        assertTrue("one failure leaves its retry", AiPlayDecision.CantPlaySa != payability(again(BOLT)));
+
+        assertFalse(ComputerUtil.handlePlayingSpellAbility(ai, again(BOLT), s -> { }));
+        assertEquals("two end its tries for the phase", AiPlayDecision.CantPlaySa, payability(again(BOLT)));
+        assertEquals("it paid nothing, so nothing was rolled back", 0, brain.getRolledBackPaymentCount());
+        assertFalse("and upstream's memory is the game loop's to keep", brain.hasFailedToCast(again(BOLT)));
+    }
+
+    /** Bant Charm on an empty board: each of its modes needs a target, so no mode can be chosen. */
+    @Test(timeOut = 120_000)
+    public void aCharmWithNoModeIsTakenBackAndCountsTowardTheTwoTries() throws Exception {
+        start();
+        spellIn(CHARM);
+
+        assertFalse(ComputerUtil.handlePlayingSpellAbility(ai, again(CHARM), null));
+        assertEquals("back in hand", 1, count(ai, ZoneType.Hand, CHARM));
+        assertEquals("not lost in the stack zone", 0, game.getCardsIn(ZoneType.Stack).size());
+        assertTrue("one failure leaves its retry", AiPlayDecision.CantPlaySa != payability(again(CHARM)));
+
+        assertFalse(ComputerUtil.handlePlayingSpellAbility(ai, again(CHARM), null));
+        assertEquals("two end its tries for the phase", AiPlayDecision.CantPlaySa, payability(again(CHARM)));
+        assertEquals(0, brain.getRolledBackPaymentCount());
+    }
+
+    @Test(timeOut = 120_000)
+    public void theGameLoopKeepsACastGivenUpForItsTargetsInUpstreamsMemory() {
+        start();
+        spellIn(BOLT);
+        final SpellAbility sa = again(BOLT);
+
+        assertFalse(pc.playWithRollback(sa, s -> { }));
+
+        assertTrue("one failure ends this cast's turn, as upstream's abandonCast has it", brain.hasFailedToCast(sa));
+        assertEquals(0, brain.getRolledBackPaymentCount());
+    }
+
+    @Test(timeOut = 120_000)
+    public void theGameLoopKeepsACharmWithNoModeInUpstreamsMemory() {
+        start();
+        spellIn(CHARM);
+        final SpellAbility sa = again(CHARM);
+
+        assertFalse(pc.playWithRollback(sa, null));
+
+        assertTrue(brain.hasFailedToCast(sa));
+        assertEquals(1, count(ai, ZoneType.Hand, CHARM));
+    }
+
     /** FlatMonteCarloComboTest's Living End list in the AI's library: its cycling is ComboPlan's Ruling.PLAY. */
     private void livingEndGame() {
         game = initAndCreateGame();

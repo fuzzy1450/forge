@@ -139,14 +139,14 @@ public class ComputerUtil {
 
         if (sa.getApi() == ApiType.Charm && !CharmEffect.makeChoices(sa)) {
             // 603.3c If no mode is chosen, the ability is removed from the stack.
-            abandonBeforePayment(game, sa, hz, movedToStack);
+            abandonBeforePayment(ai, game, sa, source, hz, movedToStack);
             return false;
         }
         if (chooseTargets != null) {
             chooseTargets.accept(sa);
             if (!sa.isTargetNumberValid()) {
                 // the spell is already in the stack zone: it has to go back, or it is lost
-                abandonBeforePayment(game, sa, hz, movedToStack);
+                abandonBeforePayment(ai, game, sa, source, hz, movedToStack);
                 return false;
             }
         }
@@ -237,13 +237,17 @@ public class ComputerUtil {
      * abandonCast for a cast given up before anything is paid (no Charm mode chosen, too few targets): nothing of this
      * attempt is in the paying lists, but an activated ability is one SpellAbility for its card's life, so they may
      * still hold its last activation's mana, which the refund would hand back -- mana that pays twice, a source
-     * untapped for free. They are emptied first, as before the AI pays (the seed-11 fix's afd3ddaf581).
+     * untapped for free. They are emptied first, as before the AI pays (the seed-11 fix's afd3ddaf581). The card counts
+     * the failure (AiController.rememberAbandonedCast), so the seed-11 rule ends its tries on every path here.
      */
-    private static void abandonBeforePayment(final Game game, final SpellAbility sa, final Zone fromZone,
-                                             final boolean movedToStack) {
+    private static void abandonBeforePayment(final Player ai, final Game game, final SpellAbility sa, final Card source,
+                                             final Zone fromZone, final boolean movedToStack) {
         sa.clearManaPaid();
         sa.getPayingManaAbilities().clear();
         abandonCast(game, sa, fromZone, movedToStack, new CostPayment(sa.getPayCosts(), sa));
+        if (ai.getController() instanceof PlayerControllerAi pca) {
+            pca.getAi().rememberAbandonedCast(source);
+        }
     }
 
     private static boolean hasDiscardHandCost(final Cost cost) {
