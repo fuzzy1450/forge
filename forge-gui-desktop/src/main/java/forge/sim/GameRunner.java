@@ -241,6 +241,16 @@ public class GameRunner {
      *  of the calling thread while it waits is a cancellation request: the game is cancelled as on a timeout, its slot
      *  is returned, and InterruptedException is thrown with the interrupt status left set. */
     public GameResult play(GameSpec spec, Consumer<Game> observer) throws InterruptedException {
+        return play(spec, observer, null);
+    }
+
+    /** {@link #play(GameSpec, Consumer)} with a stop: when {@code atFirstTurn} is not null it runs once, on the game
+     *  thread under the game's scope, just before turn 1's first priority (the mulligans and the opening-hand actions
+     *  done, nothing else), and the game ends there. Such a game did not finish, so its result says Error; a caller that
+     *  got what it came for ignores that. It is thrown away, so the hook may read what a live game must not: its scans
+     *  take ids no later decision meets. Null is the game's own path: {@code Match.startGame(g)} passes null on. The
+     *  plan verb's read (MTG_DeckMaker's tools/combo-ai/f5-guard/SPEC.md, section 3.1). */
+    public GameResult play(GameSpec spec, Consumer<Game> observer, Consumer<Game> atFirstTurn) throws InterruptedException {
         if (!booted) {
             throw new IllegalStateException("GameRunner.boot() first");
         }
@@ -255,7 +265,7 @@ public class GameRunner {
                 throw new PoisonedException();
             }
             SimScope scope = new SimScope(spec.seed());
-            Body body = new Body(spec, players, scope, observer);
+            Body body = new Body(spec, players, scope, observer, atFirstTurn);
             Thread t = new Thread(body, "Game-sim-" + slot);       // the "Game" prefix: ThreadUtil.isGameThread()
             t.setDaemon(true);
             long violationsAtStart = SimScope.VIOLATIONS.get();
@@ -400,16 +410,19 @@ public class GameRunner {
         final List<RegisteredPlayer> players;
         final SimScope scope;
         final Consumer<Game> observer;
+        final Consumer<Game> atFirstTurn;
         final Stats stats = new Stats();
         volatile Game game;
         volatile String error;
         volatile boolean finished;
 
-        Body(GameSpec spec, List<RegisteredPlayer> players, SimScope scope, Consumer<Game> observer) {
+        Body(GameSpec spec, List<RegisteredPlayer> players, SimScope scope, Consumer<Game> observer,
+             Consumer<Game> atFirstTurn) {
             this.spec = spec;
             this.players = players;
             this.scope = scope;
             this.observer = observer;
+            this.atFirstTurn = atFirstTurn;
         }
 
         @Override
@@ -435,9 +448,12 @@ public class GameRunner {
                     g.subscribeToEvents(stats);
                     game = g;
                     observer.accept(g);                               // the records' subscriber attaches here (harness-in-engine spec 3.2)
-                    match.startGame(g);
+                    match.startGame(g, atFirstTurn == null ? null : () -> {
+                        atFirstTurn.accept(g);
+                        throw new GameAbandoned();                    // the first-turn stop: no catch stands between here and below
+                    });
                 } catch (GameAbandoned abandoned) {
-                    return;                                           // cancelled from outside: the verdict is already Timeout
+                    return;                                           // cancelled from outside, the verdict already Timeout; or the first-turn stop
                 } catch (OutOfMemoryError oom) {
                     throw oom;                                        // not a game result: the uncaught handler halts
                 } catch (Throwable t) {

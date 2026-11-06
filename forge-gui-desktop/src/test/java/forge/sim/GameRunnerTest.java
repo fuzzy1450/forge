@@ -5,6 +5,7 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.testng.Assert;
@@ -12,6 +13,9 @@ import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import forge.game.GameStage;
+import forge.game.phase.PhaseType;
+import forge.game.zone.ZoneType;
 import forge.sim.GameRunner.GameResult;
 import forge.sim.GameRunner.GameSpec;
 import forge.sim.GameRunner.SeatSpec;
@@ -253,5 +257,67 @@ public class GameRunnerTest {
         });
         Assert.assertEquals(seen.get(), "false,false,false,false,false", r.toString());
         Assert.assertEquals(r.endReason(), "Error", r.toString());
+    }
+
+    /**
+     * The stop the plan verb stands on (F5 guard spec 3.1): the hook runs once, on the game thread under the game's scope,
+     * with the mulligans done and turn 1 begun, before any priority, and the game ends there. It reads as Error, the
+     * verdict of a game that did not finish, and the runner is none the worse: no thread is left, the slot came back, and
+     * the next game of the same runner plays what a fresh runner plays.
+     */
+    @Test(timeOut = 300_000)
+    public void theFirstTurnHookStopsTheGameAndLeavesNoThread() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<String> thread = new AtomicReference<>();
+        AtomicBoolean underScope = new AtomicBoolean(false);
+        AtomicReference<String> where = new AtomicReference<>();
+        AtomicInteger inHands = new AtomicInteger();
+        GameResult stopped = runner.play(spec(7_000_000L, 300), g -> { }, g -> {
+            calls.incrementAndGet();
+            thread.set(Thread.currentThread().getName());
+            underScope.set(SimScope.current() != null);
+            where.set(g.getAge() + " turn " + g.getPhaseHandler().getTurn() + " " + g.getPhaseHandler().getPhase()
+                    + " stack " + g.getStack().size());
+            for (forge.game.player.Player p : g.getRegisteredPlayers()) {
+                inHands.addAndGet(p.getCardsIn(ZoneType.Hand).size());
+            }
+        });
+        Assert.assertEquals(calls.get(), 1, "the hook ran once");
+        Assert.assertTrue(thread.get().startsWith("Game-sim-"), thread.get());
+        Assert.assertTrue(underScope.get(), "the hook runs under the game's scope");
+        Assert.assertEquals(where.get(), GameStage.Play + " turn 1 " + PhaseType.UNTAP + " stack 0",
+                "the mulligans are done, turn 1 has begun and nobody has had priority");
+        Assert.assertTrue(inHands.get() > 0, "the hands were dealt: " + inHands.get());
+        Assert.assertEquals(stopped.endReason(), "Error", stopped.toString());
+        Assert.assertEquals(stopped.error(), "game ended without finishing", stopped.toString());
+        Assert.assertFalse(stopped.timedOut(), stopped.toString());
+        Assert.assertEquals(stopped.turns(), 1, "the game stopped on the turn it began: " + stopped);
+        Assert.assertEquals(stopped.violations(), 0L, stopped.toString());
+        Assert.assertFalse(runner.isPoisoned());
+        for (Thread t : Thread.getAllStackTraces().keySet()) {
+            Assert.assertFalse(t.getName().startsWith("Game-sim-"), "game thread still alive: " + t.getName());
+        }
+        GameSpec another = spec(7_000_001L, 300);
+        GameResult next = runner.play(another);                    // the same runner: its one slot came back
+        GameResult fresh = new GameRunner(1).play(another);
+        Assert.assertTrue(DECIDED.contains(next.endReason()), next.toString());
+        Assert.assertEquals(next.digest(), fresh.digest(), "the stopped game left nothing the next game reads");
+        Assert.assertEquals(next.digestLines(), fresh.digestLines());
+    }
+
+    /** With no hook a game keeps its path: play(spec) is play(spec, observer, null), and a null hook is what
+     *  Match.startGame(game) passes on. */
+    @Test(timeOut = 300_000)
+    public void aGamesPathIsUnchanged() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        GameSpec spec = spec(7_000_000L, 300);
+        GameResult plain = runner.play(spec);
+        GameResult noHook = runner.play(spec, g -> { }, null);
+        Assert.assertTrue(DECIDED.contains(plain.endReason()), plain.toString());
+        Assert.assertNull(plain.error(), plain.toString());
+        Assert.assertTrue(plain.turns() > 1, "a whole game, not one stopped at its first turn: " + plain);
+        Assert.assertEquals(noHook.digest(), plain.digest());
+        Assert.assertEquals(noHook.digestLines(), plain.digestLines());
     }
 }
