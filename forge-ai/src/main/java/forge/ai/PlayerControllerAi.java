@@ -922,15 +922,28 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public boolean mulliganKeepHand(Player firstPlayer, int cardsToReturn)  {
+        final int stillToReturn = cardsStillToReturn(cardsToReturn);
         if (brains.useSmartMulligan()) {
             try {
-                return OpeningHand.keep(player, player.getCardsIn(ZoneType.Hand), cardsToReturn,
+                return OpeningHand.keep(player, player.getCardsIn(ZoneType.Hand), stillToReturn,
                         firstPlayer == player, brains.deckPlan(player), brains.getIntProperty(AiProps.MULLIGAN_THRESHOLD));
             } catch (final RuntimeException e) {
                 // fall back to the standard rule below
             }
         }
-        return !ComputerUtil.wantMulligan(player, cardsToReturn);
+        return !ComputerUtil.wantMulligan(player, stillToReturn);
+    }
+
+    /**
+     * What is left of the count MulliganService passes, the rule's whole tuck, for the keep rules to take off the hand.
+     * London tucks as it draws, up to the maximum hand size, and the service asks after that, so those cards have gone
+     * already and a second subtraction would judge a six-card hand as five and keep any five as three. Houston draws past
+     * that size and tucks after the keep (no other rule tucks), so what stands above it is still to go back. Reads two
+     * sizes and draws nothing.
+     */
+    private int cardsStillToReturn(final int cardsToReturn) {
+        final int overMaximum = player.getCardsIn(ZoneType.Hand).size() - player.getMaxHandSize();
+        return Math.max(0, Math.min(cardsToReturn, overMaximum));
     }
 
     @Override
