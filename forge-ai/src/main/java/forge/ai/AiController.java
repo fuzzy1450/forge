@@ -1476,18 +1476,22 @@ public class AiController {
     public CardCollection getCardsToDiscard(final int min, final int max, final CardCollection validCards, final SpellAbility sa) {
         if (validCards.size() > min) {
             final ComboPlan combos = deckPlan(player).combos;
-            // a deck that wants creatures in the graveyard throws away the right ones. Combo-aware AI, piece 1 (spec
-            // 2026-10-22-combo-aware-ai-core-design.md sections 6.2 and 6.4): it picks among the cards ComboHold.spare
-            // leaves, as chooseCardsToDiscard's own pick does, so no deck plan throws away a live combo line's piece.
-            // Inert (the list itself) for a deck holding no combo line. Draws nothing.
-            final CardCollection forCombo = combos.preferredDiscards(player, ComboHold.spare(player, validCards, min), min);
+            // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md sections 6.2 and 6.4): both of
+            // upstream's deciders below read the cards ComboHold.spare leaves, as chooseCardsToDiscard's own pick does,
+            // so neither throws away a live combo line's piece, and its fall-through below spares again. Inert (the
+            // list itself) for a deck holding no combo line. Draws nothing.
+            final CardCollection spared = ComboHold.spare(player, validCards, min);
+            // a deck that wants creatures in the graveyard throws away the right ones
+            final CardCollection forCombo = combos.preferredDiscards(player, spared, min);
             if (forCombo != null) {
                 return forCombo;
             }
-            // and no deck throws away its win card while something else will do
+            // and no deck throws away its win card while something else will do. When too few cards are left without
+            // the spared ones, a pair's piece goes before a line's: chooseCardsToDiscard returns a list of min cards
+            // unread, so it is handed this one only when it holds no spared piece
             final CardCollection safe = deckPlan(player).commander.withoutProtected(player,
-                    combos.withoutProtected(validCards));
-            if (safe.size() >= min && safe.size() < validCards.size()) {
+                    combos.withoutProtected(spared));
+            if (safe.size() >= min && safe.size() < spared.size()) {
                 return chooseCardsToDiscard(min, max, safe, sa);
             }
         }
