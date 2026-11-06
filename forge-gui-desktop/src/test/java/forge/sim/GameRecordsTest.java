@@ -18,6 +18,9 @@ public class GameRecordsTest {
     static final List<String> RECORD_KEYS = List.of("game", "seed", "winner_seat", "end_reason", "turns",
             "first_seat", "ms", "error", "win_reason", "win_card", "seats", "cards");
     static final List<String> SEAT_KEYS = List.of("seat", "deck_hash", "profile", "ai", "final_life", "mulligans",
+            "lands_played", "spells_cast", "commander_casts", "eliminated_turn", "seen_not_kept");
+    /** fallbackRecord reads no collection Stats keeps, so it writes no seen_not_kept: absent says not recorded. */
+    static final List<String> FALLBACK_SEAT_KEYS = List.of("seat", "deck_hash", "profile", "ai", "final_life", "mulligans",
             "lands_played", "spells_cast", "commander_casts", "eliminated_turn");
     static final List<String> CARD_KEYS = List.of("seat", "name", "in_opening_hand", "first_drawn_turn",
             "times_cast", "first_cast_turn", "owner_casts", "owner_first_cast_turn", "died", "final_zone");
@@ -159,7 +162,7 @@ public class GameRecordsTest {
         @SuppressWarnings("unchecked") List<Map<String, Object>> recSeats = (List<Map<String, Object>>) rec.get("seats");
         Assert.assertEquals(recSeats.size(), 2);
         for (Map<String, Object> s : recSeats) {
-            Assert.assertEquals(new ArrayList<>(s.keySet()), SEAT_KEYS);
+            Assert.assertEquals(new ArrayList<>(s.keySet()), FALLBACK_SEAT_KEYS);
         }
         String full = "the runner's error | record failed: java.lang.IllegalStateException: " + longMessage;
         Assert.assertEquals(rec.get("error"), full.substring(0, 400), "the runner's error, then the failure, cut at 400");

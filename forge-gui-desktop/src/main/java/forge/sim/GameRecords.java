@@ -2,11 +2,13 @@ package forge.sim;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
 import com.google.common.eventbus.Subscribe;
 
@@ -61,6 +63,8 @@ public final class GameRecords {
         final Map<Integer, String> cardName = new HashMap<>();    // CardView id -> paper name
         final Set<Integer> commanderIds = new java.util.HashSet<>();
         final List<Map<String, CardStat>> cards = new ArrayList<>();
+        // One set per seat, by view id, filled only in onZone: the seat's deck cards out of its hand before turn 1.
+        final List<Set<Integer>> notKept = new ArrayList<>();
         final int[] mulligans, landsPlayed, spellsCast, commanderCasts;
         final Integer[] eliminatedTurn;
         Integer firstSeat = null;
@@ -72,7 +76,10 @@ public final class GameRecords {
             mulligans = new int[nSeats]; landsPlayed = new int[nSeats];
             spellsCast = new int[nSeats]; commanderCasts = new int[nSeats];
             eliminatedTurn = new Integer[nSeats];
-            for (int i = 0; i < nSeats; i++) cards.add(new TreeMap<>());
+            for (int i = 0; i < nSeats; i++) {
+                cards.add(new TreeMap<>());
+                notKept.add(new HashSet<>());
+            }
         }
 
         /** A Stats with no game: JobRunner's, for a game whose observer never ran. {@link GameRecords#record} reads it
@@ -193,13 +200,22 @@ public final class GameRecords {
 
         @Subscribe
         public void onZone(GameEventCardChangeZone ev) {
-            // Nothing before turn 1 counts. GameAction.startGame fires GameEventGameStarted,
+            // No card row before turn 1. GameAction.startGame fires GameEventGameStarted,
             // then draws and runs MulliganService, and only then starts turn 1 — so every
             // pre-game draw, including the hands a player mulliganed away, arrives here
-            // while turn == 0. Recording those would bias first_drawn_turn by the very
-            // thing being measured, and a card seen only in a hand that went back must
-            // leave no row at all. onTurn's turn-1 snapshot stamps the hand that was kept.
-            if (turn < 1) return;
+            // while turn == 0. A row for those would bias first_drawn_turn by the very
+            // thing being measured, so a card seen only in a hand that went back leaves
+            // no row: it goes in notKept, the seat's seen_not_kept, while onTurn's turn-1
+            // snapshot stamps the hand that was kept. Ids and zones only: a read on a Card
+            // here could build what a game reads later (F5 guard spec 3.4).
+            if (turn < 1) {
+                if (ev.card() == null) return;
+                Integer seat = cardSeat.get(ev.card().getId());
+                if (seat == null) return;                         // no paper card, as below
+                if (ev.to() != null && ev.to().zoneType() == ZoneType.Hand) notKept.get(seat).remove(ev.card().getId());
+                else if (ev.from() != null && ev.from().zoneType() == ZoneType.Hand) notKept.get(seat).add(ev.card().getId());
+                return;
+            }
             if (ev.card() == null) return;
             Integer seat = cardSeat.get(ev.card().getId());
             if (seat == null) return;
@@ -215,6 +231,13 @@ public final class GameRecords {
             if (from == ZoneType.Battlefield && to == ZoneType.Graveyard) {
                 s.died++;
             }
+        }
+
+        /** The record's seen_not_kept: the names of notKept, as the card rows name them, sorted and distinct. */
+        List<String> seenNotKept(int seat) {
+            TreeSet<String> names = new TreeSet<>();
+            for (int id : notKept.get(seat)) names.add(cardName.get(id));
+            return new ArrayList<>(names);
         }
 
         /**
@@ -343,6 +366,7 @@ public final class GameRecords {
             s.put("spells_cast", stats.spellsCast[seat]);
             s.put("commander_casts", stats.commanderCasts[seat]);
             s.put("eliminated_turn", stats.eliminatedTurn[seat]);
+            s.put("seen_not_kept", stats.seenNotKept(seat));
             seats.add(s);
         }
         rec.put("seats", seats);
@@ -373,7 +397,8 @@ public final class GameRecords {
      * timeout path, where in this runtime the one game thread that can still be writing
      * the very maps record() walks is a poisoned runner's: one that outlived its 15 s
      * grace ({@link GameRunner#GRACE_MS}). Reads no live engine state and no collection
-     * this subscriber maintains, so the job always has a record to emit for the game.
+     * this subscriber maintains, so the job always has a record to emit for the game. So
+     * a seat here has no seen_not_kept: absent says not recorded, and [] would claim it.
      */
     public static Map<String, Object> fallbackRecord(Stats stats, int g, long seed, List<JobFile.Seat> specs,
                                                      boolean timedOut, String error, Throwable t, long ms) {
