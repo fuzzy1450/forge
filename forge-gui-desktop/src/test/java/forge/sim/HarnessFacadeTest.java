@@ -308,6 +308,20 @@ public class HarnessFacadeTest {
         return new Object[] {code, text.isEmpty() ? List.of() : List.of(text.split("\\R")), errBytes.toString(StandardCharsets.UTF_8)};
     }
 
+    /** A runner whose first read outlives its grace, as play() reports one: a Timeout, the runner poisoned from then on. */
+    static GameRunner poisonedByItsFirstRead() {
+        return new GameRunner(1) {
+            @Override
+            public GameResult play(GameSpec spec, Consumer<Game> observer, Consumer<Game> atFirstTurn) throws InterruptedException {
+                if (isPoisoned()) {
+                    return super.play(spec, observer, atFirstTurn);
+                }
+                poisonForTest();
+                return new GameResult(spec.seed(), null, "Timeout", 0, null, true, null, 5L, "TIMEOUT", List.of(), 0L);
+            }
+        };
+    }
+
     /** The verb's exits (F5 guard spec 3.1): 2 for usage and for a lists file it cannot read, 3 for a poisoned runner, with
      *  the lines so far standing, as run's 3. A list that fails is a line and 0: oneLinePerListInOrder. */
     @Test(timeOut = 300_000)
@@ -343,21 +357,15 @@ public class HarnessFacadeTest {
         Assert.assertEquals(stands.size(), 1, "the line so far stands: " + stands);
         Assert.assertTrue(stands.get(0).startsWith("{\"id\":\"a\",\"plan\":"), stands.get(0));
 
-        GameRunner byItsOwnGame = new GameRunner(1) {
-            @Override
-            public GameResult play(GameSpec spec, Consumer<Game> observer, Consumer<Game> atFirstTurn) throws InterruptedException {
-                if (isPoisoned()) {
-                    return super.play(spec, observer, atFirstTurn);
-                }
-                poisonForTest();                    // as play() does when this game's thread outlives its grace period
-                return new GameResult(spec.seed(), null, "Timeout", 0, null, true, null, 5L, "TIMEOUT", List.of(), 0L);
-            }
-        };
-        Object[] own = planOn(byItsOwnGame, two);
+        Object[] own = planOn(poisonedByItsFirstRead(), two);
         Assert.assertEquals(own[0], 3, "the runner is poisoned, and the list that did it has its line");
         @SuppressWarnings("unchecked") List<String> one = (List<String>) own[1];
         Assert.assertEquals(one.size(), 1, "and no list follows it: " + one);
         Assert.assertTrue(one.get(0).startsWith("{\"id\":\"a\",\"error\":"), one.get(0));
+
+        Object[] last = planOn(poisonedByItsFirstRead(), two.subList(0, 1));
+        Assert.assertEquals(last[0], 3, "the last list's read outlived its grace: only the runner can say so");
+        Assert.assertEquals(((List<?>) last[1]).size(), 1, "its line stands");
     }
 
     /** selftest puts the first precon through the plan read, so a build whose verb is dead fails its selftest, sim ai build

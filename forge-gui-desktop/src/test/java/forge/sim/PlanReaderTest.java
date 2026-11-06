@@ -88,11 +88,15 @@ public class PlanReaderTest {
     }
 
     /** {@code main}, one of each, filled to 99 with Islands and Hill Giants, about forty lands whatever {@code main} holds. */
-    private static Path listOf(List<String> main) throws IOException {
+    private static Path listOf(List<String> commanders, List<String> main) throws IOException {
         List<String> lines = main.stream().map(n -> "1 " + n).collect(Collectors.toList());
         lines.add("38 Island");
         lines.add((61 - main.size()) + " Hill Giant");
-        return deck(List.of(COMMANDER), lines);
+        return deck(commanders, lines);
+    }
+
+    private static Path listOf(List<String> main) throws IOException {
+        return listOf(List.of(COMMANDER), main);
     }
 
     /** RAMP by DeckPlan.classify's counters: the rocks, five spells of mana value 5 or more, and two top-level counters. */
@@ -230,6 +234,38 @@ public class PlanReaderTest {
             Assert.assertEquals(heldBy(runner, new GameSpec(seed, 120, List.of(list, precon)), 0), text(plan), "seat 0");
             Assert.assertEquals(heldBy(runner, new GameSpec(seed, 120, List.of(precon, list)), 1), text(plan), "seat 1");
         }
+    }
+
+    /** The line the store half reads, to the byte, on a list with two combos: their order is the plan's own, strongest
+     *  first, because ComboPlan.primary reads it, and every set inside them is sorted. */
+    @Test(timeOut = 120_000)
+    public void aLineIsWhatTheStoreReads() throws Exception {
+        List<String> outlets = List.of("Balustrade Spy", "Cephalid Illusionist", "Nomads en-Kor", "Shuko", "Undercity Informer");
+        List<String> main = goWide("Grizzly Bears");
+        main.add("Thassa's Oracle");
+        main.addAll(outlets);
+        List<String> bodies = new ArrayList<>(BODIES);          // mana value 3 or less, the commander and the outlets among them
+        bodies.addAll(List.of("Grizzly Bears", COMMANDER, "Thassa's Oracle", "Cephalid Illusionist", "Nomads en-Kor",
+                "Undercity Informer"));
+        Collections.sort(bodies);
+        Assert.assertEquals(text(read(new GameRunner(1), listOf(main))), "{\"id\":\"a-list\",\"plan\":{\"archetype\":\"COMBO\","
+                + "\"combos\":[{\"kind\":\"GO_WIDE\",\"strength\":67,"
+                + "\"payoffs\":[\"Craterhoof Behemoth\",\"Overrun\",\"Triumph of the Hordes\"],\"enablers\":" + text(bodies) + ","
+                + "\"cascaders\":[\"Chord of Calling\",\"Eldritch Evolution\",\"Green Sun's Zenith\",\"Natural Order\"]},"
+                + "{\"kind\":\"LIBRARY_OUT\",\"strength\":55,\"payoffs\":[\"Thassa's Oracle\"],\"enablers\":" + text(outlets)
+                + ",\"cascaders\":[]}],\"commanders\":[\"" + COMMANDER + "\"],"
+                + "\"known_pairs\":[\"Cephalid Illusionist + Nomads en-Kor\",\"Cephalid Illusionist + Shuko\"],\"living_end\":false}}");
+    }
+
+    /** Neither of these follows a shuffle, so the two reads cannot show an order that is not the sorted one: a card pool
+     *  and a hash set hand the names over. */
+    @Test(timeOut = 120_000)
+    public void commandersAndPairsAreSorted() throws Exception {
+        Map<String, Object> plan = planOf(new GameRunner(1), listOf(List.of("Tymna the Weaver", "Thrasios, Triton Hero"),
+                List.of("Demonic Consultation", "Thassa's Oracle", "Laboratory Maniac", "Jace, Wielder of Mysteries")));
+        Assert.assertEquals(plan.get("commanders"), List.of("Thrasios, Triton Hero", "Tymna the Weaver"), text(plan));
+        Assert.assertEquals(plan.get("known_pairs"), List.of("Demonic Consultation + Jace, Wielder of Mysteries",
+                "Demonic Consultation + Laboratory Maniac", "Demonic Consultation + Thassa's Oracle"), text(plan));
     }
 
     /** The cache is one per game and shared by both seats, so a read through the other seat's brain would find the first
