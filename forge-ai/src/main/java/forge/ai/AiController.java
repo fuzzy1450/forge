@@ -3819,12 +3819,13 @@ public class AiController {
             return simPicker.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player2, decider);
         }
 
-        if (decider == player && sa.getApi() != ApiType.Learn) {
+        if (decider == player && sa.getApi() != ApiType.Learn && !ChangeZoneAi.filtersReshapeHarm(sa, decider)) {
             // Combo-aware AI, piece 1 (spec 2026-10-22-combo-aware-ai-core-design.md section 6.3): our own search for a
             // combo line of ours takes its missing piece (ComboFetch.searchPick, and Gifts Ungiven's completers) ahead
             // of the deck plan's pick below, which decides only when no line of ours has a pick; null, so upstream's
             // choice, for a deck holding no line. ChangeZoneAi asks the same two first, for the simulation picker that
-            // reaches it without this method. Draws nothing.
+            // reaches it without this method, and for Reshape's own search, left to it above: its harm filter comes
+            // before them (and the deck plan has no pick for an artifact search). Draws nothing.
             final Card forLine = ComboFetch.searchPick(sa, destination, fetchList, player2, decider);
             if (forLine != null) {
                 return forLine;

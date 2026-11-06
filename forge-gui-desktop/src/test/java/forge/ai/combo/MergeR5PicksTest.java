@@ -16,6 +16,7 @@ import forge.ai.AITest;
 import forge.ai.AiController;
 import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
+import forge.ai.SpecialCardAi;
 import forge.ai.simulation.ComboPlan;
 import forge.game.Game;
 import forge.game.card.Card;
@@ -83,5 +84,64 @@ public class MergeR5PicksTest extends AITest {
         assertSame(consultation, brain.chooseCardToHiddenOriginChangeZone(ZoneType.Hand, fromLibrary, tutor,
                 new CardCollection(List.of(petal, consultation)), ai, ai));
         assertEquals(1, brain.getComboTracker().oneShort().size());
+    }
+    /** A loop line by its row's id, whatever its pieces (ComboLines.claim): Sol Ring in play and {@code piece} to find. */
+    private static List<ComboLines.Line> lineOf(final String piece) {
+        return ComboLines.claimed(ComboTable.parse(
+                List.of("F|11|S|Infinite colorless mana", "V|129-4131|0||11|B:" + piece + "|B:Sol Ring")));
+    }
+
+    /**
+     * ChangeZoneAi's Reshape filter comes before the fork's search pick, as it did before the merge: Reshape's owner
+     * never fetches an artifact whose activated ability reaches DestroyAll (Boompile), not for a line either. Here a
+     * test line wants Boompile: no shipped line has such a piece.
+     */
+    @Test(timeOut = 120_000)
+    public void reshapesHarmFilterComesBeforeTheSearchPick() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        ((LobbyPlayerAi) ai.getLobbyPlayer()).setAiProfile("Default");
+        final AiController brain = ((PlayerControllerAi) ai.getController()).getAi();
+        brain.getComboTracker().useLines(lineOf("Boompile"));
+        addCard("Sol Ring", ai);
+        addCards("Island", 6, ai);
+        final Card boompile = addCardToZone("Boompile", ai, ZoneType.Library);
+        final Card stone = addCardToZone("Mind Stone", ai, ZoneType.Library);
+        fillLibrary(ai, 10);
+        final SpellAbility reshape = addCardToZone("Reshape", ai, ZoneType.Hand).getFirstSpellAbility();
+        reshape.setActivatingPlayer(ai);
+        final List<ZoneType> fromLibrary = List.of(ZoneType.Library);
+
+        assertTrue(SpecialCardAi.Reshape.isHarmful(boompile));
+        assertSame("the harness: the line takes its piece from a raw list", boompile, ComboFetch.searchPick(reshape,
+                ZoneType.Battlefield, new CardCollection(List.of(boompile, stone)), ai, ai));
+
+        assertSame(stone, brain.chooseCardToHiddenOriginChangeZone(ZoneType.Battlefield, fromLibrary, reshape,
+                new CardCollection(List.of(boompile, stone)), ai, ai));
+    }
+
+    /** The filter's own control: a piece it lets through is still the pick, ahead of the stock pick's Mind Stone. */
+    @Test(timeOut = 120_000)
+    public void reshapeStillFetchesAPieceThatDoesNoHarm() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        ((LobbyPlayerAi) ai.getLobbyPlayer()).setAiProfile("Default");
+        final AiController brain = ((PlayerControllerAi) ai.getController()).getAi();
+        brain.getComboTracker().useLines(lineOf("Mana Vault"));
+        addCard("Sol Ring", ai);
+        addCards("Island", 6, ai);
+        final Card vault = addCardToZone("Mana Vault", ai, ZoneType.Library);
+        final Card stone = addCardToZone("Mind Stone", ai, ZoneType.Library);
+        fillLibrary(ai, 10);
+        final SpellAbility reshape = addCardToZone("Reshape", ai, ZoneType.Hand).getFirstSpellAbility();
+        reshape.setActivatingPlayer(ai);
+        final List<ZoneType> fromLibrary = List.of(ZoneType.Library);
+
+        assertSame(vault, brain.chooseCardToHiddenOriginChangeZone(ZoneType.Battlefield, fromLibrary, reshape,
+                new CardCollection(List.of(vault, stone)), ai, ai));
+
+        brain.getComboTracker().useLines(List.of());
+        assertSame("the harness: the stock pick", stone, brain.chooseCardToHiddenOriginChangeZone(ZoneType.Battlefield,
+                fromLibrary, reshape, new CardCollection(List.of(vault, stone)), ai, ai));
     }
 }

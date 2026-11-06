@@ -2159,9 +2159,15 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 && SpecialCardAi.Scapeshift.isOwnResolution(decider, sa);
     }
 
+    /** Whether the search is one {@link #chooseCardToHiddenOriginChangeZone} filters by Reshape's harm before it asks
+     *  anything: AiController leaves such a search to that method, whose picks all come after the filter. */
+    public static boolean filtersReshapeHarm(final SpellAbility sa, final Player decider) {
+        return SpecialCardAi.Reshape.isReshape(sa) && sa.getHostCard() != null
+                && decider.equals(sa.getHostCard().getOwner());
+    }
+
     public static Card chooseCardToHiddenOriginChangeZone(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList, Player player, final Player decider) {
-        if (SpecialCardAi.Reshape.isReshape(sa) && sa.getHostCard() != null
-                && decider.equals(sa.getHostCard().getOwner())) {
+        if (filtersReshapeHarm(sa, decider)) {
             // Reshape's owner (its cast, or a Krark, the Thumbless copy of it, whose second search
             // Reshape.consider never priced) never fetches an artifact whose activated ability
             // reaches DestroyAll (Boompile: FlipCoinAi taps it at once, and a won flip destroys
