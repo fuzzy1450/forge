@@ -23,6 +23,7 @@ import forge.game.GameType;
 import forge.game.Match;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
+import forge.game.card.CardCollection;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.player.RegisteredPlayer;
@@ -215,6 +216,23 @@ public class MergeStormHoldsTest extends AITest {
 
         storm(9);
         assertEquals("lethal needs no solver", TENDRILS, decide());
+    }
+
+    /** The holds are a tutor storm deck's alone: in a rollout any other deck casts a take-life storm card from the stock
+     *  minimum, well below lethal, Duress beside it. Five lands, for Tendrils' three, and nothing else to cast first. */
+    @Test(timeOut = 120_000)
+    public void aNoTutorStormDeckInARolloutCastsATakeLifeStormCardFromTheStockMinimum() {
+        commanderBoard(false);
+        game.markAsSimulationCopy();
+        for (final Card c : new CardCollection(ai.getCardsIn(ZoneType.Hand))) {
+            ai.getZone(ZoneType.Hand).remove(c);
+        }
+        addCardToZone(TENDRILS, ai, ZoneType.Hand);
+        addCardToZone("Duress", ai, ZoneType.Hand);
+        addCards("Swamp", 3, ai);
+        storm(3);
+
+        assertEquals(TENDRILS, decide());
     }
 
     /** The take-life finisher hold: Tendrils alone in hand, which the Storm block does not read. */

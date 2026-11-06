@@ -622,4 +622,14 @@ public class ComboManaSacrificeAiTest extends AITest {
         playOurTurn();
         assertTrue(ai.hasWon(), "held " + ai.getCardsIn(ZoneType.Hand));
     }
+
+    /** A sacrifice of "another creature" (Illuminor Szeras) is asked of what enters as of any other creature: the
+     *  type is read against the source's own card, not against the card entering. In a Constructed game Oracle is
+     *  too dear for Consultation, and nothing else is there to give up. */
+    @Test(timeOut = 120_000)
+    public void anotherCreatureIncludesWhatEnters() {
+        constructedBoard();
+        final SpellAbility ma = manaOf(ready("Illuminor Szeras"), ai);
+        assertFalse(ManaSacrifice.worthItBeforePaying(ai, ma, consultCast, oracleCast.getHostCard()));
+    }
 }
