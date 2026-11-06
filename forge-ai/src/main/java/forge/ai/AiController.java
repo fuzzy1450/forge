@@ -2243,7 +2243,7 @@ public class AiController {
         if (topOwnedByAI) {
             // Stiflenought: the AI's own "sacrifice it unless" trigger is answered with Stifle, which nothing else would do
             final SpellAbility stifle = StifleCombo.stifleOwnTrigger(player, top);
-            if (stifle != null) {
+            if (stifle != null && !castFailedThisPhase(stifle.getHostCard()) && !hasFailedToCast(stifle)) {
                 return stifle;
             }
         }
@@ -2364,7 +2364,7 @@ public class AiController {
 
         // Stiflenought: the Dreadnought is cast as soon as its Stifle can be paid for as well, without rollouts
         final SpellAbility sureStifle = StifleCombo.sureCast(player, saList);
-        if (sureStifle != null) {
+        if (sureStifle != null && !castFailedThisPhase(sureStifle.getHostCard()) && !hasFailedToCast(sureStifle)) {
             return sureStifle;
         }
         if (flatMonteCarloActive() && game.getStack().isEmpty()) {
