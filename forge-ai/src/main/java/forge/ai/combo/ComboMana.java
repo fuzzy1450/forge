@@ -8,6 +8,8 @@ import java.util.Map;
 
 import forge.ai.AiCardMemory;
 import forge.ai.ManaSacrifice;
+import forge.ai.PlayerControllerAi;
+import forge.ai.simulation.ComboPlan;
 import forge.card.MagicColor;
 import forge.card.mana.ManaAtom;
 import forge.card.mana.ManaCost;
@@ -15,6 +17,7 @@ import forge.card.mana.ManaCostShard;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
+import forge.game.cost.CostDiscard;
 import forge.game.mana.ManaPool;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -34,14 +37,15 @@ import forge.game.zone.ZoneType;
  * <p>The sources are HonestMana's (a private copy of its reading, which is frozen): the floating pool, and each
  * battlefield source we control whose mana ability canPlay() (untapped, not summoning-sick, its restrictions met), has
  * no mana in its own cost, meets its conditions, may be spent on {@code sa}, is no "activate only as an instant"
- * ability (Lion's Eye Diamond: the AI's payer never taps one) and, when it sacrifices another permanent, gives up one
- * the AI's payer would give up for what it pays (ManaSacrifice.worthItBeforePaying: for {@code sa}, Phyrexian Altar's
- * only creature, a Craw Wurm, buying no Constructed game's Demonic Consultation; for a go-off, what the payer gives up
- * at the emptier's moment, {@link #of(Player, SpellAbility, SpellAbility, Card, boolean)}), less the sources
- * isManaSourceReserved holds when {@code skipHeld}. A source makes one activation's mana: a fixed production its
- * symbols (Karoo's "U B" a {U} and a {B}), a choice production its amount of one kind among its letters (Command Tower
- * one of its colours, Gilded Lotus three of one colour), "AnyDifferent" one coloured and the rest generic only (an
- * under-count), a reflected, special or letterless production generic only. A source with several abilities of one
+ * ability (Lion's Eye Diamond: the AI's payer never taps one), is no discard the payer refuses while the hand holds a
+ * kill piece of a storm deck (Skirge Familiar with Tendrils of Agony in hand) and, when it sacrifices another permanent,
+ * gives up one the AI's payer would give up for what it pays (ManaSacrifice.worthItBeforePaying: for {@code sa},
+ * Phyrexian Altar's only creature, a Craw Wurm, buying no Constructed game's Demonic Consultation; for a go-off, what the
+ * payer gives up at the emptier's moment, {@link #of(Player, SpellAbility, SpellAbility, Card, boolean)}), less the
+ * sources isManaSourceReserved holds when {@code skipHeld}. A source makes one activation's mana: a fixed production
+ * its symbols (Karoo's "U B" a {U} and a {B}), a choice production its amount of one kind among its letters (Command
+ * Tower one of its colours, Gilded Lotus three of one colour), "AnyDifferent" one coloured and the rest generic only
+ * (an under-count), a reflected, special or letterless production generic only. A source with several abilities of one
  * mana each is one mana of any of their kinds (Talisman's {C}, {U} or {B}); one whose abilities make more is tried
  * ability by ability. {@link #nextTurn} reads our next turn's mana instead (follow-up 2, G4): the same sources, whether
  * or not they can be activated now, and no pool.
@@ -148,7 +152,7 @@ final class ComboMana {
                 }
                 ma.setActivatingPlayer(ai);
                 if ((!nextTurn && !ma.canPlay()) || ma.getPayCosts().hasManaCost() || !ma.metConditions()
-                        || !spendable(mp, sa) || instantSpeed(ma)
+                        || !spendable(mp, sa) || instantSpeed(ma) || discardRefused(ai, ma)
                         || !ManaSacrifice.worthItBeforePaying(ai, ma, paidFor, entering)) {
                     continue;
                 }
@@ -181,6 +185,14 @@ final class ComboMana {
     // (follow-up final review, round 1)
     private static boolean instantSpeed(final SpellAbility ma) {
         return ma.getRestrictions() != null && ma.getRestrictions().isInstantSpeed();
+    }
+
+    // a discard for mana while the hand holds the finisher or the engine of a storm deck: the AI's payer refuses it
+    // (ComputerUtilMana.canPayShardWithSpellAbility, the same three tests) for any spell, as it refuses Lion's Eye Diamond,
+    // so it pays none of these costs. Asked after instantSpeed, so only Skirge Familiar and Overeager Apprentice get here
+    private static boolean discardRefused(final Player ai, final SpellAbility ma) {
+        return ma.getPayCosts().hasSpecificCostType(CostDiscard.class) && ai.getController() instanceof PlayerControllerAi
+                && ComboPlan.holdsKillPiece(ai);
     }
 
     /** Whether these costs can all be paid together from this mana, each source making one activation's mana. */

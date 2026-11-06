@@ -21,6 +21,7 @@ import forge.ai.ComputerUtilCost;
 import forge.ai.LobbyPlayerAi;
 import forge.ai.ManaSacrifice;
 import forge.ai.PlayerControllerAi;
+import forge.ai.simulation.ComboPlan;
 import forge.card.mana.ManaCost;
 import forge.card.mana.ManaCostParser;
 import forge.deck.Deck;
@@ -583,5 +584,42 @@ public class ComboManaSacrificeAiTest extends AITest {
         ready("Lotus Petal");
 
         assertTrue(ComboExecute.goOffNow(ai, oracleCast));
+    }
+
+    // ---- a discard for mana, the payer's other refusal ----
+
+    /** A Commander game, two Islands and Skirge Familiar: the emptier's {B} is a discard's alone, Serra Angel in hand to
+     *  pay it. */
+    private void discardBoard(final String alsoInHand) {
+        commanderBoard();
+        addCardToZone(alsoInHand, ai, ZoneType.Hand);
+        addCardToZone("Serra Angel", ai, ZoneType.Hand);
+        ready("Skirge Familiar");
+    }
+
+    /** ComputerUtilMana refuses a discard cost for mana while the hand holds a kill piece of a storm deck, whatever else
+     *  is in the hand: the rule that keeps Lion's Eye Diamond from throwing Tendrils of Agony away. So this {B} will not
+     *  be made, the go-off is not ready, and Oracle is not spent on a full library. */
+    @Test
+    public void discardManaThePayerRefusesPaysNoGoOff() {
+        for (final String finisher : List.of("Brain Freeze", "Tendrils of Agony", "Grapeshot")) {
+            discardBoard(finisher);
+            assertTrue(ComboPlan.holdsKillPiece(ai), "the harness: the payer's rule, " + finisher);
+            assertFalse(ComboExecute.goOffNow(ai, oracleCast), finisher);
+            playOurTurn();
+            assertFalse(ai.hasWon(), finisher);
+            assertEquals(countCardsWithName(game, ORACLE, ZoneType.Hand), 1, finisher + ": Oracle was spent");
+            assertEquals(countCardsWithName(game, CONSULTATION, ZoneType.Hand), 1, finisher + ": Consultation was spent");
+        }
+    }
+
+    /** The control: nothing in hand the payer protects, so the source pays, and the go-off wins. */
+    @Test
+    public void discardManaPaysTheGoOffWithNoKillPieceInHand() {
+        discardBoard("Opt");
+        assertFalse(ComboPlan.holdsKillPiece(ai), "the harness: the payer's rule");
+        assertTrue(ComboExecute.goOffNow(ai, oracleCast));
+        playOurTurn();
+        assertTrue(ai.hasWon(), "held " + ai.getCardsIn(ZoneType.Hand));
     }
 }
