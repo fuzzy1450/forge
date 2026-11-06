@@ -3172,7 +3172,10 @@ public class AiController {
                     }
                     final AiPlayDecision opinion;
                     try {
-                        opinion = ruling == ComboPlan.Ruling.PLAY ? AiPlayDecision.WillPlay : canPlayAndPayFor(sa);
+                        // a ruling plays past the heuristics, not past a cast that has failed: the seed-11 rule's two
+                        // tries a phase and upstream's memory of a cast that did not go on the stack both still count
+                        opinion = ruling == ComboPlan.Ruling.PLAY && !castFailedThisPhase(sa.getHostCard())
+                                && !hasFailedToCast(sa) ? AiPlayDecision.WillPlay : canPlayAndPayFor(sa);
                     } finally {
                         // reset LastStateBattlefield - also when the deadline fired inside canPlayAndPayFor
                         sa.clearLastState();

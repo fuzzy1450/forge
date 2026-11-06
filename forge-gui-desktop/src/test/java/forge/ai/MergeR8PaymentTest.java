@@ -2,10 +2,13 @@ package forge.ai;
 
 import static org.testng.AssertJUnit.assertEquals;
 import static org.testng.AssertJUnit.assertFalse;
+import static org.testng.AssertJUnit.assertNotNull;
 import static org.testng.AssertJUnit.assertNotSame;
+import static org.testng.AssertJUnit.assertNull;
 import static org.testng.AssertJUnit.assertTrue;
 
 import java.lang.reflect.Method;
+import java.util.List;
 
 import org.testng.annotations.Test;
 
@@ -29,6 +32,7 @@ public class MergeR8PaymentTest extends AITest {
     private static final String ELVES = "Llanowar Elves";
     private static final String BEARS = "Grizzly Bears";
     private static final String BOLT = "Lightning Bolt";
+    private static final String WRAITH = "Street Wraith";
 
     private Game game;
     private Player ai;
@@ -214,5 +218,63 @@ public class MergeR8PaymentTest extends AITest {
         assertTrue("one failure in a new phase is one", AiPlayDecision.CantPlaySa != payability(sa));
         brain.rememberFailedCast(host);
         assertEquals("two in the new phase end its tries", AiPlayDecision.CantPlaySa, payability(sa));
+    }
+    /** FlatMonteCarloComboTest's Living End list in the AI's library: its cycling is ComboPlan's Ruling.PLAY. */
+    private void livingEndGame() {
+        game = initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        final Object[] list = { "Living End", 4, "Violent Outburst", 4, "Demonic Dread", 4, "Shardless Agent", 4,
+                "Street Wraith", 3, "Architects of Will", 4, "Curator of Mysteries", 4, "Waker of Waves", 4, "Fury", 3,
+                "Grief", 3, "Swamp", 8, "Mountain", 4, "Forest", 4 };
+        for (int i = 0; i < list.length; i += 2) {
+            for (int n = 0; n < (Integer) list[i + 1]; n++) {
+                addCardToZone((String) list[i], ai, ZoneType.Library);
+            }
+        }
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+        game.getAction().checkStateEffects(true);
+        pc = (PlayerControllerAi) ai.getController();
+        brain = pc.getAi();
+    }
+
+    private SpellAbility nextPlay() {
+        final List<SpellAbility> chosen = brain.chooseSpellAbilityToPlay();
+        return chosen == null || chosen.isEmpty() ? null : chosen.get(0);
+    }
+
+    /** Street Wraith's cycling pays life, so only the memory can say no. Its first choice is the PLAY ruling's. */
+    private SpellAbility wraithsCycling() {
+        final SpellAbility cycling = nextPlay();
+        assertNotNull("the harness: the ruling plays the cycling", cycling);
+        assertEquals(WRAITH, cycling.getHostCard().getName());
+        assertTrue(cycling.isCycling());
+        return cycling;
+    }
+
+    @Test(timeOut = 120_000)
+    public void aPlayRulingStaysUnderTheTwoTriesAPhaseRule() {
+        livingEndGame();
+        final Card wraith = addCardToZone(WRAITH, ai, ZoneType.Hand);
+        wraithsCycling();
+
+        brain.rememberFailedCast(wraith);
+        wraithsCycling();
+
+        brain.rememberFailedCast(wraith);
+        assertNull("two failures in the phase end its tries, whatever the ruling says", nextPlay());
+
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        wraithsCycling();
+    }
+
+    @Test(timeOut = 120_000)
+    public void aPlayRulingStaysUnderUpstreamsFailedCastMemory() {
+        livingEndGame();
+        addCardToZone(WRAITH, ai, ZoneType.Hand);
+        final SpellAbility cycling = wraithsCycling();
+
+        brain.noteFailedCast(AiController.castKey(cycling));
+
+        assertNull("a play that could not go on the stack is not tried again this turn", nextPlay());
     }
 }
