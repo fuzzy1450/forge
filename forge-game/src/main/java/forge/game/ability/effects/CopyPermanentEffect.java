@@ -287,7 +287,11 @@ public class CopyPermanentEffect extends TokenEffectBase {
 
             int id = newOwner == null ? 0 : newOwner.getGame().nextCardId();
             // need to create a physical card first, i need the original card faces
-            if (original.getPaperCard() == null) {
+            // a copy of a face-down permanent takes the one face-down state (CardFactory.getCloneStates), but
+            // transforming (modal included) and split are read off the paper card's rules: built on the paper of such a
+            // card, the token would read faces it does not have, and CardCopyService.getLKICopy and CardView ask it for them
+            final boolean oneFaceOfMany = original.isFaceDown() && (original.isTransformable() || original.isSplitCard());
+            if (original.getPaperCard() == null || oneFaceOfMany) {
                 // a token made from its own characteristics (not from a card script) has no paper card to rebuild
                 // the faces from; the states copied below carry everything the copy needs
                 copy = new Card(id, host.getGame());

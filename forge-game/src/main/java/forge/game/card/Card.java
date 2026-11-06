@@ -7871,6 +7871,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         final String name = getName();
         final String set = getSetCode();
 
+        if (name.isEmpty()) {
+            return null; // no paper, and no name to look one up by: a token copy of a face-down double-faced or split card
+        }
         if (StringUtils.isNotBlank(set)) {
             cp = StaticData.instance().getVariantCards().getCard(name, set);
             if (cp != null) {
