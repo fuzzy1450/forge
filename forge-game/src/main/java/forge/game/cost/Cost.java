@@ -1023,7 +1023,7 @@ public class Cost implements Serializable {
                     (part instanceof CostDiscard || part instanceof CostDraw ||
                     part instanceof CostAddMana || part instanceof CostPayLife ||
                     part instanceof CostSacrifice || part instanceof CostTapType ||
-                    part instanceof CostExile))) {
+                    part instanceof CostExile || part instanceof CostPayEnergy))) {
                 boolean alreadyAdded = false;
                 for (final CostPart other : costParts) {
                     Integer otherAmount = other.convertAmount();
@@ -1065,6 +1065,8 @@ public class Cost implements Serializable {
                             costParts.add(new CostPayLife(amount, part.getTypeDescription()));
                         } else if (part instanceof CostExile) {
                             costParts.add(new CostExile(amount, part.getType(), part.getTypeDescription(), ((CostExile) part).getFrom()));
+                        } else if (part instanceof CostPayEnergy) {
+                            costParts.add(new CostPayEnergy(amount));
                         }
                         toRemove.add(other);
                         alreadyAdded = true;
