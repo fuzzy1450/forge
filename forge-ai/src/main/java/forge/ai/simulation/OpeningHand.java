@@ -485,17 +485,20 @@ public final class OpeningHand {
         return Math.max(0.0, 1.0 - miss);
     }
 
+    // StrictMath, not Math, in both: these odds are compared with the keep bar and with each other in every game of the
+    // sim harness, and Math.exp and Math.log are free to differ in the last bits between x86 and aarch64, where a seed
+    // must play the same game (a quarter of these odds do differ on an x86 desktop, OpeningHandStrictMathTest)
     private static double hyper(final int i, final int n, final int size, final int good) {
         if (i > good || n - i > size - good || n - i < 0) {
             return 0.0;
         }
-        return Math.exp(logChoose(good, i) + logChoose(size - good, n - i) - logChoose(size, n));
+        return StrictMath.exp(logChoose(good, i) + logChoose(size - good, n - i) - logChoose(size, n));
     }
 
     private static double logChoose(final int n, final int k) {
         double r = 0;
         for (int i = 1; i <= k; i++) {
-            r += Math.log(n - k + i) - Math.log(i);
+            r += StrictMath.log(n - k + i) - StrictMath.log(i);
         }
         return r;
     }
