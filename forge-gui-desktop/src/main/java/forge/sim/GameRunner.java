@@ -245,8 +245,8 @@ public class GameRunner {
     }
 
     /** {@link #play(GameSpec, Consumer)} with a stop: when {@code atFirstTurn} is not null it runs once, on the game
-     *  thread under the game's scope, just before turn 1's first priority (the mulligans and the opening-hand actions
-     *  done, nothing else), and the game ends there. Such a game did not finish, so its result says Error; a caller that
+     *  thread under the game's scope, just before turn 1's first priority, the mulligans and the opening-hand actions
+     *  done, and the game ends there. Such a game did not finish, so its result says Error; a caller that
      *  got what it came for ignores that. It is thrown away, so the hook may read what a live game must not: its scans
      *  take ids no later decision meets. Null is the game's own path: {@code Match.startGame(g)} passes null on. The
      *  plan verb's read (MTG_DeckMaker's tools/combo-ai/f5-guard/SPEC.md, section 3.1). */

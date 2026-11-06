@@ -25,6 +25,7 @@ import forge.sim.GameRecords;
 import forge.sim.GameRunner;
 import forge.sim.JobFile;
 import forge.sim.JobRunner;
+import forge.sim.PlanReader;
 import forge.sim.Precons;
 import forge.sim.Serve;
 
@@ -34,11 +35,12 @@ import forge.sim.Serve;
  *
  *   mtgsim.Harness check {@code <names.txt>}   resolve card names against Forge's database
  *   mtgsim.Harness run {@code <job.job>}       play the job, one game at a time, records on stdout
+ *   mtgsim.Harness plan {@code <lists.txt>}    read the deck plan of each {@code <id> <deck file>} line, one JSON line a list on stdout
  *   mtgsim.Harness serve [--slots N]           play jobs from stdin on N slots (default 1), attributed records on stdout
- *   mtgsim.Harness --selftest                  name checks + two precon games
+ *   mtgsim.Harness --selftest                  name checks + two precon games + one plan read
  *
  * Exit codes: 0 ok, 1 selftest failed, 2 fatal (usage, a boot failure, a job, deck or profile that cannot be loaded,
- * or any other exception out of a command), 3 one-shot run poisoned (a timed-out game's thread outlived its grace),
+ * or any other exception out of a command), 3 one-shot run or plan read poisoned (a timed-out game's thread outlived its grace),
  * 4 uncaught throwable (GameRunner's halt handler: an Error, an OutOfMemoryError above all), 5 serve poisoned. The
  * class keeps its name so every launcher's classpath finds it first in the jar. {@link #main} is {@link #launch} and
  * an exit; the work is forge.sim's (JobFile, JobRunner, Serve).
@@ -96,6 +98,7 @@ public final class Harness {
             switch (args[0]) {
                 case "check":      return check(Paths.get(need(args, 1)), out);
                 case "run":        return run(Paths.get(need(args, 1)), out, err);
+                case "plan":       return plan(Paths.get(need(args, 1)), out, err);
                 case "serve":      return serve(args, stdin, out, err);
                 case "--selftest": return selftest(out, err);
                 default:           return usage(err);
@@ -143,6 +146,36 @@ public final class Harness {
             return EXIT_TIMEOUT_RESTART;                           // the v26 client restarts the JVM on 3 and resumes at the next seed
         }
         if (runner.isPoisoned()) {                                 // the last game's thread outlived its grace after it was recorded
+            err.println(POISONED + "; exit " + EXIT_TIMEOUT_RESTART);
+            return EXIT_TIMEOUT_RESTART;
+        }
+        return 0;
+    }
+
+    // ------------------------------------------------------------------ plan
+
+    /** The one-shot: the lists file's lists in order on a runner of one slot. The file is UTF-8, one {@code <id> <deck
+     *  file>} a line (the store half writes the deck hash as the id), and an unreadable one is an IOException, so fatal. */
+    static int plan(Path listsFile, PrintStream out, PrintStream err) throws IOException, InterruptedException {
+        return plan(Files.readAllLines(listsFile, StandardCharsets.UTF_8), new GameRunner(1), out, err);
+    }
+
+    /** Reads each list on {@code runner}, public for the tests: one JSON line a list on {@code out} in input order, a plan
+     *  or an error, blank lines skipped. A bad list stops nothing. Returns 0, or 3 when the runner is poisoned, the lines
+     *  so far standing, as {@link #run(JobFile, GameRunner, PrintStream, PrintStream)}. */
+    public static int plan(List<String> lines, GameRunner runner, PrintStream out, PrintStream err) throws InterruptedException {
+        try {
+            for (String line : lines) {
+                if (!line.isBlank()) {
+                    out.println(GameRecords.Json.write(PlanReader.readLine(line, runner)));
+                    out.flush();
+                }
+            }
+        } catch (GameRunner.PoisonedException poisoned) {
+            err.println(POISONED + "; exit " + EXIT_TIMEOUT_RESTART);
+            return EXIT_TIMEOUT_RESTART;
+        }
+        if (runner.isPoisoned()) {                                 // the last list's read outlived its grace after its line was written
             err.println(POISONED + "; exit " + EXIT_TIMEOUT_RESTART);
             return EXIT_TIMEOUT_RESTART;
         }
@@ -207,9 +240,15 @@ public final class Harness {
 
     // ------------------------------------------------------------------ selftest
 
-    /** Today's selftest: three lookups and a split card, then the first two Commander precons through a JobRunner on
-     *  one slot, two games; any game ending in Error fails it. Exit 1 on a failure. */
     static int selftest(PrintStream out, PrintStream err) throws InterruptedException {
+        return selftest(new GameRunner(1), out, err);
+    }
+
+    /** Today's selftest on {@code runner}, public for the tests: three lookups and a split card, then the first two
+     *  Commander precons through a JobRunner, two games, any game ending in Error failing it, then the first precon through
+     *  the plan read, because {@code sim ai build} runs this before it records a build, and {@code sim ai accept} refuses a
+     *  build that was never recorded: an engine whose verb is dead cannot be accepted. Exit 1 on a failure. */
+    public static int selftest(GameRunner runner, PrintStream out, PrintStream err) throws InterruptedException {
         String[][] expect = {{"Sol Ring", "Sol Ring"}, {"Treasure Map // Treasure Cove", "Treasure Map"},
                              {"Not A Real Card Xyzzy", null}};
         for (String[] e : expect) {
@@ -241,7 +280,6 @@ public final class Harness {
             lines.add("seat." + i + ".deck_hash=selftest");
         }
         List<Map<String, Object>> records = new ArrayList<>();
-        GameRunner runner = new GameRunner(1);
         try {
             new JobRunner(runner).run(JobFile.parse(lines), rec -> {
                 if (rec.containsKey("summary")) {
@@ -269,6 +307,11 @@ public final class Harness {
                 return 1;
             }
         }
+        Map<String, Object> read = PlanReader.read("selftest", precons.get(0).toAbsolutePath(), runner);
+        if (!read.containsKey("plan")) {
+            err.println("selftest: no plan for " + precons.get(0).getFileName() + ": " + read.get("error"));
+            return 1;
+        }
         out.println("selftest ok");
         return 0;
     }
@@ -288,7 +331,7 @@ public final class Harness {
     }
 
     static int usage(PrintStream err) {
-        err.println("usage: mtgsim.Harness check <names.txt> | run <job.job> | serve [--slots N] | --selftest");
+        err.println("usage: mtgsim.Harness check <names.txt> | run <job.job> | plan <lists.txt> | serve [--slots N] | --selftest");
         return EXIT_FATAL;
     }
 }

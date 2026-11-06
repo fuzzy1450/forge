@@ -297,4 +297,91 @@ public class HarnessFacadeTest {
         Assert.assertSame(systemOutAfter, savedOut, "System.out was never moved");
         Assert.assertSame(defaultAfter, savedDefault, "the halt handler was never installed");
     }
+
+    /** One read through Harness.plan on {@code runner}: {exit code, stdout lines, stderr text}. */
+    static Object[] planOn(GameRunner runner, List<String> lines) throws InterruptedException {
+        ByteArrayOutputStream outBytes = new ByteArrayOutputStream(), errBytes = new ByteArrayOutputStream();
+        PrintStream out = new PrintStream(outBytes, true, StandardCharsets.UTF_8);
+        PrintStream err = new PrintStream(errBytes, true, StandardCharsets.UTF_8);
+        int code = mtgsim.Harness.plan(lines, runner, out, err);
+        String text = outBytes.toString(StandardCharsets.UTF_8);
+        return new Object[] {code, text.isEmpty() ? List.of() : List.of(text.split("\\R")), errBytes.toString(StandardCharsets.UTF_8)};
+    }
+
+    /** The verb's exits (F5 guard spec 3.1): 2 for usage and for a lists file it cannot read, 3 for a poisoned runner, with
+     *  the lines so far standing, as run's 3. A list that fails is a line and 0: oneLinePerListInOrder. */
+    @Test(timeOut = 300_000)
+    public void planExitCodes() throws Exception {
+        Assert.assertEquals(dispatch("", "plan"), 2, "no lists file");
+        Assert.assertTrue(lastErr.startsWith("usage: mtgsim.Harness ") && lastErr.contains("plan <lists.txt>"), lastErr);
+        Assert.assertEquals(dispatch("", "plan", "C:/no/such/lists.txt"), 2, "a lists file that cannot be read");
+        Assert.assertTrue(lastErr.startsWith("fatal: "), lastErr);
+        Assert.assertEquals(lastOut, "");
+
+        List<String> two = List.of("a " + Precons.commander().get(0), "b " + Precons.commander().get(1));
+        GameRunner poisoned = new GameRunner(1);
+        poisoned.poisonForTest();
+        Object[] before = planOn(poisoned, two);
+        Assert.assertEquals(before[0], 3, "the PoisonedException at the first list");
+        Assert.assertEquals(before[1], List.of(), "nothing read, nothing written");
+        Assert.assertTrue(((String) before[2]).contains("poisoned"), (String) before[2]);
+
+        GameRunner onTheSecond = new GameRunner(1) {
+            private final AtomicInteger plays = new AtomicInteger();
+
+            @Override
+            public GameResult play(GameSpec spec, Consumer<Game> observer, Consumer<Game> atFirstTurn) throws InterruptedException {
+                if (plays.incrementAndGet() == 2) {
+                    poisonForTest();
+                }
+                return super.play(spec, observer, atFirstTurn);
+            }
+        };
+        Object[] between = planOn(onTheSecond, two);
+        Assert.assertEquals(between[0], 3);
+        @SuppressWarnings("unchecked") List<String> stands = (List<String>) between[1];
+        Assert.assertEquals(stands.size(), 1, "the line so far stands: " + stands);
+        Assert.assertTrue(stands.get(0).startsWith("{\"id\":\"a\",\"plan\":"), stands.get(0));
+
+        GameRunner byItsOwnGame = new GameRunner(1) {
+            @Override
+            public GameResult play(GameSpec spec, Consumer<Game> observer, Consumer<Game> atFirstTurn) throws InterruptedException {
+                if (isPoisoned()) {
+                    return super.play(spec, observer, atFirstTurn);
+                }
+                poisonForTest();                    // as play() does when this game's thread outlives its grace period
+                return new GameResult(spec.seed(), null, "Timeout", 0, null, true, null, 5L, "TIMEOUT", List.of(), 0L);
+            }
+        };
+        Object[] own = planOn(byItsOwnGame, two);
+        Assert.assertEquals(own[0], 3, "the runner is poisoned, and the list that did it has its line");
+        @SuppressWarnings("unchecked") List<String> one = (List<String>) own[1];
+        Assert.assertEquals(one.size(), 1, "and no list follows it: " + one);
+        Assert.assertTrue(one.get(0).startsWith("{\"id\":\"a\",\"error\":"), one.get(0));
+    }
+
+    /** selftest puts the first precon through the plan read, so a build whose verb is dead fails its selftest, sim ai build
+     *  records no such build, and sim ai accept refuses it (F5 guard spec 3.1). The read here never reaches its hook. */
+    @Test(timeOut = 300_000)
+    public void selftestAnswersOneWhenNoPlanComesBack() throws Exception {
+        GameRunner noPlan = new GameRunner(1) {
+            @Override
+            public GameResult play(GameSpec spec, Consumer<Game> observer, Consumer<Game> atFirstTurn) throws InterruptedException {
+                return atFirstTurn == null ? super.play(spec, observer, null) : JobRunnerTest.createFailed(spec, 0);
+            }
+        };
+        ByteArrayOutputStream outBytes = new ByteArrayOutputStream(), errBytes = new ByteArrayOutputStream();
+        PrintStream out = new PrintStream(outBytes, true, StandardCharsets.UTF_8);
+        PrintStream err = new PrintStream(errBytes, true, StandardCharsets.UTF_8);
+        Assert.assertEquals(mtgsim.Harness.selftest(noPlan, out, err), 1);
+        String said = errBytes.toString(StandardCharsets.UTF_8);
+        Assert.assertTrue(said.contains("selftest game 2:"), "its two games came first: " + said);
+        Assert.assertTrue(said.contains("no plan"), said);
+        Assert.assertEquals(outBytes.toString(StandardCharsets.UTF_8), "", "no selftest ok");
+
+        ByteArrayOutputStream okBytes = new ByteArrayOutputStream();
+        PrintStream ok = new PrintStream(okBytes, true, StandardCharsets.UTF_8);
+        Assert.assertEquals(mtgsim.Harness.selftest(new GameRunner(1), ok, err), 0, errBytes.toString(StandardCharsets.UTF_8));
+        Assert.assertEquals(okBytes.toString(StandardCharsets.UTF_8).trim(), "selftest ok");
+    }
 }
