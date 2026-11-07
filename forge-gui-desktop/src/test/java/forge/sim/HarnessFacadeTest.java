@@ -368,6 +368,26 @@ public class HarnessFacadeTest {
         Assert.assertEquals(((List<?>) last[1]).size(), 1, "its line stands");
     }
 
+    /** A lists file is UTF-8: a deck whose path holds a non-ASCII letter is found and read. */
+    @Test(timeOut = 300_000)
+    public void aListsFileIsReadAsUtf8() throws Exception {
+        Path deck = Files.createTempFile("plan-\u00e9-", ".dck");
+        TEMP.add(deck);
+        Files.copy(Precons.commander().get(0), deck, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        Path lists = tempFile(List.of("utf8-1 " + deck.toAbsolutePath()));
+        Assert.assertEquals(dispatch("", "plan", lists.toString()), 0, lastErr);
+        Assert.assertTrue(lastOut.startsWith("{\"id\":\"utf8-1\",\"plan\":"), lastOut);
+    }
+
+    /** A last list's poison is said on stderr as the others are, with the exit it asks for. */
+    @Test(timeOut = 300_000)
+    public void aLastListsPoisonIsSaidOnStderr() throws Exception {
+        Object[] last = planOn(poisonedByItsFirstRead(), List.of("a " + Precons.commander().get(0)));
+        Assert.assertEquals(last[0], 3);
+        String said = (String) last[2];
+        Assert.assertTrue(said.contains("poisoned") && said.contains("exit 3"), said);
+    }
+
     /** selftest puts the first precon through the plan read, so a build whose verb is dead fails its selftest, sim ai build
      *  records no such build, and sim ai accept refuses it (F5 guard spec 3.1). The read here never reaches its hook. */
     @Test(timeOut = 300_000)

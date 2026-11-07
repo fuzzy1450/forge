@@ -87,11 +87,14 @@ public class PlanReaderTest {
         return f;
     }
 
-    /** {@code main}, one of each, filled to 99 with Islands and Hill Giants, about forty lands whatever {@code main} holds. */
+    /** {@code main}, one of each, filled to 99 with Islands and Hill Giants, about forty lands whatever {@code main} holds;
+     *  past 61 names there is nothing to fill, and the list runs over 99. */
     private static Path listOf(List<String> commanders, List<String> main) throws IOException {
         List<String> lines = main.stream().map(n -> "1 " + n).collect(Collectors.toList());
         lines.add("38 Island");
-        lines.add((61 - main.size()) + " Hill Giant");
+        if (main.size() < 61) {
+            lines.add((61 - main.size()) + " Hill Giant");
+        }
         return deck(commanders, lines);
     }
 
@@ -213,6 +216,23 @@ public class PlanReaderTest {
         Assert.assertTrue(out.get(3).startsWith("{\"id\":\"last\",\"plan\":{\"archetype\":\""), out.get(3));
     }
 
+    /** A path Windows and POSIX both refuse is an error line for that list, said by its class, and stops nothing. */
+    @Test(timeOut = 120_000)
+    public void aPathThatCannotBeOneIsAnErrorLine() throws Exception {
+        Map<String, Object> line = PlanReader.readLine("bad-1 /tmp/a\u0000b.dck", new GameRunner(1));
+        Assert.assertEquals(line.get("id"), "bad-1");
+        Assert.assertFalse(line.containsKey("plan"), text(line));
+        Assert.assertTrue(String.valueOf(line.get("error")).startsWith("InvalidPathException"), text(line));
+    }
+
+    /** The id is the line's first word, and blank space around a line moves nothing. */
+    @Test(timeOut = 120_000)
+    public void aLineWithBlankSpaceAroundItKeepsItsId() throws Exception {
+        Map<String, Object> line = PlanReader.readLine("   spaced-1   C:/no/such/deck.dck  ", new GameRunner(1));
+        Assert.assertEquals(line.get("id"), "spaced-1", text(line));
+        Assert.assertTrue(line.containsKey("error"), text(line));
+    }
+
     /** The two seats' shuffles differ, the reads' games differ, and the text is the plan a real game holds, at any seed, in
      *  either seat, in a mirror or not. The list has a combo with all three name sets full, so order would show. */
     @Test(timeOut = 300_000)
@@ -286,6 +306,49 @@ public class PlanReaderTest {
         Assert.assertEquals(entries.get(), 2, "the scope's table holds the keep question's entry and the fresh one");
     }
 
+    /** Reads.at's two reads are of two seats: the held plan is the first seat's own, the fresh one the other's. A
+     *  mirror cannot tell them apart, so two different lists play, over seeds that start each seat. */
+    @Test(timeOut = 300_000)
+    public void eachReadIsOfItsOwnSeat() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        // two precons, and two lists differing by the one card living_end reads, which only a player's own cards show
+        List<SeatSpec[]> pairs = List.of(
+                new SeatSpec[] {new SeatSpec(Precons.commander().get(0), "Default", "default"),
+                                new SeatSpec(Precons.commander().get(1), "Default", "default")},
+                new SeatSpec[] {new SeatSpec(rampList("Living End"), "Default", "default"),
+                                new SeatSpec(rampList("Siphon Insight"), "Default", "default")});
+        Set<Integer> startedBy = new LinkedHashSet<>();
+        List<String> wrong = new ArrayList<>();
+        for (int i = 0; i < 16; i++) {
+            final long at = i % 8 + 1;
+            final SeatSpec[] ab = pairs.get(i / 8);
+            runner.play(new GameSpec(at, 120, List.of(ab[0], ab[1])), g -> { }, g -> {
+                PlanReader.Reads reads = PlanReader.Reads.at(g);
+                Player first = g.getStartingPlayer();
+                Player other = null;
+                for (Player p : g.getRegisteredPlayers()) {
+                    if (p != first) {
+                        other = p;
+                    }
+                }
+                startedBy.add(GameRunner.seatOf(first.getName()));
+                String ownFirst = text(PlanSignature.of(DeckPlan.forSetting("true", first), first));
+                String ownOther = text(PlanSignature.of(DeckPlan.forSetting("true", other), other));
+                if (ownFirst.equals(ownOther)) {
+                    wrong.add("seed " + at + ": the two lists read one plan, so this proves nothing");
+                }
+                if (!text(reads.asRead()).equals(ownFirst)) {
+                    wrong.add("seed " + at + ": the held read is not the first seat's: " + text(reads.asRead()));
+                }
+                if (!text(reads.again()).equals(ownOther)) {
+                    wrong.add("seed " + at + ": the fresh read is not the other seat's: " + text(reads.again()));
+                }
+            });
+        }
+        Assert.assertEquals(startedBy.size(), 2, "both seats started a game over these seeds: " + startedBy);
+        Assert.assertEquals(wrong, List.of());
+    }
+
     private static GameResult stopped(long violations) {
         return new GameResult(1L, null, "Error", 1, 0, false, "game ended without finishing", 5L, "ERROR", List.of(), violations);
     }
@@ -312,6 +375,36 @@ public class PlanReaderTest {
         Map<String, Object> line = PlanReader.answer("x", stopped(2), plan(0), plan(0));
         Assert.assertFalse(line.containsKey("plan"), text(line));
         Assert.assertTrue(String.valueOf(line.get("error")).contains("2"), text(line));
+    }
+
+    /** The answer needs both reads: one that never landed is a "no read" line, not a plan and not a comparison of
+     *  nothing with something. */
+    @Test
+    public void aReadThatNeverLandedIsNoRead() {
+        List<Map<String, Object>> ways = java.util.Arrays.asList(plan(0), null);
+        for (Map<String, Object> one : ways) {
+            for (Map<String, Object> other : ways) {
+                if (one != null && other != null) {
+                    continue;
+                }
+                Map<String, Object> line = PlanReader.answer("x", stopped(0), one, other);
+                Assert.assertFalse(line.containsKey("plan"), text(line));
+                Assert.assertTrue(String.valueOf(line.get("error")).startsWith("no read: "), text(line));
+            }
+        }
+    }
+
+    /** One violation is enough, and so are two reads that differ by a character and not by their length. */
+    @Test
+    public void oneViolationAndOneDifferingCharacterAreEachAnError() {
+        Map<String, Object> line = PlanReader.answer("x", stopped(1), plan(0), plan(0));
+        Assert.assertFalse(line.containsKey("plan"), text(line));
+        Assert.assertTrue(String.valueOf(line.get("error")).startsWith("strict mode refused 1 "), text(line));
+        Map<String, Object> ramp = plan(0), same = plan(0);
+        same.put("archetype", "RAMQ");
+        line = PlanReader.answer("x", stopped(0), ramp, same);
+        Assert.assertFalse(line.containsKey("plan"), text(line));
+        Assert.assertTrue(String.valueOf(line.get("error")).startsWith("the two reads differ"), text(line));
     }
 
     /** Past the cap CommanderPlan.scan keeps the first forty it walks, in an order that follows the library, so a list at
@@ -390,6 +483,24 @@ public class PlanReaderTest {
         with.remove("living_end");
         without.remove("living_end");
         Assert.assertEquals(text(with), text(without), "and nothing else moved");
+    }
+
+    /** The finisher in the opening hand is in the list: living_end reads every zone of the deck, not the library. */
+    @Test(timeOut = 300_000)
+    public void livingEndInTheHandIsStillInTheList() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        SeatSpec seat = new SeatSpec(rampList("Living End"), "Default", "default");
+        AtomicReference<Object> bit = new AtomicReference<>();
+        runner.play(new GameSpec(1L, 120, List.of(seat, seat)), g -> { }, g -> {
+            Player p = g.getRegisteredPlayers().get(0);
+            for (forge.game.card.Card c : p.getAllCards()) {
+                if ("Living End".equals(c.getName())) {
+                    g.getAction().moveToHand(c, null);
+                }
+            }
+            bit.set(PlanSignature.of(brainOf(p).deckPlan(p), p).get("living_end"));
+        });
+        Assert.assertEquals(bit.get(), Boolean.TRUE);
     }
 
     /** Eleven artifacts are five points of the ARTIFACTS strategy, twelve are six and it counts: Sol Ring in moves

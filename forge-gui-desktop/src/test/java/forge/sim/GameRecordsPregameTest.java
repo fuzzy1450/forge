@@ -208,6 +208,28 @@ public class GameRecordsPregameTest {
         Assert.assertEquals(key(stats, 0), List.of("Fire // Ice"));
     }
 
+    /** A move may name no zone on one side (a card made into a hand, a card gone from it): it throws nothing, and a
+     *  card that left the hand for no zone left it. */
+    @Test
+    public void aMoveWithNoZoneOnOneSideIsRead() {
+        GameRecords.Stats stats = tracked(1, 0, "Sol Ring", 2, 0, "Forest", 3, 0, "Fatal Push");
+        move(stats, 1, null, HAND);
+        move(stats, 2, LIBRARY, HAND);
+        move(stats, 2, HAND, null);
+        move(stats, 3, null, LIBRARY);
+        Assert.assertEquals(key(stats, 0), List.of("Forest"));
+    }
+
+    /** The list is of the deck's cards, a commander's among them. */
+    @Test
+    public void aCommanderThatLeftTheHandIsListed() {
+        GameRecords.Stats stats = tracked(1, 0, COMMANDER);
+        stats.commanderIds.add(1);
+        move(stats, 1, LIBRARY, HAND);
+        move(stats, 1, HAND, LIBRARY);
+        Assert.assertEquals(key(stats, 0), List.of(COMMANDER));
+    }
+
     /** {@code []} means recorded, nothing: true of a game that dealt no hand. Absent means not recorded: the fallback's
      *  contract is to read no collection this subscriber keeps, so it cannot know. */
     @Test
