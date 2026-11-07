@@ -613,6 +613,17 @@ public class ComboManaSacrificeAiTest extends AITest {
         }
     }
 
+    /** The refusal is of a discard alone: with a kill piece in hand a Swamp still pays the {B}, and the go-off is
+     *  ready. */
+    @Test
+    public void aKillPieceInHandRefusesNoOrdinarySource() {
+        constructedBoard();
+        ready("Swamp");
+        addCardToZone("Tendrils of Agony", ai, ZoneType.Hand);
+        assertTrue(ComboPlan.holdsKillPiece(ai), "the harness: the payer's rule");
+        assertTrue(ComboExecute.goOffNow(ai, oracleCast));
+    }
+
     /** The control: nothing in hand the payer protects, so the source pays, and the go-off wins. */
     @Test
     public void discardManaPaysTheGoOffWithNoKillPieceInHand() {
