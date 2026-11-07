@@ -19,6 +19,7 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
+import forge.util.SimScope;
 
 /**
  * Doomsday: five cards are kept, everything else is exiled, and half the life is lost. The deck wins by emptying its
@@ -524,9 +525,25 @@ public final class DoomsdayPile {
     private static final Map<Player, List<String>> PLANS = java.util.Collections.synchronizedMap(new WeakHashMap<>());
     private static final Map<Player, Integer> SERVED = java.util.Collections.synchronizedMap(new WeakHashMap<>());
 
+    /**
+     * {@link #PLANS} and {@link #SERVED} of a game played under a SimScope (the sim harness, one serve JVM running many
+     * games side by side): a Player's equals and hashCode are its id within its game, so in the JVM-wide maps the same
+     * seat of two games is one key, and a finished game's entry stays until the garbage collector clears it. Under a
+     * scope each game keeps its own two maps, and a simulation copy, which plays under its game's scope, shares them as
+     * it shared the JVM-wide ones. Without a scope (the GUI, SimulateMatch) the JVM-wide maps, as before.
+     */
+    private static final class Picks {
+        final Map<Player, List<String>> plans = new HashMap<>();
+        final Map<Player, Integer> served = new HashMap<>();
+    }
+
     private static Card planned(final Player ai, final CardCollectionView options) {
-        List<String> plan = PLANS.get(ai);
-        int served = SERVED.getOrDefault(ai, 0);
+        final SimScope scope = SimScope.current();
+        final Picks picks = scope == null ? null : scope.scratch(DoomsdayPile.class, Picks::new);
+        final Map<Player, List<String>> plans = picks == null ? PLANS : picks.plans;
+        final Map<Player, Integer> servedBy = picks == null ? SERVED : picks.served;
+        List<String> plan = plans.get(ai);
+        int served = servedBy.getOrDefault(ai, 0);
         boolean valid = plan != null && served > 0 && served < plan.size();
         if (valid) {
             for (int i = served; i < plan.size(); i++) {
@@ -539,24 +556,24 @@ public final class DoomsdayPile {
             final Start st = start(ai);
             final List<Spec> best = bestPile(st, candidates(ai, options), PILE);
             if (best == null) {
-                PLANS.remove(ai);
-                SERVED.remove(ai);
+                plans.remove(ai);
+                servedBy.remove(ai);
                 return null;
             }
             plan = new ArrayList<>();
             for (final Spec s : best) {
                 plan.add(s.name);
             }
-            PLANS.put(ai, plan);
+            plans.put(ai, plan);
             served = 0;
         }
         for (final Card c : options) {
             if (c.getName().equals(plan.get(served))) {
                 if (served + 1 >= plan.size()) {
-                    PLANS.remove(ai);
-                    SERVED.remove(ai);
+                    plans.remove(ai);
+                    servedBy.remove(ai);
                 } else {
-                    SERVED.put(ai, served + 1);
+                    servedBy.put(ai, served + 1);
                 }
                 return c;
             }
