@@ -1652,8 +1652,10 @@ public class ComputerUtilMana {
 
             for (SpellAbility ma : src.getManaAbilities()) {
                 ma.setActivatingPlayer(p);
-                // mana that needs a sacrifice only counts when something that costs next to nothing can be given up
-                if (!checkPlayable || ma.canPlay()) {
+                // mana that needs a sacrifice only counts when something that costs next to nothing can be given up;
+                // a Command-zone source counts only while its ability can be activated from there, checkPlayable or not:
+                // Channel's effect does, a commander waiting in the command zone with a mana ability of its own does not
+                if ((!checkPlayable && !src.isInZone(ZoneType.Command)) || ma.canPlay()) {
                     if (ManaSacrifice.isSacrificeMana(ma) && !ManaSacrifice.hasExpendableFodder(p, ma)) {
                         continue;
                     }
@@ -1728,7 +1730,9 @@ public class ComputerUtilMana {
         final List<Card> manaSources = CardLists.filter(list, c -> {
             for (final SpellAbility am : getAIPlayableMana(c)) {
                 am.setActivatingPlayer(ai);
-                if (!checkPlayable || (am.canPlay() && am.checkRestrictions(ai))) {
+                // a Command-zone source only while its ability can be activated from there (Channel's effect, not a
+                // commander in the command zone), as getAvailableManaEstimate counts it
+                if ((!checkPlayable && !c.isInZone(ZoneType.Command)) || (am.canPlay() && am.checkRestrictions(ai))) {
                     return true;
                 }
             }
