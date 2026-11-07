@@ -95,7 +95,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
     private List<Card> lastTurnCast = Lists.newArrayList();
     private final List<SpellAbility> thisTurnActivated = Lists.newArrayList();
 
-    private Card curResolvingCard = null;
+    private SpellAbility curResolving = null;
     private final Map<Integer, Integer> triggerRepeats = new HashMap<>();
     // every trigger's repeats, optional and targeted ones included, on triggerRepeats' resets: what an optional loop's
     // controller reads to stop it (CR 732.2a), where triggerRepeats draws only a mandatory loop (CR 104.4b). Keyed by
@@ -137,7 +137,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
         lastTurnCast.clear();
         thisTurnCast.clear();
         thisTurnActivated.clear();
-        curResolvingCard = null;
+        curResolving = null;
         triggerRepeats.clear();
         anyTriggerRepeats.clear();
         anyTriggerCountedAt.clear();
@@ -220,10 +220,14 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
     }
 
     public final boolean isResolving(Card c) {
-        if (!isResolving() || curResolvingCard == null) {
+        if (!isResolving()) {
             return false;
         }
-        return c.equals(curResolvingCard);
+        return c.equals(curResolving.getHostCard());
+    }
+
+    public final SpellAbility getResolvingAbility() {
+        return curResolving;
     }
 
     public final void add(SpellAbility sp) {
@@ -732,7 +736,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
         game.getPhaseHandler().resetPriority();
 
         final Card source = sa.getHostCard();
-        curResolvingCard = source;
+        curResolving = sa;
 
         boolean thisHasFizzled = hasFizzled(sa, null);
 
@@ -817,7 +821,7 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
             game.getPhaseHandler().onStackResolved();
         }
 
-        curResolvingCard = null;
+        curResolving = null;
     }
 
     private void removeCardFromStack(final SpellAbility sa, final SpellAbilityStackInstance si, final boolean fizzle) {
@@ -1021,7 +1025,8 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
                 activator = sa.getHostCard().getController();
             }
 
-            if (activator.equals(activePlayer)) {
+            // CR 805.7: a team puts all its triggered abilities on the stack in one order, chosen by its first player
+            if (activePlayer.sharesTeamWith(activator)) {
                 adjustAuraHost(sa);
                 activePlayerSAs.add(sa);
             }
@@ -1087,11 +1092,12 @@ public class MagicStack /* extends MyObservable */ implements Iterable<SpellAbil
     }
 
     public final void onNextTurn() {
-        final Player active = game.getPhaseHandler().getPlayerTurn();
         game.getStackZone().resetCardsAddedThisTurn();
         this.thisTurnActivated.clear();
         illegalAdditions.clear();
-        active.resetSpellCastSinceBegOfYourLastTurn();
+        for (final Player active : game.getPhaseHandler().getActivePlayers()) {
+            active.resetSpellCastSinceBegOfYourLastTurn();
+        }
         if (thisTurnCast.isEmpty()) {
             lastTurnCast = Lists.newArrayList();
             return;

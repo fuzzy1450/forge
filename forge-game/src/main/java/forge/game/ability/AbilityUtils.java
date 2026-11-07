@@ -156,13 +156,11 @@ public class AbilityUtils {
                 }
             }
         } else if (defined.equals("ThisTargetedCard") && sa instanceof SpellAbility) { // do not add parent targeted
-            if (((SpellAbility)sa).getTargets() != null) {
-                ((SpellAbility)sa).getTargets().getTargetCards().forEach(cards::add);
-            }
+            cards.addAll(((SpellAbility)sa).getTargets().getTargetCards());
         } else if (defined.equals("ParentTarget") && sa instanceof SpellAbility) {
             final SpellAbility parent = ((SpellAbility)sa).getParentTargetingCard();
             if (parent != null) {
-                parent.getTargets().getTargetCards().forEach(cards::add);
+                cards.addAll(parent.getTargets().getTargetCards());
             }
         }  else if (defined.startsWith("Triggered") && sa != null) {
             final CardTraitBase root = sa instanceof SpellAbility ? ((SpellAbility)sa).getRootAbility() : sa;
@@ -473,10 +471,6 @@ public class AbilityUtils {
                 val = playerXCount(players, calcX[1], card, ability);
             } else if (hType.startsWith("Remembered")) {
                 addPlayer(card.getRemembered(), hType, players);
-                val = playerXCount(players, calcX[1], card, ability);
-            } else if (hType.equals("NonActive")) {
-                players.addAll(game.getPlayers());
-                players.remove(game.getPhaseHandler().getPlayerTurn());
                 val = playerXCount(players, calcX[1], card, ability);
             } else if (hType.equals("HasLost")) {
                 players.addAll(game.getLostPlayers());
@@ -952,9 +946,7 @@ public class AbilityUtils {
                 players.addAll(parent.getTargets().getTargetPlayers());
             }
         } else if (defined.equals("ThisTargetedPlayer") && sa instanceof SpellAbility) { // do not add parent targeted
-            if (((SpellAbility)sa).getTargets() != null) {
-                ((SpellAbility)sa).getTargets().getTargetPlayers().forEach(players::add);
-            }
+            players.addAll(((SpellAbility)sa).getTargets().getTargetPlayers());
         } else if (defined.equals("TargetedController")) {
             for (final Card c : getDefinedCards(card, "Targeted", sa)) {
                 players.add(c.getController());
@@ -1126,7 +1118,15 @@ public class AbilityUtils {
             }
         } else if (defined.equals("AttackingPlayer")) {
             if (game.getPhaseHandler().inCombat()) {
-                players.add(game.getCombat().getAttackingPlayer());
+                // CR 805.10c: for a blocking creature, the player controlling what it blocks
+                final CardCollection blocked = game.getCombat().getAttackersBlockedBy(card);
+                if (blocked.isEmpty()) {
+                    players.add(game.getCombat().getAttackingPlayer());
+                } else {
+                    for (final Card attacker : blocked) {
+                        players.add(attacker.getController());
+                    }
+                }
             }
         } else if (defined.equals("DefendingPlayer")) {
             players.add(game.getCombat().getDefendingPlayerRelatedTo(card));
@@ -2440,6 +2440,10 @@ public class AbilityUtils {
             return doXMath(player.getTurn(), expr, c, ctb);
         }
 
+        if (sq[0].equals("YourExtraTurns")) {
+            return doXMath(player.getExtraTurnsPlayed(), expr, c, ctb);
+        }
+
         if (sq[0].equals("NotedNumber")) {
             return doXMath(player.getNotedNumberForName(c.getName()), expr, c, ctb);
         }
@@ -2556,8 +2560,7 @@ public class AbilityUtils {
         // Count$Domain
         if (sq[0].startsWith("Domain")) {
             int n = 0;
-            Player neededPlayer = sq[0].equals("DomainActivePlayer") ? game.getPhaseHandler().getPlayerTurn() : player;
-            CardCollection lands = neededPlayer.getLandsInPlay();
+            CardCollection lands = player.getLandsInPlay();
             for (String basic : MagicColor.Constant.BASIC_LANDS) {
                 if (!CardLists.getType(lands, basic).isEmpty()) {
                     n++;
@@ -3968,7 +3971,7 @@ public class AbilityUtils {
     public static int countCardTypesFromList(final Iterable<Card> list, boolean permanentTypes) {
         EnumSet<CardType.CoreType> types = EnumSet.noneOf(CardType.CoreType.class);
         for (Card c1 : list) {
-            c1.getType().getCoreTypes().forEach(types::add);
+            types.addAll(c1.getType().getCoreTypes());
         }
         if (permanentTypes)
             return (int) types.stream().filter(type -> type.isPermanent).count();
