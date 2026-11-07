@@ -90,12 +90,16 @@ public final class PlanReader {
         return answer(id, result, got == null ? null : got.asRead(), got == null ? null : got.again());
     }
 
-    /** The step that gives a list its answer. A line carries {@code plan} only when the game reached the hook, the two
-     *  reads gave one text, strict mode refused nothing and the list is under the pair cap. The result says Error when
-     *  both reads landed, because the game did not finish; that means nothing here. */
+    /** The step that gives a list its answer. A line carries {@code plan} only when the game reached the hook inside its
+     *  deadline, the two reads gave one text, strict mode refused nothing and the list is under the pair cap. The result
+     *  says Error when both reads landed, because the game did not finish; that means nothing here. A Timeout does: the
+     *  reads landed in the grace, in a game the runner had given up on, and no answer is the safe side. */
     static Map<String, Object> answer(String id, GameResult result, Map<String, Object> asRead, Map<String, Object> again) {
         if (asRead == null || again == null) {
             return line(id, "error", "no read: " + result.endReason() + ": " + result.error());
+        }
+        if (result.timedOut()) {
+            return line(id, "error", "the read ran past its deadline of " + TIMEOUT_S + " s");
         }
         if (result.violations() != 0) {
             return line(id, "error", "strict mode refused " + result.violations() + " access(es) during the read");

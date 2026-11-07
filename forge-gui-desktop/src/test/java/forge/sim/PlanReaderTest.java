@@ -407,6 +407,16 @@ public class PlanReaderTest {
         Assert.assertTrue(String.valueOf(line.get("error")).startsWith("the two reads differ"), text(line));
     }
 
+    /** A read can land in the grace after the deadline, from a game the runner calls Timeout. That is no answer, and the
+     *  list plays every seed: the safe side. */
+    @Test
+    public void aReadPastItsDeadlineIsAnError() {
+        GameResult late = new GameResult(1L, null, "Timeout", 1, 0, true, null, 5L, "TIMEOUT", List.of(), 0L);
+        Map<String, Object> line = PlanReader.answer("x", late, plan(0), plan(0));
+        Assert.assertFalse(line.containsKey("plan"), text(line));
+        Assert.assertTrue(String.valueOf(line.get("error")).startsWith("the read ran past its deadline"), text(line));
+    }
+
     /** Past the cap CommanderPlan.scan keeps the first forty it walks, in an order that follows the library, so a list at
      *  the cap has no answer: at the step that gives one, and through a real list that holds more than forty pairs. */
     @Test(timeOut = 120_000)
