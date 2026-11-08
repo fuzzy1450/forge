@@ -299,6 +299,36 @@ public class FlatMonteCarloVintageDoomsdayTest extends AITest {
                 bottom.getName().equals("Black Lotus"));
     }
 
+    /** A game played under a SimScope keeps its Doomsday plan in the scope, not in the JVM-wide map (R2). */
+    @Test
+    public void aScopedGameKeepsItsDoomsdayPlanInItsScope() throws Exception {
+        setUp();
+        reportedHand(true);
+        final java.lang.reflect.Field f = DoomsdayPile.class.getDeclaredField("PLANS");
+        f.setAccessible(true);
+        final java.util.Map<?, ?> plans = (java.util.Map<?, ?>) f.get(null);
+        final java.lang.reflect.Field s = DoomsdayPile.class.getDeclaredField("SERVED");
+        s.setAccessible(true);
+        final java.util.Map<?, ?> served = (java.util.Map<?, ?>) s.get(null);
+        plans.remove(ai);
+        final CardCollection options = new CardCollection(ai.getCardsIn(ZoneType.Library));
+        try {
+            forge.util.SimScope.enter(new forge.util.SimScope(7L));
+            try {
+                AssertJUnit.assertNotNull(DoomsdayPile.pick(ai, options));
+            } finally {
+                forge.util.SimScope.exit();
+            }
+            AssertJUnit.assertFalse("the scoped game wrote the JVM-wide plan map", plans.containsKey(ai));
+            AssertJUnit.assertNotNull(DoomsdayPile.pick(ai, options));
+            AssertJUnit.assertTrue("unscoped, the plan is JVM-wide (the test is not vacuous)", plans.containsKey(ai));
+        } finally {
+            // the JVM-wide maps outlive this game, and the next game's AI seat is an equal Player
+            plans.remove(ai);
+            served.remove(ai);
+        }
+    }
+
     /** The pick of the five goes through the plan: Ancestral, the Lotus and the Oracle are all kept. */
     @Test
     public void theFivePicksIncludeTheCardsOfTheWinningPile() {
