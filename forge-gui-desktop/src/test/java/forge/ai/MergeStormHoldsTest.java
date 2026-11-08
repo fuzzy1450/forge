@@ -55,18 +55,23 @@ public class MergeStormHoldsTest extends AITest {
         return ((PlayerControllerAi) p.getController()).getAi();
     }
 
-    /** The interplay review's P5: {@code Flusterstorm} makes a storm finisher of its Storm keyword, and with three
-     *  tutors and eight cheap mana cards the list reads as a tutor storm; with Counterspell in its place, as no combo.
-     *  Sensei's Divining Top, Dark Ritual and Lotus Petal in hand, a Swamp and an Island on the battlefield, in the
-     *  AI's own Main 2 of a Commander game. */
+    /** The interplay review's P5 board: three tutors and eight cheap mana cards, Sensei's Divining Top, Dark Ritual and
+     *  Lotus Petal in hand, a Swamp and an Island on the battlefield, in the AI's own Main 2 of a Commander game. With
+     *  a storm finisher in the slot, Brain Freeze, the list reads as a tutor storm; with Counterspell there, as no combo.
+     *  P5's own slot card, {@code Flusterstorm}, was a finisher by its Storm keyword until upstream's af7df3488ea
+     *  (#12606) left counterspells out of the storm finishers ({@link #flusterstormNoLongerMakesTheListATutorStorm}). */
     private void commanderBoard(final boolean storm) {
+        commanderBoard(storm ? "Brain Freeze" : "Counterspell", storm);
+    }
+
+    private void commanderBoard(final String slot, final boolean tutorStorm) {
         final Map<String, Integer> main = new LinkedHashMap<>();
         for (final String n : List.of("Demonic Tutor", "Diabolic Tutor", "Grim Tutor", "Sol Ring", "Mana Vault",
                 "Mana Crypt", "Arcane Signet", "Fellwar Stone", "Mind Stone", "Lotus Petal", "Dark Ritual", "Chrome Mox",
                 "Mox Diamond", "Sensei's Divining Top", "Thassa's Oracle", "Demonic Consultation")) {
             main.put(n, 1);
         }
-        main.put(storm ? "Flusterstorm" : "Counterspell", 1);
+        main.put(slot, 1);
         main.put("Island", 20);
         main.put("Swamp", 20);
         final Deck ours = new Deck("ours");
@@ -100,7 +105,7 @@ public class MergeStormHoldsTest extends AITest {
         move("Lotus Petal", ZoneType.Hand);
         move("Swamp", ZoneType.Battlefield).setSickness(false);
         move("Island", ZoneType.Battlefield).setSickness(false);
-        assertEquals(storm, aiOf(ai).deckPlan(ai).combos.has(ComboPlan.Kind.TUTOR_STORM));
+        assertEquals(tutorStorm, aiOf(ai).deckPlan(ai).combos.has(ComboPlan.Kind.TUTOR_STORM));
     }
 
     /** Beseech Storm in the library of the AI (Default profile), Flat MC off, in its own Main 2, five Swamps in play and
@@ -190,6 +195,18 @@ public class MergeStormHoldsTest extends AITest {
     @Test(timeOut = 120_000)
     public void flatMcDoesNotChangeADeckThatIsNoTutorStorm() {
         commanderBoard(false);
+        game.markAsSimulationCopy();
+
+        assertEquals("Lotus Petal", decide());
+    }
+
+    /** P5's own list, Flusterstorm in the slot, re-pinned: it read as a tutor storm and a rollout held its hand (null,
+     *  {@link #aRolloutHolds} at 3384f8bba2a); since upstream's af7df3488ea (#12606) a counterspell with storm copies
+     *  itself and wins nothing, so it is no storm finisher, the list reads as no tutor storm, and a rollout plays
+     *  Lotus Petal as it does for the Counterspell list. */
+    @Test(timeOut = 120_000)
+    public void flusterstormNoLongerMakesTheListATutorStorm() {
+        commanderBoard("Flusterstorm", false);
         game.markAsSimulationCopy();
 
         assertEquals("Lotus Petal", decide());
