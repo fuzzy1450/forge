@@ -411,6 +411,8 @@ public class FlatMonteCarloVintageDoomsdayTest extends AITest {
     @Test
     public void theDrawHeuristicsAllowTheDrawThroughOfTheCutPile() {
         setUp();
+        // this fork asks the draw-through only where Flat MC runs (DrawAi.pileDrawOn, MergeDoomsdayDrawThroughGateTest)
+        game.AI_FLAT_MONTE_CARLO = true;
         while (ai.getCardsIn(ZoneType.Library).size() > 5) {
             ai.getZone(ZoneType.Library).remove(ai.getCardsIn(ZoneType.Library).get(0));
         }

@@ -270,7 +270,7 @@ public class DrawAi extends SpellAbilityAi {
      */
     @Override
     protected boolean checkPhaseRestrictions(Player ai, SpellAbility sa, PhaseHandler ph) {
-        if (drawsThroughDoomsdayPile(ai, sa)) {
+        if (pileDrawOn(ai) && drawsThroughDoomsdayPile(ai, sa)) {
             return true; // the pile is drawn through in the main phase it was made in, with the cards in hand
         }
         // Sacrificing a creature in response to something dangerous is generally good in any phase
@@ -316,7 +316,7 @@ public class DrawAi extends SpellAbilityAi {
      */
     @Override
     protected boolean checkPhaseRestrictions(Player ai, SpellAbility sa, PhaseHandler ph, String logic) {
-        if (drawsThroughDoomsdayPile(ai, sa)) {
+        if (pileDrawOn(ai) && drawsThroughDoomsdayPile(ai, sa)) {
             return true;
         }
         if (logic.equals("VeilOfSummer")) {
@@ -348,6 +348,16 @@ public class DrawAi extends SpellAbilityAi {
         } catch (final RuntimeException e) {
             return false;
         }
+    }
+
+    /**
+     * Whether upstream's Doomsday draw-through is asked at all: only where Flat MC runs. Doomsday is AI:RemoveDeck:All,
+     * which no row of this fork readmits, and its follow-through casts (DoomsdayPile.sureDraw, ConsultationWin) are
+     * Flat MC's, so with Flat MC off (every sim harness game) the draw-through would only deck a short library while a
+     * winner waits in hand (interplay review F2 of the 2026-11-07 top-up; C1's class, as the tutor storm holds).
+     */
+    private static boolean pileDrawOn(final Player ai) {
+        return ai.getController() instanceof PlayerControllerAi pc && pc.getAi().flatMonteCarloActive();
     }
 
     @Override
@@ -661,7 +671,8 @@ public class DrawAi extends SpellAbilityAi {
             // checks what the ai prevent from casting it on itself
             // if spell is not mandatory
             if (aiTarget && !ai.cantLose()) {
-                if (numCards >= computerLibrarySize - 3 && !forge.ai.simulation.DoomsdayPile.drawsThroughPile(ai, numCards)) {
+                if (numCards >= computerLibrarySize - 3
+                        && !(pileDrawOn(ai) && forge.ai.simulation.DoomsdayPile.drawsThroughPile(ai, numCards))) {
                     if (xPaid) {
                         numCards = computerLibrarySize - 1;
                         if (numCards <= 0 && !mandatory) {
@@ -789,7 +800,8 @@ public class DrawAi extends SpellAbilityAi {
                 return false;
             }
 
-            if (numCards >= computerLibrarySize - 3 && !forge.ai.simulation.DoomsdayPile.drawsThroughPile(ai, numCards)) {
+            if (numCards >= computerLibrarySize - 3
+                    && !(pileDrawOn(ai) && forge.ai.simulation.DoomsdayPile.drawsThroughPile(ai, numCards))) {
                 // combo-aware AI (spec 2026-10-22 section 6.4): or the draw that finishes a line on our emptied library
                 // (finishesLine needs an empty library and drawsThroughPile a non-empty one, so they never meet)
                 if ((ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin()) || ComboExecute.finishesLine(ai, sa)) {
