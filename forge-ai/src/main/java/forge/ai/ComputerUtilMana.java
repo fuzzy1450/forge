@@ -38,6 +38,7 @@ import forge.game.replacement.ReplacementType;
 import forge.game.spellability.AbilityManaPart;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
+import forge.game.spellability.SpellAbilityRestriction;
 import forge.game.staticability.StaticAbilityManaConvert;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerType;
@@ -2118,6 +2119,12 @@ public class ComputerUtilMana {
         if (sa == null || sa.getPayCosts() == null || sa.getPayCosts().hasTapCost()) {
             return false;
         }
+        // Channel's effect repeats. An activation limit (Kozilek's Translator: once each turn) stops the repeat,
+        // and mana that may be spent only on some spells (Lord of the Forsaken: those cast from a graveyard) is
+        // not mana for whatever is estimated: either counts once, as it did before this accounting
+        if (hasActivationLimit(sa) || hasSpendingRestriction(sa)) {
+            return false;
+        }
         boolean paysLife = false;
         for (final CostPart part : sa.getPayCosts().getCostParts()) {
             if (part instanceof CostPayLife) {
@@ -2127,6 +2134,26 @@ public class ComputerUtilMana {
             }
         }
         return paysLife;
+    }
+
+    /**
+     * Whether an ability may be activated only so many times each turn or each game (ActivationLimit$,
+     * GameActivationLimit$).
+     */
+    static boolean hasActivationLimit(final SpellAbility sa) {
+        final SpellAbilityRestriction restrictions = sa.getRestrictions();
+        return restrictions != null
+                && (restrictions.getLimitToCheck() != null || restrictions.getGameLimitToCheck() != null);
+    }
+
+    /** Whether the mana of a mana ability may be spent only on some spells or abilities (RestrictValid$ and kin). */
+    private static boolean hasSpendingRestriction(final SpellAbility sa) {
+        for (final AbilityManaPart mp : sa.getAllManaParts()) {
+            if (!StringUtils.isEmpty(mp.getManaRestrictions()) || !StringUtils.isEmpty(mp.getExtraManaRestriction())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Number of life-paid activations that can be counted without spending the player's last life. */

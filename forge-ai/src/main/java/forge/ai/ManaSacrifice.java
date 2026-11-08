@@ -166,14 +166,18 @@ public final class ManaSacrifice {
      * set aside in the memory of an AI controller instead, and the ability can be used again while enough fodder is
      * left. An AI's fodder is already set aside by {@link ComputerUtilCost#checkForManaSacrificeCost}. That method skips
      * a human, because the Auto button also pays under a temporary AI controller, so a human's fodder is set aside here.
-     * A mana ability paid for only with life can also be used more than once during a test payment; the payment
-     * routine tracks the life committed by earlier uses.
+     * A mana ability paid for only with life can also be used more than once during a test payment, unless it may be
+     * activated only so many times a turn or a game, which the payment for real stops at; the payment routine tracks
+     * the life committed by earlier uses.
      */
     public static boolean canUseAgainInTest(final Player p, final SpellAbility ma) {
         final CostSacrifice part = sacrificePart(ma);
         if (part == null) {
             if (ma == null || ma.getPayCosts() == null || ma.getPayCosts().hasTapCost()) {
                 return false;
+            }
+            if (ComputerUtilMana.hasActivationLimit(ma)) {
+                return false; // Kozilek's Translator: once each turn
             }
             boolean paysLife = false;
             for (final CostPart costPart : ma.getPayCosts().getCostParts()) {

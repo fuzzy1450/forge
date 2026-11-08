@@ -164,9 +164,10 @@ public class ComboSignalsTest extends AITest {
         assertEquals(ids(t.live()), List.of("742-1295"));
     }
 
-    // Signal 1's next turn's mana is ComputerUtilMana.getAvailableManaEstimate(ai, false), which upstream's Channel
-    // support (79f6fc2ec91, #12701) widened to the Command zone; the 2026-11-07 top-up narrowed it back where it would
-    // change what this signal and the dead-card hooks read, and the test below pins that here, in the combo family.
+    // Signal 1's next turn's mana is ComputerUtilMana.getAvailableManaEstimate(ai, false). Upstream's Channel support
+    // (79f6fc2ec91, #12701) widened that estimate twice, to the Command zone and to life-paid mana, and the 2026-11-07
+    // top-up narrowed both back where they would change what this signal and the dead-card hooks read: the four tests
+    // below pin both narrowings here, in the combo family.
 
     /** A mana ability in the command zone counts only while it can be activated there (e2984100667, C9): Sol Ring
      *  waiting there is no mana next turn, no source and none of signal 1's mana; on the battlefield it is all
@@ -184,6 +185,67 @@ public class ComboSignalsTest extends AITest {
         assertEquals(ComputerUtilMana.getAvailableManaEstimate(ai, false), 2, "a battlefield Sol Ring still counts");
         assertEquals(ComputerUtilMana.getAvailableManaSources(ai, false).size(), 1);
         assertEquals(ComboSignals.nextTurnManaNow(ai), 2);
+    }
+
+    /** A Forest and {@code source} on our battlefield at {@code life}, in our own Main 2 (the 2026-11-07 interplay
+     *  review's L1 boards): "[the estimate now, the estimate next turn, signal 1's next turn's mana]". */
+    private String lifeSourceReadings(final String source, final int life) {
+        game = initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        ai.setLife(life, null);
+        addCard("Forest", ai);
+        addCard(source, ai);
+        moveToMain2(game, ai);
+        return Arrays.toString(new int[] { ComputerUtilMana.getAvailableManaEstimate(ai, true),
+                ComputerUtilMana.getAvailableManaEstimate(ai, false), ComboSignals.nextTurnManaNow(ai) });
+    }
+
+    /**
+     * Upstream's life-paid mana accounting counts a mana ability whose whole cost is life once for each life the
+     * player can spend on it. Kozilek's Translator may be activated once each turn, and Lord of the Forsaken's mana
+     * may be spent only on spells cast from a graveyard: each is one activation's mana, as before that accounting,
+     * which read each as 40 at 40 life. Treasonous Ogre, with neither, keeps upstream's count: the Forest and thirteen
+     * activations, keeping one life (upstream's design, Evan's call).
+     */
+    @Test
+    public void aLifeSourceWithALimitOrASpendingRestrictionIsOneActivationsMana() {
+        for (final String source : List.of("Lord of the Forsaken", "Kozilek's Translator")) {
+            assertEquals(lifeSourceReadings(source, 40), "[2, 2, 2]", source + " beside a Forest at 40 life");
+        }
+        assertEquals(lifeSourceReadings("Treasonous Ogre", 40), "[14, 14, 14]", "upstream's count stands");
+    }
+
+    /** So signal 1 fires beside such a source: an Island and the source make 2 next turn, short of the line's 3. */
+    @Test
+    public void noManaBesideALifeSourceWithALimitOrASpendingRestriction() {
+        for (final String source : List.of("Lord of the Forsaken", "Kozilek's Translator")) {
+            final ComboLines.Line l = oracleLine();
+            ai.setLife(40, null);
+            lands("Island");
+            addCard(source, ai);
+            assertEquals(abandon(l), Signal.NO_MANA, source);
+        }
+    }
+
+    /** The payer's test payment repeats a life-only source as well (ManaSacrifice.canUseAgainInTest), but not past an
+     *  activation limit: Kozilek's Translator alone makes one {C} a turn, so Mind Stone's {2} is not paid, as the
+     *  payment for real finds. Treasonous Ogre alone still pays Shivan Dragon's {4}{R}{R} with 18 of 20 life
+     *  (upstream's design, the interplay review's L2: Evan's call). */
+    @Test
+    public void theTestPaymentUsesALimitedLifeSourceOnce() {
+        game = initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        addCard("Kozilek's Translator", ai);
+        final SpellAbility stone = addCardToZone("Mind Stone", ai, ZoneType.Hand).getFirstSpellAbility();
+        stone.setActivatingPlayer(ai);
+        assertFalse(ComputerUtilMana.canPayManaCost(stone, ai, 0, false), "one {C} a turn for a {2}");
+
+        game = initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        addCard("Treasonous Ogre", ai);
+        final SpellAbility dragon = addCardToZone("Shivan Dragon", ai, ZoneType.Hand).getFirstSpellAbility();
+        dragon.setActivatingPlayer(ai);
+        assertTrue(ComputerUtilMana.canPayManaCost(dragon, ai, 0, false), "six activations, 18 of 20 life");
     }
 
     @Test
