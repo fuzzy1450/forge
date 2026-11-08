@@ -50,6 +50,15 @@ public class FlatMonteCarloVintageMetaTest extends AITest {
         return DeckPlan.forSetting("auto", p).combos;
     }
 
+    /**
+     * The cards of the two lists below that this fork's stock AI was taught to play, so their scripts lost
+     * AI:RemoveDeck:All on purpose: Demonic Consultation (9e1f6c8e79e, cast in response to our own Thassa's Oracle
+     * trigger), Commandeer (413f91f1ceb), Manifold Key (73f2d574f05, dead-card batch 2) and Prismatic Ending
+     * (3555a2c5534, dead-card batch 3). Not plays of the rollouts only: no mark, and kept in AI decks either way.
+     */
+    private static final String[] PLAYED_BY_THE_FORK = { "Demonic Consultation", "Commandeer", "Manifold Key",
+            "Prismatic Ending" };
+
     @Test
     public void oathDeckIsReadAsTheCheatDeck() {
         final ComboPlan combos = plan(deal(OATH));
@@ -64,15 +73,20 @@ public class FlatMonteCarloVintageMetaTest extends AITest {
 
     /**
      * The AI:RemoveDeck:All cards of the metagame stay marked (a card that loses the mark is no longer a play of the
-     * rollouts only), and the cantrips and tutors among them are offered to the rollouts.
+     * rollouts only), and the cantrips and tutors among them are offered to the rollouts. The fork's own plays among
+     * upstream's list ({@link #PLAYED_BY_THE_FORK}) are unmarked.
      */
     @Test
     public void theRemoveDeckCardsAreMarkedAndTheCantripsAreOffered() {
         final Player p = deal(BESEECH_STORM);
         for (final String name : new String[] { "Gitaxian Probe", "Vampiric Tutor", "Mishra's Bauble", "Urza's Bauble",
-                "Demonic Consultation", "Merchant Scroll", "Prismatic Ending", "Mindbreak Trap", "Manifold Key",
-                "Lion's Eye Diamond", "Doomsday", "Goblin Welder", "Commandeer", "Flash", "Nethergoyf" }) {
+                "Merchant Scroll", "Mindbreak Trap", "Lion's Eye Diamond", "Doomsday", "Goblin Welder", "Flash",
+                "Nethergoyf" }) {
             AssertJUnit.assertTrue(name, ComputerUtilCard.isCardRemAIDeck(addCardToZone(name, p, ZoneType.Hand)));
+        }
+        for (final String name : PLAYED_BY_THE_FORK) {
+            AssertJUnit.assertFalse(name + " lost AI:RemoveDeck:All in this fork, whose stock AI plays it",
+                    ComputerUtilCard.isCardRemAIDeck(addCardToZone(name, p, ZoneType.Hand)));
         }
         for (final String name : new String[] { "Gitaxian Probe", "Vampiric Tutor", "Mishra's Bauble", "Urza's Bauble",
                 "Demonic Consultation" }) {
@@ -112,14 +126,15 @@ public class FlatMonteCarloVintageMetaTest extends AITest {
 
     /**
      * Decks built for the AI keep the AI:RemoveDeck:All cards Flat MC plays (free cantrips, the combo pieces) and still
-     * leave out the others; with Flat MC off nothing is kept.
+     * leave out the others; with Flat MC off nothing is kept. The fork's own plays among upstream's lists
+     * ({@link #PLAYED_BY_THE_FORK}) carry no mark, so AI decks keep them with Flat MC on or off.
      */
     @Test
     public void aiDecksKeepTheRemoveDeckCardsFlatMcPlays() {
         final Player p = deal(OATH);
         final String[] kept = { "Gitaxian Probe", "Mishra's Bauble", "Urza's Bauble", "Vampiric Tutor",
                 "Demonic Consultation", "Merchant Scroll", "Manifold Key", "Goblin Welder", "Doomsday" };
-        final String[] left = { "Prismatic Ending", "Mindbreak Trap", "Commandeer", "Flash", "Nethergoyf" };
+        final String[] left = { "Mindbreak Trap", "Flash", "Nethergoyf" };
         try {
             forge.card.CardAiHints.setKeptForFlatMc(AiCardLists::isFlatMcPlayable);
             for (final String name : kept) {
@@ -128,6 +143,10 @@ public class FlatMonteCarloVintageMetaTest extends AITest {
             }
             for (final String name : left) {
                 AssertJUnit.assertFalse(name + " is not played by Flat MC and stays out of AI decks",
+                        forge.card.CardRulesPredicates.IS_KEPT_IN_AI_DECKS.test(addCardToZone(name, p, ZoneType.Hand).getRules()));
+            }
+            for (final String name : PLAYED_BY_THE_FORK) {
+                AssertJUnit.assertTrue(name + " is played by the fork's stock AI and kept in AI decks",
                         forge.card.CardRulesPredicates.IS_KEPT_IN_AI_DECKS.test(addCardToZone(name, p, ZoneType.Hand).getRules()));
             }
             // AI:RemoveDeck:Random: the fast mana, tutors and combo pieces Flat MC plays are kept, the prison pieces are not
@@ -142,6 +161,10 @@ public class FlatMonteCarloVintageMetaTest extends AITest {
             forge.card.CardAiHints.setKeptForFlatMc(null); // Flat MC off
             AssertJUnit.assertFalse("with Flat MC off nothing is kept", forge.card.CardRulesPredicates.IS_KEPT_IN_AI_DECKS
                     .test(addCardToZone("Gitaxian Probe", p, ZoneType.Hand).getRules()));
+            for (final String name : PLAYED_BY_THE_FORK) {
+                AssertJUnit.assertTrue(name + " is kept with Flat MC off as well",
+                        forge.card.CardRulesPredicates.IS_KEPT_IN_AI_DECKS.test(addCardToZone(name, p, ZoneType.Hand).getRules()));
+            }
         } finally {
             forge.card.CardAiHints.setKeptForFlatMc(null);
         }
