@@ -17,6 +17,7 @@ import forge.ai.AITest;
 import forge.ai.AiCardMemory;
 import forge.ai.AiController;
 import forge.ai.ComputerUtilCombat;
+import forge.ai.ComputerUtilMana;
 import forge.ai.PlayerControllerAi;
 import forge.ai.combo.ComboSignals.Signal;
 import forge.game.Game;
@@ -161,6 +162,28 @@ public class ComboSignalsTest extends AITest {
         lands("Swamp");
         assertNull(abandon(l));
         assertEquals(ids(t.live()), List.of("742-1295"));
+    }
+
+    // Signal 1's next turn's mana is ComputerUtilMana.getAvailableManaEstimate(ai, false), which upstream's Channel
+    // support (79f6fc2ec91, #12701) widened to the Command zone; the 2026-11-07 top-up narrowed it back where it would
+    // change what this signal and the dead-card hooks read, and the test below pins that here, in the combo family.
+
+    /** A mana ability in the command zone counts only while it can be activated there (e2984100667, C9): Sol Ring
+     *  waiting there is no mana next turn, no source and none of signal 1's mana; on the battlefield it is all
+     *  three. */
+    @Test
+    public void aCommanderWaitingInTheCommandZoneIsNoManaNextTurn() {
+        game = initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        addCardToZone("Sol Ring", ai, ZoneType.Command);
+        assertEquals(ComputerUtilMana.getAvailableManaEstimate(ai, false), 0,
+                "a mana ability in the command zone is not activatable there");
+        assertTrue(ComputerUtilMana.getAvailableManaSources(ai, false).isEmpty(), "nor is it a source");
+        assertEquals(ComboSignals.nextTurnManaNow(ai), 0, "nor signal 1's mana next turn");
+        addCard("Sol Ring", ai);
+        assertEquals(ComputerUtilMana.getAvailableManaEstimate(ai, false), 2, "a battlefield Sol Ring still counts");
+        assertEquals(ComputerUtilMana.getAvailableManaSources(ai, false).size(), 1);
+        assertEquals(ComboSignals.nextTurnManaNow(ai), 2);
     }
 
     @Test
