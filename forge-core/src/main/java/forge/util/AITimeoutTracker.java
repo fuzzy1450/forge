@@ -13,6 +13,8 @@ import java.util.concurrent.TimeUnit;
  * A session that is still open well past its own timeout is considered leaked (a begin() without end())
  * and is replaced by the next begin(), so one bug can never leave a player with an expired deadline forever.
  * Allocation: one tiny Slot per (game, player), purged once idle slots pile up. Reads are lock free.
+ * A game played under a {@link SimScope} keeps its slots in that scope's own map; the GUI, which binds none, keeps
+ * them in one JVM-wide map (see slots()).
  */
 public final class AITimeoutTracker {
     /** The bar becomes visible once this much time has elapsed. */
@@ -25,7 +27,7 @@ public final class AITimeoutTracker {
         volatile long startNanos;
         volatile long timeoutNanos;
         volatile int depth;
-        /** Set (under the slot's lock) once purged from SLOTS; a racing begin() must then fetch a fresh slot. */
+        /** Set (under the slot's lock) once purged from its map; a racing begin() must then fetch a fresh slot. */
         boolean removed;
     }
 
@@ -35,18 +37,20 @@ public final class AITimeoutTracker {
     /**
      * Key of one AI player's session. Player ids restart at 0 in every game while game ids are unique per JVM,
      * so two matches running side by side (or a sim and a real game) never share a deadline or a timer bar.
+     * Under a {@link SimScope} game ids are unique per scope only (every game of a serve JVM is game 1), so a scope's
+     * sessions are kept in its own map under the same keys (see slots()).
      */
     public static long key(final int gameId, final int playerId) {
         return ((long) gameId << 32) | (playerId & 0xFFFFFFFFL);
     }
 
-    private static void purgeIdle() {
-        for (final java.util.Map.Entry<Long, Slot> e : SLOTS.entrySet()) {
+    private static void purgeIdle(final ConcurrentHashMap<Long, Slot> slots) {
+        for (final java.util.Map.Entry<Long, Slot> e : slots.entrySet()) {
             final Slot s = e.getValue();
             synchronized (s) {
                 if (s.depth == 0 && !s.removed) {
                     s.removed = true;
-                    SLOTS.remove(e.getKey(), s);
+                    slots.remove(e.getKey(), s);
                 }
             }
         }
@@ -56,6 +60,17 @@ public final class AITimeoutTracker {
     private static volatile Runnable repaintHook;
 
     private AITimeoutTracker() { }
+
+    /**
+     * The map this thread's sessions are kept in: the bound {@link SimScope}'s own, or with none bound, as in the GUI,
+     * the JVM-wide SLOTS. Every game of a serve JVM takes its game and player ids from its own scope, so its games are
+     * all game 1, and in one map one game's AI would spend another's deadline. A rollout's copy plays under its game's
+     * scope, so the copy's sessions are kept in that map too, under the copy's own game id.
+     */
+    private static ConcurrentHashMap<Long, Slot> slots() {
+        final SimScope scope = SimScope.current();
+        return scope == null ? SLOTS : scope.scratch(AITimeoutTracker.class, ConcurrentHashMap::new);
+    }
 
     /** UI registers this so a repaint is requested when the bar is due to appear (non-continuous rendering). */
     public static void setRepaintHook(final Runnable hook) {
@@ -67,17 +82,18 @@ public final class AITimeoutTracker {
     }
 
     public static void begin(final long key, final long timeoutNanos) {
+        final ConcurrentHashMap<Long, Slot> slots = slots();
         boolean outermost = false;
         long sessionStart = 0;
         Slot s;
         while (true) {
-            Slot found = SLOTS.get(key);
+            Slot found = slots.get(key);
             if (found == null) {
-                if (SLOTS.size() > PURGE_THRESHOLD) {
-                    purgeIdle();
+                if (slots.size() > PURGE_THRESHOLD) {
+                    purgeIdle(slots);
                 }
                 found = new Slot();
-                final Slot prev = SLOTS.putIfAbsent(key, found);
+                final Slot prev = slots.putIfAbsent(key, found);
                 if (prev != null) {
                     found = prev;
                 }
@@ -116,7 +132,7 @@ public final class AITimeoutTracker {
     }
 
     public static void end(final long key) {
-        final Slot s = SLOTS.get(key);
+        final Slot s = slots().get(key);
         if (s == null) {
             return;
         }
@@ -133,14 +149,14 @@ public final class AITimeoutTracker {
     }
 
     public static boolean isActive(final long key) {
-        final Slot s = SLOTS.get(key);
+        final Slot s = slots().get(key);
         return s != null && s.depth > 0 && !isStale(s, System.nanoTime());
     }
 
     /** Absolute System.nanoTime() deadline of the active session, or fallbackNanos from now when none is active. */
     public static long deadlineNanos(final long key, final long fallbackTimeoutNanos) {
         final long now = System.nanoTime();
-        final Slot s = SLOTS.get(key);
+        final Slot s = slots().get(key);
         if (s != null && s.depth > 0 && !isStale(s, now)) {
             return s.startNanos + s.timeoutNanos;
         }
@@ -152,7 +168,7 @@ public final class AITimeoutTracker {
      * Returns -1 when the bar must be hidden (no session, too early, finished or timed out).
      */
     public static float getRemainingFraction(final long key) {
-        final Slot s = SLOTS.get(key);
+        final Slot s = slots().get(key);
         if (s == null || s.depth == 0) {
             return -1f;
         }

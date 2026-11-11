@@ -150,6 +150,17 @@ public class GameCopier {
             playerMap.put(origPlayer, newPlayer);
         }
 
+        // Every registered player is in the new game, but only the players still in the game had their life and
+        // state copied above: one the game has lost would come back as a live opponent, at the default starting
+        // life and with no cards, count in the score and keep the copy from ending when the last real opponent
+        // dies. It is out of the copy's game too, with the outcome it lost with.
+        for (Player origLost : origGame.getLostPlayers()) {
+            Player newLost = newGame.getPlayer(origLost.getId());
+            newGame.getPlayers().remove(newLost);
+            newGame.getLostPlayers().add(newLost);
+            newLost.getStats().setOutcome(origLost.getOutcome());
+        }
+
         PhaseHandler origPhaseHandler = origGame.getPhaseHandler();
         Player newPlayerTurn = playerMap.get(origPhaseHandler.getPlayerTurn());
         newGame.getPhaseHandler().devModeSet(origPhaseHandler.getPhase(), newPlayerTurn, origPhaseHandler.getTurn());
@@ -160,9 +171,12 @@ public class GameCopier {
 
         copyGameState(newGame, aiPlayer);
 
+        // copyCommandersToSnapshot skips a commander the copy does not hold, such as one that left the game with
+        // its owner but is still named by another player's commander damage; the strict map would throw instead.
+        final IEntityMap lenientCommanders = lenientMap(newGame);
         for (Player origPlayer : playerMap.keySet()) {
             Player newPlayer = playerMap.get(origPlayer);
-            origPlayer.copyCommandersToSnapshot(newPlayer, gameObjectMap::map);
+            origPlayer.copyCommandersToSnapshot(newPlayer, lenientCommanders::map);
             origPlayer.copyEffectCardsToSnapshot(newPlayer, gameObjectMap::map);
             ((PlayerZoneBattlefield) newPlayer.getZone(ZoneType.Battlefield)).setTriggers(true);
         }
@@ -608,7 +622,8 @@ public class GameCopier {
     /**
      * Maps what a static effect refers to, as far as the copy has it: a card is looked up by identity, then by id (a
      * card that changed zones is a new object with the same id), and what is not there is left out instead of throwing.
-     * Only for undoing effects; {@link #find} stays strict for everything that must exist in the copy.
+     * Only for undoing effects and for handing the players' commanders over (Player.copyCommandersToSnapshot
+     * skips a commander that is not there); {@link #find} stays strict for everything that must exist in the copy.
      */
     private IEntityMap lenientMap(final Game newGame) {
         final Map<Integer, Card> byId = new HashMap<>();

@@ -30,6 +30,7 @@ import forge.game.cost.Cost;
 import forge.game.spellability.*;
 import forge.game.zone.ZoneType;
 import forge.util.FileSection;
+import forge.util.SimScope;
 import io.sentry.Breadcrumb;
 import io.sentry.Sentry;
 
@@ -149,6 +150,13 @@ public final class AbilityFactory {
         try {
             return getAbility(mapParams, type, state, sVarHolder);
         } catch (Error | Exception ex) {
+            Error err = SimScope.simulationError(ex);
+            if (err != null) {
+                // Under a simulation (a scope bound here, or strict mode on) an Error goes up as it is: a strict-mode
+                // refusal, an abandoned game or a stack overflow is no failure to build this ability, and wrapped,
+                // every catch of RuntimeException above would read it as a failed play and let the game go on.
+                throw err;
+            }
             String msg = "AbilityFactory:getAbility: crash when trying to create ability ";
 
             Breadcrumb bread = new Breadcrumb(msg);

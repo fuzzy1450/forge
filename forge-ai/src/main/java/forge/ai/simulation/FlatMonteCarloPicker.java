@@ -23,6 +23,7 @@ import forge.ai.ComputerUtilCard;
 import forge.game.zone.ZoneType;
 import forge.util.AITimeoutTracker;
 import forge.util.MyRandom;
+import forge.util.SimScope;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -55,7 +56,11 @@ public final class FlatMonteCarloPicker {
     /** Print one line per decision to stderr; start the JVM with -Dforge.flatmc.debug=true. */
     public static boolean DEBUG = Boolean.getBoolean("forge.flatmc.debug");
 
-    /** Copies must never think for long: they only exist to be thrown away. */
+    /**
+     * Copies must never think for long: they only exist to be thrown away. A copy of a game that may not use an AI
+     * timeout, as every sim harness game, carries AI_CAN_USE_TIMEOUT false, and Game.getAITimeout() then reports no
+     * limit: there the 2 s bind nothing, and no copy's AI is cut by the machine's clock.
+     */
     static final int ROLLOUT_AI_TIMEOUT_SECONDS = 2;
     /** Terminal values, sized well above any ordinary {@link GameStateEvaluator} score (which is in the low thousands). */
     static final long WIN_VALUE = 20000;
@@ -124,7 +129,10 @@ public final class FlatMonteCarloPicker {
     }
 
     private static void checkRolloutDeadline() {
-        if (System.nanoTime() > rolloutDeadlineNanos) {
+        if (SimScope.current() != null) {
+            return; // the deadline is one static every game in the JVM shares; a playout is bounded by its play count
+        }
+        if (FlatMcGame.nanoTime() > rolloutDeadlineNanos) {
             throw new RolloutTooSlow();
         }
     }
@@ -246,6 +254,11 @@ public final class FlatMonteCarloPicker {
         public boolean landChoice = true;
         /** Also decide on the opponent's turn: responses on the stack and instant-speed plays at their end step. */
         public boolean reactive = true;
+        /**
+         * Stack resolutions one rollout may make before its line is invalid, under a bound scope only; 0, the default,
+         * means no cap. A flat_mc seat's word sets it (see {@link FlatMcSeat}), never the profile.
+         */
+        public int resolutionsPerRollout;
 
         public static Config fromProfile(final AiController ai, final Player player) {
             final Config cfg = new Config();
@@ -495,7 +508,7 @@ public final class FlatMonteCarloPicker {
 
     public static Result choose(final Player player, final List<SpellAbility> approved, final List<SpellAbility> extras,
                                 final Config cfg, final Predicate<SpellAbility> revalidate, final Mode mode) {
-        final long start = System.nanoTime();
+        final long start = FlatMcGame.nanoTime();
         final SpellAbility heuristicChoice = approved.isEmpty() ? null : approved.get(0);
         try {
             final Result result = chooseImpl(player, approved, extras, cfg, revalidate, start, mode);
@@ -504,12 +517,13 @@ public final class FlatMonteCarloPicker {
             }
             return result;
         } catch (final AITimeoutTracker.Expired e) {
-            return new Result(heuristicChoice, heuristicChoice == null, false, 0, 0, System.nanoTime() - start, "deadline");
+            return new Result(heuristicChoice, heuristicChoice == null, false, 0, 0, FlatMcGame.nanoTime() - start, "deadline");
         } catch (final RuntimeException e) {
             // Rollouts only ever run on copies of the game, so whatever went wrong in there must not take the real
-            // game down: play what the heuristics wanted to play anyway.
+            // game down: play what the heuristics wanted to play anyway. Under a simulation, reportFailure rethrows an
+            // Error in the failure's chain instead.
             reportFailure(e);
-            return new Result(heuristicChoice, heuristicChoice == null, false, 0, 0, System.nanoTime() - start, "error");
+            return new Result(heuristicChoice, heuristicChoice == null, false, 0, 0, FlatMcGame.nanoTime() - start, "error");
         } finally {
             rolloutDeadlineNanos = Long.MAX_VALUE;
         }
@@ -529,7 +543,7 @@ public final class FlatMonteCarloPicker {
         // smaller margin than a play that has to beat the heuristics' own favourite.
         final int bonus0 = approved.isEmpty() && prebuilt == null ? cfg.heuristicBonus / 4 : cfg.heuristicBonus;
         final List<Candidate> cands = prebuilt != null ? prebuilt : buildCandidates(player, approved, extras, cfg, revalidate, mode);
-        final long buildNanos = System.nanoTime() - start;
+        final long buildNanos = FlatMcGame.nanoTime() - start;
         if (cands.size() < 2) {
             return Result.keepHeuristic(heuristicChoice, "single-candidate");
         }
@@ -580,7 +594,8 @@ public final class FlatMonteCarloPicker {
                     break; // nothing left to compare
                 }
                 // Only start another round if all of it fits, so that every candidate gets the same samples.
-                if (System.nanoTime() + maxRolloutNanos * racing > (r == 1 ? hardDeadline : softDeadline)) {
+                if (FlatMcGame.nanoTime() + maxRolloutNanos * racing > (r == 1 ? hardDeadline : softDeadline)) {
+                    noteBudgetStop(player);
                     break;
                 }
             }
@@ -592,8 +607,9 @@ public final class FlatMonteCarloPicker {
                 if (rollouts > 0) {
                     // The second candidate is what makes a comparison possible at all, so it may use the hard limit.
                     final long limit = r == 0 && c == 1 || r == 1 ? hardDeadline : softDeadline;
-                    if (System.nanoTime() + maxRolloutNanos > limit) {
+                    if (FlatMcGame.nanoTime() + maxRolloutNanos > limit) {
                         tooSlow = r == 0 && c < 2;
+                        noteBudgetStop(player);
                         break rounds;
                     }
                 }
@@ -601,15 +617,19 @@ public final class FlatMonteCarloPicker {
                     tooSlow = r == 0 && c < 2;
                     break rounds;
                 }
-                final long t0 = System.nanoTime();
+                final long t0 = FlatMcGame.nanoTime();
                 final Candidate cand = cands.get(c);
                 final boolean stillWanted = cand.isHold() || cand.extra || revalidate == null || revalidate.test(cand.sa);
                 final boolean aimed = stillWanted && (cand.target == null || applyTarget(cand.sa, cand.target));
                 final Long value = !aimed ? null : rollout(player, cand, seed, rcfg, playoutPlays, mode);
-                maxRolloutNanos = Math.max(maxRolloutNanos, System.nanoTime() - t0);
+                final FlatMcGame st = aimed ? FlatMcGame.current() : null;
+                if (st != null) {
+                    st.fold(player.getId(), c, r, value); // the search hash sees every rollout, valued or not
+                }
+                maxRolloutNanos = Math.max(maxRolloutNanos, FlatMcGame.nanoTime() - t0);
                 rollouts++;
                 if (rollouts == 1 && value != null && cfg.scaleToDevice) {
-                    limitN = Math.min(limitN, affordableLines(softDeadline - System.nanoTime(), maxRolloutNanos,
+                    limitN = Math.min(limitN, affordableLines(softDeadline - FlatMcGame.nanoTime(), maxRolloutNanos,
                             cfg.rolloutsPerCandidate, n));
                 }
                 if (value == null) {
@@ -622,7 +642,7 @@ public final class FlatMonteCarloPicker {
                     if (value == WIN_VALUE && !cand.isHold()) {
                         // This line wins the game outright: nothing needs comparing, and waiting only wastes time.
                         return new Result(cand.sa, false, true, Math.max(evaluated, c + 1), rollouts,
-                                System.nanoTime() - start, "wins", prunedCount, cand.target);
+                                FlatMcGame.nanoTime() - start, "wins", prunedCount, cand.target);
                     }
                 }
                 if (r == 0) {
@@ -634,7 +654,7 @@ public final class FlatMonteCarloPicker {
             }
         }
 
-        final long elapsed = System.nanoTime() - start;
+        final long elapsed = FlatMcGame.nanoTime() - start;
         if (elapsed > SLOW_DECISION_NANOS) {
             FlatMonteCarloStats.noteSlow(mode + " " + (elapsed / 1_000_000) + "ms: candidates=" + n + " evaluated=" + evaluated
                     + " rollouts=" + rollouts + " build=" + (buildNanos / 1_000_000) + "ms longestRollout="
@@ -705,6 +725,14 @@ public final class FlatMonteCarloPicker {
         final Result decided = new Result(chosen.sa, chosen.isHold(), true, evaluated, rollouts, elapsed, reason, prunedCount, chosen.target);
         decided.attackers = chosen.attackers;
         return decided;
+    }
+
+    /** {@code player}'s decision stopped at its budget: counted in the seat's tally under a bound scope. */
+    private static void noteBudgetStop(final Player player) {
+        final FlatMcGame st = FlatMcGame.current();
+        if (st != null) {
+            st.noteBudgetStop(player.getId());
+        }
     }
 
     /**
@@ -1344,20 +1372,35 @@ public final class FlatMonteCarloPicker {
     }
 
     /**
-     * One sample of one candidate.
+     * One sample of one candidate. Under a bound scope {@link FlatMcGame#bracket} charges it to the counted clock (one
+     * virtual millisecond for each rollout, and for nothing else), counts its work in the seat's tally and caps its
+     * stack resolutions at {@link Config#resolutionsPerRollout}.
      *
      * @return the value of the position reached, or null if this candidate cannot be simulated
      */
     private static Long rollout(final Player player, final Candidate cand, final long seed, final Config cfg,
                                 final int playoutPlays, final Mode mode) {
+        return FlatMcGame.bracket(player, cfg.resolutionsPerRollout,
+                () -> rolloutCaught(player, cand, seed, cfg, playoutPlays, mode));
+    }
+
+    /**
+     * {@link #rollout}'s sample: null when the line fails, runs too slow or passes its resolution cap. The rollout
+     * draws from a private stream of its seed, kept here so that under a bound scope one last draw from it, as it is
+     * thrown away, goes into the seat's search hash.
+     */
+    private static Long rolloutCaught(final Player player, final Candidate cand, final long seed, final Config cfg,
+                                      final int playoutPlays, final Mode mode) {
         TOTAL_ROLLOUTS.incrementAndGet();
         final Random savedRandom = MyRandom.getRandom();
+        final Random own = new Random(seed);
         try {
             // MyRandom is global state; this is safe because the game thread is waiting for this AI decision.
-            MyRandom.setRandom(new Random(seed));
+            MyRandom.setRandom(own);
 
             final GameSimulator sim = GameSimulator.forRollout(player.getGame(), player, mode == Mode.RESPOND);
             final Game simGame = sim.getSimulatedGameState();
+            FlatMcGame.noteCopy(simGame);
             final Player simAi = sim.getSimulatedAiPlayer();
             simGame.AI_TIMEOUT = Math.min(simGame.AI_TIMEOUT, ROLLOUT_AI_TIMEOUT_SECONDS);
             HiddenInfoShuffler.shuffle(simGame, sim.getGameCopier(), player, new Random(seed ^ HIDDEN_INFO_SALT));
@@ -1383,16 +1426,30 @@ public final class FlatMonteCarloPicker {
         } catch (final RolloutTooSlow e) {
             lastRolloutProblem = "slow";
             return null;
+        } catch (final FlatMcGame.ResolutionCapReached e) {
+            // no failure: the cap makes the line invalid on every machine alike, and it is counted on its own
+            lastRolloutProblem = "resolutions";
+            FlatMcGame.current().noteResolutionCap(); // only an open rollout refuses, and only under a bound scope
+            return null;
         } catch (final RuntimeException e) {
             reportFailure(e);
+            final FlatMcGame st = FlatMcGame.current();
+            if (st != null) {
+                st.noteFailure(player.getId());
+            }
             lastRolloutProblem = "error";
             return null;
         } catch (final StackOverflowError | OutOfMemoryError e) {
-            // A runaway copy must not kill the real game either (Android has small heaps).
+            // A runaway copy must not kill the real game either (Android has small heaps), but under a simulation
+            // reportFailure rethrows it, and the game ends as an Error.
             reportFailure(new RuntimeException(e));
             lastRolloutProblem = "error";
             return null;
         } finally {
+            final FlatMcGame st = FlatMcGame.current();
+            if (st != null) {
+                st.noteFinalDraw(own.nextLong());
+            }
             MyRandom.setRandom(savedRandom);
         }
     }
@@ -1436,7 +1493,7 @@ public final class FlatMonteCarloPicker {
      * @return the verdict; {@link Result#attackers} is the set to attack with when rollouts decided, otherwise null
      */
     public static Result chooseAttack(final Player player, final forge.game.combat.Combat combat, final Config cfg) {
-        final long start = System.nanoTime();
+        final long start = FlatMcGame.nanoTime();
         try {
             final List<Candidate> cands = buildAttackCandidates(player, combat);
             if (cands.size() < 2) {
@@ -1444,10 +1501,10 @@ public final class FlatMonteCarloPicker {
             }
             return chooseImpl(player, new ArrayList<>(), new ArrayList<>(), cfg, null, start, Mode.ATTACK, cands);
         } catch (final AITimeoutTracker.Expired e) {
-            return new Result(null, false, false, 0, 0, System.nanoTime() - start, "deadline");
+            return new Result(null, false, false, 0, 0, FlatMcGame.nanoTime() - start, "deadline");
         } catch (final RuntimeException e) {
             reportFailure(e);
-            return new Result(null, false, false, 0, 0, System.nanoTime() - start, "error");
+            return new Result(null, false, false, 0, 0, FlatMcGame.nanoTime() - start, "error");
         } finally {
             rolloutDeadlineNanos = Long.MAX_VALUE;
         }
@@ -1703,11 +1760,13 @@ public final class FlatMonteCarloPicker {
     private static final int RESPONSE_FOLLOW_UPS = 3;
 
     private static void playOutResponding(final Game simGame, final Player simAi, final Player simOpp, final int maxPlays) {
+        FlatMcGame.notePlayout();
         if (!(simAi.getController() instanceof PlayerControllerAi)) {
             return;
         }
         final PlayerControllerAi pc = (PlayerControllerAi) simAi.getController();
-        for (int i = 0; i < maxPlays && !simGame.isGameOver() && !simGame.getStack().isEmpty(); i++) {
+        int plays = 0;
+        for (; plays < maxPlays && !simGame.isGameOver() && !simGame.getStack().isEmpty(); plays++) {
             AITimeoutTracker.check();
             checkRolloutDeadline();
             final List<SpellAbility> next = pc.chooseSpellAbilityToPlay();
@@ -1715,17 +1774,23 @@ public final class FlatMonteCarloPicker {
                 return;
             }
             pc.playChosenSpellAbility(next.get(0));
+            FlatMcGame.notePlay();
             GameSimulator.resolveOwnTop(simGame, simAi, simOpp);
+        }
+        if (plays == maxPlays) {
+            FlatMcGame.notePlayLimit(); // the limit ended it, not the AI running out of plays
         }
     }
 
     /** Lets the heuristic AI keep playing in the copied game, like it would for real. */
     private static void playOut(final Game simGame, final Player simAi, final int maxPlays) {
+        FlatMcGame.notePlayout();
         if (!(simAi.getController() instanceof PlayerControllerAi)) {
             return;
         }
         final PlayerControllerAi pc = (PlayerControllerAi) simAi.getController();
-        for (int i = 0; i < maxPlays && !simGame.isGameOver(); i++) {
+        int plays = 0;
+        for (; plays < maxPlays && !simGame.isGameOver(); plays++) {
             AITimeoutTracker.check();
             checkRolloutDeadline();
             final List<SpellAbility> next = pc.chooseSpellAbilityToPlay();
@@ -1733,7 +1798,11 @@ public final class FlatMonteCarloPicker {
                 return;
             }
             pc.playChosenSpellAbility(next.get(0));
+            FlatMcGame.notePlay();
             GameSimulator.resolveStack(simGame, simAi.getWeakestOpponent());
+        }
+        if (plays == maxPlays) {
+            FlatMcGame.notePlayLimit(); // the limit ended it, not the AI running out of plays
         }
     }
 
@@ -2051,7 +2120,18 @@ public final class FlatMonteCarloPicker {
         return (int) Math.round(adj * (cfg.riskWeightPercent / 100.0));
     }
 
+    /**
+     * Reports a failed rollout or decision, which its caller then reads as an invalid line or settles with the
+     * heuristic choice. Under a simulation (a scope bound here, or strict mode on) an Error anywhere in the failure's
+     * chain is rethrown first instead: a stack overflow, a strict-mode refusal or an abandoned game is no decision, and
+     * whether a stack overflows depends on the stack size and the compiler, so read as an invalid line it would make a
+     * silently different game.
+     */
     private static void reportFailure(final RuntimeException e) {
+        final Error err = SimScope.simulationError(e);
+        if (err != null) {
+            throw err;
+        }
         // A few lines are plenty to notice a systematic problem without flooding the log of a long game.
         final StackTraceElement[] trace = e.getStackTrace();
         final StringBuilder where = new StringBuilder();

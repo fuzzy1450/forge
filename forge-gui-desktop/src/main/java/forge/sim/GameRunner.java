@@ -10,6 +10,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
@@ -22,8 +23,12 @@ import com.google.common.eventbus.Subscribe;
 
 import forge.GuiDesktop;
 import forge.ai.AIOption;
+import forge.ai.AiController;
 import forge.ai.AiProfileUtil;
+import forge.ai.PlayerControllerAi;
 import forge.ai.combo.ComboTable;
+import forge.ai.simulation.FlatMcGame;
+import forge.ai.simulation.FlatMcSeat;
 import forge.card.CardEdition;
 import forge.deck.Deck;
 import forge.deck.io.DeckSerializer;
@@ -68,10 +73,23 @@ public class GameRunner {
 
     /** {@code violations}: the unbound accesses strict mode refused anywhere in this process while the game played
      *  ({@link SimScope#VIOLATIONS}), 0 normally. A refusal happens on a thread bound to no game, so a game that played
-     *  beside another can carry that one's count too. Never part of the digest. */
+     *  beside another can carry that one's count too. Never part of the digest.
+     *  <p>{@code flatMc}: for a finished game whose seats name a flat_mc word, one {@link FlatMcGame.Tally#toRecord()}
+     *  per searching seat in seat order, a seat that never rolled out included (MTG_DeckMaker's
+     *  tools/combo-ai/flat-mc/SPEC.md, section 4.7); null for any other game, and for a Timeout or an unfinished game,
+     *  which keeps its literal digest because nothing live is read. A finished game in which a rollout ran also ends
+     *  its digest lines with the game's search lines (section 4.6), so its digest covers them. */
     public record GameResult(long seed, Integer winnerSeat, String endReason, int turns, Integer firstSeat,
                              boolean timedOut, String error, long ms, String digest, List<String> digestLines,
-                             long violations) { }
+                             long violations, List<Map<String, Object>> flatMc) {
+        /** A result with no flat_mc tallies. */
+        public GameResult(long seed, Integer winnerSeat, String endReason, int turns, Integer firstSeat,
+                          boolean timedOut, String error, long ms, String digest, List<String> digestLines,
+                          long violations) {
+            this(seed, winnerSeat, endReason, turns, firstSeat, timedOut, error, ms, digest, digestLines, violations,
+                    null);
+        }
+    }
 
     /** Thrown by {@link #play} once a game thread has outlived its cancellation. */
     public static final class PoisonedException extends IllegalStateException {
@@ -332,13 +350,79 @@ public class GameRunner {
         }
     }
 
+    /** The AI options a seat's AI word asks for. A word {@link FlatMcSeat#parse} accepts asks for none: its seat is
+     *  switched on in the game by {@link #applyFlatMcSeats}. A malformed flat_mc word and any other word are refused,
+     *  the refusal naming every word ({@link FlatMcSeat#AI_MODES}). */
     static Set<AIOption> aiOptions(String ai) {
         switch (ai) {
             case "default":    return null;
             case "hybrid_sim": return EnumSet.of(AIOption.USE_HYBRID_SIMULATION);
             case "full_sim":   return EnumSet.of(AIOption.USE_FULL_SIMULATION);
-            default: throw new IllegalArgumentException("unknown ai mode " + ai + " (default|hybrid_sim|full_sim)");
+            default:
+                if (FlatMcSeat.parse(ai) != null) {                  // which refuses a malformed flat_mc word itself
+                    return null;
+                }
+                throw new IllegalArgumentException("unknown ai mode " + ai + " " + FlatMcSeat.AI_MODES);
         }
+    }
+
+    /** Switches Flat Monte Carlo on for each seat whose AI word {@link FlatMcSeat#parse} accepts (MTG_DeckMaker's
+     *  tools/combo-ai/flat-mc/SPEC.md, section 4.1): the override on the controller of the registered player
+     *  {@code "Seat" + i}, as upstream's benchmark sets it, and the seat itself, which carries the caps and is the
+     *  search-only mark. Every other seat and the game-wide flags stay as they are. It runs on the game thread once the
+     *  game exists, because {@link #aiOptions} judges the words on the caller's thread before there is a controller.
+     *  Each such seat is also registered in the game's state ({@link FlatMcGame#registerSeat}), the zero-rollout and
+     *  no-budget seats too, so its tally carries the seat and the game's search lines list it (sections 4.6 and 4.7).
+     *  Returns the registered players' ids in seat order, by which the game's result reads their tallies; empty when no
+     *  seat names a flat_mc word. */
+    static List<Integer> applyFlatMcSeats(Game g, List<SeatSpec> seats) {
+        List<Integer> searching = new ArrayList<>();
+        for (int i = 0; i < seats.size(); i++) {
+            String word = seats.get(i).ai();
+            FlatMcSeat seat = FlatMcSeat.parse(word);
+            if (seat == null) {
+                continue;
+            }
+            String name = "Seat" + i;
+            Player player = null;
+            for (Player p : g.getRegisteredPlayers()) {
+                if (name.equals(p.getName())) {
+                    player = p;
+                    break;
+                }
+            }
+            if (player == null) {                                   // never a flat_mc word played as a default seat
+                throw new IllegalStateException("no registered player " + name + " for the ai word " + word);
+            }
+            AiController ai = ((PlayerControllerAi) player.getController()).getAi();
+            ai.setFlatMonteCarloOverride(true);
+            ai.setFlatMcSeat(seat);
+            FlatMcGame.current().registerSeat(i, player.getId());   // the tally the controller keys by player id
+            searching.add(player.getId());
+        }
+        return List.copyOf(searching);
+    }
+
+    /** The wall-clock line of a game whose seats name a flat_mc word (MTG_DeckMaker's tools/combo-ai/flat-mc/SPEC.md,
+     *  section 4.7), for its stderr; null for any other game. It names the seed and each searching seat with its
+     *  profile, which is what tells a batch's games apart (both games of a deal share a seed), then the game's slowest
+     *  rollout in whole milliseconds and its rollouts over 5 s: the two figures read from the machine's clock, which
+     *  reach nothing else. Both are 0 when {@code st} is null, for a game that ended before anything made its state. */
+    static String flatMcWallLine(GameSpec spec, FlatMcGame st) {
+        List<String> search = new ArrayList<>();
+        for (int i = 0; i < spec.seats().size(); i++) {
+            SeatSpec s = spec.seats().get(i);
+            if (FlatMcSeat.parse(s.ai()) != null) {
+                search.add(i + ":" + s.profile());
+            }
+        }
+        if (search.isEmpty()) {
+            return null;
+        }
+        long slowestMs = st == null ? 0 : TimeUnit.NANOSECONDS.toMillis(st.slowestRolloutNanos());
+        int over5s = st == null ? 0 : st.rolloutsOver5s();
+        return "flat_mc wall seed=" + spec.seed() + " search=" + String.join(",", search) + " slowest_rollout_ms="
+                + slowestMs + " rollouts_over_5s=" + over5s;
     }
 
     /** The checks {@link #play} makes on a spec before it takes a slot, returning the game's players: at least two seats,
@@ -415,6 +499,8 @@ public class GameRunner {
         volatile Game game;
         volatile String error;
         volatile boolean finished;
+        /** The searching seats' player ids in seat order, as {@link #applyFlatMcSeats} registered them. */
+        volatile List<Integer> searching = List.of();
 
         Body(GameSpec spec, List<RegisteredPlayer> players, SimScope scope, Consumer<Game> observer,
              Consumer<Game> atFirstTurn) {
@@ -445,6 +531,7 @@ public class GameRunner {
                     g.AI_FLAT_MONTE_CARLO = false;
                     g.AI_FLAT_MONTE_CARLO_MAX = false;
                     g.AI_FLAT_MONTE_CARLO_LITE = false;
+                    searching = applyFlatMcSeats(g, spec.seats());    // per seat: only a seat whose word is flat_mc
                     g.subscribeToEvents(stats);
                     game = g;
                     observer.accept(g);                               // the records' subscriber attaches here (harness-in-engine spec 3.2)
@@ -473,7 +560,15 @@ public class GameRunner {
                 }
                 finished = true;
             } finally {
-                SimScope.exit();
+                try {
+                    // Here, so a Timeout or an Error prints it too; stderr, as serve mode's stdout carries records.
+                    String wall = flatMcWallLine(spec, FlatMcGame.peek(scope));
+                    if (wall != null) {
+                        System.err.println(wall);
+                    }
+                } finally {
+                    SimScope.exit();
+                }
             }
         }
 
@@ -511,8 +606,25 @@ public class GameRunner {
             }
             int turns = out != null ? out.getLastTurnNumber() : stats.turn;
             List<String> lines = digestLines(g, players.size(), winner, reason, turns, stats.firstSeat, err);
+            FlatMcGame st = FlatMcGame.peek(scope);                   // the game's thread is done with the scope
+            if (st != null && st.anyRollout()) {
+                lines.addAll(st.searchLines());                       // spec 4.6: one line per searching seat
+            }
             return new GameResult(spec.seed(), winner, reason, turns, stats.firstSeat, false, err, ms, sha256(lines), lines,
-                    violations);
+                    violations, tallies(st));
+        }
+
+        /** One {@link FlatMcGame.Tally#toRecord()} per searching seat in seat order, from the game's state; null for a
+         *  game whose seats name no flat_mc word. */
+        private List<Map<String, Object>> tallies(FlatMcGame st) {
+            if (searching.isEmpty()) {
+                return null;
+            }
+            List<Map<String, Object>> records = new ArrayList<>();
+            for (int playerId : searching) {
+                records.add(st.tally(playerId).toRecord());
+            }
+            return records;
         }
     }
 

@@ -144,6 +144,16 @@ public class AiController {
     /** Per player switch for comparisons and tests: null follows the game-wide setting. */
     private Boolean flatMcOverride;
     private Boolean flatMcMaxOverride;
+    /** The seat word of a flat_mc seat in a game the sim runner plays, null for every other seat. Set, it is the
+     *  search-only mark: {@link #flatMonteCarloActive()} answers false, so the behaviours that read it stay off, while
+     *  the searches read the override. Inside the search, ComboGuard and the fuel order are off as well
+     *  ({@link #guardProblem}, {@link #fuelPlaysFirst}), since either can move line 0 away from the default seat's own
+     *  play, and a zero-rollout seat takes line 0 where the picker would roll out
+     *  ({@link #refineWithFlatMonteCarlo}). Under a bound scope the seat's work is capped and counted in its game's
+     *  tally ({@link FlatMcGame}; {@link #flatMonteCarloConfig}, {@link #mainPhaseConfig}). */
+    private FlatMcSeat flatMcSeat;
+    /** Why the last {@link #flatMonteCarloConfig()} returned null, null when it returned a configuration. */
+    private FlatMcGame.NullCause flatMcNullCause;
 
     /**
      * Casts and activations that could not be put on the stack this turn (illegal targets), by card and ability, to
@@ -242,10 +252,10 @@ public class AiController {
 
     private StormSolver stormSolver;
 
-    /** Whether Flat Monte Carlo is switched on for this player. */
+    /** Whether Flat Monte Carlo is switched on for this player. Never for a flat_mc seat: see {@link #flatMcSeat}. */
     public boolean flatMonteCarloActive() {
-        return (flatMcOverride != null ? flatMcOverride : game.getAIFlatMonteCarlo()) && !flatMcOff()
-                && simMode == null && getBoolProperty(AiProps.FLAT_MC_ENABLED);
+        return flatMcSeat == null && (flatMcOverride != null ? flatMcOverride : game.getAIFlatMonteCarlo())
+                && !flatMcOff() && simMode == null && getBoolProperty(AiProps.FLAT_MC_ENABLED);
     }
 
     public Combat getPredictedCombat() {
@@ -2457,7 +2467,7 @@ public class AiController {
             chosenSa = chooseReactively(reactiveMode, saList, heuristicCounter, cards, top);
         } else if (usesFlatMonteCarlo(mustRespond)) {
             // Same heuristics as always, but keep the first few plays they approve of and let rollouts compare them.
-            final FlatMonteCarloPicker.Config mcCfg = flatMonteCarloConfig();
+            final FlatMonteCarloPicker.Config mcCfg = mainPhaseConfig();
             final boolean discover = mcCfg != null && mcCfg.discovery && mcCfg.extraCandidates > 0;
             final List<SpellAbility> extras = new ArrayList<>();
             List<SpellAbility> approved = chooseSpellAbilitiesToPlayFromList(saList, true,
@@ -2732,7 +2742,15 @@ public class AiController {
                 && (ph.is(PhaseType.MAIN1) || ph.is(PhaseType.MAIN2));
     }
 
+    /**
+     * The search's configuration for this decision, or null when the heuristics decide alone, with the reason in
+     * {@link #flatMcNullCause}: no decision budget, the turn's budget spent, or, for a flat_mc seat under a bound scope,
+     * its rollouts at its word's cap for the game (spec 4.4), which holds for the rest of the game. A flat_mc seat's
+     * configuration carries its word's resolution cap, and its game's tally notes whether its deck reads as tutor
+     * storm. Land choice asks here as well as the main-phase search, so only {@link #mainPhaseConfig} counts a refusal.
+     */
     private FlatMonteCarloPicker.Config flatMonteCarloConfig() {
+        flatMcNullCause = null;
         final int turn = game.getPhaseHandler().getTurn();
         if (turn != flatMcTurn) {
             flatMcTurn = turn;
@@ -2751,8 +2769,20 @@ public class AiController {
             cfg.extraRounds = Math.min(cfg.extraRounds, 1);
             cfg.opponentLookaheadPercent = 0;
         }
+        if (flatMcSeat != null) {
+            cfg.resolutionsPerRollout = flatMcSeat.resolutionsPerRollout();
+            final FlatMcGame st = FlatMcGame.current();
+            if (st != null) {
+                st.noteTutorStorm(player.getId(), cfg.plan.combos.has(ComboPlan.Kind.TUTOR_STORM));
+                if (st.tally(player.getId()).rollouts >= flatMcSeat.rolloutsPerGame()) {
+                    flatMcNullCause = FlatMcGame.NullCause.GAME_CAP;
+                    return null;
+                }
+            }
+        }
         final long left = cfg.turnBudgetNanos - flatMcTurnSpentNanos;
         if (left <= 0 || cfg.budgetNanos <= 0) {
+            flatMcNullCause = cfg.budgetNanos <= 0 ? FlatMcGame.NullCause.NO_BUDGET : FlatMcGame.NullCause.TURN_BUDGET;
             return null;
         }
         cfg.budgetNanos = Math.min(cfg.budgetNanos, left);
@@ -2760,11 +2790,44 @@ public class AiController {
     }
 
     /**
+     * {@link #flatMonteCarloConfig()} for the main-phase search, with the hold forbidden while the loop driver has
+     * handed this decision to the walk at its pool's target (LoopDriver.handedToWalk), as land choice forbids it: a
+     * hold returns nothing, which the driver hears as the walk choosing nothing (LoopDriver.afterStockWalk), so
+     * Thrasios digs or the go-off ends. For every searching seat. A flat_mc seat's refusal is counted here in its
+     * game's tally, with its reason and the turn.
+     */
+    private FlatMonteCarloPicker.Config mainPhaseConfig() {
+        final FlatMonteCarloPicker.Config cfg = flatMonteCarloConfig();
+        if (cfg == null) {
+            final FlatMcGame st = flatMcGame();
+            if (st != null) {
+                st.noteNullConfig(player.getId(), flatMcNullCause, game.getPhaseHandler().getTurn());
+            }
+            return null;
+        }
+        if (loopDriver.handedToWalk()) {
+            cfg.holdForbidden = true;
+            cfg.considerHolding = false;
+        }
+        return cfg;
+    }
+
+    /** This seat's game state when it is a flat_mc seat under a bound scope, where its work is capped and counted;
+     *  null for every other seat, and with no scope bound, as in the GUI. */
+    private FlatMcGame flatMcGame() {
+        return flatMcSeat == null ? null : FlatMcGame.current();
+    }
+
+    /**
      * Plays that Flat Monte Carlo never spends a card on (see {@link forge.ai.simulation.ComboGuard}): bringing back
      * a legend that is already in play and working, a second Omniscience, Show and Tell with nothing worth putting in,
-     * and a cantrip while the AI is confident to win this turn or the next. Returns the reason, or null for a fine play.
+     * and a cantrip while the AI is confident to win this turn or the next. Returns the reason, or null for a fine
+     * play, which is every play of a flat_mc seat (see {@link #flatMcSeat}).
      */
     private String guardProblem(final SpellAbility sa, final GameEntity aim, final boolean saveCantrips) {
+        if (flatMcSeat != null) {
+            return null;
+        }
         final ComboPlan plan = deckPlan(player).combos;
         final String problem = ComboGuard.problem(player, sa, aim, plan);
         if (problem != null) {
@@ -2794,8 +2857,9 @@ public class AiController {
             }
         }
         // Plays that waste a card are taken out before anything is compared, the heuristics' favourite included: the
-        // next play in line then stands for "what the heuristics would do". Nothing left means passing.
-        final boolean saveCantrips = ComboGuard.winLikelySoon(player, deckPlan(player).combos);
+        // next play in line then stands for "what the heuristics would do". Nothing left means passing. A flat_mc seat
+        // has no guard, so it never asks whether a win is near.
+        final boolean saveCantrips = flatMcSeat == null && ComboGuard.winLikelySoon(player, deckPlan(player).combos);
         final List<SpellAbility> approved = new ArrayList<>(approvedIn.size());
         for (final SpellAbility sa : approvedIn) {
             final String problem = guardProblem(sa, approvedAim.get(sa), saveCantrips);
@@ -2823,10 +2887,22 @@ public class AiController {
             return approved.get(0); // nothing to compare
         }
         // The heuristics are asked again before a line is rolled out, and that can aim the play somewhere else (at the
-        // legend that is already in play): such a line is not simulated, and never played either (see below).
-        final FlatMonteCarloPicker.Result result = FlatMonteCarloPicker.choose(player, approved, extras, cfg,
-                sa -> playDecisionStable(sa) == AiPlayDecision.WillPlay && guardProblem(sa, null, saveCantrips) == null, mode);
+        // legend that is already in play): such a line is not simulated, and never played either (see below). A
+        // zero-rollout seat rolls nothing out: line 0 is its result, kept and re-checked below as any result is.
+        final FlatMonteCarloPicker.Result result;
+        if (flatMcSeat != null && flatMcSeat.zeroRollout()) {
+            result = FlatMonteCarloPicker.Result.keepHeuristic(approved.isEmpty() ? null : approved.get(0),
+                    "zero-rollout");
+        } else {
+            result = FlatMonteCarloPicker.choose(player, approved, extras, cfg,
+                    sa -> playDecisionStable(sa) == AiPlayDecision.WillPlay
+                            && guardProblem(sa, null, saveCantrips) == null, mode);
+        }
         lastFlatMcResult = result;
+        final FlatMcGame st = flatMcGame();
+        if (st != null) {
+            st.noteDecision(player.getId(), result);
+        }
         FlatMonteCarloStats.record(result);
         flatMcTurnSpentNanos += result.elapsedNanos;
         noteFlatMcOutcome(result.reason);
@@ -2906,6 +2982,21 @@ public class AiController {
     /** Forces Monte Carlo on or off for this player only (null: follow the game setting). Used for A/B comparisons. */
     public void setFlatMonteCarloOverride(final Boolean enabled) {
         flatMcOverride = enabled;
+    }
+
+    /** This player's own switch: null follows the game setting. */
+    public Boolean getFlatMonteCarloOverride() {
+        return flatMcOverride;
+    }
+
+    /** Makes this player a flat_mc seat (null: none), which is also the search-only mark: see {@link #flatMcSeat}. */
+    public void setFlatMcSeat(final FlatMcSeat seat) {
+        flatMcSeat = seat;
+    }
+
+    /** This player's flat_mc seat, null for every other seat. */
+    public FlatMcSeat getFlatMcSeat() {
+        return flatMcSeat;
     }
 
     private Boolean flatMcAttackOverride;
@@ -2991,9 +3082,13 @@ public class AiController {
      * For a deck built around the graveyard (Living End and its kin, reanimator) the plays that put cards there on
      * purpose (cycling, discard and looting) come first: they are what the combo needs before anything else, and a
      * creature-first ordering would bury them. Fuel plays the heuristics turned down are brought in from the extras.
-     * Other decks, and decks whose payoff is gone, get the list back unchanged.
+     * Other decks, and decks whose payoff is gone, get the list back unchanged, and so does a flat_mc seat, whose
+     * line 0 stays the default seat's own play (see {@link #flatMcSeat}).
      */
     private List<SpellAbility> fuelPlaysFirst(final List<SpellAbility> approved, final List<SpellAbility> extras) {
+        if (flatMcSeat != null) {
+            return approved;
+        }
         final ComboPlan combos = deckPlan(player).combos;
         if (combos.isEmpty() || !combos.fuelFirst(player)) {
             return approved;

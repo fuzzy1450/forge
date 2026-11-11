@@ -112,6 +112,7 @@ public class Game {
     // so a forced-attack check can never be abandoned on a wall clock, which made
     // same-seed games follow the machine's speed. Removing it would break every
     // harness in the field with NoSuchFieldError, not just the next recompile.
+    // False, it also lifts getAITimeout()'s limit, on this game and every copy.
     public boolean AI_CAN_USE_TIMEOUT = true;
     // Whether heuristic AI players may refine their main phase choices with flat Monte Carlo rollouts.
     // False here on purpose: it is really set by the Match/Preferences (MATCH_AI_FLAT_MONTE_CARLO, default true),
@@ -1251,6 +1252,10 @@ public class Game {
     public int nextCardId() {
         return ++cardIdCounter;
     }
+    /** The last card id {@link #nextCardId()} handed out, read without stepping the counter. */
+    public int getCardIdCounter() {
+        return cardIdCounter;
+    }
     public int nextHiddenCardId() {
         return ++hiddenCardIdCounter;
     }
@@ -1630,8 +1635,14 @@ public class Game {
                 getStack().getSpellsCastThisTurn().stream().anyMatch(SpellAbility::isWarp);
     }
 
+    /**
+     * The AI's time per decision, in seconds: AI_TIMEOUT, or Integer.MAX_VALUE, no limit, when the game may not use an
+     * AI timeout (AI_CAN_USE_TIMEOUT false, as the sim harness pins every game). A copy carries both fields, so a
+     * harness game's rollout copies, whose AI_TIMEOUT the Flat Monte Carlo picker lowers to 2 s, have no limit either,
+     * and no AI session in them is cut by the machine's clock.
+     */
     public int getAITimeout() {
-        return AI_TIMEOUT;
+        return AI_CAN_USE_TIMEOUT ? AI_TIMEOUT : Integer.MAX_VALUE;
     }
 
     public boolean canUseTimeout() {

@@ -432,7 +432,7 @@ public final class DoomsdayPile {
             names.add(c.getName());
         }
         java.util.Collections.sort(names);
-        key.append(names.hashCode());
+        key.append(poolKey(names));
         final Boolean known = WINS.get(key.toString());
         if (known != null) {
             return known;
@@ -443,6 +443,15 @@ public final class DoomsdayPile {
         }
         WINS.put(key.toString(), wins);
         return wins;
+    }
+
+    /**
+     * A pool's part of a {@link #WINS} key: its sorted names themselves, one a line. WINS is shared by every game of
+     * the JVM, and under the names' 32-bit hashCode, the key before, two pools that collide (["Aa"] and ["BB"]) shared
+     * one answer, so one game could be served another's.
+     */
+    static String poolKey(final List<String> sortedNames) {
+        return String.join("\n", sortedNames);
     }
 
     private static boolean playable(final Player ai, final SpellAbility sa) {

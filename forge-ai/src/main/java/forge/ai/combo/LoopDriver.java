@@ -386,6 +386,13 @@ public final class LoopDriver {
         return null;
     }
 
+    /** Whether this decision's {@link #mainPhaseAction} passed the priority to the stock walk at the pool's target,
+     *  its pick still to be heard ({@link #noteStockPlay}, {@link #afterStockWalk}). AiController's main-phase search
+     *  forbids the hold meanwhile: a pass would read as the walk choosing nothing. Draws nothing. */
+    public boolean handedToWalk() {
+        return handedToWalk;
+    }
+
     /**
      * Whether our hand cast {@code sa} of Thassa's Oracle waits for the Oracle line (section 6.4 step 3, amended
      * 2026-11-04 (the Oracle window): the hold, its shape unchanged, waits for the line's window, where the dig toward

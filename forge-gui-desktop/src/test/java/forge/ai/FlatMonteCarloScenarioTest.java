@@ -8,11 +8,12 @@ import java.util.concurrent.TimeUnit;
 import org.testng.AssertJUnit;
 import org.testng.annotations.Test;
 
+import static forge.ai.simulation.FlatMcTestBase.playsToCompare;
+
 import forge.ai.simulation.FlatMonteCarloPicker;
 import forge.ai.simulation.GameCopier;
 import forge.ai.simulation.GameSimulator;
 import forge.ai.simulation.HiddenInfoShuffler;
-import forge.ai.simulation.SpellAbilityPicker;
 import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.phase.PhaseType;
@@ -39,35 +40,6 @@ public class FlatMonteCarloScenarioTest extends AITest {
 
     private static AiController brainOf(Player p) {
         return ((PlayerControllerAi) p.getController()).getAi();
-    }
-
-    /** What the heuristics approve of, with targets set up by the heuristics, like AiController does it. */
-    private static List<SpellAbility> approvedPlays(Player p) {
-        AiController ai = brainOf(p);
-        List<SpellAbility> approved = new ArrayList<>();
-        for (SpellAbility sa : new SpellAbilityPicker(p).getCandidateSpellsAndAbilities()) {
-            if (ai.canPlaySa(sa) == AiPlayDecision.WillPlay) {
-                approved.add(sa);
-            }
-        }
-        return approved;
-    }
-
-    /**
-     * The plays to compare in a test of the picker itself. Normally that is what the heuristics approve of, but they
-     * may rightly prefer to wait (for example, draw spells are held until the second main phase). The picker must cope
-     * with any list of playable plays, so fall back to everything that is playable, targets set up where possible.
-     */
-    private static List<SpellAbility> playsToCompare(Player p) {
-        List<SpellAbility> approved = approvedPlays(p);
-        if (!approved.isEmpty()) {
-            return approved;
-        }
-        List<SpellAbility> playable = new SpellAbilityPicker(p).getCandidateSpellsAndAbilities();
-        for (SpellAbility sa : playable) {
-            brainOf(p).canPlaySa(sa);
-        }
-        return playable;
     }
 
     private static void fillLibrariesWith(Player p, FlatMonteCarloScenarioTest t, String... names) {

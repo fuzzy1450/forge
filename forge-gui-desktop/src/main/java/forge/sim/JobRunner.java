@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import forge.ai.simulation.FlatMcSeat;
 import forge.sim.GameRunner.GameResult;
 import forge.sim.GameRunner.GameSpec;
 
@@ -27,9 +28,14 @@ public final class JobRunner {
      *  no games is refused too. An InterruptedException propagates with no record for
      *  the interrupted game and no summary. A poison caused by the job's own last game is not reported here: the
      *  summary is written and run returns normally, so a caller that must know asks the runner
-     *  ({@link GameRunner#isPoisoned()}). */
+     *  ({@link GameRunner#isPoisoned()}). When some seat's word begins flat_mc, each record ends, after any
+     *  {@code violations}, with the game's {@code digest} and its {@code flat_mc} tallies ({@link GameResult#flatMc()};
+     *  for a Timeout or an unfinished game, the literal TIMEOUT or ERROR and null), as MTG_DeckMaker's
+     *  tools/combo-ai/flat-mc/SPEC.md, section 4.7 has it; every other job's records are unchanged. */
     public Map<String, Integer> run(JobFile job, Consumer<Map<String, Object>> sink) throws InterruptedException {
         GameRunner.validate(job.firstSpec());                    // a job that cannot start writes nothing, though it has no game
+        // validate refused any malformed flat_mc word, so parse answers null or a seat here
+        boolean flatMc = job.seats.stream().anyMatch(s -> FlatMcSeat.parse(s.ai()) != null);
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (String r : GameRecords.END_REASONS) {
             counts.put(r, 0);
@@ -59,6 +65,10 @@ public final class JobRunner {
             }
             if (r.violations() > 0) {
                 rec.put("violations", r.violations());               // harness-in-engine spec 3.3: present only when non-zero
+            }
+            if (flatMc) {
+                rec.put("digest", r.digest());
+                rec.put("flat_mc", r.flatMc());
             }
             counts.merge((String) rec.get("end_reason"), 1, Integer::sum);
             totalMs += (Long) rec.get("ms");

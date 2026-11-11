@@ -59,6 +59,12 @@ public final class SimScope {
         return ++slot[0];
     }
 
+    /** Counter {@code c}'s value as it stands: the last id handed out for every kind but COMBAT_VIEW, whose next id it
+     *  is. A read only, with no checkpoint, so a cancelled scope answers too, and it steps nothing. */
+    public int peek(Counter c) {
+        return counters.get(c)[0];
+    }
+
     public void reset(Counter c, int value) {
         counters.get(c)[0] = value;
     }

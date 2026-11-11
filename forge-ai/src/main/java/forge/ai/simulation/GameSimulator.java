@@ -398,6 +398,7 @@ public class GameSimulator {
      */
     public static void resolveOwnTop(final Game game, final Player owner, final Player opponent) {
         AITimeoutTracker.check(); // a phase advance of a rollout comes through here: it must not outlive its decision
+        FlatMcGame.countResolution(); // and inside a Flat MC rollout under a scope, it counts toward the rollout's cap
         PlayerControllerAi sim = new PlayerControllerAi(game, opponent, opponent.getLobbyPlayer());
         sim.getAi().setUseSimulation(AIOption.USE_FULL_SIMULATION);
         opponent.runWithController(() -> {
@@ -407,6 +408,7 @@ public class GameSimulator {
             while (!game.getStack().isEmpty() && !game.isGameOver()
                     && owner.equals(game.getStack().peekAbility().getActivatingPlayer())) {
                 AITimeoutTracker.check();
+                FlatMcGame.countResolution();
                 game.getStack().resolveStack();
                 game.getAction().checkStateEffects(false, allAffectedCards);
                 game.getStack().addAllTriggeredAbilitiesToStack();
@@ -421,6 +423,7 @@ public class GameSimulator {
 
     public static void resolveStack(final Game game, final Player opponent) {
         AITimeoutTracker.check(); // a phase advance of a rollout comes through here: it must not outlive its decision
+        FlatMcGame.countResolution(); // and inside a Flat MC rollout under a scope, it counts toward the rollout's cap
         // TODO: This needs to set an AI controller for all opponents, in case of multiplayer.
         PlayerControllerAi sim = new PlayerControllerAi(game, opponent, opponent.getLobbyPlayer());
         sim.getAi().setUseSimulation(AIOption.USE_FULL_SIMULATION);
@@ -430,6 +433,7 @@ public class GameSimulator {
             game.getStack().addAllTriggeredAbilitiesToStack();
             while (!game.getStack().isEmpty() && !game.isGameOver()) {
                 AITimeoutTracker.check();
+                FlatMcGame.countResolution();
                 debugPrint("Resolving:" + game.getStack().peekAbility());
 
                 // Resolve the top effect on the stack.
