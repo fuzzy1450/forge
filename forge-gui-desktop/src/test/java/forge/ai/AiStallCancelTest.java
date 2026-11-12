@@ -83,10 +83,12 @@ public class AiStallCancelTest extends AITest {
         Assert.assertTrue(ended.get() instanceof GameAbandoned, "abandoned, not decided: chose " + chose.get()
                 + ", threw " + ended.get());
         final StackTraceElement[] thrower = ended.get().getStackTrace();
-        Assert.assertTrue(thrower.length > 1, "a GameAbandoned with a stack");
+        Assert.assertTrue(thrower.length > 2, "a GameAbandoned with a stack");
         Assert.assertEquals(thrower[0].getClassName() + "." + thrower[0].getMethodName(),
-                "forge.util.AITimeoutTracker.check", "it was thrown by a check(), not by a later draw");
-        Assert.assertEquals(thrower[1].getClassName() + "." + thrower[1].getMethodName(), BLOCKS + ".makeGangBlocks",
+                "forge.util.SimScope.checkCancelled", "thrown by the cancel point, not by a later draw");
+        Assert.assertEquals(thrower[1].getClassName() + "." + thrower[1].getMethodName(),
+                "forge.util.AITimeoutTracker.check", "reached through check()");
+        Assert.assertEquals(thrower[2].getClassName() + "." + thrower[2].getMethodName(), BLOCKS + ".makeGangBlocks",
                 "the check() of the search it stalled in");
         evaluation.join(5_000);
         Assert.assertFalse(evaluation.isAlive(), "its evaluation thread ended too");

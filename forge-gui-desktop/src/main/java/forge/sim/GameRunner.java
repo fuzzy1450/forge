@@ -279,7 +279,7 @@ public class GameRunner {
             }
             boolean timedOut = t.isAlive();
             if (timedOut) {
-                scope.cancel();                                      // every draw, id request and AI check() now throws GameAbandoned
+                scope.cancel();                                      // every draw, id request, AI check() and trigger run now throws GameAbandoned
                 Game g = body.game;
                 if (g != null) {
                     try {

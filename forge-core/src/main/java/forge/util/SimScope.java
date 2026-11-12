@@ -102,6 +102,19 @@ public final class SimScope {
         return BOUND.get();
     }
 
+    /**
+     * A cancel point for loops that draw no random number and take no id, which would otherwise never see their game
+     * abandoned. It throws {@link GameAbandoned} when this thread's bound scope was cancelled (the sim runner gave up on
+     * its game at the time limit). An unbound thread, the GUI's, never throws. Nothing is read but the flag, so a game
+     * that finishes plays exactly as before. AITimeoutTracker.check() and TriggerHandler.runTrigger call it.
+     */
+    public static void checkCancelled() {
+        SimScope s = BOUND.get();
+        if (s != null && s.cancelled) {
+            throw new GameAbandoned();
+        }
+    }
+
     public static void enter(SimScope s) {
         if (s == null) {
             throw new IllegalArgumentException("SimScope.enter(null)");

@@ -154,6 +154,20 @@ public class SimScopeTest {
         Assert.assertThrows(GameAbandoned.class, () -> s.nextId(SimScope.Counter.GAME));
     }
 
+    /** The cancel point for loops that draw nothing and take no id: it throws for this thread's own cancelled scope
+     *  only, never unbound (the GUI's case). */
+    @Test
+    public void checkCancelledThrowsOnlyForThisThreadsCancelledScope() {
+        SimScope.checkCancelled();                                   // unbound: nothing to stop
+        SimScope s = new SimScope(7L);
+        SimScope.enter(s);
+        SimScope.checkCancelled();                                   // this thread's game is in play
+        s.cancel();
+        Assert.assertThrows(GameAbandoned.class, SimScope::checkCancelled);
+        SimScope.exit();
+        SimScope.checkCancelled();                                   // unbound again
+    }
+
     @Test
     public void adoptingCarriesTheCallersScopeToAnotherThread() throws Exception {
         SimScope s = new SimScope(9L);

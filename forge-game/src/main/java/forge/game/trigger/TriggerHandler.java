@@ -37,6 +37,7 @@ import forge.game.staticability.StaticAbilityPanharmonicon;
 import forge.game.zone.Zone;
 import forge.game.zone.ZoneType;
 import forge.util.FileSection;
+import forge.util.SimScope;
 import io.sentry.Breadcrumb;
 import io.sentry.Sentry;
 
@@ -258,6 +259,9 @@ public class TriggerHandler {
     }
 
     public final void runTrigger(final TriggerType mode, final Map<AbilityKey, Object> runParams, boolean holdTrigger) {
+        // A cancel point: loops such as Card.addCounterInternal's, one trigger run per counter added, draw nothing and
+        // take no id, so under the sim runner a doubling's 2^k runs would otherwise outlive its grace after a timeout.
+        SimScope.checkCancelled();
         if (isTriggerSuppressed(mode)) {
             return;
         }

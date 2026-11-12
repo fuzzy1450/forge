@@ -215,13 +215,10 @@ public final class AITimeoutTracker {
      * its AI deadline is never reached, so an evaluation that draws no random number and takes no id would otherwise run
      * on past the runner's grace and poison its JVM. The scope is asked first: the AI reads Expired as "use what you
      * have" and plays on, which an abandoned game must not do. Without a cancel nothing here changes, so a game that
-     * finishes plays exactly as before; the GUI binds no scope.
+     * finishes plays exactly as before; the GUI binds no scope ({@link SimScope#checkCancelled}).
      */
     public static void check() {
-        final SimScope scope = SimScope.current();
-        if (scope != null && scope.isCancelled()) {
-            throw new GameAbandoned();
-        }
+        SimScope.checkCancelled();
         final Limit l = LIMIT.get();
         if (l.armed && (System.nanoTime() - l.deadlineNanos >= 0 || (l.honourInterrupt && Thread.currentThread().isInterrupted()))) {
             throw new Expired();
