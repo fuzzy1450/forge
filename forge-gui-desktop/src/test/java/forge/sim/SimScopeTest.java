@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.testng.Assert;
@@ -152,6 +154,20 @@ public class SimScopeTest {
         Assert.assertThrows(GameAbandoned.class, () -> s.nextId(SimScope.Counter.GAME));
     }
 
+    /** The cancel point for loops that draw nothing and take no id: it throws for this thread's own cancelled scope
+     *  only, never unbound (the GUI's case). */
+    @Test
+    public void checkCancelledThrowsOnlyForThisThreadsCancelledScope() {
+        SimScope.checkCancelled();                                   // unbound: nothing to stop
+        SimScope s = new SimScope(7L);
+        SimScope.enter(s);
+        SimScope.checkCancelled();                                   // this thread's game is in play
+        s.cancel();
+        Assert.assertThrows(GameAbandoned.class, SimScope::checkCancelled);
+        SimScope.exit();
+        SimScope.checkCancelled();                                   // unbound again
+    }
+
     @Test
     public void adoptingCarriesTheCallersScopeToAnotherThread() throws Exception {
         SimScope s = new SimScope(9L);
@@ -171,6 +187,39 @@ public class SimScopeTest {
 
         Runnable bare = () -> { };
         Assert.assertSame(SimScope.adopting(bare), bare, "with no scope bound, adopting is a no-op");
+    }
+
+    /** What the runner's stall report names besides the game thread: the threads running tasks adopted from the
+     *  game's scope (its AI evaluations), each only while its task runs. */
+    @Test
+    public void anAdoptedTaskIsAmongItsScopesThreadsOnlyWhileItRuns() throws Exception {
+        SimScope s = new SimScope(9L);
+        SimScope other = new SimScope(9L);
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        SimScope.enter(s);
+        Runnable task = SimScope.adopting(() -> {
+            inside.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        SimScope.exit();
+        Assert.assertTrue(s.adoptedThreads().isEmpty(), "adopting alone runs nothing");
+        Thread t = new Thread(task, "Game AI Eval test");
+        t.start();
+        try {
+            Assert.assertTrue(inside.await(10, TimeUnit.SECONDS), "the task started");
+            Assert.assertEquals(s.adoptedThreads(), List.of(t), "the thread running the task is its scope's");
+            Assert.assertTrue(other.adoptedThreads().isEmpty(), "and no other scope's");
+        } finally {
+            release.countDown();
+            t.join(10_000);
+        }
+        Assert.assertFalse(t.isAlive(), "the task ended");
+        Assert.assertTrue(s.adoptedThreads().isEmpty(), "a finished task leaves its scope's threads");
     }
 
     @Test

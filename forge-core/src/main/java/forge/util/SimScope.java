@@ -2,8 +2,11 @@ package forge.util;
 
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
@@ -16,7 +19,9 @@ import java.util.function.Supplier;
  * {@link #setStrict strict mode} an unbound access throws {@link UnscopedAccessError} instead of falling back.
  *
  * <p>Thread confinement: a scope is used by one game thread and, through {@link #adopting}, by a
- * child thread that runs while the game thread blocks on it, so nothing here is synchronized.
+ * child thread that runs while the game thread blocks on it, so nothing here is synchronized. The one
+ * exception is the record of those child threads ({@link #adoptedThreads}), which the runner reads from
+ * its own thread when a game outlives its grace.
  */
 public final class SimScope {
     public enum Counter { GAME, SPELL_ABILITY, STACK_INSTANCE, STATIC_ABILITY, TRIGGER, REPLACEMENT, COMBAT_VIEW }
@@ -28,6 +33,8 @@ public final class SimScope {
     private final EnumMap<Counter, int[]> counters = new EnumMap<>(Counter.class);
     private final Map<Object, Object> scratch = new HashMap<>();
     private volatile boolean cancelled = false;
+    /** The threads running a task adopted from this scope right now (see {@link #adopting}). */
+    private final Set<Thread> adopted = ConcurrentHashMap.newKeySet();
 
     /** Counters start where a fresh JVM's statics start: 0 for the pre-incremented {@code maxId}
      *  counters, -2 for {@code CombatView.nextId}. */
@@ -77,6 +84,13 @@ public final class SimScope {
         return cancelled;
     }
 
+    /** The threads running a task adopted from this scope right now ({@link #adopting}): a game's AI evaluation
+     *  threads, which the game thread waits on. A snapshot, safe to read from any thread. The runner names them
+     *  when a game outlives its grace. */
+    public List<Thread> adoptedThreads() {
+        return List.copyOf(adopted);
+    }
+
     @SuppressWarnings("unchecked")
     public <T> T scratch(Object key, Supplier<T> create) {
         return (T) scratch.computeIfAbsent(key, k -> create.get());
@@ -92,6 +106,19 @@ public final class SimScope {
 
     public static SimScope current() {
         return BOUND.get();
+    }
+
+    /**
+     * A cancel point for loops that draw no random number and take no id, which would otherwise never see their game
+     * abandoned. It throws {@link GameAbandoned} when this thread's bound scope was cancelled (the sim runner gave up on
+     * its game at the time limit). An unbound thread, the GUI's, never throws. Nothing is read but the flag, so a game
+     * that finishes plays exactly as before. AITimeoutTracker.check() and TriggerHandler.runTrigger call it.
+     */
+    public static void checkCancelled() {
+        SimScope s = BOUND.get();
+        if (s != null && s.cancelled) {
+            throw new GameAbandoned();
+        }
     }
 
     public static void enter(SimScope s) {
@@ -190,6 +217,7 @@ public final class SimScope {
 
     /** Explicit adoption at a thread hop: the returned task runs under the scope bound on the
      *  CALLING thread (read now), entering it on the executing thread and exiting in a finally.
+     *  While it runs, the executing thread is in the scope's {@link #adoptedThreads}.
      *  With no scope bound here, the task is returned as it is. */
     public static Runnable adopting(Runnable task) {
         SimScope s = BOUND.get();
@@ -198,9 +226,12 @@ public final class SimScope {
         }
         return () -> {
             enter(s);
+            final Thread self = Thread.currentThread();
+            s.adopted.add(self);
             try {
                 task.run();
             } finally {
+                s.adopted.remove(self);
                 exit();
             }
         };

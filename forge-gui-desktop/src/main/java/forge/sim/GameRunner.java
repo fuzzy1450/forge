@@ -297,7 +297,7 @@ public class GameRunner {
             }
             boolean timedOut = t.isAlive();
             if (timedOut) {
-                scope.cancel();                                      // every draw and id request now throws GameAbandoned
+                scope.cancel();                                      // every draw, id request, AI check() and trigger run now throws GameAbandoned
                 Game g = body.game;
                 if (g != null) {
                     try {
@@ -309,6 +309,8 @@ public class GameRunner {
                 joinUninterruptibly(t, GRACE_MS);
                 if (t.isAlive()) {
                     poisoned = true;
+                    System.err.print(stallReport(spec.seed(), t, scope.adoptedThreads()));   // name the stall in the log
+                    System.err.flush();
                 }
             }
             if (interrupted) {
@@ -348,6 +350,47 @@ public class GameRunner {
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+    /** Frames a stall report prints per thread: enough for an AI evaluation's whole chain (the evaluation thread that
+     *  poisoned pods-p58-s2 was 43 frames deep). */
+    static final int STALL_FRAMES = 80;
+    /** Frames per thread on the report's last line: the stall's innermost calls, for a reader that keeps only the
+     *  tail of stderr, as MTG_DeckMaker's serve session does for every driver and client (its last 40 lines). */
+    static final int STALL_SUMMARY_FRAMES = 3;
+
+    /**
+     * What play() prints when the game with {@code seed} outlived its grace. The report names the game thread
+     * {@code game} and {@code adopted}, the threads running tasks adopted from the game's scope (its AI evaluations).
+     * Each gets its name and state and up to {@link #STALL_FRAMES} frames, as a thread dump prints them. A last line
+     * repeats each thread's innermost {@link #STALL_SUMMARY_FRAMES} frames. Built as one string, so one print cannot
+     * interleave with another slot's lines. It reads stacks only, never the game, whose state may still be moving.
+     */
+    static String stallReport(long seed, Thread game, List<Thread> adopted) {
+        List<Thread> threads = new ArrayList<>();
+        threads.add(game);
+        threads.addAll(adopted);
+        StringBuilder sb = new StringBuilder("GameRunner: the game with seed ").append(seed).append(" outlived its ")
+                .append(GRACE_MS).append(" ms grace after its cancel; this runner is poisoned. Its threads:\n");
+        StringBuilder summary = new StringBuilder("GameRunner: stall of seed ").append(seed).append(':');
+        for (Thread th : threads) {
+            Thread.State state = th.getState();
+            StackTraceElement[] frames = th.getStackTrace();
+            sb.append('"').append(th.getName()).append("\" ").append(state).append('\n');
+            int shown = Math.min(frames.length, STALL_FRAMES);
+            for (int i = 0; i < shown; i++) {
+                sb.append("\tat ").append(frames[i]).append('\n');
+            }
+            if (frames.length > shown) {
+                sb.append("\t... ").append(frames.length - shown).append(" more\n");
+            }
+            summary.append(" \"").append(th.getName()).append("\" ").append(state);
+            for (int i = 0; i < Math.min(frames.length, STALL_SUMMARY_FRAMES); i++) {
+                summary.append(i == 0 ? " at " : " <- ").append(frames[i]);
+            }
+            summary.append(';');
+        }
+        return sb.append(summary).append('\n').toString();
     }
 
     /** The AI options a seat's AI word asks for. A word {@link FlatMcSeat#parse} accepts asks for none: its seat is

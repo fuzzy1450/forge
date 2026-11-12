@@ -1,12 +1,20 @@
 package forge.sim;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
@@ -19,6 +27,8 @@ import forge.game.zone.ZoneType;
 import forge.sim.GameRunner.GameResult;
 import forge.sim.GameRunner.GameSpec;
 import forge.sim.GameRunner.SeatSpec;
+import forge.util.AITimeoutTracker;
+import forge.util.GameAbandoned;
 import forge.util.SimScope;
 import forge.util.UnscopedAccessError;
 
@@ -124,6 +134,143 @@ public class GameRunnerTest {
         Assert.assertFalse(runner.isPoisoned(), "the game thread unwound inside the grace period");
         for (Thread t : Thread.getAllStackTraces().keySet()) {
             Assert.assertFalse(t.getName().startsWith("Game-sim-"), "game thread still alive: " + t.getName());
+        }
+    }
+
+    /**
+     * The shape of the stall that poisoned pods-p58-s2. The game thread waits on an evaluation thread adopted from its
+     * scope, as AiController's does, and the evaluation loops through AITimeoutTracker.check() under the runner's AI
+     * deadline (2^31-1 s away), drawing no random number and asking for no id. The cancel at the game's limit must end
+     * it at its next check(): the game reads as a Timeout soon after its limit, and the runner is not poisoned.
+     */
+    @Test(timeOut = 120_000)
+    public void aStalledEvaluationEndsAtItsNextCheckAfterTheCancelAndPoisonsNothing() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        AtomicBoolean giveUp = new AtomicBoolean(false);
+        AtomicReference<Thread> evalThread = new AtomicReference<>();
+        AtomicReference<Throwable> evaluationEnded = new AtomicReference<>();
+        GameResult r;
+        try {
+            r = runner.play(spec(7_000_003L, 10), g -> {
+                FutureTask<Void> evaluation = new FutureTask<>(() -> {
+                    Object limit = AITimeoutTracker.arm(System.nanoTime() + TimeUnit.SECONDS.toNanos(Integer.MAX_VALUE), true);
+                    try {
+                        while (!giveUp.get()) {
+                            AITimeoutTracker.check();
+                            LockSupport.parkNanos(1_000_000L);      // a stall, not a busy core: 1 ms between checks
+                        }
+                        return null;
+                    } finally {
+                        AITimeoutTracker.disarm(limit);
+                    }
+                });
+                Thread eval = new Thread(SimScope.adopting(evaluation), "Game AI Eval");
+                eval.setDaemon(true);
+                evalThread.set(eval);
+                eval.start();
+                try {
+                    evaluation.get();
+                } catch (ExecutionException e) {
+                    evaluationEnded.set(e.getCause());
+                    if (e.getCause() instanceof Error err) {
+                        throw err;                                    // as AiController rethrows its evaluation's Error
+                    }
+                    throw new IllegalStateException(e);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            });
+        } finally {
+            giveUp.set(true);                                         // a failed run must not leave the loop spinning
+        }
+        Assert.assertTrue(r.timedOut(), r.toString());
+        Assert.assertEquals(r.endReason(), "Timeout", r.toString());
+        Assert.assertTrue(evaluationEnded.get() instanceof GameAbandoned,
+                "the evaluation was abandoned at a check(): " + evaluationEnded.get());
+        Assert.assertFalse(runner.isPoisoned(), "the game thread unwound inside the grace period");
+        Assert.assertTrue(r.ms() < 10_000 + 5_000, "the game ended within 5 s of its 10 s limit: " + r.ms() + " ms");
+        evalThread.get().join(10_000);
+        Assert.assertFalse(evalThread.get().isAlive(), "the evaluation thread ended");
+        for (Thread t : Thread.getAllStackTraces().keySet()) {
+            Assert.assertFalse(t.getName().startsWith("Game-sim-"), "game thread still alive: " + t.getName());
+        }
+    }
+
+    /**
+     * A stall the cancel cannot reach outlives the grace and poisons the runner. Here the game thread waits on an
+     * evaluation thread adopted from its scope, and that thread waits on a latch, which draws nothing and calls no
+     * check(). The runner's report on stderr names both threads with their states and stacks, so a poisoned log says
+     * where the game stalled. Its last line holds their innermost frames, for a reader that keeps only stderr's tail.
+     * Takes the 10 s limit plus the 15 s grace.
+     */
+    @Test(timeOut = 180_000)
+    public void aGameThatOutlivesItsGraceIsPoisonedAndItsStuckThreadsAreReported() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicReference<Thread> evalThread = new AtomicReference<>();
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        PrintStream savedErr = System.err;
+        GameResult r;
+        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+        try {
+            r = runner.play(spec(7_000_004L, 10), g -> {
+                Thread eval = new Thread(SimScope.adopting(() -> awaitQuietly(release)), "Game AI Eval");
+                eval.setDaemon(true);
+                evalThread.set(eval);
+                eval.start();
+                try {
+                    eval.join();                                      // as the game thread waits on its evaluation
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        } finally {
+            System.setErr(savedErr);
+            release.countDown();                                      // the stall ends; the released game unwinds at its next draw
+        }
+        String report = captured.toString(StandardCharsets.UTF_8);
+        Assert.assertTrue(r.timedOut(), r.toString());
+        Assert.assertTrue(runner.isPoisoned(), "the game thread outlived its grace");
+        Assert.assertEquals(runner.exitCodeAfterDrain(), 5);
+        Assert.assertTrue(report.contains("GameRunner: the game with seed 7000004 outlived its 15000 ms grace"), report);
+        Assert.assertTrue(report.contains("\"Game-sim-0\" WAITING\n"), "the game thread, by name and state: " + report);
+        Assert.assertTrue(report.contains("\"Game AI Eval\" WAITING\n"),
+                "the evaluation thread adopted from its scope: " + report);
+        Assert.assertTrue(report.contains("\tat forge.sim.GameRunnerTest.awaitQuietly("),
+                "with the frames it stalled in: " + report);
+        Assert.assertTrue(report.contains("GameRunner: stall of seed 7000004: \"Game-sim-0\" WAITING at "),
+                "and a last line of innermost frames: " + report);
+        evalThread.get().join(30_000);
+        Assert.assertFalse(evalThread.get().isAlive(), "released, the evaluation thread ended");
+        awaitNoGameThread();
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Waits up to 60 s for every game thread to end, then fails naming one that did not. */
+    static void awaitNoGameThread() throws InterruptedException {
+        long deadline = System.nanoTime() + 60_000_000_000L;
+        while (true) {
+            String alive = null;
+            for (Thread t : Thread.getAllStackTraces().keySet()) {
+                if (t.getName().startsWith("Game-sim-")) {
+                    alive = t.getName();
+                }
+            }
+            if (alive == null) {
+                return;
+            }
+            if (System.nanoTime() > deadline) {
+                Assert.fail("game thread still alive: " + alive);
+            }
+            Thread.sleep(10);
         }
     }
 

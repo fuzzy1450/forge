@@ -3,10 +3,15 @@ package forge.util;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class AITimeoutTrackerTest {
     private static final long SEC = TimeUnit.SECONDS.toNanos(1);
+    /** The AI deadline a game of the sim runner arms: GameRunner sets AI_TIMEOUT to Integer.MAX_VALUE seconds. */
+    private static final long HARNESS_DEADLINE_NANOS = TimeUnit.SECONDS.toNanos(Integer.MAX_VALUE);
 
     @Test
     public void checkIsNoOpWhenNotArmed() {
@@ -109,6 +114,82 @@ public class AITimeoutTrackerTest {
         w.start();
         w.join(2000);
         Assert.assertTrue(stopped[0], "busy loop with check() must abort at the deadline");
+    }
+
+    /** Armed or not: a check() on a thread that armed no deadline must stop an abandoned game too. */
+    @Test
+    public void checkThrowsGameAbandonedOnceTheBoundScopeIsCancelled() {
+        final SimScope scope = new SimScope(1L);
+        SimScope.enter(scope);
+        try {
+            AITimeoutTracker.check(); // a game in play: nothing stops it
+            scope.cancel();           // the runner abandons the game at its time limit
+            Assert.assertThrows(GameAbandoned.class, AITimeoutTracker::check);
+        } finally {
+            SimScope.exit();
+        }
+    }
+
+    /** Expired is read by the AI as "use what you have" and the game plays on; an abandoned game must unwind. */
+    @Test
+    public void anAbandonedGameIsNotReadAsAnExpiredDeadline() {
+        final SimScope scope = new SimScope(1L);
+        scope.cancel();
+        SimScope.enter(scope);
+        final Object t = AITimeoutTracker.arm(System.nanoTime() - 1, false); // the deadline has passed too
+        try {
+            Assert.assertThrows(GameAbandoned.class, AITimeoutTracker::check);
+        } finally {
+            AITimeoutTracker.disarm(t);
+            SimScope.exit();
+        }
+    }
+
+    /**
+     * How AiController runs a decision: on a "Game AI Eval" thread adopted from the game's scope, armed with the
+     * game's deadline and calling check() in its loops. Under the sim runner the deadline is 2^31-1 s away and the
+     * runner interrupts nothing, so only the cancel can end such a loop; it must do so at the loop's next check().
+     */
+    @Test
+    public void anAdoptedEvaluationEndsAtItsNextCheckOnceItsGameIsCancelled() throws Exception {
+        final SimScope scope = new SimScope(2L);
+        final CountDownLatch looping = new CountDownLatch(1);
+        final AtomicBoolean giveUp = new AtomicBoolean(false);
+        final AtomicReference<Throwable> ended = new AtomicReference<>();
+        final Runnable evaluation;
+        SimScope.enter(scope);
+        try {
+            evaluation = SimScope.adopting(() -> {
+                final Object t = AITimeoutTracker.arm(System.nanoTime() + HARNESS_DEADLINE_NANOS, true);
+                try {
+                    looping.countDown();
+                    while (!giveUp.get()) {
+                        AITimeoutTracker.check();
+                    }
+                } catch (Throwable e) {
+                    ended.set(e);
+                } finally {
+                    AITimeoutTracker.disarm(t);
+                }
+            });
+        } finally {
+            SimScope.exit();
+        }
+        final Thread w = new Thread(evaluation, "Game AI Eval test");
+        w.setDaemon(true);
+        w.start();
+        try {
+            Assert.assertTrue(looping.await(10, TimeUnit.SECONDS), "the evaluation started");
+            w.join(200);
+            Assert.assertTrue(w.isAlive(), "while its game is in play the evaluation runs on");
+            scope.cancel();
+            w.join(2000);
+            Assert.assertFalse(w.isAlive(), "the evaluation ended at its next check() after the cancel");
+            Assert.assertTrue(ended.get() instanceof GameAbandoned, "it ended abandoned: " + ended.get());
+        } finally {
+            giveUp.set(true); // a failed run must not leave the loop spinning
+            w.join(2000);
+        }
     }
 
     @Test
