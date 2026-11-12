@@ -207,8 +207,21 @@ public final class AITimeoutTracker {
         l.honourInterrupt = prev[2] == 1;
     }
 
-    /** Cheap: call it inside AI loops. Throws {@link Expired} once the armed deadline passed (no-op when not armed). */
+    /**
+     * Cheap: call it inside AI loops. Throws {@link GameAbandoned} once this thread's {@link SimScope} was cancelled,
+     * and {@link Expired} once the armed deadline passed (no-op when not armed).
+     * <p>
+     * A scope is cancelled when the sim runner abandons its game at the time limit. The runner interrupts nothing, and
+     * its AI deadline is never reached, so an evaluation that draws no random number and takes no id would otherwise run
+     * on past the runner's grace and poison its JVM. The scope is asked first: the AI reads Expired as "use what you
+     * have" and plays on, which an abandoned game must not do. Without a cancel nothing here changes, so a game that
+     * finishes plays exactly as before; the GUI binds no scope.
+     */
     public static void check() {
+        final SimScope scope = SimScope.current();
+        if (scope != null && scope.isCancelled()) {
+            throw new GameAbandoned();
+        }
         final Limit l = LIMIT.get();
         if (l.armed && (System.nanoTime() - l.deadlineNanos >= 0 || (l.honourInterrupt && Thread.currentThread().isInterrupted()))) {
             throw new Expired();
