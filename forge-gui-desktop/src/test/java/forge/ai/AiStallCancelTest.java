@@ -31,10 +31,12 @@ import forge.util.SimScope;
  * <p>
  * The board here is that shape: three hundred 2/2s against fifteen 9/9s, which no three blockers can kill, so the
  * walk never ends early. The AI is at 20 life, where the bears are blockers worth spending
- * (AiBlockController.assignBlockers' diff). The decision runs on a game thread under a SimScope, as GameRunner runs a
- * game, with GameRunner's AI settings: no deadline, so only the cancel can end it. Once the evaluation is inside the
- * walk, the test cancels the scope. The evaluation must then end at the walk's own check(), which only the fix can
- * do. Without it, the GameAbandoned can only come from a later random draw, so the thrower names the fix.
+ * (AiBlockController.assignBlockers' diff). The opponent is at 100,000, so no swing of the bears is lethal and the
+ * attack plan takes its normal path into the block prediction. The decision runs on a game thread under a SimScope,
+ * as GameRunner runs a game, with GameRunner's AI settings: no deadline, so only the cancel can end it. Once the
+ * evaluation is inside the walk, the test cancels the scope. The evaluation must then end at the walk's own check(),
+ * which only the fix can do. Without it, the GameAbandoned can only come from a later random draw, so the thrower
+ * names the fix.
  */
 public class AiStallCancelTest extends AITest {
     private static final String BLOCKS = "forge.ai.AiBlockController";
@@ -57,6 +59,9 @@ public class AiStallCancelTest extends AITest {
                 addCard("Forest", ai);
                 addCardToZone("Might of Old Krosa", ai, ZoneType.Hand);   // AILogic Main1IfAble: judged in main 1
                 addCards("Ancient Brontodon", 15, opp);
+                // No lethal swing: at 20 life the bears' unblocked damage would make doAssault attack with all of them
+                // and skip the attack plan's block prediction. The AI's own life, which the search reads, stays 20.
+                opp.setLife(100_000, null);
                 for (final Card c : g.getCardsIn(ZoneType.Battlefield)) {
                     c.setSickness(false);                    // addCard leaves creatures summoning-sick
                 }
