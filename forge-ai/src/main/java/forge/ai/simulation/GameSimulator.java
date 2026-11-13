@@ -260,6 +260,25 @@ public class GameSimulator {
         return null;
     }
 
+    /**
+     * The simulated game's own land ability for {@code origSa}, a land ability of the original game: the first land
+     * ability of the same face among those the copy of its card offers the simulated AI player and can play now, as
+     * the controller's land choice takes the first of the original's. Null when there is none. The original is
+     * neither asked nor played: for a card face down in exile its canPlay() turns an LKI copy face up, which takes the
+     * original game's next timestamp (LandAbility.getAlternateHost), so a rollout that offered a land a Petty Larceny
+     * or a Siphon Insight had exiled wrote the original game; and as the cause of the land's move and of its
+     * LandPlayed triggers it would hand the copy an ability of the original game.
+     */
+    private SpellAbility findLandAbilityInSimGame(final SpellAbility origSa) {
+        Card hostCard = copier.find(origSa.getHostCard());
+        for (SpellAbility sa : hostCard.getAllPossibleAbilities(aiPlayer, true)) {
+            if (sa.isLandAbility() && sa.getCardStateName() == origSa.getCardStateName()) {
+                return sa;
+            }
+        }
+        return null;
+    }
+
     public Score simulateSpellAbility(SpellAbility origSa) {
         return simulateSpellAbility(origSa, this.eval, true);
     }
@@ -361,11 +380,11 @@ public class GameSimulator {
      */
     public boolean applySpellAbility(SpellAbility origSa, boolean resolveStack) {
         if (origSa.isLandAbility()) {
-            if (!origSa.canPlay()) {
+            SpellAbility landSa = findLandAbilityInSimGame(origSa);
+            if (landSa == null) {
                 return false;
             }
-            Card hostCard = copier.find(origSa.getHostCard());
-            aiPlayer.playLand(hostCard, origSa);
+            aiPlayer.playLand(landSa.getHostCard(), landSa);
         } else {
             SpellAbility sa = findSaInSimGame(origSa);
             if (sa == null) {
