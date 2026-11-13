@@ -140,7 +140,7 @@ public final class StormSolver {
     /** A setup play has to make the hand this much better, or the AI does what it always did. */
     private static final int SETUP_MIN_GAIN = 30;
 
-    /** Set after an OutOfMemoryError: the AI plays without the solver for the rest of the game. */
+    /** Set when a search failed (see {@link #next}): the AI plays without the solver for the rest of the game. */
     private boolean disabled;
     private Line line;
     private int index;
@@ -152,9 +152,29 @@ public final class StormSolver {
     /** What the last call did, for tests and traces. */
     public String lastNote = "";
 
+    /** A search for a line that wins this turn, as {@link #solve} makes one. */
+    interface Search {
+        Line solve(Player ai, ComboPlan combos, int maxNodes, long budgetNanos);
+    }
+
+    /**
+     * The search {@link #next} runs: {@link #solve}. Package-private, as {@link #heap} is, so that StormSolverScopeTest
+     * can hand next() a search that fails and put this one back; nothing else sets it.
+     */
+    static Search search = StormSolver::solve;
+
     /**
      * The next play of the winning line, or null when there is none and the caller should decide as it always did.
      * {@code combos} is the plan of the AI; this does nothing for a deck that is not a tutor storm deck.
+     *
+     * <p>A search that fails switches the solver off for the rest of the game, and the AI plays on without it. In a
+     * game under a SimScope (the sim harness) an Error does not: a heap or a stack that ran short on one machine and
+     * not on another would switch the solver off on the one alone, and one seed would play two games (see
+     * {@link #solve}). There an OutOfMemoryError comes out of this method, and so does the Error that
+     * {@link SimScope#simulationError} finds inside a RuntimeException (a StackOverflowError, whose depth is the JDK's
+     * and the CPU's), as an Error ends a game everywhere else in the harness. A plain RuntimeException, which every
+     * machine meets alike, still switches the solver off. Unbound, the GUI's case, either Error switches it off as
+     * before.
      */
     public SpellAbility next(final Player ai, final ComboPlan combos) {
         SpellAbility sa;
@@ -163,6 +183,10 @@ public final class StormSolver {
         } catch (final AITimeoutTracker.Expired e) {
             throw e;
         } catch (final RuntimeException e) {
+            final Error error = SimScope.simulationError(e);
+            if (error != null) {
+                throw error; // under a simulation an Error inside the failure is no decision (see above)
+            }
             // a failure in the search must not end the turn or switch Flat Monte Carlo off: play on without the solver
             disabled = true;
             line = null;
@@ -249,8 +273,11 @@ public final class StormSolver {
         solves++;
         totalSolves++;
         try {
-            line = solve(ai, combos, DEFAULT_MAX_NODES, budgetNanos());
+            line = search.solve(ai, combos, DEFAULT_MAX_NODES, budgetNanos());
         } catch (final OutOfMemoryError e) {
+            if (scoped()) {
+                throw e; // under a SimScope a search stops by its state cap alone, never by a heap (see next)
+            }
             line = null; // the search is local and garbage now; Flat Monte Carlo plays on
             disabled = true;
             lastNote = "out of memory: solver off";

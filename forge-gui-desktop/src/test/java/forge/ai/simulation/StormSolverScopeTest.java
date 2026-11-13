@@ -4,6 +4,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -134,6 +135,44 @@ public class StormSolverScopeTest extends AITest {
     }
 
     /**
+     * Under a scope an Error in a search is no decision, as everywhere else in a harness game: an OutOfMemoryError,
+     * or a StackOverflowError inside a RuntimeException, comes out of next() instead of switching the solver off,
+     * since a heap or a stack that ran short on one machine and not on another would play one seed two ways. A plain
+     * RuntimeException, which every machine meets alike, still switches it off. Unbound, the GUI's case, both Errors
+     * switch it off as before. next() is handed searches that fail at once through its package-private seam; the real
+     * search would find the Beseech line, so a solver that gives no play here ran the failing one.
+     */
+    @Test
+    public void aSearchErrorComesOutOfNextOnlyUnderAScope() {
+        assertNull(SimScope.current(), "the test's own thread has no scope bound");
+        assertFalse(SimScope.isStrict(), "nor strict mode on: the GUI's case");
+        final Player p = beseechLine();
+        final OutOfMemoryError oom = new OutOfMemoryError("a search that ran short of heap");
+        final StackOverflowError deep = new StackOverflowError();
+        final RuntimeException wrapped = new RuntimeException(deep);
+        final RuntimeException plain = new IllegalStateException("a failure every machine meets alike");
+        final StormSolver.Search solve = StormSolver.search;
+        try {
+            StormSolver.search = failingWith(oom);
+            assertEquals(noteOfNext(p), "out of memory: solver off", "unbound, a search out of memory switches it off");
+            StormSolver.search = failingWith(wrapped);
+            final String unboundNote = noteOfNext(p);
+            assertTrue(unboundNote.startsWith("solver error, solver off"),
+                    "unbound, so does a StackOverflowError inside a failure: " + unboundNote);
+            StormSolver.search = failingWith(plain);
+            final String scopedNote = Scoped.under(new SimScope(SEED), () -> noteOfNext(p));
+            assertTrue(scopedNote.startsWith("solver error, solver off"),
+                    "under a scope a plain failure still switches it off: " + scopedNote);
+            StormSolver.search = failingWith(oom);
+            assertSame(thrownByNext(p), oom, "under a scope the OutOfMemoryError comes out of next()");
+            StormSolver.search = failingWith(wrapped);
+            assertSame(thrownByNext(p), deep, "and so does the StackOverflowError inside a failure, unwrapped");
+        } finally {
+            StormSolver.search = solve;
+        }
+    }
+
+    /**
      * The Beseech line: StormGoldfishTest's main deck as the library of the seat that plays, Beseech the Mirror, Dark
      * Ritual and Tendrils of Agony taken from it into the hand, six Swamps and Wishclaw Talisman (the Bargain's
      * sacrifice) in play, the opponent at 8 and no spell cast yet this turn, at the seat's first main phase with the AI
@@ -176,6 +215,28 @@ public class StormSolverScopeTest extends AITest {
     /** One search of {@code p}'s position, as a harness game's thread runs it: on a fresh thread, in a fresh scope. */
     private static StormSolver.Line scoped(final Player p, final int maxNodes, final long budgetNanos) {
         return Scoped.under(new SimScope(SEED), () -> StormSolver.solve(p, tutorStorm(p), maxNodes, budgetNanos));
+    }
+
+    /** A search that fails at once with {@code failure}, an Error or a RuntimeException, as a search can. */
+    private static StormSolver.Search failingWith(final Throwable failure) {
+        return (ai, combos, maxNodes, budgetNanos) -> {
+            if (failure instanceof Error e) {
+                throw e;
+            }
+            throw (RuntimeException) failure;
+        };
+    }
+
+    /** The note a fresh solver leaves when its next() for {@code p}'s position, on this thread, gives no play. */
+    private static String noteOfNext(final Player p) {
+        final StormSolver solver = new StormSolver();
+        assertNull(solver.next(p, tutorStorm(p)), "the solver gives no play");
+        return solver.lastNote;
+    }
+
+    /** What a fresh solver's next() for {@code p}'s position throws on a harness game's thread; null if it returns. */
+    private static Throwable thrownByNext(final Player p) {
+        return Scoped.thrownBy(new SimScope(SEED), () -> new StormSolver().next(p, tutorStorm(p)));
     }
 
     /** The seat's combos, read in the scope bound here, if any, as the AI reads them. */
