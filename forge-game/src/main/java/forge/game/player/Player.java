@@ -721,10 +721,13 @@ public class Player extends GameEntity implements Comparable<Player> {
                 && !this.getGame().getRules().hasAppliedVariant(GameType.Brawl)) {
             // In case that commander is merged permanent, get the real commander card
             final Card realCommander = source.getRealCommander();
-            addCommanderDamage(realCommander, amount);
-            view.updateCommanderDamage(this);
-            if (realCommander != source) {
-                view.updateMergedCommanderDamage(source, realCommander);
+            // not in the CR: the Two-Headed Giant format page counts commander damage per team
+            for (final Player p : getSharedTeam()) {
+                p.addCommanderDamage(realCommander, amount);
+                p.view.updateCommanderDamage(p);
+                if (realCommander != source) {
+                    p.view.updateMergedCommanderDamage(source, realCommander);
+                }
             }
         }
 
@@ -3156,6 +3159,27 @@ public class Player extends GameEntity implements Comparable<Player> {
                     effect.setActivatingPlayer(this);
 
                     getController().playSpellAbilityNoStack(effect, true);
+                }
+            }
+        }
+    }
+
+    public void runStartGameScripts() {
+        for (final List<String> script : getRegisteredPlayer().getStartGameScripts()) {
+            // each script gets its own host, so SVar names and remembered cards stay separate
+            final DetachedCardEffect host = new DetachedCardEffect(this, "Start of Game Effect");
+            getZone(ZoneType.Command).add(host);
+            for (final String line : script) {
+                if (line.startsWith("SVar:")) {
+                    final String[] svar = line.split(":", 3);
+                    host.setSVar(svar[1], svar[2]);
+                }
+            }
+            for (final String line : script) {
+                if (!line.startsWith("SVar:")) {
+                    final SpellAbility sa = AbilityFactory.getAbility(line, host);
+                    sa.setActivatingPlayer(this);
+                    getController().playSpellAbilityNoStack(sa, true);
                 }
             }
         }

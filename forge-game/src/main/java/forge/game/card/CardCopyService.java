@@ -422,8 +422,6 @@ public class CardCopyService {
 
         newCopy.getGoadMap().putAll(copyFrom.getGoadMap());
 
-        newCopy.setMayPlay(copyFrom.getMayPlay());
-
         return newCopy;
     }
 

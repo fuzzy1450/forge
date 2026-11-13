@@ -165,7 +165,7 @@ public abstract class GameLobby implements IHasGameType {
             if (field.startsWith(SETUP_VARIANTS)) {
                 for (final String name : StringUtils.split(field.substring(SETUP_VARIANTS.length()), ',')) {
                     final GameType variant = EnumUtils.getEnum(GameType.class, name);
-                    if (variant != null && (choices.contains(variant) || FormatChoices.STACKED_GAME_TYPES.contains(variant))) {
+                    if (variant != null && (choices.contains(variant) || FormatChoices.VARIANTS.contains(variant))) {
                         applyVariant(variant);
                     }
                 }
@@ -359,19 +359,20 @@ public abstract class GameLobby implements IHasGameType {
             data.appliedVariants.remove(GameType.TwoHeadedGiant);
             break;
         case TwoHeadedGiant:
-            // the Commander variants and Vanguard set their own life totals, and Planechase has its own team rules (CR 901.12)
+            // the other Commander variants and Vanguard set their own life totals, and Planechase has its own team rules (CR 901.12)
             data.appliedVariants.remove(GameType.Vanguard);
             data.appliedVariants.remove(GameType.Planechase);
             data.appliedVariants.remove(GameType.Archenemy);
             data.appliedVariants.remove(GameType.ArchenemyRumble);
-            data.appliedVariants.remove(GameType.Commander);
             data.appliedVariants.remove(GameType.Oathbreaker);
             data.appliedVariants.remove(GameType.TinyLeaders);
             data.appliedVariants.remove(GameType.Brawl);
+            if (hasVariant(GameType.Commander)) {
+                setGameType(GameType.Commander); // the desktop deck choosers follow the game type
+            }
             applyVariantTeams();
             break;
         case Commander:
-            data.appliedVariants.remove(GameType.TwoHeadedGiant);
             data.appliedVariants.remove(GameType.Oathbreaker);
             data.appliedVariants.remove(GameType.TinyLeaders);
             data.appliedVariants.remove(GameType.Brawl);
@@ -436,6 +437,12 @@ public abstract class GameLobby implements IHasGameType {
         final boolean changed = data.appliedVariants.remove(variant);
         if (!changed) {
             return;
+        }
+
+        if (variant == GameType.TwoHeadedGiant || variant == GameType.Archenemy) {
+            for (int i = 0; i < data.slots.size(); i++) {
+                data.slots.get(i).setTeam(i);
+            }
         }
 
         if (variant == currentGameType) {

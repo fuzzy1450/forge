@@ -68,6 +68,14 @@ public class PermanentCreatureAi extends PermanentAi {
             // AiPlayDecision.AnotherTime
             return false;
         }
+        // ... and not when its whole point, the one attack, would be prevented (protection from creatures/everything)
+        if (card.hasSVar("EndOfTurnLeavePlay")) {
+            for (final Player opp : ai.getOpponents()) {
+                if (AiAttackController.isDamageProtected(opp, card)) {
+                    return false;
+                }
+            }
+        }
 
         if (SpecialCardAi.OverchargedAmalgam.NAME.equals(card.getName()) && !sa.isCastFromPlayEffect()) {
             // a counterspell on a body: a worthy counter window while we hold exploit fodder, else

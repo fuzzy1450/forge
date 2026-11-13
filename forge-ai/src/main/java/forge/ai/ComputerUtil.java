@@ -86,6 +86,7 @@ public class ComputerUtil {
     public static boolean handlePlayingSpellAbility(final Player ai, SpellAbility sa, Consumer<SpellAbility> chooseTargets) {
         final Card source = sa.getHostCard();
         final Game game = source.getGame();
+        RunawayLoop.note(ai, sa);
         if (!sa.isCopied() && !sa.isTrigger() && ai.getController() instanceof PlayerControllerAi pc) {
             if (pc.getAi().hasFailedToCast(sa)) {
                 return false;
@@ -104,6 +105,7 @@ public class ComputerUtil {
         final boolean castFaceDown = sa.isCastFaceDown();
         // what a failed payment needs to undo the cast, kept as PlaySpellAbility.playAbility keeps it for a human
         final boolean refreeze = game.getStack().isFrozen();
+        final int waitingMark = game.getTriggerHandler().getWaitingTriggerCount();
         Zone fromZone = null;
         int zonePosition = 0;
         boolean movedToStack = false;
@@ -181,7 +183,7 @@ public class ComputerUtil {
             // striker) then held those spells' cast triggers back for ever: walk 14's seed-offset-11 timeouts, a
             // failed Angel of Salvation in Divine Convocation. Its spells sit out the AI's next choice, as the stock
             // branch below meant them to.
-            GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, pay, source);
+            GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, pay, source, waitingMark);
             game.getStack().unfreezeStack();
             if (fromZone != null) {
                 for (SpellAbility csa : sa.getHostCard().getSpellAbilities()) {
@@ -337,6 +339,7 @@ public class ComputerUtil {
         }
 
         final Card source = sa.getHostCard();
+        final int waitingMark = game.getTriggerHandler().getWaitingTriggerCount();
 
         Zone fromZone = game.getZoneOf(source);
         int zonePosition = 0;
@@ -355,7 +358,7 @@ public class ComputerUtil {
 
         // do this after card got added to stack
         if (!sa.checkRestrictions(ai)) {
-            GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, pay, source);
+            GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, pay, source, waitingMark);
             return false;
         }
 
@@ -367,8 +370,8 @@ public class ComputerUtil {
             // A spell a play effect casts (playSaFromPlayEffect) whose payment fails goes back where it was cast
             // from, its convoke creatures untapped and its mana refunded, instead of staying in the Stack zone with
             // no stack entry, lost to the game. The resolving stack stays frozen, with the spells and the triggers
-            // the resolution has put on it so far: rollbackCast is rollbackAbility without its clearFrozen and
-            // clearWaitingTriggers, which would drop them in the middle of the resolution.
+            // the resolution has put on it so far: rollbackCast is rollbackAbility without its last two steps, the
+            // unfreeze and the clearing of waiting triggers, which do not belong in the middle of a resolution.
             System.out.println("[" + sa.getActivatingPlayer() + "] AI failed to play " + sa.getHostCard() + " [" + sa.getHostCard().getZone() + "]");
             GameActionUtil.rollbackCast(sa, fromZone, zonePosition, pay, source);
         }
@@ -1672,6 +1675,10 @@ public class ComputerUtil {
     public static boolean preventRunAwayActivations(final SpellAbility sa) {
         if (!sa.isActivatedAbility()) {
             return false;
+        }
+
+        if (RunawayLoop.exceeded(sa)) {
+            return true;
         }
 
         int activations = sa.getActivationsThisTurn();

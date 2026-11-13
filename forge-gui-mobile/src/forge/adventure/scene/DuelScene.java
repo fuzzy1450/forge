@@ -77,7 +77,9 @@ public class DuelScene extends ForgeScene {
     EnemySprite enemy;
     PlayerSprite player;
     RegisteredPlayer humanPlayer;
+    private EffectData biomeEffect;
     private EffectData dungeonEffect;
+    private boolean ignoreGlobalEffect;
     Deck playerDeck;
     boolean chaosBattle = false;
     boolean callbackExit = false;
@@ -251,7 +253,6 @@ public class DuelScene extends ForgeScene {
         Forge.advFreezePlayerControls = winner;
         endRunnable = () -> Gdx.app.postRunnable(() -> {
             GameHUD.getInstance().updateBGM();
-            dungeonEffect = null;
             callbackExit = false;
             Forge.clearTransitionScreen();
             Forge.clearScreenStack();
@@ -355,19 +356,32 @@ public class DuelScene extends ForgeScene {
             changeStartCards += data.changeStartCards;
             startCards.addAll(data.startBattleWithCards());
             startCardsInCommandZone.addAll(data.startBattleWithCardsInCommandZone());
+            if (data.startBattleScript != null)
+                player.addStartGameScript(Arrays.asList(data.startBattleScript));
             extraManaShards += data.extraManaShards;
         }
         player.addExtraCardsOnBattlefield(startCards);
         player.addExtraCardsInCommandZone(startCardsInCommandZone);
         if (lifeMod != 0)
             player.setStartingLife(Math.max(1, lifeMod + player.getStartingLife()));
-        player.setStartingHand(player.getStartingHand() + changeStartCards);
+        player.setStartingHand(Math.max(0, player.getStartingHand() + changeStartCards));
         player.setManaShards((player.getManaShards() + extraManaShards));
         player.setEnableETBCountersEffect(true); //enable etbcounters on starting cards like Ring of Three Wishes, etc...
     }
 
-    public void setDungeonEffect(EffectData E) {
-        dungeonEffect = E;
+    /** The enemy's own opt-outs are applied when the duel starts, so callers pass only the place's layers and opt-out. */
+    public void setEffectLayers(EffectData biomeEffect, EffectData dungeonEffect, boolean ignoreGlobalEffect) {
+        this.biomeEffect = biomeEffect;
+        this.dungeonEffect = dungeonEffect;
+        this.ignoreGlobalEffect = ignoreGlobalEffect;
+    }
+
+    private static void addEffect(Array<EffectData> ownSide, Array<EffectData> otherSide, EffectData effect) {
+        if (effect == null)
+            return;
+        ownSide.add(effect);
+        if (effect.opponent != null)
+            otherSide.add(effect.opponent);
     }
 
     /** True while enemy decks are being generated in the background (Forge.switchScene must keep the VS screen up). */
@@ -377,6 +391,8 @@ public class DuelScene extends ForgeScene {
 
     private boolean needsEnemyDeckGeneration() {
         if (chaosBattle) return false;
+        //Sealed events build an opponent's deck the first time it is faced, see AdventureEventData.generateOpponentDeck.
+        if (eventData != null && !arenaBattleChallenge) return eventData.needsOpponentDeck(eventData.nextOpponent);
         return arenaBattleChallenge || (eventData == null && !enemy.getData().copyPlayerDeck);
     }
 
@@ -397,10 +413,15 @@ public class DuelScene extends ForgeScene {
         new Thread(() -> {
             List<Deck> decks = new ArrayList<>();
             try {
-                EnemyData e = enemy.getData();
-                for (int i = 0; i < 9 && e != null; i++) {
-                    decks.add(!arenaBattleChallenge && e.copyPlayerDeck ? null : generateEnemyDeck(e));
-                    e = e.nextEnemy;
+                if (eventData != null && !arenaBattleChallenge) {
+                    //The opponent's deck is stored on the event participant, there is nothing to hand back in the list.
+                    eventData.generateOpponentDeck(eventData.nextOpponent);
+                } else {
+                    EnemyData e = enemy.getData();
+                    for (int i = 0; i < 9 && e != null; i++) {
+                        decks.add(!arenaBattleChallenge && e.copyPlayerDeck ? null : generateEnemyDeck(e));
+                        e = e.nextEnemy;
+                    }
                 }
             } catch (Throwable t) {
                 t.printStackTrace();
@@ -449,7 +470,6 @@ public class DuelScene extends ForgeScene {
 
         List<RegisteredPlayer> players = new ArrayList<>();
 
-        applyAdventureDeckRules(mainGameType.getDeckFormat());
         int playerCount = 1;
         EnemyData currentEnemy = enemy.getData();
         for (int i = 0; i < 8 && currentEnemy != null; i++) {
@@ -457,31 +477,8 @@ public class DuelScene extends ForgeScene {
             currentEnemy = currentEnemy.nextEnemy;
         }
 
-        humanPlayer = RegisteredPlayer.forVariants(playerCount, appliedVariants, playerDeck, null, false, null, null);
-        LobbyPlayer playerObject = GamePlayerUtil.getGuiPlayer();
-        FSkin.getAvatars().put(playerAvatarKey, advPlayer.avatar());
-        playerObject.setAvatarIndex(playerAvatarKey);
-        humanPlayer.setPlayer(playerObject);
-        humanPlayer.setTeamNumber(0);
-        humanPlayer.setStartingLife(eventData != null ? eventData.eventRules.startingLife : advPlayer.getLife());
-        if (eventData == null || eventData.eventRules.allowsShards)
-            humanPlayer.setManaShards(advPlayer.getShards());
-
         Array<EffectData> playerEffects = new Array<>();
         Array<EffectData> oppEffects = new Array<>();
-
-        Map<DeckProxy, Pair<List<String>, List<String>>> deckProxyMapMap = null;
-        DeckProxy deckProxy = null;
-        if (chaosBattle) {
-            deckProxyMapMap = DeckProxy.getAllQuestChallenges();
-            deckProxy = Aggregates.random(deckProxyMapMap.keySet());
-            //playerextras
-            List<IPaperCard> playerCards = new ArrayList<>();
-            for (String s : deckProxyMapMap.get(deckProxy).getLeft()) {
-                playerCards.add(QuestUtil.readExtraCard(s));
-            }
-            humanPlayer.addExtraCardsOnBattlefield(playerCards);
-        }
 
         if (eventData == null || eventData.eventRules.allowsItems) {
             //Collect and add items effects first.
@@ -501,19 +498,39 @@ public class DuelScene extends ForgeScene {
                 playerEffects.add(advPlayer.getBlessing());
                 if (advPlayer.getBlessing().opponent != null) oppEffects.add(advPlayer.getBlessing().opponent);
             }
-
-            //Collect and add enemy effects (same as blessings but for individual enemies).
-            if (enemy.effect != null) {
-                oppEffects.add(enemy.effect);
-                if (enemy.effect.opponent != null)
-                    playerEffects.add(enemy.effect.opponent);
-            }
         }
-        //Collect and add dungeon-wide effects.
-        if (dungeonEffect != null) {
-            oppEffects.add(dungeonEffect);
-            if (dungeonEffect.opponent != null)
-                playerEffects.add(dungeonEffect.opponent);
+        //Every layer is written for the enemies, as dungeon effects always were, so its opponent block goes to the player.
+        if (!ignoreGlobalEffect && !enemy.ignoreGlobalEffect)
+            addEffect(oppEffects, playerEffects, Config.instance().getConfigData().globalEffect);
+        if (!enemy.ignoreBiomeEffect)
+            addEffect(oppEffects, playerEffects, biomeEffect);
+        if (!enemy.ignoreDungeonEffect)
+            addEffect(oppEffects, playerEffects, dungeonEffect);
+        if (eventData == null || eventData.eventRules.allowsBlessings)
+            addEffect(oppEffects, playerEffects, enemy.effect);
+
+        applyAdventureDeckRules(mainGameType.getDeckFormat(), allowsIllegalCommander(playerEffects));
+        humanPlayer = RegisteredPlayer.forVariants(playerCount, appliedVariants, playerDeck, null, false, null, null);
+        LobbyPlayer playerObject = GamePlayerUtil.getGuiPlayer();
+        FSkin.getAvatars().put(playerAvatarKey, advPlayer.avatar());
+        playerObject.setAvatarIndex(playerAvatarKey);
+        humanPlayer.setPlayer(playerObject);
+        humanPlayer.setTeamNumber(0);
+        humanPlayer.setStartingLife(eventData != null ? eventData.eventRules.startingLife : advPlayer.getLife());
+        if (eventData == null || eventData.eventRules.allowsShards)
+            humanPlayer.setManaShards(advPlayer.getShards());
+
+        Map<DeckProxy, Pair<List<String>, List<String>>> deckProxyMapMap = null;
+        DeckProxy deckProxy = null;
+        if (chaosBattle) {
+            deckProxyMapMap = DeckProxy.getAllQuestChallenges();
+            deckProxy = Aggregates.random(deckProxyMapMap.keySet());
+            //playerextras
+            List<IPaperCard> playerCards = new ArrayList<>();
+            for (String s : deckProxyMapMap.get(deckProxy).getLeft()) {
+                playerCards.add(QuestUtil.readExtraCard(s));
+            }
+            humanPlayer.addExtraCardsOnBattlefield(playerCards);
         }
 
         addEffects(humanPlayer, playerEffects);
@@ -554,6 +571,9 @@ public class DuelScene extends ForgeScene {
                 System.err.println(isDeckMissingMsg);
                 deck = this.eventData == null && canUseGeneticAI ? Aggregates.random(DeckProxy.getAllGeneticAIDecks()).getDeck() : this.playerDeck;
             }
+            //A copy of the player's deck keeps the player's commander, already checked by applyAdventureDeckRules.
+            if (deck != this.playerDeck && mainGameType.getDeckFormat().hasCommander() && !allowsIllegalCommander(oppEffects))
+                deck = withoutIllegalCommanders(deck, mainGameType.getDeckFormat());
             RegisteredPlayer aiPlayer = RegisteredPlayer.forVariants(playerCount, appliedVariants, deck, null, false, null, null);
 
             LobbyPlayer enemyPlayer = GamePlayerUtil.createAiPlayer(currentEnemy.getName(), selectAI(currentEnemy.ai, bossBattle && eventData == null));
@@ -669,7 +689,30 @@ public class DuelScene extends ForgeScene {
     private static final String PLACEHOLDER_ATTRACTION = "Coin-Operated Pony";
     private static final String PLACEHOLDER_CONTRAPTION = "Automatic Fidget Spinner";
 
-    private void applyAdventureDeckRules(DeckFormat format) {
+    private static boolean allowsIllegalCommander(Array<EffectData> effects) {
+        for (EffectData effect : effects) {
+            if (effect.allowIllegalCommander)
+                return true;
+        }
+        return false;
+    }
+
+    private static Deck withoutIllegalCommanders(Deck deck, DeckFormat format) {
+        List<PaperCard> illegal = new ArrayList<>();
+        for (PaperCard commander : deck.getCommanders()) {
+            if (!format.isLegalCommander(commander.getRules()))
+                illegal.add(commander);
+        }
+        if (illegal.isEmpty())
+            return deck;
+        //Edit a copy, because the deck can be one that is reused.
+        Deck copy = new Deck(deck);
+        copy.get(DeckSection.Commander).removeAllFlat(illegal);
+        copy.getMain().add(illegal);
+        return copy;
+    }
+
+    private void applyAdventureDeckRules(DeckFormat format, boolean allowIllegalCommander) {
         if(FModel.getPreferences().getPrefBoolean(ForgePreferences.FPref.DEV_MODE_ENABLED)
                 && !FModel.getPreferences().getPrefBoolean(ForgePreferences.FPref.ENFORCE_DECK_LEGALITY))
             return;
@@ -678,7 +721,7 @@ public class DuelScene extends ForgeScene {
         CardPool mainSection = playerDeck.getMain(), attractions = playerDeck.get(DeckSection.Attractions), contraptions = playerDeck.get(DeckSection.Contraptions);
 
         if(format.hasCommander()) {
-            applyAdventureCommandZoneRules(playerDeck, format);
+            applyAdventureCommandZoneRules(playerDeck, format, allowIllegalCommander);
         }
 
         removeExcessCopies(mainSection, format);
@@ -772,26 +815,27 @@ public class DuelScene extends ForgeScene {
         return maxDeckSize;
     }
 
-    private static void applyAdventureCommandZoneRules(Deck playerDeck, DeckFormat format) {
+    private static void applyAdventureCommandZoneRules(Deck playerDeck, DeckFormat format, boolean allowIllegalCommander) {
         CardPool commandPool = playerDeck.getOrCreate(DeckSection.Commander);
 
         //1. Validate command section.
         List<PaperCard> removals = new ArrayList<>();
         List<PaperCard> commanders = playerDeck.getCommanders(); //ordered flat list
+        boolean enforceLegality = !allowIllegalCommander && FModel.getPreferences().getPrefBoolean(ForgePreferences.FPref.ENFORCE_DECK_LEGALITY);
         if (commanders.size() > 2) {
             removals.addAll(commanders.subList(2, commanders.size()));
             commanders = commanders.subList(0, 2);
         }
         if (!commanders.isEmpty()) {
             PaperCard mainCommander = commanders.get(0);
-            if (!format.isLegalCommander(mainCommander.getRules()))
+            if (!format.isAllowedCommander(mainCommander.getRules(), enforceLegality))
                 removals.add(mainCommander);
             if (commanders.size() > 1) {
                 PaperCard partnerCommander = commanders.get(1);
                 if (removals.contains(mainCommander)) {
-                    if (!format.isLegalCommander(partnerCommander.getRules()))
+                    if (!format.isAllowedCommander(partnerCommander.getRules(), enforceLegality))
                         removals.add(partnerCommander); //Main is invalid but partner is valid.
-                } else if (!mainCommander.getRules().canBePartnerCommanders(partnerCommander.getRules()))
+                } else if (!format.isAllowedPartnership(mainCommander.getRules(), partnerCommander.getRules(), enforceLegality))
                     removals.add(partnerCommander); //Invalid partnership.
             }
         }
@@ -873,6 +917,8 @@ public class DuelScene extends ForgeScene {
         enemyAvatar.clear();
         this.isArena = isArena;
         this.eventData = eventData;
+        //Each caller sets the layers of its own place after this call.
+        setEffectLayers(null, null, false);
         if (eventData != null && eventData.eventRules == null)
             eventData.eventRules = new AdventureEventData.AdventureEventRules(AdventureEventController.EventFormat.Constructed, 1.0f);
         this.arenaBattleChallenge = isArena && Current.player().isHardorInsaneDifficulty();

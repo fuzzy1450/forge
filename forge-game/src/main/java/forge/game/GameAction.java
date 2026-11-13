@@ -1999,7 +1999,7 @@ public class GameAction {
                     if (p.conceded()) {
                         mate.concede();
                         losers.add(mate);
-                    } else if (mate.loseConditionMet(p.getOutcome().lossState, null)) {
+                    } else if (mate.loseConditionMet(p.getOutcome().lossState, p.getOutcome().loseConditionSpell)) {
                         losers.add(mate);
                     }
                 }
@@ -2399,6 +2399,11 @@ public class GameAction {
                 new MulliganService(first).perform();
             }
             if (game.isGameOver()) { break; } // conceded during "mulligan" prompt
+
+            // after the mulligans, which shuffle the hand away and redraw up to the maximum hand size
+            for (final Player p1 : game.getPlayers()) {
+                p1.runStartGameScripts();
+            }
 
             game.setAge(GameStage.Play);
 

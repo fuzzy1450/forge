@@ -526,11 +526,12 @@ public class DamageDealAi extends DamageAiBase {
                 // won't play it even in chain
                 return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
             }
-            if (chainDmg.getKey().getApi() == ApiType.Pump && sa.getTargets().isTargetingAnyPlayer()) {
-                // we're trying to chain a pump spell to a damage spell targeting a player, that won't work
+            if (!chainDmg.getKey().canTarget(sa.getTargets().get(0))) {
+                // we might be trying to chain a pump spell to a damage spell targeting a player, that won't work
                 // so run an additional check to ensure that we want to cast the current spell separately
                 sa.resetTargets();
                 if (!damageTargetAI(ai, sa, dmg, false)) {
+                    // could try to find another chain candidate
                     return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
                 }
             } else {
@@ -964,6 +965,7 @@ public class DamageDealAi extends DamageAiBase {
                 if ((freePing && !avoidTargetP(ai, sa))
                         || (((phase.is(PhaseType.END_OF_TURN) && phase.isPlayerNextTurn(ai))
                         || (isSorcerySpeed(sa, ai) && phase.is(PhaseType.MAIN2))
+                        || isFaceBurnWorthCasting(ai, sa) // an instant that can only hit the player (Skullcrack)
                         || ("BurnCreatures".equals(logic) && !enemy.getCreaturesInPlay().isEmpty()))
                         && ((sa.isPwAbility() && sa.getPayCosts().hasSpecificCostType(CostPutCounter.class))
                         || shouldTgtP(ai, sa, dmg, noPrevention)))) {
@@ -1065,7 +1067,8 @@ public class DamageDealAi extends DamageAiBase {
             return false;
         }
         if (!urgent && !playReusable(ai, saMe)) {
-            return false;
+            // a spell that can only hurt the opponent has no other use, so it is not kept for later (Boltwave at 6+ life)
+            return positive && isFaceBurnWorthCasting(ai, saMe);
         }
         return true;
     }
@@ -1337,6 +1340,9 @@ public class DamageDealAi extends DamageAiBase {
                     if (ab.equals(sa) || ab.getSubAbility() != null) { // decisions for complex SAs with subs are not supported yet
                         continue;
                     }
+                    if (ab.getActivatingPlayer() == null) {
+                        ab.setActivatingPlayer(ai); // a spell still in hand has none, and canPlay() checks need one
+                    }
                     if (!ab.canPlay()) {
                         continue;
                     }
@@ -1356,11 +1362,9 @@ public class DamageDealAi extends DamageAiBase {
                         if (StringUtils.isNumeric(dmgDef)) { // currently doesn't work for X and other dependent costs
                             if (sa.usesTargeting() && ab.usesTargeting()) {
                                 // Ensure that the chained spell can target at least the same things (or more) as the current one
-                                TargetRestrictions tgtSa = sa.getTargetRestrictions();
-                                TargetRestrictions tgtAb = sa.getTargetRestrictions();
-                                String[] validTgtsSa = tgtSa.getValidTgts();
-                                String[] validTgtsAb = tgtAb.getValidTgts();
-                                if (!Arrays.asList(validTgtsSa).containsAll(Arrays.asList(validTgtsAb))) {
+                                String[] validTgtsSa = sa.getTargetRestrictions().getValidTgts();
+                                String[] validTgtsAb = ab.getTargetRestrictions().getValidTgts();
+                                if (!validTgtsAb[0].equals("Any") && !Arrays.asList(validTgtsAb).containsAll(Arrays.asList(validTgtsSa))) {
                                     continue;
                                 }
 

@@ -208,6 +208,8 @@ public class PaperToken implements InventoryItemFromSet, IPaperCard {
                 suffix = ImageKeys.BACKFACE_POSTFIX;
             }
         }
+        // Cosmetic art pick, made on the GUI thread whenever the image is looked up. It must not draw from the game's
+        // stream: that would count as game randomness (breaking undo) and perturb seeded simulations.
         int idx = MyRandom.getCosmeticRandom().nextInt(artIndex); // art only: never the game's stream
         return getImageKey(idx) + suffix;
     }

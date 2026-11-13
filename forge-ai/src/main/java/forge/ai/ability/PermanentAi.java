@@ -58,7 +58,29 @@ public class PermanentAi extends SpellAbilityAi {
                 // our Main 1 while our Neera is unspent, when it takes no mana a castable non-feeder needs. Asked only
                 // where the wait above refused (a draw-free point); one isCardInPlay for every other deck. See
                 // SpecialCardAi.NeeraOwnTurn.
-                || SpecialCardAi.NeeraOwnTurn.liftsMainTwoHold(ai, sa);
+                || SpecialCardAi.NeeraOwnTurn.liftsMainTwoHold(ai, sa)
+                || paysOffForSpellInHand(ai, sa);
+    }
+
+    /**
+     * A permanent that pays off for a spell in hand that the mana also covers (Up the Beanstalk with a 5+ spell) is cast
+     * first, not held for the second main phase: after the spell it only misses the card (#4278).
+     */
+    public static boolean paysOffForSpellInHand(final Player ai, final SpellAbility sa) {
+        final Card host = sa.getHostCard();
+        final int mana = ComputerUtilMana.getAvailableManaEstimate(ai);
+        for (final Card inHand : ai.getCardsIn(ZoneType.Hand)) {
+            if (inHand == host) {
+                continue;
+            }
+            for (final SpellAbility other : inHand.getSpellAbilities()) {
+                if (other.isSpell() && ComputerUtilAbility.paysOffFor(sa, other)
+                        && host.getCMC() + inHand.getCMC() <= mana) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -403,6 +425,11 @@ public class PermanentAi extends SpellAbilityAi {
                 if (ai.getLife() > Integer.parseInt(value)) {
                     dontCast = false;
                     break; // disregard other preferences, always cast as a last resort
+                }
+            } else if (param.equals("MinOtherCardsInHand")) {
+                // Only cast with enough other cards to pay for it (Solitary Confinement discards one every upkeep)
+                if (ai.getCardsIn(ZoneType.Hand).size() - (source.isInZone(ZoneType.Hand) ? 1 : 0) < Integer.parseInt(value)) {
+                    dontCast = true;
                 }
             } else if (param.equals("OnlyFromZone")) {
                 if (!source.getZone().getZoneType().toString().equals(value)) {

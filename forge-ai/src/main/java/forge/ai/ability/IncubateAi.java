@@ -12,20 +12,21 @@ import forge.game.zone.ZoneType;
 /**
  * AI for ApiType.Incubate.
  *
- * Incubate had no SpellApiToAi entry, so every lookup fell back to
- * CannotPlayAi. Three sub-abilities are understood so far: Excise the
- * Imperfect's "its controller incubates X" (name-gated, priced in
- * SpecialCardAi.ExciseTheImperfect), Blight Titan's "mill yourself two,
- * then incubate X", and Sunfall's "exile all creatures, then incubate X",
- * where the sweep is judged by ChangeZoneAllAi (the rider's mana ceiling is
- * SpecialCardAi.Sunfall). Every other Incubate keeps CannotPlayAi's refusal.
- * That covers top-level SP$/AB$ Incubate (canPlay is inherited) and every
- * other Incubate hung under another effect (chkDrawback falls through to
- * super). Assimilate Essence, Merciless Repurposing, Searing Barb, Sunder the
- * Gateway, Tangled Skyline and Traumatic Revelation therefore behave exactly
- * as before.
+ * Three sub-abilities are understood here: Excise the Imperfect's "its
+ * controller incubates X" (name-gated, priced in
+ * SpecialCardAi.ExciseTheImperfect), Blight Titan's "mill yourself two, then
+ * incubate X", and Sunfall's "exile all creatures, then incubate X", where the
+ * sweep is judged by ChangeZoneAllAi (the rider's mana ceiling is
+ * SpecialCardAi.Sunfall). Every other Incubate is approved as upstream's own
+ * entry approves it (Card-Forge #12748, ApiType.Incubate -> AlwaysPlayAi):
+ * top-level SP$/AB$ Incubate (canPlay is inherited) and every other Incubate
+ * hung under another effect (chkDrawback falls through to super). Before that
+ * change Incubate had no SpellApiToAi entry, every lookup fell back to
+ * CannotPlayAi, and this class refused every other Incubate (Assimilate
+ * Essence, Merciless Repurposing, Searing Barb, Sunder the Gateway, Tangled
+ * Skyline and Traumatic Revelation among them).
  */
-public class IncubateAi extends CannotPlayAi {
+public class IncubateAi extends AlwaysPlayAi {
     @Override
     public AiAbilityDecision chkDrawback(Player aiPlayer, SpellAbility sa) {
         // Excise the Imperfect: the only Incubate script whose recipient is the

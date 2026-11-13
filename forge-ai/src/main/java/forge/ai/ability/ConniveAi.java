@@ -18,7 +18,7 @@ public class ConniveAi extends SpellAbilityAi {
     static final int STOCK_LIFE_FLOOR = 4;
 
     @Override
-    protected AiAbilityDecision canPlay(Player ai, SpellAbility sa) {
+    protected AiAbilityDecision checkApiLogic(Player ai, SpellAbility sa) {
         if (!ai.canDraw()) {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
