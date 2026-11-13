@@ -511,6 +511,10 @@ public class ComboLinesEndToEndAiTest extends AITest {
         sa.setActivatingPlayer(opp);
         sa.getTargets().add(target);
         game.getStack().add(sa);
+        // as if the opponent had just cast it (CR 117.3c), so everyone gets to respond before it resolves:
+        // MagicStack.add no longer hands its controller priority (Card-Forge #12785), and upstream's own tools set it
+        // as here
+        game.getPhaseHandler().setPriority(opp);
         assertEquals(game.getStack().peek().getSourceCard(), card, name + " is not the stack's top");
         assertEquals(game.getPhaseHandler().getPriorityPlayer(), opp, "the opponent does not hold priority");
         return card;
