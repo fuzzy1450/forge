@@ -1339,7 +1339,7 @@ public final class FlatMonteCarloPicker {
                 if (c.isLand() || c == sa.getHostCard() || isInstantSpeedSpell(c)) {
                     continue;
                 }
-                if (cheat && c.isValid(cheatable, ai, sa.getHostCard(), sa)) {
+                if (cheat && c.isValid(cheatable.split(","), ai, sa.getHostCard(), sa)) { // a list: any part, as isCheatFromHand reads it
                     continue;
                 }
                 for (final SpellAbility spell : c.getSpellAbilities()) {

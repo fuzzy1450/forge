@@ -220,7 +220,8 @@ public class ComputerUtilAbility {
                     || !t.hasParam("TriggerZones") || !t.getParam("TriggerZones").contains("Battlefield")) {
                 continue;
             }
-            if (!t.hasParam("ValidCard") || cast.isValid(t.getParam("ValidCard"), host.getController(), host, t)) {
+            // a list (Instant,Sorcery) is valid when any part is, as the trigger reads it (CardTraitBase.matchesValidParam)
+            if (!t.hasParam("ValidCard") || cast.isValid(t.getParam("ValidCard").split(","), host.getController(), host, t)) {
                 return true;
             }
         }

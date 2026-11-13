@@ -339,7 +339,7 @@ public class PermanentNoncreatureAi extends PermanentAi {
             }
             hates = true;
             for (final Card c : ai.getOpponents().getCardsIn(ZoneType.Battlefield)) {
-                if (!c.isValid(valid, host.getController(), host, st)) {
+                if (!c.isValid(valid.split(","), host.getController(), host, st)) { // a list (Artifact,Creature): any part
                     continue;
                 }
                 for (final SpellAbility ab : c.getSpellAbilities()) {

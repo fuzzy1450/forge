@@ -1,5 +1,8 @@
 package forge.ai;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -9,6 +12,7 @@ import org.testng.annotations.AfterClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
+import forge.ai.ability.PermanentAi;
 import forge.ai.simulation.DeckPlan;
 import forge.ai.simulation.OpeningHand;
 import forge.game.Game;
@@ -104,6 +108,16 @@ public class AiReportScenarioTest extends AITest {
         }
         boolean plays(final String card) { return playOf(card) != null; }
         SpellAbility first() { final List<SpellAbility> l = plays(); return l.isEmpty() ? null : l.get(0); }
+        /** The spell of the card of that name in the AI's hand, the AI its activator: a cast to ask the AI about. */
+        SpellAbility castOf(final String card) {
+            for (final Card k : ai.getCardsIn(ZoneType.Hand)) {
+                if (!card.equals(k.getName())) { continue; }
+                for (final SpellAbility sa : k.getSpellAbilities()) {
+                    if (sa.isSpell()) { sa.setActivatingPlayer(ai); return sa; }
+                }
+            }
+            throw new IllegalStateException("setup: no " + card + " spell in the AI's hand");
+        }
         Card target(final SpellAbility sa) {
             return sa != null && sa.usesTargeting() ? sa.getTargets().getFirstTargetedCard() : null;
         }
@@ -374,6 +388,56 @@ public class AiReportScenarioTest extends AITest {
                 c -> { final SpellAbility sa = c.first();
                     return sa != null && sa.getHostCard().getName().equals("Up the Beanstalk") ? null
                             : "first play was " + sa + c.why("Up the Beanstalk") + c.why("Craterhoof Behemoth"); }));
+        // the payoff's SpellCast trigger is read as the trigger reads its own ValidCard: a list is valid when any part is
+        l.add(new Scenario("4278", "Melek, Izzet Paragon (an instant or sorcery cast from the library) is read without an exception", Fid.EXACT, M1, true,
+                c -> { c.hand("Melek, Izzet Paragon", c.ai); c.hand("Opt", c.ai); c.hand("Ponder", c.ai); },
+                c -> {
+                    final SpellAbility melek = c.castOf("Melek, Izzet Paragon"), opt = c.castOf("Opt");
+                    if (ComputerUtilAbility.paysOffFor(melek, opt) || ComputerUtilAbility.paysOffFor(melek, c.castOf("Ponder"))) {
+                        return "Melek pays off for a spell cast from the hand";
+                    }
+                    if (PermanentAi.paysOffForSpellInHand(c.ai, melek)) { return "Melek is hurried for a spell cast from the hand"; }
+                    final List<SpellAbility> order = new ArrayList<>(List.of(opt, melek));
+                    ComputerUtilAbility.putCastPayoffsFirst(order); // the game thread's sort of the AI's plays
+                    return order.equals(List.of(opt, melek)) ? null : "Melek put ahead of Opt: " + order;
+                }));
+        l.add(new Scenario("4278", "Mizzix of the Izmagnus (an instant or sorcery of mana value above the experience counters) is read with its X", Fid.EXACT, M1, true,
+                c -> { c.hand("Mizzix of the Izmagnus", c.ai); c.hand("Opt", c.ai); c.hand("Ponder", c.ai); c.hand("Divination", c.ai); },
+                c -> {
+                    final SpellAbility mizzix = c.castOf("Mizzix of the Izmagnus");
+                    final StringBuilder wrong = new StringBuilder();
+                    final ByteArrayOutputStream err = new ByteArrayOutputStream();
+                    final PrintStream savedErr = System.err;
+                    System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
+                    try {
+                        if (!ComputerUtilAbility.paysOffFor(mizzix, c.castOf("Opt"))) { wrong.append(" Opt (1 > 0 counters) not paid off;"); }
+                        if (!ComputerUtilAbility.paysOffFor(mizzix, c.castOf("Ponder"))) { wrong.append(" Ponder (1 > 0 counters) not paid off;"); }
+                        c.ai.setCounters(CounterEnumType.EXPERIENCE, 1);
+                        if (ComputerUtilAbility.paysOffFor(mizzix, c.castOf("Opt"))) { wrong.append(" Opt (1, not above 1 counter) paid off;"); }
+                        if (!ComputerUtilAbility.paysOffFor(mizzix, c.castOf("Divination"))) { wrong.append(" Divination (3 > 1 counter) not paid off;"); }
+                    } finally {
+                        System.setErr(savedErr);
+                    }
+                    final String printed = err.toString(StandardCharsets.UTF_8);
+                    if (printed.contains("not defined")) { wrong.append(" printed: ").append(printed.trim()); }
+                    return wrong.length() == 0 ? null : wrong.toString().trim();
+                }));
+        l.add(new Scenario("4278", "Young Pyromancer (an Instant,Sorcery list) before the instant it pays off for", Fid.EXACT, M1, true,
+                c -> { c.bf("Mountain", 2, c.ai); c.bf("Island", c.ai); /* {1}{R} and {U}: the mana for both */
+                    c.hand("Young Pyromancer", c.ai); c.hand("Opt", c.ai); c.hand("Grizzly Bears", c.ai); },
+                c -> {
+                    final SpellAbility pyromancer = c.castOf("Young Pyromancer"), opt = c.castOf("Opt");
+                    final StringBuilder wrong = new StringBuilder();
+                    if (!PermanentAi.paysOffForSpellInHand(c.ai, pyromancer)) { wrong.append(" held for main 2 with Opt in hand;"); }
+                    if (!ComputerUtilAbility.paysOffFor(pyromancer, opt)) { wrong.append(" not for Opt, an instant;"); }
+                    if (ComputerUtilAbility.paysOffFor(pyromancer, c.castOf("Grizzly Bears"))) { wrong.append(" for Grizzly Bears, a creature;"); }
+                    c.hand("Ponder", c.ai);
+                    if (!ComputerUtilAbility.paysOffFor(pyromancer, c.castOf("Ponder"))) { wrong.append(" not for Ponder, a sorcery;"); }
+                    final List<SpellAbility> order = new ArrayList<>(List.of(opt, pyromancer));
+                    ComputerUtilAbility.putCastPayoffsFirst(order);
+                    if (!order.equals(List.of(pyromancer, opt))) { wrong.append(" order ").append(order); }
+                    return wrong.length() == 0 ? null : wrong.toString().trim();
+                }));
         l.add(noPlay("4299", "Preordain in the player's upkeep under Teferi, Time Raveler", Fid.EXACT, "UPKEEP", false, "Preordain",
                 c -> { c.bf("Island", 2, c.ai); c.hand("Preordain", c.ai); c.bf("Teferi, Time Raveler", c.opp); }));
         l.add(noPlay("4325", "Angel's Grace against non-lethal damage", Fid.APPROX, M1, false, "Angel's Grace",
@@ -596,10 +660,37 @@ public class AiReportScenarioTest extends AITest {
         l.add(new Scenario("6105", "Suppression Field, not Stony Silence, against non-artifact abilities", Fid.EXACT, "MAIN2", true,
                 c -> { c.bf("Plains", 2, c.ai); c.hand("Stony Silence", c.ai); c.hand("Suppression Field", c.ai); c.bf("Mother of Runes", c.opp); c.bf("Giver of Runes", c.opp); },
                 c -> { final SpellAbility sa = c.first(); return sa != null && sa.getHostCard().getName().equals("Suppression Field") ? null : "first play was " + sa + c.why("Suppression Field") + c.why("Stony Silence"); }));
+        // the static's ValidCard is read as the static reads it: Damping Matrix's Artifact,Creature reaches either
+        l.add(new Scenario("6105", "Damping Matrix against a creature with a {T} ability is worth its cast", Fid.APPROX, "MAIN2", true,
+                c -> { c.bf("Plains", 3, c.ai); c.hand("Damping Matrix", c.ai); c.bf("Prodigal Pyromancer", c.opp); },
+                c -> { final SpellAbility sa = c.castOf("Damping Matrix"); final AiAbilityDecision d = SpellApiToAi.Converter.get(sa).canPlayWithSubs(c.ai, sa);
+                    return d.decision() != AiPlayDecision.DoesntImpactGame ? null : "judged to stop abilities nobody uses: " + d; }));
+        l.add(new Scenario("6105", "Damping Matrix against mana abilities alone stops nothing", Fid.APPROX, "MAIN2", true,
+                c -> { c.bf("Plains", 3, c.ai); c.hand("Damping Matrix", c.ai); c.bf("Llanowar Elves", c.opp); c.bf("Grizzly Bears", c.opp); },
+                c -> { final SpellAbility sa = c.castOf("Damping Matrix"); final AiAbilityDecision d = SpellApiToAi.Converter.get(sa).canPlayWithSubs(c.ai, sa);
+                    return d.decision() == AiPlayDecision.DoesntImpactGame ? null : "judged to stop something: " + d; }));
         l.add(play("6617", "noncreature spell before combat with a prowess creature", Fid.EXACT, M1, true, "Lightning Bolt",
                 c -> { c.bf("Mountain", c.ai); c.bf("Monastery Swiftspear", c.ai); c.hand("Lightning Bolt", c.ai); c.bf("Grizzly Bears", c.opp); }));
         l.add(noPlay("7335", "sacrifice-at-end-of-turn haste creature into a player with protection from creatures", Fid.APPROX, M1, true, "Ball Lightning",
                 c -> { c.bf("Mountain", 3, c.ai); c.hand("Ball Lightning", c.ai); c.effect(c.opp, "Teferi's Protection"); }));
+        // a protection's sources (Card.X,Emblem.X) are read as the damage it prevents reads them: any part of the list
+        l.add(new Scenario("7335", "attack into a player that Eon Frolicker protects from the AI (protection from a player) is pointless", Fid.APPROX, "COMBAT_DECLARE_ATTACKERS", true,
+                c -> { c.bf("Grizzly Bears", c.ai);
+                    c.opp.addChangedKeywords(List.of("Protection:Player.PlayerUID_" + c.ai.getId() + ":" + c.ai.getName()), List.of(), c.game.getNextTimestamp(), 0); },
+                c -> {
+                    if (!AiAttackController.isDamageProtected(c.opp, c.ai.getCreaturesInPlay().get(0))) { return "the AI's Grizzly Bears can damage a player protected from the AI"; }
+                    new AiAttackController(c.ai); // the attack plan declareAttackers makes first asks it of each creature that can attack
+                    return null;
+                }));
+        l.add(new Scenario("7335", "a player with protection from red is protected from a red creature, not from a green one", Fid.APPROX, M1, true,
+                c -> { c.bf("Goblin Guide", c.ai); c.bf("Grizzly Bears", c.ai); c.opp.addChangedKeywords(List.of("Protection from red"), List.of(), c.game.getNextTimestamp(), 0); },
+                c -> {
+                    final StringBuilder wrong = new StringBuilder();
+                    for (final Card k : c.ai.getCreaturesInPlay()) {
+                        if (AiAttackController.isDamageProtected(c.opp, k) != k.isRed()) { wrong.append(' ').append(k).append(k.isRed() ? " not prevented;" : " prevented;"); }
+                    }
+                    return wrong.length() == 0 ? null : wrong.toString().trim();
+                }));
         l.add(new Scenario("10922", "The Kingpin of Crime: pays 2 life for its attack trigger with two toughness-over-power creatures", Fid.APPROX, "COMBAT_DECLARE_ATTACKERS", true,
                 c -> { c.bf("The Kingpin of Crime", c.ai); c.bf("Pegasus Courser", 2, c.ai); },
                 c -> {

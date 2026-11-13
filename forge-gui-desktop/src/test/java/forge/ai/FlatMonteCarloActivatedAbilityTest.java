@@ -387,4 +387,14 @@ public class FlatMonteCarloActivatedAbilityTest extends AITest {
         AssertJUnit.assertTrue("four lands pay for both", forge.ai.simulation.FlatMonteCarloPicker.sparesMana(ai, token));
     }
 
+    @Test
+    public void aCardTheAbilityPutsInIsNoRivalWhicheverPartOfItsListItMatches() {
+        xSetUp();
+        addCards("Mountain", 4, ai);
+        final SpellAbility liege = xAbility("Mindwrack Liege"); // {U/R}x4: a blue or red creature card from the hand onto the battlefield
+        addCardToZone("Goblin Guide", ai, ZoneType.Hand); // {R}, red: Creature.Red, the second part of Creature.Blue,Creature.Red
+        AssertJUnit.assertTrue("the Liege can put the Guide in", FlatMonteCarloPicker.isCheatFromHand(liege));
+        AssertJUnit.assertTrue("the Guide comes in through the ability: no rival for its mana", FlatMonteCarloPicker.sparesMana(ai, liege));
+    }
+
 }

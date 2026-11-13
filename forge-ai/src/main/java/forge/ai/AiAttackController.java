@@ -182,7 +182,8 @@ public class AiAttackController {
                 continue;
             }
             final String valid = Protection.getProtectionValid(orig, true);
-            if (valid.isEmpty() || source.isValid(valid, p, null, null)) {
+            // a list (Card.X,Emblem.X): any part, as the damage prevention's ValidSource reads it
+            if (valid.isEmpty() || source.isValid(valid.split(","), p, null, null)) {
                 return true;
             }
         }

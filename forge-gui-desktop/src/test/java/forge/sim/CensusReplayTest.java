@@ -17,7 +17,7 @@ import forge.util.SimScope;
 
 /**
  * Games that the Flat MC ship engine's census ended as an Error on 2.0.15+23fd6633b91 (MTG_DeckMaker's
- * tools/combo-ai/flat-mc/SHIP-PLAN.md, Task 7a; the census is H:/mtg-combo-lanes/flatmc-ship/diag/census.md), replayed
+ * tools/combo-ai/flat-mc/SHIP-PLAN.md, Tasks 7a and 7c; the census is H:/mtg-combo-lanes/flatmc-ship/diag/census.md), replayed
  * as the census played them: a one-game job of the game's census job file, at the game's seed, with its two seats'
  * deck lists, Default profiles and default AI words and the census's 1200-s limit, read by JobFile and played by
  * JobRunner on a one-slot GameRunner. Each deck list is the job's deck_file, copied byte for byte into this class's
@@ -63,6 +63,19 @@ public class CensusReplayTest {
         assertNoError(play(censusJob(990_000_162_000L,
                 "331ad298", "331ad2984e14cf7e5c45a4a02120058eac0091d2c77fd87063627bcb642977b6",
                 "33431700", "33431700855b00ac1320219bff4272329f663ee13aa1a72496900e9f6dcea389")));
+    }
+
+    /**
+     * job-260 game 0, seed 990000260000: Esper Dungeon Reanimator (507d2ea4) in seat 0 against Neera - Wild Magic
+     * (510f65b5) in seat 1. On turn 17, with Melek, Izzet Paragon in seat 1's hand, the AI read Melek's SpellCast list
+     * (Instant.wasCastFromYourLibrary,Sorcery.wasCastFromYourLibrary) as one restriction, which threw, and the census
+     * ended the game: "No element named Library,Sorcery.wasCastFromYourLibrary in enum Zone" (Task 7c).
+     */
+    @Test(timeOut = 1_300_000)
+    public void aCastPayoffWithACommaListPlaysOn() throws Exception {
+        assertNoError(play(censusJob(990_000_260_000L,
+                "507d2ea4", "507d2ea41b77394771d8e6687b621eecd355ba6a2c13a09a5bfe8a4436e39e68",
+                "510f65b5", "510f65b5164dbd7823d8eb0aab85105f87bb300fc5adca614a5ef0fc3ccd885b")));
     }
 
     /** The census's job for the game of {@code seed}, as its job file reads with games=1 and that seed: seat 0 plays
