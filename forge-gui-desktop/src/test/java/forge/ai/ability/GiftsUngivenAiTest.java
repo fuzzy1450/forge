@@ -22,7 +22,8 @@ import org.testng.annotations.Test;
 /**
  * Gifts Ungiven (dead-card batch 4, row 32). Its "target opponent chooses two" sub-ability had no
  * IsCurse$, so the AI aimed it at itself and refused every cast; with IsCurse$ True (32A) the stock
- * hidden-origin path approves from Main 2 on, and SpecialCardAi.GiftsUngiven.worthSearching (32B1)
+ * hidden-origin path approves (from Main 1 on since Card-Forge #12809, which reads a search that reveals its cards
+ * for a pile as a tutor to hand; from Main 2 on before it), and SpecialCardAi.GiftsUngiven.worthSearching (32B1)
  * floors that approval: a library that keeps four cards, four different names, a search nobody else
  * controls, sees only the top of or profits from, and room in hand for the two cards. Every decline
  * draws nothing from MyRandom (with one opponent the stock path before it draws nothing either) and
@@ -41,15 +42,16 @@ public class GiftsUngivenAiTest extends AITest {
     }
 
     @Test
-    public void neverBeforeMainTwo() {
-        // the stock hidden-origin timing gate (a Library destination) is unchanged
+    public void castsBeforeMainTwoAsATutorToHand() {
+        // the stock hidden-origin timing gate (a Library destination) lets a search that reveals its cards for a pile
+        // (RememberChanged with a follow-up) through before Main 2 since Card-Forge #12809: a tutor to hand
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
         library(ai, 8);
         addCardToZone("Gifts Ungiven", ai, ZoneType.Hand);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
         game.getAction().checkStateEffects(true);
-        AssertJUnit.assertEquals(AiPlayDecision.CantPlayAi, declinesDrawingNothing(ai));
+        AssertJUnit.assertEquals(AiPlayDecision.WillPlay, decide(ai));
     }
 
     @Test

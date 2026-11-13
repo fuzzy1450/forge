@@ -24,7 +24,8 @@ import org.testng.annotations.Test;
 /**
  * Intuition (dead-card batch 4, row 9). Its "target opponent chooses one" sub-ability had no IsCurse$, so
  * the AI aimed it at itself and refused every cast; with IsCurse$ True (9A) the stock hidden-origin path
- * approves from Main 2 on, and SpecialCardAi.IntuitionPile.worthSearching (9B1) floors that approval right
+ * approves (from Main 1 on since Card-Forge #12809, which reads a search that reveals its cards for a pile as a tutor
+ * to hand; from Main 2 on before it), and SpecialCardAi.IntuitionPile.worthSearching (9B1) floors that approval right
  * after ChangeZoneAi.checkApiLogic's stock fill of the per-game choice scratch: a library that keeps four
  * cards, and a search nobody else controls, limits or profits from. The fill
  * (SpecialCardAi.Intuition.considerMultiple) draws MyRandom in its test payments, in the stock path and here
@@ -45,8 +46,9 @@ public class IntuitionAiTest extends AITest {
     }
 
     @Test
-    public void neverBeforeMainTwo() {
-        // the stock hidden-origin timing gate (a Library destination) is unchanged, after the same fill
+    public void castsBeforeMainTwoAsATutorToHand() {
+        // the stock hidden-origin timing gate (a Library destination) lets a search that reveals its cards for a pile
+        // (RememberChanged with a follow-up) through before Main 2 since Card-Forge #12809: a tutor to hand
         Game game = initAndCreateGame();
         Player ai = game.getPlayers().get(1);
         ((LobbyPlayerAi) ai.getLobbyPlayer()).setAiProfile("Default");
@@ -55,7 +57,7 @@ public class IntuitionAiTest extends AITest {
         addCardToZone("Intuition", ai, ZoneType.Hand);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
         game.getAction().checkStateEffects(true);
-        AssertJUnit.assertEquals(AiPlayDecision.CantPlayAi, declinesWithTheFillsDrawsOnly(ai));
+        AssertJUnit.assertEquals(AiPlayDecision.WillPlay, decide(ai));
     }
 
     @Test
