@@ -212,14 +212,18 @@ public class Match {
     private static void preparePlayerZone(Player player, final ZoneType zoneType, CardPool section, boolean canRandomFoil) {
         PlayerZone library = player.getZone(zoneType);
         List<Card> newLibrary = new ArrayList<>();
-        // Iterate the deck section in sorted order: CardPool's backing map
-        // does not guarantee iteration order, so for a fixed seed the
-        // pre-shuffle library order, the random-foil roll sequence, and the
-        // card id assignment order could all vary across JVMs. Sorted
-        // iteration makes zone preparation a pure function of (deck, seed).
-        List<Entry<PaperCard, Integer>> ordered = Lists.newArrayList(section);
-        ordered.sort(Entry.comparingByKey());
-        for (final Entry<PaperCard, Integer> stackOfCards : ordered) {
+        // The section as it stands, not sorted (upstream's #11285 sorted it
+        // here, and the fork takes that back out): the fork's ItemPool is a
+        // LinkedHashMap (d12cadeb324), so a CardPool iterates in the order its
+        // .dck file lists it, on every JVM, and zone preparation -- the
+        // pre-shuffle library, the random-foil rolls and the card ids -- is
+        // already a pure function of (deck file, seed), upstream's goal. A name
+        // sort moves a one-card variant's added card to its sorted place and
+        // shifts every card between the two names, so a walk's champion and its
+        // variant (the added card on the cut card's line, mtglib/sim/bridge.py
+        // swap_in_place) would stop sharing a shuffle outside the swapped slot.
+        // PreShuffleDeterminismTest pins this order.
+        for (final Entry<PaperCard, Integer> stackOfCards : section) {
             final PaperCard cp = stackOfCards.getKey();
             for (int i = 0; i < stackOfCards.getValue(); i++) {
                 final Card card = Card.fromPaperCard(cp, player);
