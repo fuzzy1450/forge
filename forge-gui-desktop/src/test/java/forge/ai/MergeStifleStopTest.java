@@ -21,7 +21,9 @@ import forge.game.zone.ZoneType;
  * return without canPlayAndPayFor, so they stood outside the seed-11 rule's two tries a phase and upstream's memory of a
  * cast that did not go on the stack: a payment that disagrees with canPayCost for good was picked again until
  * PhaseHandler's cap of 999, and the Stifle ignored even the one-choice skip. They answer to both now, as ComboPlan's PLAY
- * ruling does (MergeR8PaymentTest), and each stop ends with the phase or the turn as it does there.
+ * ruling does (MergeR8PaymentTest), and each stop ends with the phase or the turn as it does there. Since upstream's
+ * clean-up of the Flat MC sure plays (Card-Forge #12764) both picks are made only where Flat Monte Carlo is on, so the
+ * seat here has it on.
  */
 public class MergeStifleStopTest extends AITest {
     private static final String DREADNOUGHT = "Phyrexian Dreadnought";
@@ -39,6 +41,7 @@ public class MergeStifleStopTest extends AITest {
         addCard("Underground Sea", ai);
         addCard("Tundra", ai);
         brain = ((PlayerControllerAi) ai.getController()).getAi();
+        brain.setFlatMonteCarloOverride(true); // StifleCombo's picks are Flat MC's since Card-Forge #12764
     }
 
     private SpellAbility nextPlay() {
