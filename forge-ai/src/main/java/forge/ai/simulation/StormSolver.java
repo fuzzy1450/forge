@@ -14,6 +14,7 @@ import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
 import forge.util.AITimeoutTracker;
+import forge.util.SimScope;
 
 /**
  * Finds a line that wins a tutor storm deck (Beseech the Mirror, Infernal Tutor, Gaea's Will, Tendrils of Agony) this
@@ -100,14 +101,38 @@ public final class StormSolver {
     /** The search stops (and the AI falls back to Flat Monte Carlo) when this share of the heap is in use. */
     private static final double MEMORY_LIMIT = 0.90;
     private static final boolean TRACE = Boolean.getBoolean("storm.trace");
-    /** The plays that make the hand better when no kill was found (null: nothing worth doing). */
+    /**
+     * The plays that make the hand better when no kill was found (null: nothing worth doing). In a game played under a
+     * SimScope (the sim harness: one serve JVM plays many games side by side, each on threads of its own) they are that
+     * game's own, kept in its scope as GameSimulator keeps its debug lines: with the one field below, a game whose
+     * search found no setup could play the one another game's search had just found, or lose its own to another game's
+     * search, so a seed played one game beside other games and another alone. Unbound, the GUI's case, they are that
+     * field's, as before.
+     */
     static List<Step> lastSetup() {
-        return lastSetup;
+        final SimScope scope = SimScope.current();
+        return scope == null ? lastSetup : scope.scratch(StormSolver.class, ScopedSetup::new).steps;
+    }
+
+    /** Keeps {@code steps}, or null, as the setup {@link #lastSetup()} reads: the bound scope's, else the field's. */
+    private static void setLastSetup(final List<Step> steps) {
+        final SimScope scope = SimScope.current();
+        if (scope == null) {
+            lastSetup = steps;
+        } else {
+            scope.scratch(StormSolver.class, ScopedSetup::new).steps = steps;
+        }
+    }
+
+    /** A game's setup, kept in its SimScope (see {@link #lastSetup()}). */
+    private static final class ScopedSetup {
+        List<Step> steps;
     }
 
     /** What the last search that found no line saw: the start, the best state and why it stopped. */
     private static String lastDiagnostic = "";
-    /** The plays of the best state to end the turn in when no kill was found (see {@link ComboPlan#setupScore}), or null. */
+    /** The plays of the best state to end the turn in when no kill was found (see {@link ComboPlan#setupScore}), or
+     *  null: every unbound search's, the GUI's (a game under a SimScope keeps its own, see {@link #lastSetup()}). */
     private static volatile List<Step> lastSetup;
     /** A setup play has to make the hand this much better, or the AI does what it always did. */
     private static final int SETUP_MIN_GAIN = 30;
@@ -413,7 +438,7 @@ public final class StormSolver {
         addWishTargets(ai, root);
         root.releaseCopier(); // the shuffle above was the last use of the link to the real game
 
-        lastSetup = null;
+        setLastSetup(null);
         int setupBest = combos.setupScore(root.getSimulatedAiPlayer());
         final int setupStart = setupBest;
         List<Step> setupSteps = null;
@@ -542,7 +567,7 @@ public final class StormSolver {
             }
         }
         if (setupSteps != null && setupBest - setupStart >= SETUP_MIN_GAIN) {
-            lastSetup = Collections.unmodifiableList(setupSteps);
+            setLastSetup(Collections.unmodifiableList(setupSteps));
         }
         lastDiagnostic = "start {" + startState + "} searched " + nodes + " states in " + (System.nanoTime() - start) / 1_000_000
                 + " ms (" + (open.isEmpty() ? "all explored" : nodes >= maxNodes ? "state limit" : lowMemory() ? "memory limit" : "time limit")
