@@ -52,7 +52,10 @@ public final class StormSolver {
         }
     }
 
-    /** A winning line, the number of states that were searched and the time it took. */
+    /**
+     * A winning line, the number of states that were searched and the time it took: 0 in a game under a SimScope, whose
+     * search reads no clock (see {@link StormSolver#solve}).
+     */
     public static final class Line {
         public final List<Step> steps;
         public final int nodes;
@@ -412,24 +415,78 @@ public final class StormSolver {
      * so a few different shuffles are searched, and the first line that wins in one of them is the plan. It is checked
      * against the real game after every play ({@link #next}), and when the draws went another way a new line is looked for.
      * That is how a hand with Ad Nauseam plays: the cast is made when some order of the library wins, then it is re-solved.
+     *
+     * <p>In a game under a SimScope (the sim harness) the search reads no clock and no heap: {@code budgetNanos} is not
+     * applied, nothing is {@link #constrained()} and the heap is never measured, so {@code maxNodes} is what stops it,
+     * and the solve limits of {@link #next} still count its searches. One serve JVM plays many games side by side and
+     * verify replays a game alone, on any machine: a search the clock or the heap cut short would find a line on one
+     * machine and miss it on another, and one seed would play two games (MTG_DeckMaker's
+     * tools/combo-ai/flat-mc/SHIP.md, design 3). Unbound, the GUI's case, the budget and the heap limit the search as
+     * they always did.
      */
     public static Line solve(final Player ai, final ComboPlan combos, final int maxNodes, final long budgetNanos) {
-        final long start = System.nanoTime();
+        final Budget budget = new Budget(budgetNanos);
         final int shuffles = shuffles();
         final long each = budgetNanos / shuffles;
         Line found = null;
         for (int i = 0; i < shuffles && found == null; i++) {
-            final long left = budgetNanos - (System.nanoTime() - start);
+            final long left = budget.left();
             if (left <= 0) {
                 break;
             }
             found = solveShuffle(ai, combos, maxNodes, Math.min(left, each), i);
         }
-        return found == null ? null : new Line(found.steps, found.nodes, System.nanoTime() - start);
+        return found == null ? null : new Line(found.steps, found.nodes, budget.elapsed());
+    }
+
+    /** Whether this thread plays a game under a SimScope: the sim harness, whose searches read no clock and no heap. */
+    private static boolean scoped() {
+        return SimScope.current() != null;
+    }
+
+    /**
+     * A search's time on the machine's clock: its budget, what is left of it and what the search has taken. Under a
+     * SimScope the clock is never read: the budget is never spent, all the time there is is left and the search has
+     * taken none (see {@link #solve}).
+     */
+    private static final class Budget {
+        /** Whether this search reads the clock: not under a SimScope. */
+        private final boolean timed = !scoped();
+        private final long start = now();
+        private final long nanos;
+
+        Budget(final long nanos) {
+            this.nanos = nanos;
+        }
+
+        /** The machine's clock outside a SimScope; 0 under one. */
+        private long now() {
+            return timed ? System.nanoTime() : 0L;
+        }
+
+        /** Whether the budget is used up: never under a SimScope, whatever the budget. */
+        boolean spent() {
+            return timed && now() - start >= nanos;
+        }
+
+        /** What is left of the budget: under a SimScope, all the time there is. */
+        long left() {
+            return timed ? nanos - (now() - start) : Long.MAX_VALUE;
+        }
+
+        /** The time the search has taken: 0 under a SimScope. */
+        long elapsed() {
+            return now() - start;
+        }
+
+        /** " in N ms" for a search's report; nothing under a SimScope. */
+        String took() {
+            return timed ? " in " + elapsed() / 1_000_000 + " ms" : "";
+        }
     }
 
     private static Line solveShuffle(final Player ai, final ComboPlan combos, final int maxNodes, final long budgetNanos, final int variant) {
-        final long start = System.nanoTime();
+        final Budget budget = new Budget(budgetNanos);
         final Game game = ai.getGame();
         final GameSimulator root = new GameSimulator(game, ai);
         HiddenInfoShuffler.shuffle(root.getSimulatedGameState(), root.getGameCopier(), ai, new Random(game.getPhaseHandler().getTurn() + 7919L * variant),
@@ -458,7 +515,7 @@ public final class StormSolver {
         if (TRACE) {
             trail.append(" | picker: ").append(new SpellAbilityPicker(ai).explainCandidates());
         }
-        while (!open.isEmpty() && nodes < maxNodes && System.nanoTime() - start < budgetNanos && !lowMemory()) {
+        while (!open.isEmpty() && nodes < maxNodes && !budget.spent() && !lowMemory()) {
             final Node node = open.poll();
             final GameSimulator nodeSim = materialize(node, live, cap);
             if (nodeSim == null) {
@@ -478,7 +535,7 @@ public final class StormSolver {
                 if (host != null && ComboPlan.isStormFinisher(host) && ComboPlan.stormIsLethal(simAi, host)) {
                     final List<Step> steps = new ArrayList<>(node.steps);
                     steps.add(new Step(sa));
-                    return new Line(Collections.unmodifiableList(steps), nodes, System.nanoTime() - start);
+                    return new Line(Collections.unmodifiableList(steps), nodes, budget.elapsed());
                 }
             }
             for (final SpellAbility sa : moves) {
@@ -490,7 +547,7 @@ public final class StormSolver {
                 if (fromGy && node.gyCast.contains(host.getId())) {
                     continue; // Gaea's Will exiles it after the first cast
                 }
-                if (System.nanoTime() - start >= budgetNanos || lowMemory()) {
+                if (budget.spent() || lowMemory()) {
                     break;
                 }
                 final GameSimulator child = playOn(nodeSim, sa);
@@ -537,7 +594,7 @@ public final class StormSolver {
                 for (final SpellAbility sa : moves) {
                     final Card host = sa.getHostCard();
                     if (host == null || !sa.isSpell() || !ComboPlan.isHellbentTutor(host)
-                            || System.nanoTime() - start >= budgetNanos || lowMemory()) {
+                            || budget.spent() || lowMemory()) {
                         continue;
                     }
                     final GameSimulator child = tutorWithDiscardMana(nodeSim, sa, discardMana);
@@ -569,9 +626,9 @@ public final class StormSolver {
         if (setupSteps != null && setupBest - setupStart >= SETUP_MIN_GAIN) {
             setLastSetup(Collections.unmodifiableList(setupSteps));
         }
-        lastDiagnostic = "start {" + startState + "} searched " + nodes + " states in " + (System.nanoTime() - start) / 1_000_000
-                + " ms (" + (open.isEmpty() ? "all explored" : nodes >= maxNodes ? "state limit" : lowMemory() ? "memory limit" : "time limit")
-                + ", games kept " + cap + ", heap " + heap() + "); best score " + bestScore + " after " + bestSteps + " {" + bestState + "}" + trail;
+        lastDiagnostic = "start {" + startState + "} searched " + nodes + " states" + budget.took()
+                + " (" + (open.isEmpty() ? "all explored" : nodes >= maxNodes ? "state limit" : lowMemory() ? "memory limit" : "time limit")
+                + ", games kept " + cap + heapNote() + "); best score " + bestScore + " after " + bestSteps + " {" + bestState + "}" + trail;
         return null;
     }
 
@@ -681,14 +738,58 @@ public final class StormSolver {
         return child;
     }
 
-    /** A phone or tablet gives the app a few hundred MB: search less there. */
-    private static boolean constrained() {
-        return Runtime.getRuntime().maxMemory() <= (768L << 20);
+    /**
+     * The heap as the solver measures it: how far it may grow, how much of it is in use, and a request for a
+     * collection. Only a search outside a SimScope asks it anything (see {@link #solve}).
+     */
+    interface Heap {
+        long max();
+
+        long used();
+
+        void collect();
+    }
+
+    /** The JVM's own heap. */
+    private static final Heap JVM_HEAP = new Heap() {
+        @Override
+        public long max() {
+            return Runtime.getRuntime().maxMemory();
+        }
+
+        @Override
+        public long used() {
+            final Runtime rt = Runtime.getRuntime();
+            return rt.totalMemory() - rt.freeMemory();
+        }
+
+        @Override
+        public void collect() {
+            System.gc();
+        }
+    };
+
+    /**
+     * The heap the solver measures, the JVM's. Package-private, as {@link #constrained()}, {@link #cacheSize()},
+     * {@link #budgetNanos()} and {@link #lowMemory()} are, so that StormSolverScopeTest can hand the solver a phone's
+     * heap and put this one back; nothing else sets it.
+     */
+    static Heap heap = JVM_HEAP;
+
+    /**
+     * A phone or tablet gives the app a few hundred MB: search less there. Never in a game under a SimScope, whose
+     * search reads no heap: a machine's heap must not change its search (see {@link #solve}).
+     */
+    static boolean constrained() {
+        return !scoped() && heap.max() <= (768L << 20);
     }
 
 
-    /** How many states keep their game while the search runs: the others are played again when needed. */
-    private static int cacheSize() {
+    /**
+     * How many states keep their game while the search runs: the others are played again when needed. Ten in a game
+     * under a SimScope, where nothing is {@link #constrained()}.
+     */
+    static int cacheSize() {
         return constrained() ? 4 : 10;
     }
 
@@ -696,7 +797,14 @@ public final class StormSolver {
         return 1; // the pieces of the deck are at the bottom of the library: one order is the pessimistic one, more is luck
     }
 
-    private static long budgetNanos() {
+    /**
+     * The time the AI's own searches may take: half of it on a phone or tablet, and none in a game under a SimScope,
+     * whose search its state cap stops (see {@link #solve}).
+     */
+    static long budgetNanos() {
+        if (scoped()) {
+            return Long.MAX_VALUE;
+        }
         return constrained() ? DEFAULT_BUDGET_NANOS / 2 : DEFAULT_BUDGET_NANOS;
     }
 
@@ -716,24 +824,27 @@ public final class StormSolver {
 
     /**
      * The heap is nearly full of live data. The used memory of a search is mostly garbage, so the first time it looks
-     * full the collector runs (at most once a second) and the heap is measured again; only what survives counts.
+     * full the collector runs (at most once a second) and the heap is measured again; only what survives counts. Never
+     * in a game under a SimScope, whose search measures no heap and asks for no collection (see {@link #solve}).
      */
-    private static boolean lowMemory() {
-        final Runtime rt = Runtime.getRuntime();
-        if (rt.totalMemory() - rt.freeMemory() <= rt.maxMemory() * MEMORY_LIMIT) {
+    static boolean lowMemory() {
+        if (scoped()) {
+            return false;
+        }
+        if (heap.used() <= heap.max() * MEMORY_LIMIT) {
             return false;
         }
         final long now = System.nanoTime();
         if (now - lastGc > 1_000_000_000L) {
-            System.gc();
+            heap.collect();
             lastGc = System.nanoTime();
         }
-        return rt.totalMemory() - rt.freeMemory() > rt.maxMemory() * MEMORY_LIMIT;
+        return heap.used() > heap.max() * MEMORY_LIMIT;
     }
 
-    private static String heap() {
-        final Runtime rt = Runtime.getRuntime();
-        return (rt.totalMemory() - rt.freeMemory() >> 20) + "/" + (rt.maxMemory() >> 20) + " MB";
+    /** ", heap used/max MB" for a search's report; nothing under a SimScope, whose search reads no heap. */
+    private static String heapNote() {
+        return scoped() ? "" : ", heap " + (heap.used() >> 20) + "/" + (heap.max() >> 20) + " MB";
     }
 
     private static String describe(final Player ai) {
