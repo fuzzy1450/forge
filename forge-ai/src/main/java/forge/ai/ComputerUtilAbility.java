@@ -101,17 +101,32 @@ public class ComputerUtilAbility {
     }
 
     public static List<SpellAbility> getOriginalAndAltCostAbilities(final List<SpellAbility> originList, final Player activator) {
+        return getOriginalAndAltCostAbilities(originList, activator, null);
+    }
+
+    /**
+     * {@link #getOriginalAndAltCostAbilities(List, Player)}, which also maps, when {@code madeFrom} is not null, each
+     * ability it returns to the ability of {@code originList} it was made from: that ability itself, or a copy of it
+     * with an additional, alternative or optional cost (Misdirection's pitch). AiController's walk judges every such
+     * copy of an ability its own RemoveDeck row readmits as it judges that ability, whose row saw the ability alone
+     * (AiController.readmittedNow). The map is only written here, and an identity map serves: its keys are abilities.
+     */
+    public static List<SpellAbility> getOriginalAndAltCostAbilities(final List<SpellAbility> originList,
+            final Player activator, final Map<SpellAbility, SpellAbility> madeFrom) {
         List<SpellAbility> originListWithAddCosts = Lists.newArrayList();
         for (SpellAbility sa : originList) {
             // If this spell has alternative additional costs, add them instead of the unmodified SA itself
             sa.setActivatingPlayer(activator);
-            originListWithAddCosts.addAll(GameActionUtil.getAdditionalCostSpell(sa));
+            final List<SpellAbility> withAddCosts = GameActionUtil.getAdditionalCostSpell(sa);
+            noteMadeFrom(madeFrom, withAddCosts, sa);
+            originListWithAddCosts.addAll(withAddCosts);
         }
 
         final List<SpellAbility> newAbilities = Lists.newArrayList();
         for (SpellAbility sa : originListWithAddCosts) {
             // determine which alternative costs are cheaper than the original and prioritize them
             List<SpellAbility> saAltCosts = GameActionUtil.getAlternativeCosts(sa, activator, false);
+            noteMadeFrom(madeFrom, saAltCosts, sa);
             List<SpellAbility> priorityAltSa = Lists.newArrayList();
             List<SpellAbility> otherAltSa = Lists.newArrayList();
             for (SpellAbility altSa : saAltCosts) {
@@ -144,7 +159,9 @@ public class ComputerUtilAbility {
                     if (list.stream().anyMatch(ocv -> ocv.getType().equals(OptionalCost.PromiseGift))) {
                         result.add(sa);
                     }
-                    result.add(GameActionUtil.addOptionalCosts(sa, list));
+                    final SpellAbility withOptionalCosts = GameActionUtil.addOptionalCosts(sa, list);
+                    noteMadeFrom(madeFrom, List.of(withOptionalCosts), sa);
+                    result.add(withOptionalCosts);
                     choseOptCost = true;
                 }
             }
@@ -156,6 +173,20 @@ public class ComputerUtilAbility {
         }
 
         return result;
+    }
+
+    // getOriginalAndAltCostAbilities' map: each ability made from `from` comes from the ability of the caller's list
+    // that `from` came from, else from `from` itself; an ability already mapped keeps its entry, so one of the list's
+    // own abilities, mapped to itself first, is never mapped to another
+    private static void noteMadeFrom(final Map<SpellAbility, SpellAbility> madeFrom, final List<SpellAbility> made,
+                                     final SpellAbility from) {
+        if (madeFrom == null) {
+            return;
+        }
+        final SpellAbility origin = madeFrom.getOrDefault(from, from);
+        for (final SpellAbility m : made) {
+            madeFrom.putIfAbsent(m, origin);
+        }
     }
 
     /**

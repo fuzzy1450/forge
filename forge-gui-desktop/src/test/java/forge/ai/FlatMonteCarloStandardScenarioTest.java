@@ -245,8 +245,11 @@ public class FlatMonteCarloStandardScenarioTest extends AITest {
     // ------------------------------------------------------------------------------------ RemoveDeck
 
     /**
-     * Springleaf Drum is AI:RemoveDeck:All: the heuristics never approve it, and Flat MC is offered it as a play of its
-     * own. With mana to spare and nothing else to do the rollouts must take it (a permanent that makes mana).
+     * Springleaf Drum is AI:RemoveDeck:All, and Flat MC is offered it. With mana to spare and nothing else to do it
+     * must be cast (a permanent that makes mana). In this fork the card's own RemoveDeck row
+     * (SpecialCardAi.SpringleafDrum, dead-card batch 3 row 19) readmits its owner's hand cast, so it is no Flat-MC-only
+     * play: the heuristics judge it, as with Flat MC off, and the rollouts compare it as an approved line
+     * (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP-PLAN.md, Task 4's fix round 1).
      */
     @Test(timeOut = LONG_TIMEOUT_MS)
     public void springleafDrumIsOfferedToFlatMcAndCastWithSpareMana() {
@@ -264,7 +267,8 @@ public class FlatMonteCarloStandardScenarioTest extends AITest {
         if (!brainOf(ai).flatMonteCarloActive()) {
             return; // the profile of the test run has Flat MC off: nothing to show
         }
-        AssertJUnit.assertTrue("only Flat MC may play it", brainOf(ai).isFlatMcOnlyPlay(cast));
+        AssertJUnit.assertFalse("its own row readmits the hand cast: the heuristics judge it",
+                brainOf(ai).isFlatMcOnlyPlay(cast));
 
         playFirstMain(game, ai);
 

@@ -2558,17 +2558,21 @@ public class AiController {
         final boolean flatMc = flatMonteCarloActive();
         saList.removeIf(spellAbility -> {
             // don't include removedAI cards if somehow the AI can play the ability or gain control of unsupported card,
-            // unless Flat MC is on: it weighs them with rollouts (isFlatMcOnlyPlay keeps the heuristics off them)
+            // unless Flat MC is on: it weighs them with rollouts (isFlatMcOnlyPlay keeps the heuristics off them where
+            // no row readmits them)
             // TODO allow when experimental profile?
             // The RemoveDeck dispatcher (SpecialCardAi.RemoveDeckFilter): a hinted card's own row may
             // re-admit one of its abilities, an unhinted card's own row may keep one off outside its
             // cast window. Both answer false for every card no row names: the filter as it was.
+            // Under Flat MC a hinted card stays whatever its row answers, but the row is asked first all the same,
+            // as with Flat MC off: a row's memo for the walk's sort is set here (ComputerUtilAbility's
+            // getSpellAbilityPriority: Breath of Fury, Cleansing Beam, Cruel Entertainment).
             if (spellAbility.isLandAbility()) {
                 return true;
             }
             final Card h = spellAbility.getHostCard();
             return h != null && ((ComputerUtilCard.isCardRemAIDeck(h)
-                    ? !flatMc && !SpecialCardAi.RemoveDeckFilter.readmit(player, spellAbility)
+                    ? !SpecialCardAi.RemoveDeckFilter.readmit(player, spellAbility) && !flatMc
                     : SpecialCardAi.RemoveDeckFilter.keepOff(player, spellAbility))
                     || ComboAssembly.deadOnArrival(player, spellAbility)
                     || (flatMc && LoopRunner.held(player, spellAbility))
@@ -3397,14 +3401,53 @@ public class AiController {
      * rule of thumb. Nothing is decided here; rollouts judge it against the alternatives.
      */
     /**
-     * A play of a card marked AI:RemoveDeck:All that is not a piece of the deck's combos or a tutor with a find: the
-     * heuristics cannot play it well, so they never approve it, but with rollouts to check what it really does it may
-     * be offered as a discovered play (Parallax Wave's exile ability, the Wave itself). Only while Flat MC is on.
+     * A play of a card marked AI:RemoveDeck:All that is not a piece of the deck's combos, a tutor with a find, or an
+     * ability its own row readmits now (SpecialCardAi.RemoveDeckFilter.readmit, the filter's question in
+     * getSpellAbilityToPlay): the heuristics cannot play it well, so they never approve it, but with rollouts to check
+     * what it really does it may be offered as a discovered play (Parallax Wave's exile ability, the Wave itself). Only
+     * while Flat MC is on. A readmitted ability is the heuristics' to judge in its row's window, as with Flat MC off:
+     * the walk approves it, and the rollouts compare it as an approved line.
      */
     public boolean isFlatMcOnlyPlay(final SpellAbility sa) {
+        return isFlatMcOnlyPlay(sa, s -> SpecialCardAi.RemoveDeckFilter.readmit(player, s));
+    }
+
+    /** {@link #isFlatMcOnlyPlay(SpellAbility)} with its row's answer taken from {@code readmitted}, which is asked last
+     *  and only for a play that is otherwise one: the walk's are the answers {@link #readmittedNow} took. */
+    private boolean isFlatMcOnlyPlay(final SpellAbility sa, final Predicate<SpellAbility> readmitted) {
         final Card h = sa == null ? null : sa.getHostCard();
         return h != null && ComputerUtilCard.isCardRemAIDeck(h) && flatMonteCarloActive()
-                && !deckPlan(player).combos.isKeyCard(h) && !TutorPlan.hasPlanTarget(player, sa);
+                && !deckPlan(player).combos.isKeyCard(h) && !TutorPlan.hasPlanTarget(player, sa)
+                && !readmitted.test(sa);
+    }
+
+    /**
+     * Under Flat MC, the abilities of the walk's list whose own RemoveDeck row readmits them now: the filter's question
+     * (SpecialCardAi.RemoveDeckFilter.readmit), asked for every ability of a hinted host, each stamped with this player
+     * first, the activator the walk's expansion (ComputerUtilAbility.getOriginalAndAltCostAbilities) stamps on it next.
+     * The walk reads it for each ability and for every copy the expansion makes of one with another cost, judging the
+     * copy as the ability (Misdirection's pitch, which its row does not take itself), as N's walk judged every copy of
+     * an ability its filter readmitted. Asked on the evaluation thread before the expansion and every judgment, as the
+     * filter's question came before N's walk: a row that clears a target clears it before the walk aims the play, and
+     * the memo a row keeps for the sort stays where the filter set it on the game thread. Empty with Flat MC off, where
+     * no row is asked here. An identity set, read by lookups only: never iterated.
+     */
+    private Set<SpellAbility> readmittedNow(final List<SpellAbility> all) {
+        if (!flatMonteCarloActive()) {
+            return Collections.emptySet();
+        }
+        final Set<SpellAbility> readmitted = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (final SpellAbility sa : all) {
+            final Card h = sa.getHostCard();
+            if (h == null || !ComputerUtilCard.isCardRemAIDeck(h)) {
+                continue;
+            }
+            sa.setActivatingPlayer(player);
+            if (SpecialCardAi.RemoveDeckFilter.readmit(player, sa)) {
+                readmitted.add(sa);
+            }
+        }
+        return readmitted;
     }
 
     /**
@@ -3636,9 +3679,15 @@ public class AiController {
             // the eval thread aborts itself at the shared deadline (or when cancelled) instead of running on as a zombie
             final Object evalLimit = AITimeoutTracker.arm(deadlineNanos, true);
             try {
+                // under Flat MC, what each ability's own RemoveDeck row answers now (isFlatMcOnlyPlay), asked before
+                // the expansion and every judgment below; the expansion maps each copy it makes to its ability (an
+                // identity map, read by lookups only: never iterated)
+                final Set<SpellAbility> readmitted = readmittedNow(all);
+                final Map<SpellAbility, SpellAbility> madeFrom = new IdentityHashMap<>();
                 //avoid ComputerUtil.aiLifeInDanger in loops as it slows down a lot.. call this outside loops will generally be fast...
                 final boolean isLifeInDanger = massReanimation && ComputerUtil.aiLifeInDanger(player, true, 0);
-                for (final SpellAbility sa : ComputerUtilAbility.getOriginalAndAltCostAbilities(all, player)) {
+                for (final SpellAbility sa
+                        : ComputerUtilAbility.getOriginalAndAltCostAbilities(all, player, madeFrom)) {
                     AITimeoutTracker.check();
 
                     // Don't add Counterspells to the "normal" playcard lookups
@@ -3708,7 +3757,7 @@ public class AiController {
                     // PhaseHandler ph = game.getPhaseHandler();
                     // System.out.printf("Ai thinks '%s' of %s -> %s @ %s %s >>> \n", opinion, sa.getHostCard(), sa, Lang.getInstance().getPossesive(ph.getPlayerTurn().getName()), ph.getPhase());
 
-                    if (isFlatMcOnlyPlay(sa)) {
+                    if (isFlatMcOnlyPlay(sa, s -> readmitted.contains(madeFrom.get(s)))) {
                         // never approved by the heuristics: only a play for the rollouts to weigh, and only with discovery
                         if (extrasOut != null && isLegalDiscovery(sa, opinion)) {
                             extrasOut.add(sa);
