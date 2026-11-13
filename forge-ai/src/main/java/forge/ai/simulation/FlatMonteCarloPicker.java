@@ -156,22 +156,57 @@ public final class FlatMonteCarloPicker {
     private FlatMonteCarloPicker() {
     }
 
-    /** A phone or tablet gives the app a few hundred MB: search less there. */
+    /**
+     * The JVM's own heap, as the picker measures it: how far it may grow and how much of it is in use. The picker asks
+     * for no collection: on a full heap it keeps the heuristic choice instead (see {@link #lowMemory()}).
+     */
+    private static final StormSolver.Heap JVM_HEAP = new StormSolver.Heap() {
+        @Override
+        public long max() {
+            return Runtime.getRuntime().maxMemory();
+        }
+
+        @Override
+        public long used() {
+            final Runtime rt = Runtime.getRuntime();
+            return rt.totalMemory() - rt.freeMemory();
+        }
+
+        @Override
+        public void collect() {
+            System.gc();
+        }
+    };
+
+    /**
+     * The heap the picker measures, the JVM's, seen as StormSolver sees one. Package-private, as
+     * {@link #constrainedHeap()} and {@link #lowMemory()} are, so that FlatMcHeapTest can hand the picker a phone's
+     * heap and put this one back; nothing else sets it.
+     */
+    static StormSolver.Heap heap = JVM_HEAP;
+
+    /**
+     * A phone or tablet gives the app a few hundred MB: search less there. Never in a game under a SimScope (the sim
+     * harness), whose search reads no heap: a serve JVM's heap is shared with the games beside it and sized by whoever
+     * runs the machine, and verify replays a game alone, so a search the heap steered would play one seed two ways
+     * (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md, the anti-goal). Unbound, the GUI's case, it reads the heap as it
+     * always did.
+     */
     static boolean constrainedHeap() {
-        return Runtime.getRuntime().maxMemory() <= (768L << 20);
+        return SimScope.current() == null && heap.max() <= (768L << 20);
     }
 
     /**
      * Every rollout copies the whole game. On a small heap, stop sampling before the garbage collector thrashes and
      * keep the heuristic choice. Only checked on small heaps: elsewhere the used memory is mostly garbage that has not
-     * been collected yet, and an OutOfMemoryError in a rollout is already caught.
+     * been collected yet, and an OutOfMemoryError in a rollout is already caught. Never under a SimScope, where
+     * nothing is {@link #constrainedHeap() constrained}.
      */
     static boolean lowMemory() {
         if (!constrainedHeap()) {
             return false;
         }
-        final Runtime rt = Runtime.getRuntime();
-        return rt.totalMemory() - rt.freeMemory() > rt.maxMemory() * 0.85;
+        return heap.used() > heap.max() * 0.85;
     }
 
     /** Tunable parameters, normally read from the AI profile with {@link #fromProfile}. */
