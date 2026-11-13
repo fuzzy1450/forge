@@ -144,8 +144,13 @@ public class GameCopier {
             newPlayer.setUnlimitedHandSize(origPlayer.isUnlimitedHandSize());
             newPlayer.setCrankCounter(origPlayer.getCrankCounter());
             // TODO creatureAttackedThisTurn
+            // The floating mana, as records of the copy's player: a refund gives a record back to its own player's
+            // pool (ManaRefundService groups the paying mana by Mana.getPlayer), so with the original's records a
+            // cast rolled back in the copy, or a mana ability undone with it, put the mana in the original's pool.
+            // The source and the mana ability stay the original's, as before.
             for (Mana m : origPlayer.getManaPool()) {
-                newPlayer.getManaPool().addManaNoEvent(m);
+                newPlayer.getManaPool().addManaNoEvent(new Mana(m.getColor(), m.getSourceCard(), m.getManaAbility(),
+                        newPlayer));
             }
             playerMap.put(origPlayer, newPlayer);
         }

@@ -51,6 +51,20 @@ public class CensusReplayTest {
                 "006fb3f8", "006fb3f8a8380441132109a5fd13c4fd4f84091d12523ba0c76ac1f1f8cfd01f")));
     }
 
+    /**
+     * job-162 game 0, seed 990000162000: Rabbits, Rabbits, Rabbits (331ad298) in seat 0 against Jeskai Artifacts and
+     * Energy (33431700) in seat 1. On turn 24 a rollout of seat 1's main-phase search could not pay a Vanish into
+     * Eternity in the copy and rolled the cast back, undoing a mana ability paid from seat 1's floating mana, and the
+     * refund put that {C} in the real pool: the census ended the game, "a rollout wrote the real game: Seat1's
+     * floating mana 5 -> 6".
+     */
+    @Test(timeOut = 1_300_000)
+    public void aCastRolledBackInARolloutPlaysOn() throws Exception {
+        assertNoError(play(censusJob(990_000_162_000L,
+                "331ad298", "331ad2984e14cf7e5c45a4a02120058eac0091d2c77fd87063627bcb642977b6",
+                "33431700", "33431700855b00ac1320219bff4272329f663ee13aa1a72496900e9f6dcea389")));
+    }
+
     /** The census's job for the game of {@code seed}, as its job file reads with games=1 and that seed: seat 0 plays
      *  the resource census/{@code deck0}.dck and seat 1 census/{@code deck1}.dck, both Default and default. */
     static JobFile censusJob(final long seed, final String deck0, final String hash0, final String deck1,
