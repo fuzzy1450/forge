@@ -39,6 +39,17 @@ public class JobRunnerTest {
         return JobFile.parse(lines);
     }
 
+    /** A default job's record keys: GameRecordsTest.RECORD_KEYS, then {@code middle}, then the game's digest and its
+     *  flat_mc tallies, which every default job's record carries (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md,
+     *  design 2). */
+    static List<String> defaultJobKeys(String... middle) {
+        List<String> keys = new ArrayList<>(GameRecordsTest.RECORD_KEYS);
+        keys.addAll(List.of(middle));
+        keys.add("digest");
+        keys.add("flat_mc");
+        return keys;
+    }
+
     static final String CREATE_FAILED = "java.lang.IllegalStateException: createGame failed";
 
     /** The runner's own Error result for a game that failed before its observer ran, as when createGame() throws. */
@@ -94,12 +105,18 @@ public class JobRunnerTest {
         // The values above come from the outcome or from JobRunner itself. What only the subscriber knows -- first
         // seat, mulligans, lands, spells, every card row -- is pinned by comparing each record, ms aside, with the one
         // GameRecordsTest's reference attach builds for the same spec: a fresh Stats per game, subscribed before the
-        // game starts.
+        // game starts. A default job's record then ends with the game's digest and flat_mc tallies, which JobRunner
+        // takes from the runner's result and the reference attach does not write: they are the reference game's.
         for (int g = 0; g < 2; g++) {
-            Map<String, Object> reference = GameRecordsTest.play(new GameRunner(1), job.specs().get(g), g).rec();
-            out.get(g).remove("ms");
+            GameRecordsTest.Recorded played = GameRecordsTest.play(new GameRunner(1), job.specs().get(g), g);
+            Map<String, Object> rec = out.get(g);
+            Assert.assertEquals(new ArrayList<>(rec.keySet()), defaultJobKeys(), "game " + g);
+            Assert.assertEquals(rec.remove("digest"), played.result().digest(), "game " + g + "'s digest");
+            Assert.assertEquals(rec.remove("flat_mc"), played.result().flatMc(), "game " + g + "'s tallies");
+            Map<String, Object> reference = played.rec();
+            rec.remove("ms");
             reference.remove("ms");
-            Assert.assertEquals(GameRecords.Json.write(out.get(g)), GameRecords.Json.write(reference),
+            Assert.assertEquals(GameRecords.Json.write(rec), GameRecords.Json.write(reference),
                     "game " + g + "'s record is the reference attach's");
         }
     }
@@ -207,7 +224,9 @@ public class JobRunnerTest {
         Assert.assertEquals(out.size(), 3, "two records and a summary, no exception");
         for (int g = 0; g < 2; g++) {
             Map<String, Object> rec = out.get(g);
-            Assert.assertEquals(new ArrayList<>(rec.keySet()), GameRecordsTest.RECORD_KEYS);
+            Assert.assertEquals(new ArrayList<>(rec.keySet()), defaultJobKeys());
+            Assert.assertEquals(rec.get("digest"), "ERROR", "an unfinished game's literal digest");
+            Assert.assertNull(rec.get("flat_mc"), "and no tallies: nothing live is read");
             Assert.assertEquals(rec.get("game"), g);
             Assert.assertEquals(rec.get("seed"), 9L + g);
             Assert.assertEquals(rec.get("end_reason"), "Error");
@@ -227,19 +246,20 @@ public class JobRunnerTest {
                 "{\"summary\":{\"games\":2,\"AllOpponentsLost\":0,\"WinsGameSpellEffect\":0,\"Draw\":0,\"Timeout\":0,\"Error\":2,\"ms\":10}}");
     }
 
+    /** A non-zero violation count rides on the record right after its cards, before a default job's digest and
+     *  flat_mc (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md, design 2), and a zero count writes no key. */
     @Test
-    public void aNonZeroViolationCountRidesOnTheRecordAsItsLastKey() throws Exception {
+    public void aNonZeroViolationCountRidesOnTheRecordAfterItsCards() throws Exception {
         List<Map<String, Object>> out = new ArrayList<>();
         new JobRunner(neverObserving(2)).run(job(1, 9L, 300, 2), out::add);
         Map<String, Object> rec = out.get(0);
-        List<String> keys = new ArrayList<>(rec.keySet());
-        Assert.assertEquals(keys.subList(keys.size() - 2, keys.size()), List.of("cards", "violations"));
-        Assert.assertEquals(keys.subList(0, keys.size() - 1), GameRecordsTest.RECORD_KEYS);
+        Assert.assertEquals(new ArrayList<>(rec.keySet()), defaultJobKeys("violations"));
         Assert.assertEquals(rec.get("violations"), 2L);
-        Assert.assertTrue(GameRecords.Json.write(rec).endsWith(",\"cards\":[],\"violations\":2}"), GameRecords.Json.write(rec));
+        Assert.assertTrue(GameRecords.Json.write(rec).endsWith(
+                ",\"cards\":[],\"violations\":2,\"digest\":\"ERROR\",\"flat_mc\":null}"), GameRecords.Json.write(rec));
         List<Map<String, Object>> clean = new ArrayList<>();
         new JobRunner(neverObserving(0)).run(job(1, 9L, 300, 2), clean::add);
         Assert.assertFalse(clean.get(0).containsKey("violations"), "a zero count: no key");
-        Assert.assertEquals(new ArrayList<>(clean.get(0).keySet()), GameRecordsTest.RECORD_KEYS);
+        Assert.assertEquals(new ArrayList<>(clean.get(0).keySet()), defaultJobKeys());
     }
 }

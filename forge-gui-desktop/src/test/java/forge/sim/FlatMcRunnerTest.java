@@ -35,10 +35,12 @@ import forge.util.SimScope;
 
 /**
  * The flat_mc seat words in a game the runner plays (MTG_DeckMaker's tools/combo-ai/flat-mc/SPEC.md, section 4.1): the
- * runner takes the words as no AI option, and switches the search on for the seat that names one and for no other,
- * while the game-wide flags stay off. And what such a game leaves behind (sections 4.6 and 4.7): its search lines in
- * its digest, its searching seats' tallies in its result and its job record, and its wall-clock line on stderr. The
- * class loads the four private profiles beside the shipped ones (FlatMcProfiles).
+ * runner takes the words as no AI option and gives the seat that names one the word's search-only seat, while the
+ * game-wide flags stay off. And what such a game leaves behind (sections 4.6 and 4.7): its search lines in its digest,
+ * its searching seats' tallies in its result and its job record, and its wall-clock line on stderr. Since every
+ * default seat plays full Flat MC (its SHIP.md, design 2), a default seat beside a flat_mc one searches too, and is
+ * registered, tallied and listed with it in seat order. The class loads the four private profiles beside the shipped
+ * ones (FlatMcProfiles).
  */
 public class FlatMcRunnerTest {
 
@@ -136,13 +138,14 @@ public class FlatMcRunnerTest {
     }
 
     /**
-     * A mixed-seat twin of GameRunnerTest.flatMonteCarloIsOffOnTheGameAndForEverySeat: seat 1 names flat_mc:40:8, so its
-     * controller carries the override and the seat, and seat 0 neither. The seat is the search-only mark, so
-     * flatMonteCarloActive() stays false on the flat seat too, and the switch is read through the getters. The observer
-     * throws once it has looked, so no game is played.
+     * A mixed-seat twin of GameRunnerTest.flatMonteCarloIsOffOnTheGameAndOnForEveryDefaultSeat: seat 1 names
+     * flat_mc:40:8, so its controller carries the override and the word's seat, which is the search-only mark, so
+     * flatMonteCarloActive() stays false there; seat 0's default word gives it the full seat, active (SHIP.md, design
+     * 2). The game-wide flags stay off, and the switch is read through the getters. The observer throws once it has
+     * looked, so no game is played.
      */
     @Test(timeOut = 300_000)
-    public void onlyTheFlatSeatIsSwitchedOnAndNoSeatIsFlatMonteCarloActive() throws Exception {
+    public void theFlatSeatIsSearchOnlyBesideAFullDefaultSeat() throws Exception {
         List<Path> precons = Precons.commander();
         Assert.assertTrue(precons.size() >= 2, "Forge ships Commander precons; found " + precons);
         GameSpec spec = new GameSpec(7_000_000L, 300, List.of(
@@ -162,8 +165,8 @@ public class FlatMcRunnerTest {
             seen.set(sb.toString());
             throw new IllegalStateException("looked");
         });
-        Assert.assertEquals(seen.get(), "false,false,false|null,null,false"
-                + "|true,FlatMcSeat[rolloutsPerGame=40, resolutionsPerRollout=8, zeroRollout=false],false", r.toString());
+        Assert.assertEquals(seen.get(), "false,false,false|" + GameRunnerTest.FULL_SEAT + "|"
+                + GameRunnerTest.seatLine(true, new FlatMcSeat(40, 8, false, false), false), r.toString());
         Assert.assertEquals(r.endReason(), "Error", r.toString());
     }
 
@@ -181,10 +184,10 @@ public class FlatMcRunnerTest {
     }
 
     /**
-     * A tight seat's game replayed on a fresh runner gives the same digest, digest lines and tallies. Its digest closes
-     * with seat 1's search line and is the hash of every line, that one included, and the seat's rollouts stay within
-     * the word's 40 plus the last decision's few: the cap is read before a decision, and a 2 ms decision charges at
-     * most 4.
+     * A tight seat's game beside a full default seat, replayed on a fresh runner, gives the same digest, digest lines
+     * and tallies. Its digest closes with both seats' search lines in seat order and is the hash of every line, those
+     * included, and the tight seat's rollouts stay within the word's 40 plus the last decision's few: the cap is read
+     * before a decision, and a 2 ms decision charges at most 4.
      */
     @Test(timeOut = 600_000)
     public void aSearchedGameReplaysToTheSameDigestAndTally() throws Exception {
@@ -195,20 +198,23 @@ public class FlatMcRunnerTest {
         Assert.assertEquals(y.digestLines(), x.digestLines());
         Assert.assertEquals(y.flatMc(), x.flatMc());
         List<String> search = linesStarting(x, "search\t");
-        Assert.assertEquals(search.size(), 1, search.toString());
-        Assert.assertTrue(search.get(0).startsWith("search\t1\t"), search.toString());
-        Assert.assertEquals(x.digestLines().get(x.digestLines().size() - 1), search.get(0),
-                "the search line comes last");
-        Assert.assertEquals(x.digest(), GameRunner.sha256(x.digestLines()), "the digest covers the search line");
-        Assert.assertEquals(x.flatMc().size(), 1, x.flatMc().toString());
-        Assert.assertEquals(x.flatMc().get(0).get("seat"), 1);
-        Assert.assertTrue(rollouts(x, 0) <= 44L, x.flatMc().toString());
+        Assert.assertEquals(search.size(), 2, search.toString());
+        Assert.assertTrue(search.get(0).startsWith("search\t0\t"), search.toString());
+        Assert.assertTrue(search.get(1).startsWith("search\t1\t"), search.toString());
+        Assert.assertEquals(x.digestLines().subList(x.digestLines().size() - 2, x.digestLines().size()), search,
+                "the search lines come last");
+        Assert.assertEquals(x.digest(), GameRunner.sha256(x.digestLines()), "the digest covers the search lines");
+        Assert.assertEquals(x.flatMc().size(), 2, x.flatMc().toString());
+        Assert.assertEquals(x.flatMc().get(0).get("seat"), 0);
+        Assert.assertEquals(x.flatMc().get(1).get("seat"), 1);
+        Assert.assertTrue(rollouts(x, 1) <= 44L, x.flatMc().toString());
     }
 
     /**
-     * Two budgeted seats' games, each alone on a runner of its own, then both at once on one two-slot runner: each
-     * concurrent game equals its solo game in digest, digest lines and tallies, so neither game's search reads the
-     * other's clock, caps or counts. Each seat did search, so the equality covers rollouts.
+     * Two budgeted seats' games, each beside a full default seat, each alone on a runner of its own, then both at once
+     * on one two-slot runner: each concurrent game equals its solo game in digest, digest lines and tallies, so
+     * neither game's search reads the other's clock, caps or counts. Each budgeted seat did search, so the equality
+     * covers rollouts; its tally is entry i, the seat order's, beside the default seat's.
      */
     @Test(timeOut = 900_000)
     public void twoSearchedGamesSideBySideEqualEachAlone() throws Exception {
@@ -249,8 +255,9 @@ public class FlatMcRunnerTest {
             GameResult side = together.get(i);
             Assert.assertNull(solo.error(), solo.toString());
             Assert.assertNull(side.error(), side.toString());
-            Assert.assertEquals(solo.flatMc().get(0).get("seat"), i, solo.flatMc().toString());
-            Assert.assertTrue(rollouts(solo, 0) > 0, "the budgeted seat searched: " + solo.flatMc());
+            Assert.assertEquals(solo.flatMc().size(), 2, solo.flatMc().toString());
+            Assert.assertEquals(solo.flatMc().get(i).get("seat"), i, solo.flatMc().toString());
+            Assert.assertTrue(rollouts(solo, i) > 0, "the budgeted seat searched: " + solo.flatMc());
             Assert.assertEquals(side.digest(), solo.digest(), "game " + i);
             Assert.assertEquals(side.digestLines(), solo.digestLines(), "game " + i);
             Assert.assertEquals(side.flatMc(), solo.flatMc(), "game " + i);
@@ -258,35 +265,50 @@ public class FlatMcRunnerTest {
     }
 
     /**
-     * A seat whose profile gives a decision no budget never searches: its game is the default seats' game, digest for
-     * digest, and its tally counts no rollout. The default seats' game carries no tally and prints no wall line.
+     * A seat whose profile gives a decision no budget never searches: its tally counts no decision, rollout or playout,
+     * and its game is one game whichever flat_mc word it names, digest for digest, since without a budget neither a
+     * word's caps nor its zero-rollout branch is reached. Its game was the default seats' game until every default
+     * seat played full Flat MC (SHIP.md, design 2): a default seat searches now, so no seat word plays the heuristics
+     * alone, and the default seat beside it here searches as one.
      */
     @Test(timeOut = 600_000)
-    public void aNoBudgetSeatPlaysTheDefaultSeatsGame() throws Exception {
+    public void aNoBudgetSeatNeverSearches() throws Exception {
         GameResult off = new GameRunner(1).play(off(7_100_003L, 1));
-        Played def = capturingErr(() -> new GameRunner(1).play(GameRunnerTest.spec(7_100_003L, 600)));
-        Assert.assertEquals(off.digest(), def.result().digest());
-        Assert.assertEquals(off.flatMc().get(0).get("rollouts"), 0L);
-        Assert.assertNull(def.result().flatMc(), def.result().toString());
-        Assert.assertEquals(def.wallOf(7_100_003L), List.of(), "a game with no flat_mc word prints no wall line");
+        GameResult capped = new GameRunner(1).play(seated(7_100_003L, 1, "FlatSearchOff", "flat_mc:40:8"));
+        GameResult zero = new GameRunner(1).play(seated(7_100_003L, 1, "FlatSearchOff", "flat_mc_zero"));
+        Assert.assertNull(off.error(), off.toString());
+        Assert.assertEquals(capped.digest(), off.digest(), "flat_mc:40:8 with no budget plays flat_mc's game");
+        Assert.assertEquals(zero.digest(), off.digest(), "flat_mc_zero with no budget plays flat_mc's game");
+        Assert.assertEquals(off.flatMc().size(), 2, off.flatMc().toString());
+        Map<String, Object> tally = off.flatMc().get(1);
+        Assert.assertEquals(tally.get("seat"), 1, tally.toString());
+        Assert.assertEquals(tally.get("decisions"), 0L, tally.toString());
+        Assert.assertEquals(tally.get("rollouts"), 0L, tally.toString());
+        Assert.assertEquals(tally.get("playouts"), 0L, tally.toString());
+        Assert.assertTrue(rollouts(off, 0) > 0, "the default seat beside it searched: " + off.flatMc());
     }
 
     /**
-     * The zero-rollout seat takes line 0 wherever its search would roll out, so its game has no search line, and its
-     * tally, which it still gets, counts no rollout or playout. The seat did reach its search, every decision a
-     * zero-rollout one, so it is the zero branch that kept the rollouts at 0 (spec 4.6; Review Focus 5).
+     * Zero-rollout seats take line 0 wherever their search would roll out, so a game of two of them has no search
+     * line, and each one's tally, which it still gets, counts no rollout or playout. Seat 1 did reach its search, every
+     * decision a zero-rollout one, so it is the zero branch that kept the rollouts at 0 (spec 4.6; Review Focus 5).
+     * Seat 0 is a zero-rollout seat too: a default seat would roll out since every default seat plays full Flat MC
+     * (SHIP.md, design 2), and its rollouts would give the game its search lines.
      */
     @Test(timeOut = 600_000)
     public void aGameWithNoRolloutAddsNoSearchLine() throws Exception {
-        GameResult r = new GameRunner(1).play(zero(7_100_006L, 1));
+        GameResult r = new GameRunner(1).play(withSeat(zero(7_100_006L, 1), 0, "FlatSearch", "flat_mc_zero"));
         Assert.assertNull(r.error(), r.toString());
         Assert.assertEquals(linesStarting(r, "search"), List.of());
-        Assert.assertEquals(r.flatMc().size(), 1, r.flatMc().toString());
-        Map<String, Object> tally = r.flatMc().get(0);
-        Assert.assertEquals(new ArrayList<>(tally.keySet()), FlatMcGame.TALLY_KEYS);
-        Assert.assertEquals(tally.get("seat"), 1);
-        Assert.assertEquals(tally.get("rollouts"), 0L);
-        Assert.assertEquals(tally.get("playouts"), 0L);
+        Assert.assertEquals(r.flatMc().size(), 2, r.flatMc().toString());
+        for (int i = 0; i < 2; i++) {
+            Map<String, Object> each = r.flatMc().get(i);
+            Assert.assertEquals(new ArrayList<>(each.keySet()), FlatMcGame.TALLY_KEYS);
+            Assert.assertEquals(each.get("seat"), i);
+            Assert.assertEquals(each.get("rollouts"), 0L, each.toString());
+            Assert.assertEquals(each.get("playouts"), 0L, each.toString());
+        }
+        Map<String, Object> tally = r.flatMc().get(1);
         long decisions = (Long) tally.get("decisions");
         Assert.assertTrue(decisions > 0, "the seat reached its search: " + tally);
         Assert.assertEquals(tally.get("reasons"), Map.of("zero-rollout", decisions), tally.toString());
@@ -294,8 +316,9 @@ public class FlatMcRunnerTest {
 
     /**
      * A job whose seat 1 names flat_mc:40:8 under FlatSearchTight, read by JobFile as a job file's lines are, writes a
-     * record that ends with the game's digest and its flat_mc tallies: one entry, seat 1's. The same job without those
-     * two lines writes today's record.
+     * record that ends with the game's digest and its flat_mc tallies: an entry a seat in seat order, seat 0's that of
+     * its default seat, which plays full Flat MC (SHIP.md, design 2). The same job without those two lines, every seat
+     * default, ends its record with them too.
      */
     @Test(timeOut = 600_000)
     public void aFlatJobRecordEndsWithItsDigestAndTally() throws Exception {
@@ -319,21 +342,24 @@ public class FlatMcRunnerTest {
         Assert.assertTrue(((String) rec.get("digest")).matches("[0-9a-f]{64}"), String.valueOf(rec.get("digest")));
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> tallies = (List<Map<String, Object>>) rec.get("flat_mc");
-        Assert.assertEquals(tallies.size(), 1, tallies.toString());
-        Assert.assertEquals(new ArrayList<>(tallies.get(0).keySet()), FlatMcGame.TALLY_KEYS);
-        Assert.assertEquals(tallies.get(0).get("seat"), 1);
+        Assert.assertEquals(tallies.size(), 2, tallies.toString());
+        for (int i = 0; i < 2; i++) {
+            Assert.assertEquals(new ArrayList<>(tallies.get(i).keySet()), FlatMcGame.TALLY_KEYS);
+            Assert.assertEquals(tallies.get(i).get("seat"), i);
+        }
         List<Map<String, Object>> plain = new ArrayList<>();
         new JobRunner(new GameRunner(1)).run(JobFile.parse(lines), plain::add);
-        Assert.assertEquals(new ArrayList<>(plain.get(0).keySet()), GameRecordsTest.RECORD_KEYS);
+        Assert.assertEquals(new ArrayList<>(plain.get(0).keySet()), expected);
     }
 
     /** A searched game's wall-clock line on stderr names its seed and its searching seat with that seat's profile,
-     *  beside the two figures read from the machine's clock (spec 4.7). */
+     *  in seat order beside the default seat, which searches too (SHIP.md, design 2), then the two figures read from
+     *  the machine's clock (spec 4.7). */
     @Test(timeOut = 600_000)
     public void theWallClockLineNamesTheSeedAndTheSearchingSeat() throws Exception {
         Played p = capturingErr(() -> new GameRunner(1).play(tight(7_100_005L, 1)));
-        assertOneWallLine(p.wallOf(7_100_005L),
-                "flat_mc wall seed=7100005 search=1:FlatSearchTight slowest_rollout_ms=\\d+ rollouts_over_5s=0");
+        assertOneWallLine(p.wallOf(7_100_005L), "flat_mc wall seed=7100005 search=0:Default,1:FlatSearchTight"
+                + " slowest_rollout_ms=\\d+ rollouts_over_5s=0");
     }
 
     /** A pod with a full-count seat, at a one-second limit, times out: its digest is the literal TIMEOUT and it carries
@@ -358,8 +384,8 @@ public class FlatMcRunnerTest {
         Assert.assertEquals(r.error(), "game ended without finishing", r.toString());
         Assert.assertEquals(r.digest(), "ERROR");
         Assert.assertNull(r.flatMc(), r.toString());
-        assertOneWallLine(p.wallOf(7_100_009L),
-                "flat_mc wall seed=7100009 search=1:FlatSearchTight slowest_rollout_ms=\\d+ rollouts_over_5s=0");
+        assertOneWallLine(p.wallOf(7_100_009L), "flat_mc wall seed=7100009 search=0:Default,1:FlatSearchTight"
+                + " slowest_rollout_ms=\\d+ rollouts_over_5s=0");
     }
 
     /**
