@@ -32473,8 +32473,13 @@ public class SpecialCardAi {
         }
 
         // the pick: the first instant of the best kind whose copy can work, in fetchList's order (the stock
-        // shuffle's, at the imprint), else null; RNG-free, builds nothing
+        // shuffle's, at the imprint), else null; RNG-free, builds nothing. A Flat MC seat first takes the Scepter's
+        // partner in upstream's combo list (cataloguedPartner).
         public static Card imprintPick(final Player ai, final Card host, final Iterable<Card> fetchList) {
+            final Card partner = cataloguedPartner(ai, host, fetchList);
+            if (partner != null) {
+                return partner;
+            }
             Card pick = null;
             Kind best = Kind.NONE;
             for (final Card c : fetchList) {
@@ -32486,6 +32491,26 @@ public class SpecialCardAi {
                 }
             }
             return pick;
+        }
+
+        // A Flat MC seat imprints the instant that upstream's combo list (ai-combos.txt, read by ComboCatalog) pairs
+        // with the Scepter, Orim's Chant for the lock, whatever kind() reads: that copy is what the combo is for, and
+        // upstream's ComboAssembly puts it together (FlatMonteCarloComboAssemblyTest) where the rollouts weigh the
+        // copy. Any other seat keeps the ranked pick, since the copy readmit opens no window for a kind it does not
+        // name and the instant would be stranded. Only ai-combos.txt's own lines count, not the Commander pairs
+        // (ComboCatalog.commanderEntries), so the Reversal rule (reversalLive, F2) stands. Reads names; draws nothing.
+        static Card cataloguedPartner(final Player ai, final Card host, final Iterable<Card> fetchList) {
+            if (host == null || !(ai.getController() instanceof PlayerControllerAi pca)
+                    || !pca.getAi().flatMonteCarloActive()) {
+                return null;
+            }
+            for (final Card c : fetchList) {
+                if (c != null && c.isInstant()
+                        && !forge.ai.simulation.ComboCatalog.inNames(List.of(host.getName(), c.getName())).isEmpty()) {
+                    return c;
+                }
+            }
+            return null;
         }
 
         // the instant's kind: a plain instant spell with only a mana cost and no X, then its root API, each
