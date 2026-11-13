@@ -62,12 +62,15 @@ public class AiReportScenarioTest extends AITest {
         final boolean aiTurn;
         final Setup setup;
         final Check check;
+        int players = 2; // 3: the opponent, the AI and a third player (Ctx.third)
 
         Scenario(final String issue, final String title, final Fid fid, final String phase, final boolean aiTurn,
                  final Setup setup, final Check check) {
             this.issue = issue; this.title = title; this.fid = fid; this.phase = phase; this.aiTurn = aiTurn;
             this.setup = setup; this.check = check;
         }
+        /** @return this scenario, played in a three-player game */
+        Scenario inThreePlayerGame() { players = 3; return this; }
         @Override public String toString() { return "#" + issue + " " + title + " [" + fid + "]"; }
     }
 
@@ -78,6 +81,8 @@ public class AiReportScenarioTest extends AITest {
         final Player ai, opp;
 
         Ctx(final Game g) { game = g; opp = g.getPlayers().get(0); ai = g.getPlayers().get(1); }
+        /** The third player of a scenario played in a three-player game. */
+        Player third() { return game.getPlayers().get(2); }
 
         /** A permanent that has been there for a while: no summoning sickness, so {T} abilities and attacks are possible. */
         Card bf(final String name, final Player p) {
@@ -682,6 +687,17 @@ public class AiReportScenarioTest extends AITest {
                     new AiAttackController(c.ai); // the attack plan declareAttackers makes first asks it of each creature that can attack
                     return null;
                 }));
+        // ... and with the host that prevention reads them with, the protected player's keyword card, which protection
+        // from a player reads for a source someone else controls: a third player's, in a three-player game
+        l.add(new Scenario("7335", "in a three-player game, a player Eon Frolicker protects from the AI is protected from the AI's creature, not from a third player's", Fid.APPROX, M1, true,
+                c -> { c.bf("Grizzly Bears", c.ai); c.bf("Grizzly Bears", c.third());
+                    c.opp.addChangedKeywords(List.of("Protection:Player.PlayerUID_" + c.ai.getId() + ":" + c.ai.getName()), List.of(), c.game.getNextTimestamp(), 0); },
+                c -> {
+                    final StringBuilder wrong = new StringBuilder();
+                    if (!AiAttackController.isDamageProtected(c.opp, c.ai.getCreaturesInPlay().get(0))) { wrong.append(" the AI's Grizzly Bears not prevented;"); }
+                    if (AiAttackController.isDamageProtected(c.opp, c.third().getCreaturesInPlay().get(0))) { wrong.append(" the third player's Grizzly Bears prevented;"); }
+                    return wrong.length() == 0 ? null : wrong.toString().trim();
+                }).inThreePlayerGame());
         l.add(new Scenario("7335", "a player with protection from red is protected from a red creature, not from a green one", Fid.APPROX, M1, true,
                 c -> { c.bf("Goblin Guide", c.ai); c.bf("Grizzly Bears", c.ai); c.opp.addChangedKeywords(List.of("Protection from red"), List.of(), c.game.getNextTimestamp(), 0); },
                 c -> {
@@ -758,12 +774,12 @@ public class AiReportScenarioTest extends AITest {
 
     @Test(dataProvider = "scenarios")
     public void aiBehavesAsReported(final Scenario s) {
-        final Game game = initAndCreateGame();
+        final Game game = s.players == 3 ? initAndCreateThreePlayerGame() : initAndCreateGame();
         game.AI_FLAT_MONTE_CARLO = FLAT_MC;
         if (System.getProperty("forge.test.issue") != null) { forge.ai.simulation.FlatMonteCarloPicker.DEBUG = true; } // a single scenario: print what the picker made of it
         game.AI_TIMEOUT = 10;
         final Ctx c = new Ctx(game);
-        if (FLAT_MC) { fillLibrary(c.ai, 20); fillLibrary(c.opp, 20); } // rollouts must not deck anyone
+        if (FLAT_MC) { fillLibrary(c.ai, 20); fillLibrary(c.opp, 20); if (s.players == 3) { fillLibrary(c.third(), 20); } } // rollouts must not deck anyone
         if (!PROFILE.isEmpty()) {
             ((LobbyPlayerAi) c.ai.getLobbyPlayer()).setAiProfile(PROFILE);
         }

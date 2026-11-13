@@ -36,6 +36,7 @@ import forge.game.keyword.KeywordInterface;
 import forge.game.keyword.Protection;
 import forge.game.player.Player;
 import forge.game.player.PlayerCollection;
+import forge.game.replacement.ReplacementEffect;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityPredicates;
 import forge.game.staticability.StaticAbility;
@@ -182,9 +183,17 @@ public class AiAttackController {
                 continue;
             }
             final String valid = Protection.getProtectionValid(orig, true);
-            // a list (Card.X,Emblem.X): any part, as the damage prevention's ValidSource reads it
-            if (valid.isEmpty() || source.isValid(valid.split(","), p, null, null)) {
+            if (valid.isEmpty()) {
                 return true;
+            }
+            // read as the keyword's damage prevention (PlayerFactoryUtil.addReplacementEffect) reads its ValidSource:
+            // any part of the list (Card.X,Emblem.X), with that prevention's host, the player's keyword card, which a
+            // protection from a player reads for a source someone else controls, a third player's in a pod (never
+            // Player.getKeywordCard(), which makes that card, with a fresh id, when there is none)
+            for (final ReplacementEffect prevention : kw.getReplacements()) {
+                if (source.isValid(valid.split(","), p, prevention.getHostCard(), null)) {
+                    return true;
+                }
             }
         }
         return false;
