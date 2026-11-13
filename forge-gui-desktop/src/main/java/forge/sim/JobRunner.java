@@ -28,10 +28,12 @@ public final class JobRunner {
      *  no games is refused too. An InterruptedException propagates with no record for
      *  the interrupted game and no summary. A poison caused by the job's own last game is not reported here: the
      *  summary is written and run returns normally, so a caller that must know asks the runner
-     *  ({@link GameRunner#isPoisoned()}). When some seat's word begins flat_mc, each record ends, after any
+     *  ({@link GameRunner#isPoisoned()}). When some seat's word names a Flat MC seat ({@link FlatMcSeat#parse}: the
+     *  default word, which a blank or absent ai line reads as, or a flat_mc test word), each record ends, after any
      *  {@code violations}, with the game's {@code digest} and its {@code flat_mc} tallies ({@link GameResult#flatMc()};
      *  for a Timeout or an unfinished game, the literal TIMEOUT or ERROR and null), as MTG_DeckMaker's
-     *  tools/combo-ai/flat-mc/SPEC.md, section 4.7 has it; every other job's records are unchanged. */
+     *  tools/combo-ai/flat-mc/SPEC.md, section 4.7 has it, so every default job's records carry them (its SHIP.md,
+     *  design 2); a job of hybrid_sim and full_sim seats alone writes neither key. */
     public Map<String, Integer> run(JobFile job, Consumer<Map<String, Object>> sink) throws InterruptedException {
         GameRunner.validate(job.firstSpec());                    // a job that cannot start writes nothing, though it has no game
         // validate refused any malformed flat_mc word, so parse answers null or a seat here

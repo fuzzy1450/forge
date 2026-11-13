@@ -5,7 +5,11 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -15,14 +19,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.Consumer;
 
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import forge.ai.AiController;
+import forge.ai.PlayerControllerAi;
+import forge.ai.simulation.FlatMcGame;
+import forge.ai.simulation.FlatMcSeat;
+import forge.game.Game;
 import forge.game.GameStage;
 import forge.game.phase.PhaseType;
+import forge.game.player.Player;
 import forge.game.zone.ZoneType;
 import forge.sim.GameRunner.GameResult;
 import forge.sim.GameRunner.GameSpec;
@@ -383,27 +394,226 @@ public class GameRunnerTest {
     }
 
     /**
-     * Upstream's Flat Monte Carlo search (#12308) decides on wall-clock budgets (FLAT_MC_DECISION_BUDGET_MS,
-     * FLAT_MC_TURN_BUDGET_MS) and only the GUI's HostedMatch and the SimulateMatch CLI switch it on: in a game the runner
-     * plays it is off on the game and for every seat, so a seed follows its own stream, never the machine's speed. The
-     * observer throws once it has looked, so no game is played.
+     * Upstream's Flat Monte Carlo search (#12308) stays off on the game: only the GUI's HostedMatch and the SimulateMatch
+     * CLI switch the game-wide flags on, and the runner pins them off. Each default seat switches the search on for
+     * itself instead (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md, design 2; aDefaultDuelPlaysFullFlatMc), and under
+     * the game's scope its budgets count rollouts on the game's counted clock, so a seed still follows its own stream,
+     * never the machine's speed. The observer throws once it has looked, so no game is played.
      */
     @Test(timeOut = 300_000)
-    public void flatMonteCarloIsOffOnTheGameAndForEverySeat() throws Exception {
+    public void flatMonteCarloIsOffOnTheGameAndOnForEveryDefaultSeat() throws Exception {
         GameRunner runner = new GameRunner(1);
         AtomicReference<String> seen = new AtomicReference<>();
         GameResult r = runner.play(spec(7_000_000L, 300), g -> {
             StringBuilder sb = new StringBuilder();
             sb.append(g.getAIFlatMonteCarlo()).append(',').append(g.getAIFlatMonteCarloMax()).append(',')
                     .append(g.getAIFlatMonteCarloLite());
-            for (forge.game.player.Player p : g.getPlayers()) {
-                sb.append(',').append(((forge.ai.PlayerControllerAi) p.getController()).getAi().flatMonteCarloActive());
+            for (Player p : g.getPlayers()) {
+                sb.append(',').append(((PlayerControllerAi) p.getController()).getAi().flatMonteCarloActive());
             }
             seen.set(sb.toString());
             throw new IllegalStateException("looked");
         });
-        Assert.assertEquals(seen.get(), "false,false,false,false,false", r.toString());
+        Assert.assertEquals(seen.get(), "false,false,false,true,true", r.toString());
         Assert.assertEquals(r.endReason(), "Error", r.toString());
+    }
+
+    /** One seat as {@link #seatsOf} reads it: its controller's own Flat MC switch, its Flat MC seat and whether
+     *  flatMonteCarloActive() answers true. */
+    static String seatLine(Boolean override, FlatMcSeat seat, boolean active) {
+        return override + "," + seat + "," + active;
+    }
+
+    /** What {@link #seatsOf} reads for a default seat: its switch on, the full seat with the shipped caps, and Flat MC
+     *  active (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md, design 2). */
+    static final String FULL_SEAT = seatLine(true, new FlatMcSeat(4000, 500, false, true), true);
+
+    /** The first {@code nSeats} seats of {@code g} in seat order, each as {@link #seatLine} writes it, joined by "|". */
+    static String seatsOf(Game g, int nSeats) {
+        List<String> seats = new ArrayList<>();
+        for (int i = 0; i < nSeats; i++) {
+            for (Player p : g.getRegisteredPlayers()) {
+                if (("Seat" + i).equals(p.getName())) {
+                    AiController ai = ((PlayerControllerAi) p.getController()).getAi();
+                    seats.add(seatLine(ai.getFlatMonteCarloOverride(), ai.getFlatMcSeat(), ai.flatMonteCarloActive()));
+                }
+            }
+        }
+        return String.join("|", seats);
+    }
+
+    /** {@code spec} with each seat's AI word replaced by {@code ais}' in seat order, its deck and profile kept. */
+    static GameSpec withAis(GameSpec spec, String... ais) {
+        Assert.assertEquals(ais.length, spec.seats().size(), "one word a seat");
+        List<SeatSpec> seats = new ArrayList<>();
+        for (int i = 0; i < ais.length; i++) {
+            SeatSpec s = spec.seats().get(i);
+            seats.add(new SeatSpec(s.deckFile(), s.profile(), ais[i]));
+        }
+        return new GameSpec(spec.seed(), spec.timeoutSeconds(), List.copyOf(seats));
+    }
+
+    /** A one-game job at {@code seed} over the first {@code nSeats} Commander precons with a 600 s limit, read by JobFile
+     *  as a job file's lines are, {@code extra} lines last. A seat with no ai line plays the default word, as a seat with
+     *  a blank one does. */
+    static JobFile defaultJob(long seed, int nSeats, String... extra) {
+        List<String> lines = new ArrayList<>(List.of("games=1", "seed=" + seed, "timeout_s=600"));
+        List<Path> precons = Precons.commander();
+        for (int i = 0; i < nSeats; i++) {
+            lines.add("seat." + i + ".deck_file=" + precons.get(i));
+            lines.add("seat." + i + ".deck_hash=hash" + i);
+        }
+        lines.addAll(List.of(extra));
+        return JobFile.parse(lines);
+    }
+
+    /** A one-slot runner that hands each game to {@code look} on the game thread once its seats are set, after the
+     *  caller's own observer and before the game starts; with {@code stop} it then ends the game there, before anything
+     *  is played, which reads as an Error. */
+    static GameRunner looking(Consumer<Game> look, boolean stop) {
+        return new GameRunner(1) {
+            @Override
+            public GameResult play(GameSpec spec, Consumer<Game> observer) throws InterruptedException {
+                return super.play(spec, g -> {
+                    observer.accept(g);
+                    look.accept(g);
+                    if (stop) {
+                        throw new IllegalStateException("looked");
+                    }
+                });
+            }
+        };
+    }
+
+    /** The flat_mc tallies of a job's record. */
+    @SuppressWarnings("unchecked")
+    static List<Map<String, Object>> tallies(Map<String, Object> rec) {
+        return (List<Map<String, Object>>) rec.get("flat_mc");
+    }
+
+    /**
+     * Both default seats of a duel play full Flat MC (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md, design 2): each
+     * controller's own switch is on and carries the full seat with the shipped caps, so flatMonteCarloActive() answers
+     * true. Seat 0's job lines name no ai and seat 1's a blank one, both read by JobFile as default. The record of the
+     * finished game ends with its digest and one flat_mc tally per seat in seat order, and both seats searched.
+     */
+    @Test(timeOut = 900_000)
+    public void aDefaultDuelPlaysFullFlatMc() throws Exception {
+        AtomicReference<String> seen = new AtomicReference<>();
+        List<Map<String, Object>> out = new ArrayList<>();
+        new JobRunner(looking(g -> seen.set(seatsOf(g, 2)), false))
+                .run(defaultJob(7_000_000L, 2, "seat.1.ai="), out::add);
+        Assert.assertEquals(seen.get(), FULL_SEAT + "|" + FULL_SEAT);
+        Map<String, Object> rec = out.get(0);
+        Assert.assertTrue(DECIDED.contains(rec.get("end_reason")), rec.get("end_reason") + ": " + rec.get("error"));
+        List<String> keys = new ArrayList<>(GameRecordsTest.RECORD_KEYS);
+        keys.add("digest");
+        keys.add("flat_mc");
+        Assert.assertEquals(new ArrayList<>(rec.keySet()), keys);
+        Assert.assertTrue(((String) rec.get("digest")).matches("[0-9a-f]{64}"), String.valueOf(rec.get("digest")));
+        List<Map<String, Object>> tallies = tallies(rec);
+        Assert.assertEquals(tallies.size(), 2, tallies.toString());
+        for (int i = 0; i < 2; i++) {
+            Map<String, Object> t = tallies.get(i);
+            Assert.assertEquals(new ArrayList<>(t.keySet()), FlatMcGame.TALLY_KEYS);
+            Assert.assertEquals(t.get("seat"), i, t.toString());
+            Assert.assertTrue((Long) t.get("rollouts") > 0L, "seat " + i + " searched: " + t);
+        }
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> seats = (List<Map<String, Object>>) rec.get("seats");
+        for (int i = 0; i < 2; i++) {
+            Assert.assertEquals(seats.get(i).get("ai"), "default", "seat " + i + "'s record names the word it played");
+        }
+    }
+
+    /**
+     * A pod's four default seats are four full seats, each with its own switch, the shipped caps and Flat MC active, and
+     * each registered in its game's state, so the job's record carries a flat_mc list of four tallies in seat order.
+     * Seat 0's job lines name default, seat 1's a blank word and seats 2 and 3 none. The runner ends the game once it has
+     * looked, before anything is played, so the record reads Error and its tallies count nothing: what a played pod
+     * costs is the census's to say (the ship plan's Review Focus 4).
+     */
+    @Test(timeOut = 300_000)
+    public void aDefaultPodRegistersFourSeats() throws Exception {
+        AtomicReference<String> seen = new AtomicReference<>();
+        List<Map<String, Object>> out = new ArrayList<>();
+        new JobRunner(looking(g -> seen.set(seatsOf(g, 4)), true))
+                .run(defaultJob(7_000_001L, 4, "seat.0.ai=default", "seat.1.ai="), out::add);
+        Assert.assertEquals(seen.get(), String.join("|", Collections.nCopies(4, FULL_SEAT)));
+        Map<String, Object> rec = out.get(0);
+        Assert.assertEquals(rec.get("end_reason"), "Error", String.valueOf(rec.get("error")));
+        Assert.assertTrue(String.valueOf(rec.get("error")).contains("looked"), String.valueOf(rec.get("error")));
+        Assert.assertTrue(((String) rec.get("digest")).matches("[0-9a-f]{64}"), String.valueOf(rec.get("digest")));
+        List<Map<String, Object>> tallies = tallies(rec);
+        Assert.assertEquals(tallies.size(), 4, String.valueOf(tallies));
+        for (int i = 0; i < 4; i++) {
+            Assert.assertEquals(tallies.get(i).get("seat"), i, tallies.toString());
+            Assert.assertEquals(tallies.get(i).get("rollouts"), 0L, tallies.toString());
+        }
+    }
+
+    /**
+     * A flat_mc test word keeps its search-only seat beside a default one: its switch on and its seat set with the
+     * word's caps, not full, so flatMonteCarloActive() answers false; flat_mc_zero and flat_mc:R:S alike. The observer
+     * throws once it has looked, so no game is played.
+     */
+    @Test(timeOut = 300_000)
+    public void aFlatMcSeatStaysSearchOnly() throws Exception {
+        AtomicReference<String> seen = new AtomicReference<>();
+        GameResult r = new GameRunner(1).play(withAis(pod(7_000_000L, 300), "flat_mc", "flat_mc_zero", "flat_mc:40:8",
+                "default"), g -> {
+                    seen.set(seatsOf(g, 4));
+                    throw new IllegalStateException("looked");
+                });
+        Assert.assertEquals(seen.get(), String.join("|",
+                seatLine(true, new FlatMcSeat(4000, 500, false, false), false),
+                seatLine(true, new FlatMcSeat(4000, 500, true, false), false),
+                seatLine(true, new FlatMcSeat(40, 8, false, false), false),
+                FULL_SEAT), r.toString());
+        Assert.assertEquals(r.endReason(), "Error", r.toString());
+    }
+
+    /**
+     * hybrid_sim and full_sim seats do their own lookahead, and the default seats' switch does not reach them: no
+     * switch of their own, no Flat MC seat, and flatMonteCarloActive() false (the ship plan's Review Focus 5). The
+     * observer throws once it has looked, so no game is played.
+     */
+    @Test(timeOut = 300_000)
+    public void aHybridSeatIsUntouched() throws Exception {
+        AtomicReference<String> seen = new AtomicReference<>();
+        GameResult r = new GameRunner(1).play(withAis(pod(7_000_000L, 300), "hybrid_sim", "full_sim", "default",
+                "default"), g -> {
+                    seen.set(seatsOf(g, 4));
+                    throw new IllegalStateException("looked");
+                });
+        Assert.assertEquals(seen.get(), String.join("|", seatLine(null, null, false), seatLine(null, null, false),
+                FULL_SEAT, FULL_SEAT), r.toString());
+        Assert.assertEquals(r.endReason(), "Error", r.toString());
+    }
+
+    /**
+     * One seed's default duel played twice on one runner writes equal records but for ms, the wall clock's: the full
+     * seats' budgets count rollouts on the game's counted clock, so their search repeats, and with it the digest, the
+     * tallies and their hashes, and every count.
+     */
+    @Test(timeOut = 1_800_000)
+    public void aDefaultGameRepeats() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        JobFile job = defaultJob(7_000_005L, 2);
+        List<Map<String, Object>> first = new ArrayList<>();
+        List<Map<String, Object>> second = new ArrayList<>();
+        new JobRunner(runner).run(job, first::add);
+        new JobRunner(runner).run(job, second::add);
+        Map<String, Object> a = new LinkedHashMap<>(first.get(0));
+        Map<String, Object> b = new LinkedHashMap<>(second.get(0));
+        Assert.assertTrue(DECIDED.contains(a.get("end_reason")), a.get("end_reason") + ": " + a.get("error"));
+        Assert.assertTrue(((String) a.get("digest")).matches("[0-9a-f]{64}"), String.valueOf(a.get("digest")));
+        Assert.assertEquals(tallies(a).size(), 2, String.valueOf(tallies(a)));
+        Assert.assertTrue((Long) tallies(a).get(0).get("rollouts") + (Long) tallies(a).get(1).get("rollouts") > 0L,
+                "the seats searched, so the repeat covers their rollouts: " + tallies(a));
+        a.remove("ms");
+        b.remove("ms");
+        Assert.assertEquals(b, a);
     }
 
     /**

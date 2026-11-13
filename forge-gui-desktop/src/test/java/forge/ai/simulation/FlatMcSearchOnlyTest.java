@@ -35,8 +35,9 @@ import forge.util.SimScope;
  * the zero-rollout seat (MTG_DeckMaker's tools/combo-ai/flat-mc/SPEC.md, sections 4.2 and 4.7). ComboGuard and the fuel
  * order can each move line 0 away from the default seat's own play, so the mark turns both off; the main-phase search
  * forbids the hold while the loop driver has handed the decision to the walk, where a pass reads as the walk choosing
- * nothing; and a zero-rollout seat takes line 0 where the picker would roll out. Private controller methods are reached
- * through {@link Reflect}, and every board runs with the AI deadline off.
+ * nothing; and a zero-rollout seat takes line 0 where the picker would roll out. A full seat, the default word's, keeps
+ * the guard and the fuel order, as plain Flat MC does (SHIP.md beside that spec, design 2). Private controller methods
+ * are reached through {@link Reflect}, and every board runs with the AI deadline off.
  */
 public class FlatMcSearchOnlyTest extends FlatMcTestBase {
     /** FlatMonteCarloGraveyardLandsTest's dredge library: the deck plan reads DREDGE from it. */
@@ -65,6 +66,14 @@ public class FlatMcSearchOnlyTest extends FlatMcTestBase {
         assertNull(Reflect.call(brain(), "guardProblem", opt, null, true));
     }
 
+    /** A full seat is no search-only seat: its guard still keeps Opt while a win looks near. */
+    @Test
+    public void theGuardStandsForAFullSeat() {
+        final SpellAbility opt = put("Opt", ai, ZoneType.Hand).getSpellAbilities().get(0);
+        brain().setFlatMcSeat(FlatMcSeat.parse("default"));
+        assertEquals(Reflect.call(brain(), "guardProblem", opt, null, true), "cantrip-saved");
+    }
+
     /**
      * A dredge deck with a dredger in hand puts its fuel first, Faithless Looting ahead of Grizzly Bears; a search-only
      * seat gets its approved plays back as they came, the same list.
@@ -82,6 +91,21 @@ public class FlatMcSearchOnlyTest extends FlatMcTestBase {
                 "Faithless Looting");
         brain().setFlatMcSeat(FlatMcSeat.parse("flat_mc"));
         assertSame(Reflect.call(brain(), "fuelPlaysFirst", approved, new ArrayList<>()), approved);
+    }
+
+    /** A full seat orders a dredge deck's plays as plain Flat MC does: Faithless Looting ahead of Grizzly Bears. */
+    @Test
+    public void aFullSeatPutsItsFuelFirst() {
+        for (int i = 0; i < DREDGE_DECK.length; i += 2) {
+            put((String) DREDGE_DECK[i], (Integer) DREDGE_DECK[i + 1], ai, ZoneType.Library);
+        }
+        put("Stinkweed Imp", ai, ZoneType.Hand);
+        final List<SpellAbility> approved = new ArrayList<>();
+        approved.add(spell(put("Grizzly Bears", ai, ZoneType.Hand)));
+        approved.add(spell(put("Faithless Looting", ai, ZoneType.Hand)));
+        brain().setFlatMcSeat(FlatMcSeat.parse("default"));
+        assertEquals(firstName(Reflect.call(brain(), "fuelPlaysFirst", approved, new ArrayList<>())),
+                "Faithless Looting");
     }
 
     /**

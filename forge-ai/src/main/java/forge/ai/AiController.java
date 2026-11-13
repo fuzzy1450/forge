@@ -144,13 +144,14 @@ public class AiController {
     /** Per player switch for comparisons and tests: null follows the game-wide setting. */
     private Boolean flatMcOverride;
     private Boolean flatMcMaxOverride;
-    /** The seat word of a flat_mc seat in a game the sim runner plays, null for every other seat. Set, it is the
-     *  search-only mark: {@link #flatMonteCarloActive()} answers false, so the behaviours that read it stay off, while
-     *  the searches read the override. Inside the search, ComboGuard and the fuel order are off as well
-     *  ({@link #guardProblem}, {@link #fuelPlaysFirst}), since either can move line 0 away from the default seat's own
-     *  play, and a zero-rollout seat takes line 0 where the picker would roll out
-     *  ({@link #refineWithFlatMonteCarlo}). Under a bound scope the seat's work is capped and counted in its game's
-     *  tally ({@link FlatMcGame}; {@link #flatMonteCarloConfig}, {@link #mainPhaseConfig}). */
+    /** The Flat MC seat a seat's word names in a game the sim runner plays ({@link FlatMcSeat}), null for every other
+     *  seat. Under a bound scope every such seat's work is capped and counted in its game's tally ({@link FlatMcGame};
+     *  {@link #flatMonteCarloConfig}, {@link #mainPhaseConfig}). A full seat, the default word's, is otherwise plain
+     *  Flat MC. Any other is a flat_mc test word's seat, and then it is also the search-only mark
+     *  ({@link #searchOnly()}): {@link #flatMonteCarloActive()} answers false, so the behaviours that read it stay off,
+     *  while the searches read the override. Inside the search, ComboGuard and the fuel order are off as well
+     *  ({@link #guardProblem}, {@link #fuelPlaysFirst}), since either can move line 0 away from the heuristics' own
+     *  play, and a zero-rollout seat takes line 0 where the picker would roll out ({@link #refineWithFlatMonteCarlo}). */
     private FlatMcSeat flatMcSeat;
     /** Why the last {@link #flatMonteCarloConfig()} returned null, null when it returned a configuration. */
     private FlatMcGame.NullCause flatMcNullCause;
@@ -252,10 +253,17 @@ public class AiController {
 
     private StormSolver stormSolver;
 
-    /** Whether Flat Monte Carlo is switched on for this player. Never for a flat_mc seat: see {@link #flatMcSeat}. */
+    /** Whether Flat Monte Carlo is switched on for this player. Never for a flat_mc test word's seat, the search-only
+     *  mark; a full seat, the default word's, is plain Flat MC here: see {@link #flatMcSeat}. */
     public boolean flatMonteCarloActive() {
-        return flatMcSeat == null && (flatMcOverride != null ? flatMcOverride : game.getAIFlatMonteCarlo())
+        return !searchOnly() && (flatMcOverride != null ? flatMcOverride : game.getAIFlatMonteCarlo())
                 && !flatMcOff() && simMode == null && getBoolProperty(AiProps.FLAT_MC_ENABLED);
+    }
+
+    /** Whether this seat is a flat_mc test word's seat, the search-only mark (see {@link #flatMcSeat}): false for a
+     *  full seat, the default word's, and for a seat with no Flat MC seat. */
+    private boolean searchOnly() {
+        return flatMcSeat != null && !flatMcSeat.full();
     }
 
     public Combat getPredictedCombat() {
@@ -2980,10 +2988,11 @@ public class AiController {
 
     /**
      * The search's configuration for this decision, or null when the heuristics decide alone, with the reason in
-     * {@link #flatMcNullCause}: no decision budget, the turn's budget spent, or, for a flat_mc seat under a bound scope,
-     * its rollouts at its word's cap for the game (spec 4.4), which holds for the rest of the game. A flat_mc seat's
-     * configuration carries its word's resolution cap, and its game's tally notes whether its deck reads as tutor
-     * storm. Land choice asks here as well as the main-phase search, so only {@link #mainPhaseConfig} counts a refusal.
+     * {@link #flatMcNullCause}: no decision budget, the turn's budget spent, or, for a Flat MC seat under a bound scope
+     * (a full seat as a search-only one), its rollouts at its word's cap for the game (spec 4.4), which holds for the
+     * rest of the game. A Flat MC seat's configuration carries its word's resolution cap, and its game's tally notes
+     * whether its deck reads as tutor storm. Land choice asks here as well as the main-phase search, so only
+     * {@link #mainPhaseConfig} counts a refusal.
      */
     private FlatMonteCarloPicker.Config flatMonteCarloConfig() {
         flatMcNullCause = null;
@@ -3029,7 +3038,7 @@ public class AiController {
      * {@link #flatMonteCarloConfig()} for the main-phase search, with the hold forbidden while the loop driver has
      * handed this decision to the walk at its pool's target (LoopDriver.handedToWalk), as land choice forbids it: a
      * hold returns nothing, which the driver hears as the walk choosing nothing (LoopDriver.afterStockWalk), so
-     * Thrasios digs or the go-off ends. For every searching seat. A flat_mc seat's refusal is counted here in its
+     * Thrasios digs or the go-off ends. For every searching seat. A Flat MC seat's refusal is counted here in its
      * game's tally, with its reason and the turn.
      */
     private FlatMonteCarloPicker.Config mainPhaseConfig() {
@@ -3048,8 +3057,8 @@ public class AiController {
         return cfg;
     }
 
-    /** This seat's game state when it is a flat_mc seat under a bound scope, where its work is capped and counted;
-     *  null for every other seat, and with no scope bound, as in the GUI. */
+    /** This seat's game state when it is a Flat MC seat (full or search-only) under a bound scope, where its work is
+     *  capped and counted; null for every other seat, and with no scope bound, as in the GUI. */
     private FlatMcGame flatMcGame() {
         return flatMcSeat == null ? null : FlatMcGame.current();
     }
@@ -3058,10 +3067,11 @@ public class AiController {
      * Plays that Flat Monte Carlo never spends a card on (see {@link forge.ai.simulation.ComboGuard}): bringing back
      * a legend that is already in play and working, a second Omniscience, Show and Tell with nothing worth putting in,
      * and a cantrip while the AI is confident to win this turn or the next. Returns the reason, or null for a fine
-     * play, which is every play of a flat_mc seat (see {@link #flatMcSeat}).
+     * play, which is every play of a flat_mc test word's seat, the search-only mark (see {@link #flatMcSeat}); a full
+     * seat is guarded as plain Flat MC is.
      */
     private String guardProblem(final SpellAbility sa, final GameEntity aim, final boolean saveCantrips) {
-        if (flatMcSeat != null) {
+        if (searchOnly()) {
             return null;
         }
         final ComboPlan plan = deckPlan(player).combos;
@@ -3093,9 +3103,9 @@ public class AiController {
             }
         }
         // Plays that waste a card are taken out before anything is compared, the heuristics' favourite included: the
-        // next play in line then stands for "what the heuristics would do". Nothing left means passing. A flat_mc seat
-        // has no guard, so it never asks whether a win is near.
-        final boolean saveCantrips = flatMcSeat == null && ComboGuard.winLikelySoon(player, deckPlan(player).combos);
+        // next play in line then stands for "what the heuristics would do". Nothing left means passing. A flat_mc test
+        // word's seat has no guard, so it never asks whether a win is near; a full seat asks, as plain Flat MC does.
+        final boolean saveCantrips = !searchOnly() && ComboGuard.winLikelySoon(player, deckPlan(player).combos);
         final List<SpellAbility> approved = new ArrayList<>(approvedIn.size());
         for (final SpellAbility sa : approvedIn) {
             final String problem = guardProblem(sa, approvedAim.get(sa), saveCantrips);
@@ -3252,12 +3262,13 @@ public class AiController {
         return flatMcOverride;
     }
 
-    /** Makes this player a flat_mc seat (null: none), which is also the search-only mark: see {@link #flatMcSeat}. */
+    /** Makes this player a Flat MC seat (null: none): a full seat, the default word's, or a flat_mc test word's seat,
+     *  which is also the search-only mark: see {@link #flatMcSeat}. */
     public void setFlatMcSeat(final FlatMcSeat seat) {
         flatMcSeat = seat;
     }
 
-    /** This player's flat_mc seat, null for every other seat. */
+    /** This player's Flat MC seat, null for every other seat. */
     public FlatMcSeat getFlatMcSeat() {
         return flatMcSeat;
     }
@@ -3345,11 +3356,12 @@ public class AiController {
      * For a deck built around the graveyard (Living End and its kin, reanimator) the plays that put cards there on
      * purpose (cycling, discard and looting) come first: they are what the combo needs before anything else, and a
      * creature-first ordering would bury them. Fuel plays the heuristics turned down are brought in from the extras.
-     * Other decks, and decks whose payoff is gone, get the list back unchanged, and so does a flat_mc seat, whose
-     * line 0 stays the default seat's own play (see {@link #flatMcSeat}).
+     * Other decks, and decks whose payoff is gone, get the list back unchanged, and so does a flat_mc test word's
+     * seat, the search-only mark, whose line 0 stays the heuristics' own play (see {@link #flatMcSeat}); a full seat
+     * orders its fuel as plain Flat MC does.
      */
     private List<SpellAbility> fuelPlaysFirst(final List<SpellAbility> approved, final List<SpellAbility> extras) {
-        if (flatMcSeat != null) {
+        if (searchOnly()) {
             return approved;
         }
         final ComboPlan combos = deckPlan(player).combos;
@@ -3608,8 +3620,9 @@ public class AiController {
         final boolean darkDepths = combos.has(ComboPlan.Kind.DARK_DEPTHS);
         // Upstream's tutor storm holds below keep a deck's fast mana, its cheap fodder, Infernal Tutor and its take-life
         // finisher for StormSolver, their only release, which runs under Flat Monte Carlo alone (and which upstream ships
-        // switched on). With Flat MC off, every game of the sim harness (GameRunner pins it), nothing could release them
-        // and those cards would simply be dead: the walk treats them as stock there, and the Storm block falls to the
+        // switched on, as the sim harness does for every default seat). With Flat MC off (in a harness game, a seat whose
+        // word is not default: a flat_mc test seat, a hybrid_sim or a full_sim one), nothing could release them and
+        // those cards would simply be dead: the walk treats them as stock there, and the Storm block falls to the
         // stock minimum storm count. A rollout's game has the flag off by design (GameCopier) and holds as the game it
         // copies does. False at once for a deck that reads as no tutor storm; draws nothing.
         final boolean stormHolds = combos.has(ComboPlan.Kind.TUTOR_STORM)

@@ -74,11 +74,12 @@ public class GameRunner {
     /** {@code violations}: the unbound accesses strict mode refused anywhere in this process while the game played
      *  ({@link SimScope#VIOLATIONS}), 0 normally. A refusal happens on a thread bound to no game, so a game that played
      *  beside another can carry that one's count too. Never part of the digest.
-     *  <p>{@code flatMc}: for a finished game whose seats name a flat_mc word, one {@link FlatMcGame.Tally#toRecord()}
-     *  per searching seat in seat order, a seat that never rolled out included (MTG_DeckMaker's
-     *  tools/combo-ai/flat-mc/SPEC.md, section 4.7); null for any other game, and for a Timeout or an unfinished game,
-     *  which keeps its literal digest because nothing live is read. A finished game in which a rollout ran also ends
-     *  its digest lines with the game's search lines (section 4.6), so its digest covers them. */
+     *  <p>{@code flatMc}: for a finished game in which some seat's word names a Flat MC seat (the default word's full
+     *  seat or a flat_mc test word's: MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md, design 2), one
+     *  {@link FlatMcGame.Tally#toRecord()} per searching seat in seat order, a seat that never rolled out included (its
+     *  SPEC.md, section 4.7); null for any other game, and for a Timeout or an unfinished game, which keeps its literal
+     *  digest because nothing live is read. A finished game in which a rollout ran also ends its digest lines with the
+     *  game's search lines (section 4.6), so its digest covers them. */
     public record GameResult(long seed, Integer winnerSeat, String endReason, int turns, Integer firstSeat,
                              boolean timedOut, String error, long ms, String digest, List<String> digestLines,
                              long violations, List<Map<String, Object>> flatMc) {
@@ -409,15 +410,16 @@ public class GameRunner {
         }
     }
 
-    /** Switches Flat Monte Carlo on for each seat whose AI word {@link FlatMcSeat#parse} accepts (MTG_DeckMaker's
-     *  tools/combo-ai/flat-mc/SPEC.md, section 4.1): the override on the controller of the registered player
-     *  {@code "Seat" + i}, as upstream's benchmark sets it, and the seat itself, which carries the caps and is the
-     *  search-only mark. Every other seat and the game-wide flags stay as they are. It runs on the game thread once the
-     *  game exists, because {@link #aiOptions} judges the words on the caller's thread before there is a controller.
-     *  Each such seat is also registered in the game's state ({@link FlatMcGame#registerSeat}), the zero-rollout and
-     *  no-budget seats too, so its tally carries the seat and the game's search lines list it (sections 4.6 and 4.7).
-     *  Returns the registered players' ids in seat order, by which the game's result reads their tallies; empty when no
-     *  seat names a flat_mc word. */
+    /** Switches Flat Monte Carlo on for each seat whose AI word {@link FlatMcSeat#parse} accepts: every default seat,
+     *  a full seat (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md, design 2), and every flat_mc test word's seat (its
+     *  SPEC.md, section 4.1). That is the override on the controller of the registered player {@code "Seat" + i}, as
+     *  upstream's benchmark sets it, and the seat itself, which carries the caps and, for a test word, is the
+     *  search-only mark. Every other seat (hybrid_sim, full_sim) and the game-wide flags stay as they are. It runs on
+     *  the game thread once the game exists, because {@link #aiOptions} judges the words on the caller's thread before
+     *  there is a controller. Each such seat is also registered in the game's state ({@link FlatMcGame#registerSeat}),
+     *  the zero-rollout and no-budget seats too, so its tally carries the seat and the game's search lines list it
+     *  (sections 4.6 and 4.7). Returns the registered players' ids in seat order, by which the game's result reads
+     *  their tallies; empty when no seat's word names a Flat MC seat. */
     static List<Integer> applyFlatMcSeats(Game g, List<SeatSpec> seats) {
         List<Integer> searching = new ArrayList<>();
         for (int i = 0; i < seats.size(); i++) {
@@ -434,7 +436,7 @@ public class GameRunner {
                     break;
                 }
             }
-            if (player == null) {                                   // never a flat_mc word played as a default seat
+            if (player == null) {                                   // never a Flat MC word played without its seat
                 throw new IllegalStateException("no registered player " + name + " for the ai word " + word);
             }
             AiController ai = ((PlayerControllerAi) player.getController()).getAi();
@@ -446,11 +448,12 @@ public class GameRunner {
         return List.copyOf(searching);
     }
 
-    /** The wall-clock line of a game whose seats name a flat_mc word (MTG_DeckMaker's tools/combo-ai/flat-mc/SPEC.md,
-     *  section 4.7), for its stderr; null for any other game. It names the seed and each searching seat with its
-     *  profile, which is what tells a batch's games apart (both games of a deal share a seed), then the game's slowest
-     *  rollout in whole milliseconds and its rollouts over 5 s: the two figures read from the machine's clock, which
-     *  reach nothing else. Both are 0 when {@code st} is null, for a game that ended before anything made its state. */
+    /** The wall-clock line of a game in which some seat's word names a Flat MC seat, every default game among them
+     *  (MTG_DeckMaker's tools/combo-ai/flat-mc/SPEC.md, section 4.7; SHIP.md, design 2), for its stderr; null for any
+     *  other game. It names the seed and each searching seat with its profile, which is what tells a batch's games apart
+     *  (both games of a deal share a seed), then the game's slowest rollout in whole milliseconds and its rollouts over
+     *  5 s: the two figures read from the machine's clock, which reach nothing else. Both are 0 when {@code st} is null,
+     *  for a game that ended before anything made its state. */
     static String flatMcWallLine(GameSpec spec, FlatMcGame st) {
         List<String> search = new ArrayList<>();
         for (int i = 0; i < spec.seats().size(); i++) {
@@ -568,13 +571,16 @@ public class GameRunner {
                     // drawn from the seeded stream, so the game would follow the clock instead of its seed.
                     g.AI_TIMEOUT = Integer.MAX_VALUE;
                     g.AI_CAN_USE_TIMEOUT = false;
-                    // No Flat Monte Carlo search either, for the same reason: its budgets (FLAT_MC_DECISION_BUDGET_MS,
-                    // FLAT_MC_TURN_BUDGET_MS) are wall-clock. Off already (Game's default; only the GUI's HostedMatch
-                    // and the SimulateMatch CLI switch it on), and pinned here so no later default can turn it on.
+                    // The game-wide Flat Monte Carlo flags stay off: off already (Game's default; only the GUI's
+                    // HostedMatch and the SimulateMatch CLI switch them on), and pinned here so no later default can
+                    // turn them on. The search is switched on seat by seat instead, below: every default seat plays
+                    // full Flat MC (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md, design 2), and under this scope its
+                    // budgets (FLAT_MC_DECISION_BUDGET_MS, FLAT_MC_TURN_BUDGET_MS) count rollouts on the game's counted
+                    // clock (FlatMcGame), not the wall clock, so the game still follows its seed.
                     g.AI_FLAT_MONTE_CARLO = false;
                     g.AI_FLAT_MONTE_CARLO_MAX = false;
                     g.AI_FLAT_MONTE_CARLO_LITE = false;
-                    searching = applyFlatMcSeats(g, spec.seats());    // per seat: only a seat whose word is flat_mc
+                    searching = applyFlatMcSeats(g, spec.seats());    // per seat: each word naming a Flat MC seat
                     g.subscribeToEvents(stats);
                     game = g;
                     observer.accept(g);                               // the records' subscriber attaches here (harness-in-engine spec 3.2)
@@ -658,7 +664,7 @@ public class GameRunner {
         }
 
         /** One {@link FlatMcGame.Tally#toRecord()} per searching seat in seat order, from the game's state; null for a
-         *  game whose seats name no flat_mc word. */
+         *  game in which no seat's word names a Flat MC seat. */
         private List<Map<String, Object>> tallies(FlatMcGame st) {
             if (searching.isEmpty()) {
                 return null;

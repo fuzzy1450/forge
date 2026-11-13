@@ -382,8 +382,9 @@ public class DrawAi extends SpellAbilityAi {
     /**
      * Whether upstream's Doomsday draw-through is asked at all: only where Flat MC runs. Doomsday is AI:RemoveDeck:All,
      * which no row of this fork readmits, and its follow-through casts (DoomsdayPile.sureDraw, ConsultationWin) are
-     * Flat MC's, so with Flat MC off (every sim harness game) the draw-through would only deck a short library while a
-     * winner waits in hand (interplay review F2 of the 2026-11-07 top-up; C1's class, as the tutor storm holds).
+     * Flat MC's, so with Flat MC off (in a sim harness game, a seat whose word is not default) the draw-through would
+     * only deck a short library while a winner waits in hand (interplay review F2 of the 2026-11-07 top-up; C1's class,
+     * as the tutor storm holds).
      */
     private static boolean pileDrawOn(final Player ai) {
         return ai.getController() instanceof PlayerControllerAi pc && pc.getAi().flatMonteCarloActive();
