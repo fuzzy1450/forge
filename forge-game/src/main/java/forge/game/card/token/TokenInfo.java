@@ -156,15 +156,26 @@ public class TokenInfo {
         return makeOneToken(controller, controller.getGame().nextCardId());
     }
     public Card makeOneToken(final Player controller, int id) {
+        return makeOneToken(controller, id, true);
+    }
+
+    /**
+     * The token, without its keywords when {@code withKeywords} is false: for a caller that copies them over itself
+     * with the SVars they name (GameCopier, from the token it copies), since a keyword naming an SVar, as an
+     * ETBReplacement names its ability, cannot be built on a card that has no SVars yet.
+     */
+    public Card makeOneToken(final Player controller, int id, final boolean withKeywords) {
         final Game game = controller.getGame();
         final Card c = toCard(game, id);
 
         c.setOwner(controller);
         c.setGamePieceType(GamePieceType.TOKEN);
         CardFactoryUtil.setupKeywordedAbilities(c);
-        // add them later to prevent setupKeywords from adding them multiple times
-        for (final String kw : intrinsicKeywords) {
-            c.addIntrinsicKeyword(kw);
+        if (withKeywords) {
+            // add them later to prevent setupKeywords from adding them multiple times
+            for (final String kw : intrinsicKeywords) {
+                c.addIntrinsicKeyword(kw);
+            }
         }
         return c;
     }

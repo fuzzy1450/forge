@@ -418,7 +418,10 @@ public class GameCopier {
     private static final boolean USE_FROM_PAPER_CARD = true;
     private Card createCardCopy(Game newGame, Player newOwner, Card c, Player aiPlayer) {
         if (c.isToken() && !c.isImmutable()) {
-            Card result = new TokenInfo(c).makeOneToken(newOwner, c.getId());
+            // without its keywords: copyCopiableCharacteristics copies them over with the SVars they name, while a
+            // keyword built on the bare token could not find the ability an ETBReplacement names, and a token copy of
+            // Thief of Blood, Titan of Littjara or Master Biomancer failed the whole copy ("no API")
+            Card result = new TokenInfo(c).makeOneToken(newOwner, c.getId(), false);
             new CardCopyService(c).copyCopiableCharacteristics(result, null, null);
             // a token copy of a transforming (or otherwise multi-faced) permanent has its other faces too, and may be
             // showing one of them: without them it cannot be put back in the state it is in
