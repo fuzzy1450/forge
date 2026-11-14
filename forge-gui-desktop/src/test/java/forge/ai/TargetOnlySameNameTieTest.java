@@ -12,11 +12,12 @@ import forge.game.zone.ZoneType;
 /**
  * Declaration in Stone's choice of target (AILogic SameName, TargetOnlyAi.sameName) scores each opponent's best
  * creature name and takes the best with Collections.max, which keeps the first entry on a tie. Upstream keyed those
- * scores by Player in a HashMap, and Player does not override hashCode, so between two opponents with equally good
- * creatures the one targeted followed the JVM's identity hashes: a pod at one seed played differently by launch and by
- * machine. The fork had made the same scan, PumpAi.doSameNameLogic, break ties in turn order with a LinkedHashMap
- * (0f39ee161f8); upstream's merge moved it to TargetOnlyAi with a HashMap again. Here twenty fresh three-player games,
- * each opponent with one Grizzly Bears: the AI targets its first opponent in turn order in every one.
+ * scores by Player in a HashMap, deterministically: a Player's hashCode is its id (GameEntity.hashCode), so between two
+ * opponents with equally good creatures the one targeted was the one with the lowest player id, in every run. The fork
+ * breaks such ties in turn order: its same scan, PumpAi.doSameNameLogic, had a LinkedHashMap for that since
+ * 0f39ee161f8, and upstream's merge moved the scan to TargetOnlyAi with a HashMap again. Here twenty fresh three-player
+ * games, each opponent with one Grizzly Bears: the AI targets its first opponent in turn order in every one (the
+ * HashMap's choice, the lowest id, was the second).
  */
 public class TargetOnlySameNameTieTest extends AITest {
 

@@ -321,9 +321,11 @@ public class TargetOnlyAi extends SpellAbilityAi {
         if (list.isEmpty()) {
             return false;
         }
-        // LinkedHashMap: Collections.max below keeps the first entry on a value tie, and Player doesn't override
-        // hashCode, so a HashMap broke a tie by each JVM's identity hashes. Insertion order (getOpponents(), turn
-        // order) is the same in every run (the fork's PumpAi.doSameNameLogic, 0f39ee161f8, before the move here).
+        // LinkedHashMap: Collections.max below keeps the first entry on a value tie, so the map's order breaks a tie.
+        // Upstream's HashMap broke it deterministically too, by the lowest player id: a Player's hashCode is its id
+        // (GameEntity.hashCode), and a HashMap holds ids this small in id order. The LinkedHashMap breaks it in turn
+        // order (getOpponents(), its insertion order), the fork's convention since 0f39ee161f8
+        // (PumpAi.doSameNameLogic, before the move here).
         final Map<Player, Map.Entry<String, Integer>> data = Maps.newLinkedHashMap();
         for (final Player opp : ai.getOpponents()) {
             CardCollection oppList = CardLists.filterControlledBy(list, opp);
