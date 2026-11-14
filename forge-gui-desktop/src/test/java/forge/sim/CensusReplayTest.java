@@ -17,7 +17,7 @@ import forge.util.SimScope;
 
 /**
  * Games that the Flat MC ship engine's census ended as an Error on 2.0.15+23fd6633b91 (MTG_DeckMaker's
- * tools/combo-ai/flat-mc/SHIP-PLAN.md, Tasks 7a and 7c; the census is H:/mtg-combo-lanes/flatmc-ship/diag/census.md), replayed
+ * tools/combo-ai/flat-mc/SHIP-PLAN.md, Tasks 7a and 7c; the census is Task 7's, Step 2: 850 decks, two games each), replayed
  * as the census played them: a one-game job of the game's census job file, at the game's seed, with its two seats'
  * deck lists, Default profiles and default AI words and the census's 1200-s limit, read by JobFile and played by
  * JobRunner on a one-slot GameRunner. Each deck list is the job's deck_file, copied byte for byte into this class's

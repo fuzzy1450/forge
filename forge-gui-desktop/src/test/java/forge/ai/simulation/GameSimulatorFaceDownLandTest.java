@@ -22,11 +22,11 @@ import forge.util.SimScope;
 
 /**
  * A land that the seat's Petty Larceny exiled face down, which the seat may play for as long as it stays exiled, as a
- * rollout plays it (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP-PLAN.md, Task 7a: 23 of the 25 Errors of the census on
- * 2.0.15+23fd6633b91, H:/mtg-combo-lanes/flatmc-ship/diag/drake.md). The real land ability's canPlay() turns an LKI
- * copy of the face-down card face up (LandAbility.getAlternateHost), which takes the real game's next timestamp, so a
- * rollout that asked it wrote the real game, and the real-game check ended the game as an Error. The simulator asks
- * and plays the copy's own land ability instead.
+ * rollout plays it (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP-PLAN.md, Task 7a: 23 of the 25 Errors of Task 7's
+ * census on 2.0.15+23fd6633b91, each a game that seats a Nathan Drake, Treasure Hunter list). The real land ability's
+ * canPlay() turns an LKI copy of the face-down card face up (LandAbility.getAlternateHost), which takes the real game's
+ * next timestamp, so a rollout that asked it wrote the real game, and the real-game check ended the game as an Error.
+ * The simulator asks and plays the copy's own land ability instead.
  */
 public class GameSimulatorFaceDownLandTest extends FlatMcTestBase {
     /** The opponent's Exotic Orchard, face down in exile where the seat's Petty Larceny put it. */
