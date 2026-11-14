@@ -340,8 +340,9 @@ public final class DeckPlan {
         if (fromCombo != null) {
             return fromCombo;
         }
-        // a catalogued combo (ai-combos.txt) that is one card short: fetch that card
-        final List<Card> pieces = ComboCatalog.missingPieces(ai, pool);
+        // a catalogued combo (ai-combos.txt) that is one card short: fetch that card, unless the fork's combo table
+        // holds that combo as a line, whose fetch (ComboFetch, ahead of this plan) has already decided it
+        final List<Card> pieces = ComboCatalog.missingPieces(ai, pool, forge.ai.combo.CatalogOverlap::held);
         if (pieces.size() >= n) {
             return new CardCollection(pieces.subList(0, n));
         }
