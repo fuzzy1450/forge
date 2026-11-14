@@ -45,6 +45,17 @@ import forge.game.zone.ZoneType;
  * decision is already allowed to choose among (the search's list or library, the dig's or the Vault's cards in view,
  * the library Consultation reveals), and the tracker reads our library as contents only. Consultation's tutor intent
  * and the known tops, the things carried from a decision to a later one, live on the AI's own tracker.
+ *
+ * <p>A refusal, a hook's null where a search, a dig or Intuition's pile could have taken a line's piece (danger with
+ * no win in time, a line denied at its window, a hoser such as Rule of Law or Platinum Angel, a search another player
+ * controls), leaves the decision to the stock code, which in a game asks the deck plan next (DeckPlan.tutorPicks:
+ * ChangeZoneAi's search to our hand or the top of our library, DigAi's dig to our hand and Intuition's pile), and the
+ * deck plan fills it with its catalogue step (upstream #12858: the piece of a combo of ai-combos.txt one card short,
+ * so with Thassa's Oracle in hand Demonic Consultation, the line's own piece) and, for one card in a Commander game,
+ * its key-card step (a commander, or a piece of a pair of the Commander lists the deck holds). That is Evan's ruling
+ * of 2026-11-14 ("go with a - upstream decides everywhere"): a refusal is no veto on upstream's pick. Whenever this
+ * program fetches it still decides first (the merge's rule R5): its pick is the one taken, and the deck plan is not
+ * asked.
  */
 public final class ComboFetch {
     /** Where a fetch puts its card, and so which pieces it may take: our hand or the top of our library any piece,
@@ -72,9 +83,11 @@ public final class ComboFetch {
 
     /**
      * The library search's combo pick (ChangeZoneAi.chooseCardToHiddenOriginChangeZone, ahead of KeyCards), or null
-     * for the stock pick: our own search ({@code player} is the decider), never Gifts Ungiven's or Intuition's piles
-     * (their own rules), to our hand, the top of our library ({@code LibraryPosition$ 0}) or, for a piece that may
-     * start there, the battlefield. The pick is the missing piece of the first {@link #fetchable} line, by rank, that
+     * for the stock pick, which for a search to our hand or the top of our library asks the deck plan after the deck
+     * file's KeyCards, and its catalogue and key-card steps fill a refusal (Evan's ruling, 2026-11-14: the class
+     * comment): our own search ({@code player} is the decider), never Gifts Ungiven's or Intuition's piles (their own
+     * rules), to our hand, the top of our library ({@code LibraryPosition$ 0}) or, for a piece that may start there,
+     * the battlefield. The pick is the missing piece of the first {@link #fetchable} line, by rank, that
      * {@code fetchList} holds a card of ours named for: the first such card in its order. A pick to the top of our
      * library is remembered as a known top ({@link ComboTracker#knownTops}).
      */
@@ -95,11 +108,12 @@ public final class ComboFetch {
     }
 
     /**
-     * The dig's combo pick (DigAi.chooseSingleCard, after Cream of the Crop's), or null for the stock pick: a dig of
-     * our own library ({@code relatedPlayer} null or us), whose chosen card goes to our hand (DigEffect's default
-     * {@code DestinationZone}), the top of our library ({@code LibraryPosition$ 0}) or, for a piece that may start
-     * there, the battlefield; ranked as {@link #searchPick} is, among {@code valid}, and remembered as a known top as
-     * it is.
+     * The dig's combo pick (DigAi.chooseSingleCard, after Cream of the Crop's), or null for the stock pick, which for
+     * our own dig of our library to our hand with no AILogic asks the deck plan, and its catalogue and key-card steps
+     * fill a refusal (Evan's ruling, 2026-11-14: the class comment): a dig of our own library ({@code relatedPlayer}
+     * null or us), whose chosen card goes to our hand (DigEffect's default {@code DestinationZone}), the top of our
+     * library ({@code LibraryPosition$ 0}) or, for a piece that may start there, the battlefield; ranked as
+     * {@link #searchPick} is, among {@code valid}, and remembered as a known top as it is.
      */
     public static Card digPick(final Player ai, final SpellAbility sa, final Iterable<Card> valid,
             final Player relatedPlayer) {
@@ -284,9 +298,11 @@ public final class ComboFetch {
     }
 
     /**
-     * Intuition's pile (Intuition.considerMultiple, ahead of its Trix branch), or null for the stock pile. With three
-     * or more completers, the first three's library cards: whichever the opponent hands us completes a line. With
-     * fewer, when the first is a creature, that creature and two fillers: the opponent's stock pick prefers a creature
+     * Intuition's pile (Intuition.considerMultiple, ahead of its Trix branch), or null for the stock pile, which asks
+     * the deck plan first for three cards (DeckPlan.tutorPicks: its combo plan's, then its catalogue step's when three
+     * catalogued pieces are missing; Evan's ruling, 2026-11-14: the class comment). With three or more completers, the
+     * first three's library cards: whichever the opponent hands us completes a line. With fewer, when the first is a
+     * creature, that creature and two fillers: the opponent's stock pick prefers a creature
      * (ChangeZoneAi.chooseCardToHiddenOriginChangeZone, "Prefer to pull a creature"), so it hands over the piece and
      * the two fillers go to the graveyard. The fillers are the two cheapest ({@code getCMC}, ties by name) of our
      * library's noncreature, nonland cards that are no piece of the deck's lines and no mana source
@@ -568,7 +584,9 @@ public final class ComboFetch {
     // (nextTurn) our next turn's Main 1, read from its winner's own window there as ComboExecute opens it (follow-up
     // final review, round 1: the mana alone let a Laboratory Maniac line with no draw to follow, a Doctor Doom cast
     // summoning sick and a Fblthp past combat take the fetch from the stock pick under danger, and the AI stopped
-    // playing to live; follow-up 2, G4, the same windows next turn):
+    // playing to live; follow-up 2, G4, the same windows next turn; since Evan's ruling of 2026-11-14 a refusal is no
+    // veto on the deck plan's pick, whose catalogue and key-card steps may fetch the piece all the same in a game, the
+    // class comment, so this rule decides whether this program fetches it, first, R5, not whether it is fetched):
     // - Thassa's Oracle: its go-off (ComboExecute.goOffFirst, then the emptier at Oracle's trigger) needs the mana
     //   alone;
     // - Laboratory Maniac and Jace win off a draw of ours after the emptier, and in that main phase only a spell of our
