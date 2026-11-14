@@ -33373,9 +33373,16 @@ public class SpecialCardAi {
         }
 
         // B's cheap pre-check: a damage or -X/-X item that +2/+2 can answer (amendment 5: never a
-        // deathtouch source, never a divided item with more than one target)
+        // deathtouch source, never a divided item with more than one target). The API is the item's
+        // first part that is not TargetOnly: upstream's #12858 moved the root of a bite (Ram Through
+        // and the other PowerDmg scripts) from Pump to TargetOnly, a part that only chooses the creature
+        // dealing the damage, and the damage is the part after it.
         private static boolean threatens(final SpellAbility top) {
-            final ApiType api = top.getApi();
+            SpellAbility part = top;
+            while (part != null && part.getApi() == ApiType.TargetOnly) {
+                part = part.getSubAbility();
+            }
+            final ApiType api = part == null ? null : part.getApi();
             if (api != ApiType.DealDamage && api != ApiType.DamageAll && api != ApiType.Pump && api != ApiType.PumpAll) {
                 return false;
             }
