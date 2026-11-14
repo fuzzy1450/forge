@@ -97,9 +97,10 @@ public class ComputerUtilCost {
         final AiCostDecision decision = new AiCostDecision(sa.getActivatingPlayer(), sa, false);
         for (final CostPart part : cost.getCostParts()) {
             if (part instanceof CostRemoveCounter remCounter) {
+                // null: counters of any kind (SubCounter<X/Any/...>, Moxite Refinery's), neither +1/+1 nor loyalty
                 final CounterType type = remCounter.counter;
                 if (!part.payCostFromSource()) {
-                    if (type.is(CounterEnumType.P1P1)) {
+                    if (type != null && type.is(CounterEnumType.P1P1)) {
                         return false;
                     }
                     continue;
@@ -111,7 +112,7 @@ public class ComputerUtilCost {
                 }
 
                 // ignore Loyality abilities with Zero as Cost
-                if (!type.is(CounterEnumType.LOYALTY)) {
+                if (type == null || !type.is(CounterEnumType.LOYALTY)) {
                     PaymentDecision pay = decision.visit(remCounter);
                     if (pay == null || pay.counterTable.totalValues() <= 0) {
                         return false;
@@ -119,7 +120,7 @@ public class ComputerUtilCost {
                 }
 
                 //don't kill the creature
-                if (type.is(CounterEnumType.P1P1) && source.getLethalDamage() <= 1
+                if (type != null && type.is(CounterEnumType.P1P1) && source.getLethalDamage() <= 1
                         && !source.hasKeyword(Keyword.UNDYING)) {
                     return false;
                 }
