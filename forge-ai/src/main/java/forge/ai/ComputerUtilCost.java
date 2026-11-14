@@ -103,6 +103,12 @@ public class ComputerUtilCost {
                     if (type != null && type.is(CounterEnumType.P1P1)) {
                         return false;
                     }
+                    // counters of any kind from another permanent: approved only as the AI's payer pays them, as a
+                    // CostRemoveAnyCounter is below. AiCostDecision.visit(CostRemoveCounter) removes none of a null
+                    // type (no AI chooses their kinds yet), so an approval here failed at payment and was rolled back
+                    if (type == null && decision.visit(remCounter) == null) {
+                        return false;
+                    }
                     continue;
                 }
 
