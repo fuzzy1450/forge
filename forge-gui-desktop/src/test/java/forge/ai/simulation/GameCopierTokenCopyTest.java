@@ -1,5 +1,9 @@
 package forge.ai.simulation;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -8,6 +12,8 @@ import forge.game.Game;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
+import forge.game.keyword.Keyword;
+import forge.game.keyword.KeywordInterface;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -102,5 +108,80 @@ public class GameCopierTokenCopyTest extends SimulationTest {
 
         Assert.assertFalse(OnePlaySafetyChecker.isAcceptable(ai, land),
                 "the copy of the game shows the land's 2 damage killing the seat");
+    }
+
+    /**
+     * Since the copier builds a token without its keywords, a token copy's own keywords come only from
+     * copyCopiableCharacteristics (CardState.copyFrom): a 1/1 white Spirit token with flying keeps its flying in the
+     * copy, and the static ability its flying is. A copy without it would let every rollout block the Spirit with a
+     * ground creature, silently.
+     */
+    @Test
+    public void aSpiritTokenWithFlyingIsCopiedWithItsFlying() {
+        final Game game = initAndCreateGame();
+        final Player p = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p);
+        final Card spirit = addToken("w_1_1_spirit_flying", p);
+        game.getAction().checkStateEffects(true);
+        Assert.assertEquals(namesOf(spirit.getCurrentState().getIntrinsicKeywords()), List.of("Flying"),
+                "the Spirit's own keyword is flying");
+
+        assertCopiedWithItsKeywords(game, spirit);
+    }
+
+    /**
+     * A token whose keywords an anthem grants: a 1/1 white Soldier token under Eldrazi Monument has flying and
+     * indestructible from it and no keyword of its own. TokenInfo reads every keyword a token shows, but the copy has
+     * these from the copied Monument's static ability, applied again in the copy once the original's effects are
+     * undone, and not as its own, so a rollout that removes the Monument takes them away.
+     */
+    @Test
+    public void aTokenWhoseKeywordsAnAnthemGrantsIsCopiedWithThem() {
+        final Game game = initAndCreateGame();
+        final Player p = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p);
+        addCard("Eldrazi Monument", p);
+        final Card soldier = addToken("w_1_1_soldier", p);
+        game.getAction().checkStateEffects(true);
+        Assert.assertTrue(soldier.getCurrentState().getIntrinsicKeywords().isEmpty(),
+                "the Soldier has no keyword of its own");
+        Assert.assertEquals(namesOf(soldier.getKeywords()), List.of("Flying", "Indestructible"),
+                "the Monument gives it flying and indestructible");
+
+        assertCopiedWithItsKeywords(game, soldier);
+    }
+
+    /**
+     * Copies the game and checks the token's copy: the token's keywords, flying among them, the same of them its own,
+     * and as many static abilities.
+     */
+    private void assertCopiedWithItsKeywords(final Game game, final Card token) {
+        Assert.assertTrue(token.isToken());
+        Assert.assertFalse(token.getStaticAbilities().isEmpty(), "the token's flying is a static ability");
+
+        final GameCopier copier = new GameCopier(game);
+        final Game copy = copier.makeCopy();
+
+        final Card copied = copier.find(token);
+        Assert.assertNotSame(copied, token);
+        Assert.assertSame(copied.getGame(), copy);
+        Assert.assertTrue(copied.isToken(), "still a token");
+        Assert.assertEquals(namesOf(copied.getKeywords()), namesOf(token.getKeywords()),
+                "the copy has the token's keywords");
+        Assert.assertTrue(copied.hasKeyword(Keyword.FLYING), "flying among them");
+        Assert.assertEquals(namesOf(copied.getCurrentState().getIntrinsicKeywords()),
+                namesOf(token.getCurrentState().getIntrinsicKeywords()), "the same of them its own");
+        Assert.assertEquals(copied.getStaticAbilities().size(), token.getStaticAbilities().size(),
+                "and as many static abilities");
+    }
+
+    /** Each keyword's text, sorted: which keywords a card has, whatever order its keyword collection lists them in. */
+    private static List<String> namesOf(final Iterable<KeywordInterface> keywords) {
+        final List<String> names = new ArrayList<>();
+        for (final KeywordInterface k : keywords) {
+            names.add(k.getOriginal());
+        }
+        Collections.sort(names);
+        return names;
     }
 }
