@@ -29,13 +29,15 @@ import org.testng.annotations.Test;
 
 /**
  * The clock check (MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md, design 4, for its anti-goal: an engine whose games
- * differ by machine). Every seat of every harness game plays Flat MC, and one seed has to play one game on every
- * machine, beside other games or alone, as verify replays it, so nothing the AI decides may follow the machine's clock,
- * an unseeded random stream or the runtime. This test scans the AI's sources for such reads and fails on any that is
- * not on {@link #ALLOWED}, its short list of known reads that are inert in a harness game: an upstream merge that adds
- * one fails the build, naming its file, before an engine is built from it. A read that steers a harness game is not
- * added to the list: it goes through the counted clock ({@code FlatMcGame.nanoTime()}), the scope's random stream
- * ({@code MyRandom.getRandom()}) or behind a scope test, as the storm solver's and the picker's heap reads do.
+ * differ by machine). Every default seat of a harness game (every seat the farm deals) plays Flat MC, and one seed has
+ * to play one game on every machine, beside other games or alone, as verify replays it, so nothing the AI or the rules
+ * engine decides may follow the machine's clock, an unseeded random stream or the runtime. This test scans the AI's
+ * sources and forge-game's for such reads and fails on any that is not on {@link #ALLOWED} or {@link #GAME_ALLOWED},
+ * their short lists of known reads that are inert in a harness game: after an upstream merge that adds one, the fork's
+ * suite fails here, naming its file, before an engine is built from the merge (the engine build itself skips the
+ * tests). A read that steers a harness game is not added to a list: it goes through the counted clock
+ * ({@code FlatMcGame.nanoTime()}), the scope's random stream ({@code MyRandom.getRandom()}) or behind a scope test, as
+ * the storm solver's and the picker's heap reads do.
  */
 public class AiClockReadsTest {
     /** The AI's sources, seen from forge-gui-desktop, the directory its tests run in. */
@@ -59,10 +61,31 @@ public class AiClockReadsTest {
             // the storm solver's GUI path: under a scope it reads no clock and no heap (StormSolverScopeTest)
             "forge/ai/simulation/StormSolver.java", 5);
 
+    /** forge-game's sources, the rules engine every harness game runs, seen from forge-gui-desktop. */
+    private static final Path GAME_SOURCES = Path.of("..", "forge-game", "src", "main", "java");
+
+    /**
+     * Every file of forge-game's sources that reads, by its path under forge-game/src/main/java, with its number of
+     * reads, each inert in a harness game for the reason on the line above it, as {@link #ALLOWED} lists the AI's.
+     */
+    static final Map<String, Integer> GAME_ALLOWED = Map.of(
+            // a format file's date that does not parse is taken as today's: read where the formats load, for the
+            // GUI's format lists and deck legality, and no harness game asks a format for its date
+            "forge/game/GameFormat.java", 1,
+            // the match's start time, which only the log's "match duration" line reads, written once the game is over
+            "forge/game/GameLog.java", 1,
+            // that line itself: game-log text, written after the game's outcome, which nothing decides from
+            "forge/game/GameLogFormatter.java", 1,
+            // the heap budget of the undo history and the AI's rollback snapshot: checkpoint() runs only before a
+            // human seat's priority prompt, and a harness game seats none; markForRollback only when
+            // PlayerControllerAi.AI_ROLLBACK, a constant false
+            "forge/game/undo/UndoManager.java", 2);
+
     /**
      * Every spelling of a read is seen, once: each file of a scratch tree reads once in a spelling of its own (the
-     * plain call, fully qualified, spaced across lines, a method reference, a bare call under a static import of the
-     * member or of its class, a read after literals that look like comments), and one file reads three times.
+     * plain call, fully qualified, spaced across lines, with explicit type arguments, a method reference, a bare call
+     * under a static import of the member or of its class, a read after literals that look like comments), and one
+     * file reads three times.
      */
     @Test
     public void theScannerSeesEverySpelling() {
@@ -73,8 +96,30 @@ public class AiClockReadsTest {
         files.put("clock/LocalDateTimeNow.java",
                 "import java.time.LocalDateTime; class A { LocalDateTime t = LocalDateTime.now(); }");
         files.put("clock/LocalTimeNow.java", "import java.time.LocalTime; class A { LocalTime t = LocalTime.now(); }");
+        files.put("clock/LocalDateNow.java", "import java.time.LocalDate; class A { LocalDate t = LocalDate.now(); }");
+        files.put("clock/ZonedDateTimeNow.java",
+                "import java.time.ZonedDateTime; class A { ZonedDateTime t = ZonedDateTime.now(); }");
+        files.put("clock/OffsetDateTimeNow.java",
+                "import java.time.OffsetDateTime; class A { OffsetDateTime t = OffsetDateTime.now(); }");
+        files.put("clock/OffsetTimeNow.java", "import java.time.OffsetTime; class A { OffsetTime t = OffsetTime.now(); }");
+        files.put("clock/YearNow.java", "import java.time.Year; class A { Year t = Year.now(); }");
+        files.put("clock/YearMonthNow.java", "import java.time.YearMonth; class A { YearMonth t = YearMonth.now(); }");
+        files.put("clock/MonthDayNow.java", "import java.time.MonthDay; class A { MonthDay t = MonthDay.now(); }");
+        files.put("clock/ClockSystemUTC.java", "import java.time.Clock; class A { Clock c = Clock.systemUTC(); }");
+        files.put("clock/ClockSystemDefaultZone.java",
+                "import java.time.Clock; class A { Clock c = Clock.systemDefaultZone(); }");
+        files.put("clock/ClockSystem.java", "import java.time.*; class A { Clock c = Clock.system(ZoneId.of(\"UTC\")); }");
+        files.put("clock/NewDate.java", "import java.util.Date; class A { Date d = new Date(); }");
+        files.put("clock/CalendarGetInstance.java",
+                "import java.util.Calendar; class A { Calendar c = Calendar.getInstance(); }");
         files.put("random/NewRandom.java", "import java.util.Random; class A { Random r = new Random(); }");
         files.put("random/MathRandom.java", "class A { double d = Math.random(); }");
+        files.put("random/StrictMathRandom.java", "class A { double d = StrictMath.random(); }");
+        files.put("random/NewSecureRandom.java", "class A { Object r = new java.security.SecureRandom(); }");
+        files.put("random/SecureRandomInstance.java", "import java.security.*;\n"
+                + "class A { Object r() throws Exception { return SecureRandom.getInstanceStrong(); } }");
+        files.put("random/NewSplittableRandom.java",
+                "import java.util.SplittableRandom; class A { Object r = new SplittableRandom(); }");
         files.put("random/ThreadLocalRandomCurrent.java", "import java.util.concurrent.ThreadLocalRandom;\n"
                 + "class A { int i = ThreadLocalRandom.current().nextInt(); }");
         files.put("random/ShuffleOneArgument.java",
@@ -91,6 +136,12 @@ public class AiClockReadsTest {
         files.put("imports/StaticThreadLocalRandom.java",
                 "import static java.util.concurrent.ThreadLocalRandom.current;\n"
                 + "class A { int i = current().nextInt(); }");
+        files.put("imports/StaticClockSystemUTC.java", "import static java.time.Clock.systemUTC;\n"
+                + "class A { Object c = systemUTC(); }");
+        files.put("imports/StaticLocalDateWildcard.java", "import static java.time.LocalDate.*;\n"
+                + "class A { Object d = now(); }");
+        files.put("imports/StaticStrictMathRandom.java", "import static java.lang.StrictMath.random;\n"
+                + "class A { double d = random(); }");
         files.put("qualified/JavaLangSystemNanoTime.java", "class A { long t = java.lang.System.nanoTime ( ); }");
         files.put("qualified/SpacedAcrossLines.java", "class A {\n"
                 + "    long t = java . lang . System\n"
@@ -103,6 +154,11 @@ public class AiClockReadsTest {
         files.put("qualified/NewJavaUtilRandom.java", "class A { Object r = new java.util.Random ( ); }");
         files.put("qualified/ShuffleOfAGeneric.java", "import java.util.*; class A { void f() {\n"
                 + "    java.util.Collections.shuffle(new ArrayList<Map.Entry<String, Integer>>(List.of())); } }");
+        files.put("qualified/TypedShuffle.java",
+                "import java.util.*; class A { void f(List<String> l) { Collections.<String>shuffle(l); } }");
+        files.put("qualified/TypedShuffleOfAGeneric.java", "import java.util.*; class A { void f() {\n"
+                + "    java.util.Collections . <Map.Entry<String, Integer>> shuffle(new ArrayList<>()); } }");
+        files.put("qualified/NewJavaUtilDate.java", "class A { Object d = new java.util.Date ( ); }");
         files.put("references/NanoTimeReference.java",
                 "import java.util.function.LongSupplier; class A { LongSupplier t = System::nanoTime; }");
         files.put("references/SpacedReference.java",
@@ -111,6 +167,14 @@ public class AiClockReadsTest {
                 + "import java.util.function.Supplier; class A { Supplier<Random> r = Random::new; }");
         files.put("references/ShuffleReference.java", "import java.util.*; import java.util.function.Consumer;\n"
                 + "class A { Consumer<List<?>> s = Collections::shuffle; }");
+        files.put("references/TypedShuffleReference.java", "import java.util.*; import java.util.function.Consumer;\n"
+                + "class A { Consumer<List<String>> s = Collections::<String>shuffle; }");
+        files.put("references/ClockReference.java", "import java.time.Clock; import java.util.function.Supplier;\n"
+                + "class A { Supplier<Clock> c = Clock::systemUTC; }");
+        files.put("references/DateConstructorReference.java", "import java.util.Date;\n"
+                + "import java.util.function.Supplier; class A { Supplier<Date> d = Date::new; }");
+        files.put("references/SplittableRandomConstructorReference.java", "import java.util.SplittableRandom;\n"
+                + "import java.util.function.Supplier; class A { Supplier<SplittableRandom> r = SplittableRandom::new; }");
         files.put("literals/ReadAfterTrickyLiterals.java", "class A {\n"
                 + "    char q = '\"';\n"
                 + "    String s = \"/* no comment\";\n"
@@ -133,7 +197,10 @@ public class AiClockReadsTest {
         assertEquals(found, expected, "each spelling is one read, keyed by its path with /; the scan found " + found);
     }
 
-    /** A seeded stream is no read: new Random(seed), the scope's MyRandom.getRandom(), a shuffle handed either. */
+    /**
+     * A seeded stream is no read: new Random(seed), the scope's MyRandom.getRandom(), a shuffle handed either (with
+     * explicit type arguments too), a SplittableRandom of a seed and what it splits; nor is a Date of a given time.
+     */
     @Test
     public void seededRandomsAreNoRead() {
         final Map<String, String> files = new TreeMap<>();
@@ -163,6 +230,16 @@ public class AiClockReadsTest {
                 + "}\n");
         files.put("StaticSeededShuffle.java", "import static java.util.Collections.shuffle;\n"
                 + "class A { void f(java.util.List<?> l, java.util.Random r) { shuffle(l, r); } }");
+        files.put("TypedSeededShuffle.java", "import java.util.*;\n"
+                + "class A { void f(List<String> l, Random r) { Collections.<String>shuffle(l, r); } }");
+        files.put("SeededSplittableRandom.java", "import java.util.SplittableRandom;\n"
+                + "class A {\n"
+                + "    SplittableRandom r = new SplittableRandom(42L);\n"
+                + "    SplittableRandom s = r.split();\n"
+                + "    Object u = new java.util.SplittableRandom(7);\n"
+                + "}\n");
+        files.put("GivenDate.java", "import java.util.Date;\n"
+                + "class A { Date d = new Date(0L); Date e = new java.util.Date(1_000L); }");
         final Map<String, Integer> found = scanOf(files);
         assertEquals(found, Map.of(), "a seeded stream is no read, but the scan found " + found);
     }
@@ -193,7 +270,17 @@ public class AiClockReadsTest {
                 + "    Object v = myRuntime.getRuntime();\n"
                 + "    Object w = new MyRandom();\n"
                 + "    long x = nanoTime();\n"
+                + "    Object y = MyClock.systemUTC();\n"
+                + "    Object z = myCalendar.getInstance();\n"
+                + "    Object d = new DateTime();\n"
+                + "    Object s = new NotSecureRandomAtAll();\n"
+                + "    Object m = OffsetTimes.now();\n"
                 + "    static long nanoTime() { return 0; }\n"
+                + "}\n");
+        files.put("MoreComments.java", "/** {@link java.time.Clock#systemUTC()}, new Date(), Calendar.getInstance(). */\n"
+                + "class A {\n"
+                + "    // new SplittableRandom() and SecureRandom would be the machine's\n"
+                + "    String s = \"LocalDate.now() StrictMath.random() Collections.<T>shuffle(l)\";\n"
                 + "}\n");
         files.put("Imports.java", "import java.util.concurrent.ThreadLocalRandom;\n"
                 + "import static java.lang.System.nanoTime;\n"
@@ -210,25 +297,43 @@ public class AiClockReadsTest {
      */
     @Test
     public void theAiReadsAreTheKnownOnes() {
-        assertTrue(Files.isDirectory(AI_SOURCES), "the AI's sources are not at " + AI_SOURCES.toAbsolutePath());
-        final Map<String, Integer> found = scan(AI_SOURCES);
+        assertKnownReads("the AI's sources", AI_SOURCES, "ALLOWED", ALLOWED);
+    }
+
+    /**
+     * forge-game's reads are GAME_ALLOWED's, as the AI's are ALLOWED's: the rules engine runs every harness game too,
+     * so an upstream merge that adds a read there fails here just the same.
+     */
+    @Test
+    public void theGameReadsAreTheKnownOnes() {
+        assertKnownReads("forge-game's sources", GAME_SOURCES, "GAME_ALLOWED", GAME_ALLOWED);
+    }
+
+    /**
+     * Fails unless the reads under {@code root} are {@code allowed}'s, file by file and count by count, naming each
+     * file that differs with its count and lines and the list's count.
+     */
+    private static void assertKnownReads(final String what, final Path root, final String listName,
+                                         final Map<String, Integer> allowed) {
+        assertTrue(Files.isDirectory(root), what + " are not at " + root.toAbsolutePath());
+        final Map<String, Integer> found = scan(root);
         final Set<String> files = new TreeSet<>(found.keySet());
-        files.addAll(ALLOWED.keySet());
+        files.addAll(allowed.keySet());
         final List<String> wrong = new ArrayList<>();
         for (final String file : files) {
             final int reads = found.getOrDefault(file, 0);
-            final Integer allowed = ALLOWED.get(file);
-            if (allowed == null || reads != allowed) {
+            final Integer listed = allowed.get(file);
+            if (listed == null || reads != listed) {
                 wrong.add(file + ": " + reads + " read(s)"
-                        + (reads == 0 ? "" : " on line(s) " + readLines(read(AI_SOURCES.resolve(file))))
-                        + ", ALLOWED " + (allowed == null ? "has no entry" : "says " + allowed));
+                        + (reads == 0 ? "" : " on line(s) " + readLines(read(root.resolve(file))))
+                        + ", " + listName + " " + (listed == null ? "has no entry" : "says " + listed));
             }
         }
         if (!wrong.isEmpty()) {
-            fail("the AI's sources read the clock, an unseeded random stream or the runtime where ALLOWED does not say"
+            fail(what + " read the clock, an unseeded random stream or the runtime where " + listName + " does not say"
                     + " so: route a read that steers a harness game through FlatMcGame.nanoTime(),"
-                    + " MyRandom.getRandom() or a scope test, and give an inert one its count in ALLOWED and why\n  "
-                    + String.join("\n  ", wrong));
+                    + " MyRandom.getRandom() or a scope test, and give an inert one its count in " + listName
+                    + " and why\n  " + String.join("\n  ", wrong));
         }
     }
 
@@ -254,10 +359,14 @@ public class AiClockReadsTest {
             this.name = name;
             this.oneArgumentOnly = oneArgumentOnly;
             this.imports = Set.of(pkg + "." + owner + "." + name, pkg + "." + owner + ".*");
-            this.call = Pattern.compile("(?<![\\w$])" + owner + "\\s*\\.\\s*" + name + "\\s*\\(");
-            this.reference = Pattern.compile("(?<![\\w$])" + owner + "\\s*::\\s*" + name + "(?![\\w$])");
+            this.call = Pattern.compile("(?<![\\w$])" + owner + "\\s*\\.\\s*" + TYPE_ARGUMENTS + name + "\\s*\\(");
+            this.reference = Pattern.compile("(?<![\\w$])" + owner + "\\s*::\\s*" + TYPE_ARGUMENTS + name + "(?![\\w$])");
         }
     }
+
+    /** Explicit type arguments, which a call or a method reference may give before the member's name:
+     *  {@code Collections.<String>shuffle(l)}, {@code Collections::<String>shuffle}. */
+    private static final String TYPE_ARGUMENTS = "(?:<[^()]*?>\\s*)?";
 
     private static final List<Member> MEMBERS = List.of(
             new Member("java.lang", "System", "nanoTime", false),
@@ -265,17 +374,32 @@ public class AiClockReadsTest {
             new Member("java.time", "Instant", "now", false),
             new Member("java.time", "LocalDateTime", "now", false),
             new Member("java.time", "LocalTime", "now", false),
+            new Member("java.time", "LocalDate", "now", false),
+            new Member("java.time", "ZonedDateTime", "now", false),
+            new Member("java.time", "OffsetDateTime", "now", false),
+            new Member("java.time", "OffsetTime", "now", false),
+            new Member("java.time", "Year", "now", false),
+            new Member("java.time", "YearMonth", "now", false),
+            new Member("java.time", "MonthDay", "now", false),
+            new Member("java.time", "Clock", "systemUTC", false),
+            new Member("java.time", "Clock", "systemDefaultZone", false),
+            new Member("java.time", "Clock", "system", false),
+            new Member("java.util", "Calendar", "getInstance", false),
             new Member("java.lang", "Math", "random", false),
+            new Member("java.lang", "StrictMath", "random", false),
             new Member("java.lang", "Runtime", "getRuntime", false),
             new Member("java.util", "Collections", "shuffle", true));
 
-    /** {@code new Random()} with no seed, the class named plainly or fully qualified. */
-    private static final Pattern NEW_RANDOM =
-            Pattern.compile("(?<![\\w$])new\\s+(?:java\\s*\\.\\s*util\\s*\\.\\s*)?Random\\s*\\(\\s*\\)");
-    /** {@code Random::new}, which may name the constructor with no seed. */
-    private static final Pattern RANDOM_REFERENCE = Pattern.compile("(?<![\\w$])Random\\s*::\\s*new(?![\\w$])");
-    /** The name ThreadLocalRandom, whose every stream is the machine's. */
-    private static final Pattern THREAD_LOCAL_RANDOM = Pattern.compile("(?<![\\w$])ThreadLocalRandom(?![\\w$])");
+    /** The classes whose constructor with no argument reads: Random and SplittableRandom take no seed, Date the time. */
+    private static final String UNSEEDED = "(?:Random|SplittableRandom|Date)";
+    /** {@code new Random()}, {@code new SplittableRandom()} or {@code new Date()}, named plainly or fully qualified. */
+    private static final Pattern NEW_UNSEEDED = Pattern.compile(
+            "(?<![\\w$])new\\s+(?:java\\s*\\.\\s*util\\s*\\.\\s*)?" + UNSEEDED + "\\s*\\(\\s*\\)");
+    /** {@code Random::new} and the like, which may name the constructor with no argument. */
+    private static final Pattern UNSEEDED_REFERENCE = Pattern.compile("(?<![\\w$])" + UNSEEDED + "\\s*::\\s*new(?![\\w$])");
+    /** The names ThreadLocalRandom and SecureRandom, whose every stream is the machine's. */
+    private static final Pattern MACHINE_RANDOM =
+            Pattern.compile("(?<![\\w$])(?:ThreadLocalRandom|SecureRandom)(?![\\w$])");
     /** An import declaration: group 1 is set for a static one, group 2 is the name imported. */
     private static final Pattern IMPORT =
             Pattern.compile("(?<![\\w$])import\\s+(static\\s+)?([\\w$]+(?:\\s*\\.\\s*(?:[\\w$]+|\\*))*)\\s*;");
@@ -283,9 +407,12 @@ public class AiClockReadsTest {
     /**
      * The machine-dependent reads in each {@code .java} file under {@code root}, by the file's path relative to
      * {@code root} with {@code /}; a file with none is left out. A read is a call of System.nanoTime,
-     * System.currentTimeMillis, Instant.now, LocalDateTime.now, LocalTime.now, Math.random or Runtime.getRuntime, a
-     * {@code new Random()} with no seed, a one-argument Collections.shuffle, or the name ThreadLocalRandom: in any
-     * spacing, fully qualified or not, as a method reference too, and as a bare call of a member the file imports
+     * System.currentTimeMillis, the now() of Instant, LocalDateTime, LocalTime, LocalDate, ZonedDateTime,
+     * OffsetDateTime, OffsetTime, Year, YearMonth or MonthDay, Clock.systemUTC, Clock.systemDefaultZone, Clock.system,
+     * Calendar.getInstance, Math.random, StrictMath.random or Runtime.getRuntime, a {@code new Random()} or
+     * {@code new SplittableRandom()} with no seed, a {@code new Date()} of no given time, a one-argument
+     * Collections.shuffle, or the name ThreadLocalRandom or SecureRandom: in any spacing, fully qualified or not, with
+     * explicit type arguments or without, as a method reference too, and as a bare call of a member the file imports
      * statically, or whose class it does (see {@link #readLines}).
      */
     static Map<String, Integer> scan(final Path root) {
@@ -303,7 +430,7 @@ public class AiClockReadsTest {
      * The line of each read in {@code source}, a Java file's text, in order: a line twice for two reads on it. Only
      * code is read: comments, string literals, text blocks and character literals are not code, and a plain import
      * declaration only names a class whose uses are counted where they are. A static import is code: it names the
-     * members a bare call reads, and one of ThreadLocalRandom's is a read itself.
+     * members a bare call reads, and one naming ThreadLocalRandom or SecureRandom is a read itself.
      */
     static List<Integer> readLines(final String source) {
         final StringBuilder blanked = new StringBuilder(code(source));
@@ -346,7 +473,7 @@ public class AiClockReadsTest {
                 }
             }
         }
-        for (final Pattern p : List.of(NEW_RANDOM, RANDOM_REFERENCE, THREAD_LOCAL_RANDOM)) {
+        for (final Pattern p : List.of(NEW_UNSEEDED, UNSEEDED_REFERENCE, MACHINE_RANDOM)) {
             final Matcher m = p.matcher(code);
             while (m.find()) {
                 at.add(m.start());
