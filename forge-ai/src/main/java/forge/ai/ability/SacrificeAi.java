@@ -3,6 +3,7 @@ package forge.ai.ability;
 import forge.ai.AiAbilityDecision;
 import forge.ai.AiPlayDecision;
 import forge.ai.ComputerUtilAbility;
+import forge.ai.PlaceholderTargetAi;
 import forge.ai.ComputerUtilCard;
 import forge.ai.ComputerUtilCost;
 import forge.ai.SpecialCardAi;
@@ -257,6 +258,9 @@ public class SacrificeAi extends SpellAbilityAi {
             return false;
         }
 
+        if ("PayIfBigger".equals(sa.getParam("AILogic"))) {
+            return !alreadyPaid && PlaceholderTargetAi.worthPaying(payer, sa, cost);
+        }
         // Icy Prison
         if (payers.size() > 1) {
             final Player p = sa.getActivatingPlayer();

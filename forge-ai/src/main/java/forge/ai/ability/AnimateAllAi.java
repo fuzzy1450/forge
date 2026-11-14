@@ -72,7 +72,7 @@ public class AnimateAllAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player aiPlayer, SpellAbility sa, boolean mandatory) {
         if (mandatory) {
-            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
+            return super.doTriggerNoCost(aiPlayer, sa, mandatory);
         }
         if (SpecialCardAi.HourOfDevastation.handles(sa)) {
             // a free cast (Neera's reveal, Arcane Bombardment / Mnemonic Deluge copies, a thief's optional
