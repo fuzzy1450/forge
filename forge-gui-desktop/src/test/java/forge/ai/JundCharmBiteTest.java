@@ -18,13 +18,14 @@ import forge.game.zone.ZoneType;
 /**
  * Jund Charm's save (SpecialCardAi.JundCharm, line B): with an opponent's item on top of the stack, its counters mode
  * goes on the AI's best premium creature the item kills and two +1/+1 counters save. A cheap pre-check, threatens,
- * passes only a damage or -X/-X item, and it read the item's root API. Upstream's #12858 moved the roots of the bites
- * (Ram Through and the other PowerDmg scripts) from Pump to TargetOnly, a part that only chooses the creature that
- * deals the damage, the damage being the part after it, so a bite no longer raised the save. The pre-check reads the
- * item's first part that is not TargetOnly. Each board: the opponent's main phase, their spell on the stack (unpaid:
- * only the top of the stack is read), the AI with Serra Angel (4/4 flying vigilance, premium), an untapped Swamp,
- * Mountain and Forest and Jund Charm in hand, asked as the game asks it
- * (SpellApiToAi.Converter.get(sa).canPlayWithSubs).
+ * reads the item's root API, and bestSaved's prediction (ComputerUtil.predictThreatenedObjects, which reads every part
+ * of the item) decides. At 1785d1982ed the pre-check passed a DealDamage, DamageAll, Pump or PumpAll root. Upstream's
+ * #12858 moved the roots of the bites (Ram Through and the other PowerDmg scripts) and of The Fall of Kroog from Pump
+ * to TargetOnly, a part that only chooses a target, so after the merge 2d339921360 none of them raised the save. The
+ * pre-check passes a TargetOnly root as it passed the Pump root it replaced: 1785d1982ed's reading, restored. Each
+ * board: the opponent's main phase, their spell on the stack (unpaid: only the top of the stack is read), the AI with
+ * Serra Angel (4/4 flying vigilance, premium), an untapped Swamp, Mountain and Forest and Jund Charm in hand, asked as
+ * the game asks it (SpellApiToAi.Converter.get(sa).canPlayWithSubs).
  */
 public class JundCharmBiteTest extends AITest {
 
@@ -111,12 +112,13 @@ public class JundCharmBiteTest extends AITest {
         assertSaves(b, ask(b), "Rending Volley");
     }
 
-    /** Unchanged: the opponent's The Fall of Kroog aimed at the AI, a TargetOnly root (target opponent) whose next part
-     *  destroys a land; only the parts after that deal damage, 3 to the AI and 1 to each of its creatures, which kills
-     *  Serra Angel with 3 damage marked and would not after +2/+2. The pre-check reads the Destroy, so the AI does not
-     *  cast Jund Charm. */
+    /** 1785d1982ed's behaviour, restored: the opponent's The Fall of Kroog aimed at the AI, a TargetOnly root (target
+     *  opponent; a Pump root at 1785d1982ed) whose next part destroys a land; only the parts after that deal damage, 3
+     *  to the AI and 1 to each of its creatures, which kills Serra Angel with 3 damage marked and would not after
+     *  +2/+2. The TargetOnly root passes the pre-check as the Pump root it replaced did, and bestSaved's prediction sees
+     *  the damage after the Destroy: the AI casts Jund Charm's counters mode on the Angel. */
     @Test
-    public void aTargetOnlyRootedItemWhoseNextPartIsNoDamageRaisesNoSave() {
+    public void aTargetOnlyRootedItemWhoseDamageFollowsADestroyRaisesTheSaveAsAt1785d1982ed() {
         final Board b = board();
         final Card forest = addCard("Forest", b.ai);
         b.angel.setDamage(3);
@@ -125,8 +127,23 @@ public class JundCharmBiteTest extends AITest {
         Assert.assertEquals(kroog.getApi(), ApiType.TargetOnly, "The Fall of Kroog's root only chooses the opponent");
         Assert.assertEquals(kroog.getSubAbility().getApi(), ApiType.Destroy, "its next part destroys a land");
 
+        assertSaves(b, ask(b), "The Fall of Kroog");
+    }
+
+    /** The pre-check alone saves nothing: the opponent's Ram Through from their Grizzly Bears, whose 2 damage cannot
+     *  kill the undamaged Serra Angel, passes the pre-check (a TargetOnly root) but kills nothing of the AI's, so
+     *  bestSaved's prediction finds nothing to save and the AI does not cast Jund Charm. */
+    @Test
+    public void aTargetOnlyRootedItemThatKillsNothingRaisesNoSave() {
+        final Board b = board();
+        final Card bears = addCard("Grizzly Bears", b.opp);
+        final SpellAbility ram = opponentCasts(b, "Ram Through", new GameObject[] {bears},
+                new GameObject[] {b.angel});
+        Assert.assertEquals(ram.getApi(), ApiType.TargetOnly, "Ram Through's root only chooses the creature");
+        Assert.assertEquals(ram.getSubAbility().getApi(), ApiType.DealDamage, "its damage is the part after the root");
+
         final AiAbilityDecision decision = ask(b);
         Assert.assertFalse(decision.willingToPlay(),
-                "the AI answers The Fall of Kroog with Jund Charm: " + b.charm.getChosenList());
+                "the AI answers Ram Through with Jund Charm: " + b.charm.getChosenList());
     }
 }
