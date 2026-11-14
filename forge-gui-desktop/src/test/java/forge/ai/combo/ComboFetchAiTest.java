@@ -59,7 +59,7 @@ import forge.util.MyRandom;
  * Every test runs without upstream's combo catalogue ({@link NoComboCatalog}, emptied by
  * {@link #emptyTheCatalogue}): by Evan's ruling of 2026-11-14 the deck plan's catalogue step fills a refusal of
  * ComboFetch's, and with Oracle in hand it fetches Consultation itself, so the stock decision these boards tell a
- * fetch from is the one of a game without the catalogue.
+ * fetch from is the one of a game without the catalogue. MergeRefusalFillTest pins the catalogue's pick at a refusal.
  */
 public class ComboFetchAiTest extends AITest {
     private static final String WIN = "F|2|S|Win the game";

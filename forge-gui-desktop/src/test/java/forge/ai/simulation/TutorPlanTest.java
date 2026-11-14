@@ -56,6 +56,23 @@ public class TutorPlanTest extends FlatMcTestBase {
         AssertJUnit.assertEquals(quillspike, TutorPlan.planPicks(ai, demonic).getFirst());
     }
 
+    /**
+     * Evan's ruling of 2026-11-14 ("go with a - upstream decides everywhere"): the catalogue step serves every combo of
+     * ai-combos.txt, those the fork's combo table holds a line of as well, and no ComboFetch runs ahead of Flat MC's
+     * value of a tutor. Thassa's Oracle in hand and Demonic Consultation in the library (line 742-1295 of the table):
+     * Demonic Tutor's plan target is Consultation, as upstream #12858 ships it. The gate of f602a0c1949 left that
+     * combination to the fork's combo program, and the tutor had no target.
+     */
+    @Test
+    public void aCataloguedComboTheForksTableHoldsIsATutorsTargetToo() {
+        addPlainDeck();
+        put("Thassa's Oracle", ai, ZoneType.Hand); // Thassa's Oracle + Demonic Consultation is a line of ai-combos.txt
+        final Card consultation = put("Demonic Consultation", ai, ZoneType.Library);
+        final SpellAbility demonic = spellOf(put("Demonic Tutor", ai, ZoneType.Hand));
+        AssertJUnit.assertTrue(TutorPlan.hasPlanTarget(ai, demonic));
+        AssertJUnit.assertEquals(consultation, TutorPlan.planPicks(ai, demonic).getFirst());
+    }
+
     @Test
     public void aLonePieceOfACataloguedComboIsNotFetched() {
         addPlainDeck();

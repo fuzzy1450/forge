@@ -19,9 +19,10 @@ import forge.ai.simulation.ComboCatalog;
  * would then pick the same card, and the 22 guards that failed at the merge of upstream e5e2f900616 (2d339921360,
  * each "expected not same [Demonic Consultation]") could tell nothing. Without the catalogue a board's refusal is the
  * pick of a game without it, the pick those guards tell a fetch from: the merge's rule R7, a stock quantity re-pinned
- * with a named cause (the ruling), no assertion loosened. With the gate of f602a0c1949 in place, every test of both
- * classes passed with the catalogue emptied as well, and the one reader of it they reach, the deck plan's catalogue
- * step through ChangeZoneAi, answered nothing on any of their boards either way: emptying it changes no other test.
+ * with a named cause (the ruling), no assertion loosened. MergeRefusalFillTest pins what the catalogue picks at a
+ * refusal: Consultation, on these boards. With the gate of f602a0c1949 in place, every test of both classes passed
+ * with the catalogue emptied as well, and the one reader of it they reach, the deck plan's catalogue step through
+ * ChangeZoneAi, answered nothing on any of their boards either way: emptying it changes no other test.
  * <p>
  * Per method, not per class: surefire runs the module's tests in one forked JVM that every class shares (forkCount 1,
  * reuseForks true, no parallel run, a class order of its own), and AITest configures the catalogue in that JVM once,

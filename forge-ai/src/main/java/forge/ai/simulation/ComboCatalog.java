@@ -5,7 +5,6 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.function.BiPredicate;
 import java.util.function.Supplier;
 
 import forge.game.card.Card;
@@ -68,11 +67,6 @@ public final class ComboCatalog {
         /** The slots as written in the file, a slot being "Card A" or "Card A / Card B". */
         public List<String> slotSpecs() {
             return rawSlots;
-        }
-
-        /** The slots, each the set of its cards' normalized names ({@link AiCardLists#normalize}). */
-        public List<Set<String>> slots() {
-            return slots;
         }
 
         public int slotCount() {
@@ -231,17 +225,6 @@ public final class ComboCatalog {
      * Empty when no combo is one card short.
      */
     public static List<Card> missingPieces(final Player ai, final Iterable<Card> pool) {
-        return missingPieces(ai, pool, (inView, piece) -> false);
-    }
-
-    /**
-     * {@link #missingPieces(Player, Iterable)}, without a piece whose combo {@code owned} says another combo program
-     * decides: it is given, for the combo's other slots, the names in view that fill each one, and the piece's name,
-     * every name normalized ({@link AiCardLists#normalize}). The fork's deck plan passes its combo table's lines
-     * (forge.ai.combo.CatalogOverlap), whose own fetch decides when such a piece is worth fetching.
-     */
-    public static List<Card> missingPieces(final Player ai, final Iterable<Card> pool,
-            final BiPredicate<List<Set<String>>, String> owned) {
         final List<Card> out = new ArrayList<>();
         if (ai == null || pool == null) {
             return out;
@@ -257,27 +240,21 @@ public final class ComboCatalog {
         for (final Entry e : entries()) {
             Set<String> empty = null;
             int open = 0;
-            final List<Set<String>> inView = new ArrayList<>();
             for (final Set<String> slot : e.slots) {
-                final Set<String> there = new LinkedHashSet<>();
+                boolean filled = false;
                 for (final String n : slot) {
-                    if (have.contains(n)) {
-                        there.add(n);
-                    }
+                    filled |= have.contains(n);
                 }
-                if (there.isEmpty()) {
+                if (!filled) {
                     open++;
                     empty = slot;
-                } else {
-                    inView.add(there);
                 }
             }
             if (open != 1 || e.slots.size() < 2) {
                 continue;
             }
             for (final Card c : pool) {
-                final String name = AiCardLists.normalize(c.getName());
-                if (empty.contains(name) && !c.isLand() && !owned.test(inView, name)) {
+                if (empty.contains(AiCardLists.normalize(c.getName())) && !c.isLand()) {
                     final int r = (e.type == Type.WIN ? 200 : 100) - c.getCMC();
                     if (!rank.containsKey(c) || rank.get(c) < r) {
                         rank.put(c, r);
