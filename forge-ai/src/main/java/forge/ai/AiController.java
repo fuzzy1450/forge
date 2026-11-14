@@ -1504,7 +1504,11 @@ public class AiController {
             return AiPlayDecision.WillPlay;
         }
         if (usesHybridSimulation()) {
-            return OnePlaySafetyChecker.isAcceptable(player, sa) ? AiPlayDecision.WillPlay : AiPlayDecision.HybridSimRejected;
+            final Boolean acceptable = hybridSafetyCheck(sa);
+            if (acceptable != null) {
+                return acceptable ? AiPlayDecision.WillPlay : AiPlayDecision.HybridSimRejected;
+            }
+            // no copy of the game to weigh the play on: judge it as a default seat does, below
         }
 
         int damage = 0;
@@ -1543,6 +1547,35 @@ public class AiController {
         }
 
         return ComputerUtilCard.checkNeedsToPlayReqs(card, sa);
+    }
+
+    /** Failed hybrid safety checks this JVM has reported: the first few are enough to notice a gap of the copier's. */
+    private static final java.util.concurrent.atomic.AtomicInteger HYBRID_CHECK_FAILURES =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
+     * The hybrid seat's one-play safety check (OnePlaySafetyChecker), or null when it could not be made: the game could
+     * not be copied (a gap of GameCopier's) or the play not simulated on the copy. saSideEffects then judges the play as
+     * a default seat does, as a Flat MC rollout that fails falls back to the heuristic choice: every caller of that
+     * branch, on the game thread as on the eval thread, gets a decision rather than a throw that ends the game as an
+     * Error. The AI's deadline still goes through, and so, under a simulation, does an Error in the failure's chain,
+     * which FlatMonteCarloPicker.reportFailure rethrows too: whether a stack overflows depends on the machine.
+     */
+    private Boolean hybridSafetyCheck(final SpellAbility sa) {
+        try {
+            return OnePlaySafetyChecker.isAcceptable(player, sa);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            final Error err = SimScope.simulationError(e);
+            if (err != null) {
+                throw err;
+            }
+            if (HYBRID_CHECK_FAILURES.incrementAndGet() <= 5) {
+                System.err.println("Hybrid safety check failed, judging the play as a default seat does: " + e);
+            }
+            return null;
+        }
     }
 
     private boolean canPlaySpellWithoutBuyback(SpellAbility sa) {
