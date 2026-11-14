@@ -29,6 +29,7 @@ import forge.game.card.CounterType;
 import forge.game.keyword.Keyword;
 import forge.item.PaperCard;
 import forge.item.PaperToken;
+import forge.model.FModel;
 import forge.token.TokenDb;
 import forge.trackable.TrackableTypes;
 import forge.util.SimScope;
@@ -53,14 +54,33 @@ import forge.util.SimScope;
  *  races the once-only fill of tokens no edition lists in twenty fresh TokenDbs, so a missing lock fails every run. */
 public class CacheConcurrencyTest {
 
+    /** StaticData.instance() as this class found it, put back when it is done. */
+    private StaticData found;
+
+    /** The card and token databases. Boot preloads the tokens of FModel's database, which is StaticData.instance() in
+     *  a served JVM, and which this class reads. In the fork's whole suite a class that builds a database of its own
+     *  (CardMockTestCase, CardDatabaseHelper) leaves StaticData.instance() pointing there for the rest of the JVM, at
+     *  a database boot never loaded: both token tests failed on it in every whole-suite run (its tokens "left for a
+     *  game thread to load", and TokenDb's lazy path racing) and passed alone, so a whole-suite red here said nothing
+     *  about boot's preload. */
     @BeforeClass
-    public void boot() {
-        GameRunner.boot();                    // the card and token databases
+    public void boot() throws Exception {
+        GameRunner.boot();
+        found = StaticData.instance();
+        setStaticDataInstance(FModel.getMagicDb());
     }
 
     @AfterClass
-    public void relaxStrict() {
+    public void relaxStrict() throws Exception {
         SimScope.setStrict(false);            // boot() arms strict mode
+        setStaticDataInstance(found);
+    }
+
+    /** Points StaticData.instance() at {@code data}, as CardMockTestCase does: its constructor is what assigns it. */
+    private static void setStaticDataInstance(final StaticData data) throws Exception {
+        Field instance = StaticData.class.getDeclaredField("lastInstance");
+        instance.setAccessible(true);
+        instance.set(null, data);
     }
 
     /** Every token an edition lists and Forge has a script for is loaded by boot. An entry naming a token with no
