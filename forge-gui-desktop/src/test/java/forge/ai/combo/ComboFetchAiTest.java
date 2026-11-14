@@ -19,6 +19,8 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import forge.ai.AITest;
@@ -53,6 +55,11 @@ import forge.util.MyRandom;
  * line's pieces on top, and otherwise make the stock decision with the stock draws. Unless a test says otherwise the
  * board is line 742-1295 with Thassa's Oracle in hand, a ten-name library holding Demonic Consultation and Craw Wurm,
  * and Island, Island and Swamp in play (the line's whole cost, so NO_MANA is quiet), on the Default profile.
+ * <p>
+ * Every test runs without upstream's combo catalogue ({@link NoComboCatalog}, emptied by
+ * {@link #emptyTheCatalogue}): by Evan's ruling of 2026-11-14 the deck plan's catalogue step fills a refusal of
+ * ComboFetch's, and with Oracle in hand it fetches Consultation itself, so the stock decision these boards tell a
+ * fetch from is the one of a game without the catalogue.
  */
 public class ComboFetchAiTest extends AITest {
     private static final String WIN = "F|2|S|Win the game";
@@ -85,6 +92,23 @@ public class ComboFetchAiTest extends AITest {
     private Player ai;
     private Player opp;
     private ComboTracker t;
+    /** The catalogue emptied while a test method runs, null between them (NoComboCatalog). */
+    private NoComboCatalog noCatalogue;
+
+    /** After AITest's own {@code @BeforeMethod}, which configures the catalogue at the JVM's first test. */
+    @BeforeMethod
+    public void emptyTheCatalogue() {
+        noCatalogue = NoComboCatalog.begin();
+    }
+
+    /** Whatever the test did, so that no other class reads the empty catalogue. */
+    @AfterMethod(alwaysRun = true)
+    public void putTheCatalogueBack() {
+        if (noCatalogue != null) {
+            noCatalogue.end();
+            noCatalogue = null;
+        }
+    }
 
     private static AiController aiOf(final Player p) {
         return ((PlayerControllerAi) p.getController()).getAi();

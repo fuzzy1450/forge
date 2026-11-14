@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Random;
 import java.util.stream.Collectors;
 
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import forge.ai.AITest;
@@ -37,7 +39,10 @@ import forge.gamesimulationtests.util.LobbyPlayerForTests;
 import forge.util.MyRandom;
 
 /** The per-AI combo tracker: which of piece 1's lines the AI's own deck holds, and where each piece is (spec
- *  2026-10-22-combo-aware-ai-core-design.md section 6.2). */
+ *  2026-10-22-combo-aware-ai-core-design.md section 6.2). Every test runs without upstream's combo catalogue
+ *  ({@link NoComboCatalog}), as ComboFetchAiTest's do: by Evan's ruling of 2026-11-14 the deck plan's catalogue step
+ *  fills a refusal, and {@link #ofIsNullForAControlledPlayer}'s board tells the stock pick of a game without the
+ *  catalogue from the piece. */
 public class ComboTrackerTest extends AITest {
     private static final String WIN = "F|2|S|Win the game";
     private static final String EXILE = "F|88|H|Exile your library";
@@ -53,6 +58,24 @@ public class ComboTrackerTest extends AITest {
     // ten distinct nonland names (GiftsUngivenAiTest's): fillLibrary makes ten of one name
     private static final List<String> NAMES = Arrays.asList("Runeclaw Bear", "Grizzly Bears", "Hill Giant",
             "Craw Wurm", "Serra Angel", "Shivan Dragon", "Llanowar Elves", "Counterspell", "Divination", "Opt");
+
+    /** The catalogue emptied while a test method runs, null between them (NoComboCatalog). */
+    private NoComboCatalog noCatalogue;
+
+    /** After AITest's own {@code @BeforeMethod}, which configures the catalogue at the JVM's first test. */
+    @BeforeMethod
+    public void emptyTheCatalogue() {
+        noCatalogue = NoComboCatalog.begin();
+    }
+
+    /** Whatever the test did, so that no other class reads the empty catalogue. */
+    @AfterMethod(alwaysRun = true)
+    public void putTheCatalogueBack() {
+        if (noCatalogue != null) {
+            noCatalogue.end();
+            noCatalogue = null;
+        }
+    }
 
     private static AiController aiOf(final Player p) {
         return ((PlayerControllerAi) p.getController()).getAi();
