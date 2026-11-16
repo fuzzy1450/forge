@@ -6,6 +6,7 @@ import java.util.Set;
 import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
+import forge.game.card.CardCollectionView;
 import forge.game.zone.ZoneType;
 
 public class StaticAbilityCantPreventDamage {
@@ -24,16 +25,38 @@ public class StaticAbilityCantPreventDamage {
     }
 
     private static boolean scan(final Card source, final boolean isCombat) {
-        CardCollection list = new CardCollection(source.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
-        list.add(source);
-        for (final Card ca : list) {
-            for (final StaticAbility stAb : ca.getStaticAbilities()) {
-                if (!stAb.checkConditions(StaticAbilityMode.CantPreventDamage)) {
-                    continue;
-                }
-                if (applyCantPreventDamage(stAb, source, isCombat)) {
-                    return true;
-                }
+        final CardCollectionView cards = source.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES);
+        if (StaticAbilityModeProbe.listener != null) {
+            final CardCollection list = new CardCollection(cards);
+            list.add(source);
+            return StaticAbilityModeProbe.listener.visits(list, () -> visits(source, isCombat, cards), found -> !found);
+        }
+        return visits(source, isCombat, cards);
+    }
+
+    // the cards, then the source (an LKI copy, say) unless it equals one of them: the order of a CardCollection of the
+    // cards to which the source was added, without building one
+    private static boolean visits(final Card source, final boolean isCombat, final CardCollectionView cards) {
+        boolean sourceVisited = false;
+        for (final Card ca : cards) {
+            if (ca.equals(source)) {
+                sourceVisited = true;
+            }
+            if (any(ca, source, isCombat)) {
+                return true;
+            }
+        }
+        return !sourceVisited && any(source, source, isCombat);
+    }
+
+    private static boolean any(final Card ca, final Card source, final boolean isCombat) {
+        StaticAbilityModeProbe.visited(ca);
+        for (final StaticAbility stAb : ca.getStaticAbilities()) {
+            if (!stAb.checkConditions(StaticAbilityMode.CantPreventDamage)) {
+                continue;
+            }
+            if (applyCantPreventDamage(stAb, source, isCombat)) {
+                return true;
             }
         }
         return false;

@@ -9,6 +9,7 @@ import forge.card.mana.ManaCostParser;
 import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
+import forge.game.card.CardCollectionView;
 import forge.game.cost.Cost;
 import forge.game.player.Player;
 import forge.game.spellability.OptionalCost;
@@ -33,10 +34,27 @@ public class StaticAbilityAlternativeCost {
 
     private static List<SpellAbility> scan(final SpellAbility sa, final Card source, final Player pl,
             final List<SpellAbility> result) {
-        // add source first in case it's LKI (alternate host)
-        CardCollection list = new CardCollection(source);
-        list.addAllUnique(source.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
-        for (final Card ca : list) {
+        final CardCollectionView cards = source.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES);
+        if (StaticAbilityModeProbe.listener != null) {
+            final CardCollection list = new CardCollection(source);
+            list.addAllUnique(cards);
+            // every card is visited
+            return StaticAbilityModeProbe.listener.visits(list, () -> visits(sa, source, pl, result, cards),
+                    added -> true);
+        }
+        return visits(sa, source, pl, result, cards);
+    }
+
+    // source first in case it's LKI (alternate host), then each of the cards not equal to it: the order of a
+    // CardCollection of the source to which the cards were added, without building one
+    private static List<SpellAbility> visits(final SpellAbility sa, final Card source, final Player pl,
+            final List<SpellAbility> result, final CardCollectionView cards) {
+        for (int i = -1; i < cards.size(); i++) {
+            final Card ca = i < 0 ? source : cards.get(i);
+            if (i >= 0 && (ca == null || ca.equals(source))) {
+                continue;
+            }
+            StaticAbilityModeProbe.visited(ca);
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkMode(StaticAbilityMode.AlternativeCost)) {
                     continue;

@@ -28,6 +28,7 @@ import forge.game.GameEntity;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
+import forge.game.card.CardCollectionView;
 import forge.game.cost.Cost;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
@@ -185,16 +186,37 @@ public class StaticAbilityCantAttackBlock {
     }
 
     private static boolean cantBlockScan(final Card blocker) {
-        CardCollection list = new CardCollection(blocker);
-        list.addAllUnique(blocker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
-        for (final Card ca : list) {
-            for (final StaticAbility stAb : ca.getStaticAbilities()) {
-                if (!stAb.checkConditions(StaticAbilityMode.CantBlock)) {
-                    continue;
-                }
-                if (applyCantBlockAbility(stAb, blocker)) {
-                    return true;
-                }
+        final CardCollectionView cards = blocker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES);
+        if (StaticAbilityModeProbe.listener != null) {
+            final CardCollection list = new CardCollection(blocker);
+            list.addAllUnique(cards);
+            return StaticAbilityModeProbe.listener.visits(list, () -> cantBlockVisits(blocker, cards), found -> !found);
+        }
+        return cantBlockVisits(blocker, cards);
+    }
+
+    // the blocker first in case of LKI, then each of the cards not equal to it: the order of a CardCollection of the
+    // blocker to which the cards were added, without building one
+    private static boolean cantBlockVisits(final Card blocker, final CardCollectionView cards) {
+        if (cantBlockAny(blocker, blocker)) {
+            return true;
+        }
+        for (final Card ca : cards) {
+            if (ca != null && !ca.equals(blocker) && cantBlockAny(ca, blocker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean cantBlockAny(final Card ca, final Card blocker) {
+        StaticAbilityModeProbe.visited(ca);
+        for (final StaticAbility stAb : ca.getStaticAbilities()) {
+            if (!stAb.checkConditions(StaticAbilityMode.CantBlock)) {
+                continue;
+            }
+            if (applyCantBlockAbility(stAb, blocker)) {
+                return true;
             }
         }
         return false;
@@ -250,20 +272,47 @@ public class StaticAbilityCantAttackBlock {
     }
 
     private static boolean cantBlockByScan(final Card attacker, final Card blocker) {
-        // add attacker and blocker first in case of LKI
-        CardCollection list = new CardCollection(attacker);
-        if (blocker != null) {
-            list.add(blocker);
+        final CardCollectionView cards = attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES);
+        if (StaticAbilityModeProbe.listener != null) {
+            final CardCollection list = new CardCollection(attacker);
+            if (blocker != null) {
+                list.add(blocker);
+            }
+            list.addAllUnique(cards);
+            return StaticAbilityModeProbe.listener.visits(list, () -> cantBlockByVisits(attacker, blocker, cards),
+                    found -> !found);
         }
-        list.addAllUnique(attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
-        for (final Card ca : list) {
-            for (final StaticAbility stAb : ca.getStaticAbilities()) {
-                if (!stAb.checkConditions(StaticAbilityMode.CantBlockBy)) {
-                    continue;
-                }
-                if (applyCantBlockByAbility(stAb, attacker, blocker)) {
-                    return true;
-                }
+        return cantBlockByVisits(attacker, blocker, cards);
+    }
+
+    // attacker and blocker first in case of LKI (the blocker unless it equals the attacker), then each of the cards
+    // equal to neither: the order of a CardCollection of the attacker to which the blocker and then the cards were
+    // added, without building one
+    private static boolean cantBlockByVisits(final Card attacker, final Card blocker, final CardCollectionView cards) {
+        if (cantBlockByAny(attacker, attacker, blocker)) {
+            return true;
+        }
+        final boolean blockerVisited = blocker != null && !blocker.equals(attacker);
+        if (blockerVisited && cantBlockByAny(blocker, attacker, blocker)) {
+            return true;
+        }
+        for (final Card ca : cards) {
+            if (ca != null && !ca.equals(attacker) && !(blockerVisited && ca.equals(blocker))
+                    && cantBlockByAny(ca, attacker, blocker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean cantBlockByAny(final Card ca, final Card attacker, final Card blocker) {
+        StaticAbilityModeProbe.visited(ca);
+        for (final StaticAbility stAb : ca.getStaticAbilities()) {
+            if (!stAb.checkConditions(StaticAbilityMode.CantBlockBy)) {
+                continue;
+            }
+            if (applyCantBlockByAbility(stAb, attacker, blocker)) {
+                return true;
             }
         }
         return false;
