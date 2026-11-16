@@ -30,6 +30,7 @@ import forge.game.replacement.ReplacementEffect;
 import forge.game.replacement.ReplacementHandler;
 import forge.game.replacement.ReplacementLayer;
 import forge.game.replacement.ReplacementType;
+import forge.game.undo.UndoManager;
 import forge.util.Visitor;
 
 /**
@@ -51,8 +52,7 @@ public class WalkSummaryTest extends AITest {
 
     @AfterMethod
     public void probeOff() {
-        WalkSummaryProbe.verify = false;
-        WalkSummaryProbe.plain = false;
+        WalkSummaryProbe.stop();
     }
 
     /** A card known to have no replacement effect (its effects were read). */
@@ -460,15 +460,14 @@ public class WalkSummaryTest extends AITest {
         params.put(AbilityKey.Origin, ZoneType.Battlefield);
         params.put(AbilityKey.Destination, ZoneType.Graveyard);
         params.put(AbilityKey.LastStateBattlefield, new CardCollection(lki));
-        WalkSummaryProbe.reset();
-        WalkSummaryProbe.verify = true;
+        WalkSummaryProbe.start(false);
         AssertJUnit.assertEquals(List.of(dies), game.getReplacementHandler()
                 .getReplacementList(ReplacementType.Moved, params, ReplacementLayer.Other));
-        AssertJUnit.assertEquals(0L, WalkSummaryProbe.WALKS.sum());
+        AssertJUnit.assertEquals(0L, WalkSummaryProbe.walks());
         // without one the walk is summarized
         AssertJUnit.assertTrue(target.canUntap(p, true));
-        AssertJUnit.assertEquals(1L, WalkSummaryProbe.WALKS.sum());
-        AssertJUnit.assertEquals(0L, WalkSummaryProbe.FAILURES.sum());
+        AssertJUnit.assertEquals(1L, WalkSummaryProbe.walks());
+        AssertJUnit.assertEquals(0L, WalkSummaryProbe.failures());
     }
 
     @Test
@@ -589,8 +588,7 @@ public class WalkSummaryTest extends AITest {
             }
         }
         Card target = summarizedTarget(game, p);
-        WalkSummaryProbe.reset();
-        WalkSummaryProbe.verify = true;
+        WalkSummaryProbe.start(false);
         for (int i = 0; i < 3; i++) {
             AssertJUnit.assertTrue(target.canUntap(p, true));
         }
@@ -598,9 +596,145 @@ public class WalkSummaryTest extends AITest {
         for (int i = 0; i < 3; i++) {
             AssertJUnit.assertFalse(target.canUntap(p, true));
         }
-        AssertJUnit.assertEquals(6L, WalkSummaryProbe.WALKS.sum());
-        AssertJUnit.assertTrue(WalkSummaryProbe.SKIPPED.sum() > 0);
-        AssertJUnit.assertEquals(1L, WalkSummaryProbe.DROPPED.sum());
-        AssertJUnit.assertEquals(0L, WalkSummaryProbe.FAILURES.sum());
+        AssertJUnit.assertEquals(6L, WalkSummaryProbe.walks());
+        AssertJUnit.assertTrue(WalkSummaryProbe.skipped() > 0);
+        AssertJUnit.assertEquals(1L, WalkSummaryProbe.DROPPED[0].sum());
+        AssertJUnit.assertEquals(0L, WalkSummaryProbe.failures());
+    }
+
+    @Test
+    public void aSummaryMadeByAWalkAVisitMadeIsFollowedFromThePositionReached() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        Zone library = p.getZone(ZoneType.Library);
+        Card f0 = withEffect(p, ZoneType.Library, CANT_UNTAP);
+        Card f1 = withEffect(p, ZoneType.Library, CANT_UNTAP);
+        Card f2 = withEffect(p, ZoneType.Library, CANT_UNTAP);
+        Card f3 = withEffect(p, ZoneType.Library, CANT_UNTAP);
+        quiet(p, ZoneType.Library);
+        quiet(p, ZoneType.Library);
+        quiet(p, ZoneType.Library);
+        Card h = withEffect(p, ZoneType.Hand, CANT_UNTAP);
+        p.getZone(ZoneType.Hand).remove(h);
+        summarize(game);
+        Zone.WalkSummary s = library.validWalkSummary();
+        AssertJUnit.assertNotNull(s);
+        AssertJUnit.assertEquals(4, s.index.length);
+        // at f3 (position 3, the old summary's fourth entry) the visit takes f0 and f1 out and puts h last: the list
+        // is f2 f3 q q q h, the plain loop goes on at position 4 and visits h at 5. Two walks made by the visit note
+        // the changed zone and then summarize it again, so the outer walk goes on with a summary whose entries
+        // (f2 f3 h at 0 1 5) are not the ones it was reading
+        final List<Card> out = new ArrayList<>();
+        final AtomicBoolean done = new AtomicBoolean(false);
+        final List<Zone.WalkSummary> made = new ArrayList<>();
+        game.forEachCardInGameSummarized(c -> {
+            if ((c.knownReplacementEvents() & UNTAP) != 0) {
+                out.add(c);
+            }
+            if (c == f3 && !done.getAndSet(true)) {
+                library.remove(f0);
+                library.remove(f1);
+                library.add(h);
+                summarize(game);
+                made.add(library.validWalkSummary());
+            }
+            return true;
+        }, UNTAP, null);
+        AssertJUnit.assertEquals(List.of(f0, f1, f2, f3, h), out);
+        AssertJUnit.assertNotNull(made.get(0));
+        AssertJUnit.assertNotSame(s, made.get(0));
+        AssertJUnit.assertEquals(3, made.get(0).index.length);
+        AssertJUnit.assertEquals(5, made.get(0).index[2]);
+    }
+
+    @Test
+    public void anUndoBringsBackTheSummaryTogetherWithWhatItPasses() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        Zone battlefield = p.getZone(ZoneType.Battlefield);
+        Card target = summarizedTarget(game, p);
+        Zone.WalkSummary s = battlefield.validWalkSummary();
+        long epoch = game.getWalkCounterEpoch();
+        UndoManager.Mark mark = game.getUndoManager().markForRollback(game);
+        AssertJUnit.assertNotNull(mark);
+
+        target.setCounters(CounterEnumType.STUN, 1);
+        AssertJUnit.assertNull(battlefield.validWalkSummary());
+        AssertJUnit.assertEquals(1, untapReplacements(game, target));
+        summarize(game);
+        AssertJUnit.assertNotNull(battlefield.validWalkSummary());
+        AssertJUnit.assertNotSame(s, battlefield.validWalkSummary());
+        AssertJUnit.assertEquals(epoch + 1, game.getWalkCounterEpoch());
+
+        // the undo sets the counters, the epoch, the summary and the mark back to the capture, all at once
+        AssertJUnit.assertTrue(game.getUndoManager().rollbackTo(game, mark));
+        AssertJUnit.assertEquals(0, target.getCounters(CounterEnumType.STUN));
+        AssertJUnit.assertEquals(epoch, game.getWalkCounterEpoch());
+        AssertJUnit.assertSame(s, battlefield.validWalkSummary());
+        AssertJUnit.assertSame(battlefield, target.getWalkSummaryZone());
+        WalkSummaryProbe.start(false);
+        for (int i = 0; i < 3; i++) {
+            AssertJUnit.assertEquals(0, untapReplacements(game, target));
+            AssertJUnit.assertTrue(target.canUntap(p, true));
+        }
+        // and a counter put after it is seen again, though the epoch comes back to the same value as before
+        target.setCounters(CounterEnumType.STUN, 1);
+        AssertJUnit.assertEquals(epoch + 1, game.getWalkCounterEpoch());
+        AssertJUnit.assertNull(battlefield.validWalkSummary());
+        for (int i = 0; i < 3; i++) {
+            AssertJUnit.assertEquals(1, untapReplacements(game, target));
+        }
+        AssertJUnit.assertTrue(WalkSummaryProbe.skipped() > 0);
+        AssertJUnit.assertEquals(0L, WalkSummaryProbe.failures());
+    }
+
+    @Test
+    public void anUndoOfAChangedListBringsBackASummaryThatNoLongerHolds() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        Zone library = p.getZone(ZoneType.Library);
+        List<Card> cards = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            cards.add(i == 2 ? withEffect(p, ZoneType.Library, CANT_UNTAP) : quiet(p, ZoneType.Library));
+        }
+        for (int round = 0; round < 2; round++) {
+            summarize(game);
+            Zone.WalkSummary s = library.validWalkSummary();
+            AssertJUnit.assertNotNull(s);
+            UndoManager.Mark mark = game.getUndoManager().markForRollback(game);
+            AssertJUnit.assertNotNull(mark);
+            library.reorder(cards.get(0), 3);
+            if (round == 1) {
+                // and back: the same cards in the same order, but the list has moved on
+                library.reorder(cards.get(0), 0);
+            }
+            summarize(game);
+            AssertJUnit.assertTrue(game.getUndoManager().rollbackTo(game, mark));
+            AssertJUnit.assertEquals(cards, List.copyOf(library.getCards()));
+            AssertJUnit.assertNull(library.validWalkSummary());
+            WalkSummaryProbe.start(false);
+            assertSameWork(game);
+            summarize(game);
+            AssertJUnit.assertEquals(List.of(cards.get(2)), visited(game, UNTAP));
+            AssertJUnit.assertEquals(0L, WalkSummaryProbe.failures());
+            WalkSummaryProbe.stop();
+        }
+    }
+
+    @Test
+    public void aCardTurnedFaceDownIsSeen() {
+        Game game = initAndCreateGame();
+        Player p = game.getPlayers().get(0);
+        Card target = summarizedTarget(game, p);
+        target.setOriginalStateAsFaceDown();
+        AssertJUnit.assertNull(p.getZone(ZoneType.Battlefield).validWalkSummary());
+        AssertJUnit.assertNull(target.getWalkSummaryZone());
+        AssertJUnit.assertEquals(List.of(target), worked(game, UNTAP, true));
+        assertSameWork(game);
+    }
+
+    private static int untapReplacements(final Game game, final Card c) {
+        return game.getReplacementHandler().getReplacementList(ReplacementType.Untap, AbilityKey.mapFromAffected(c),
+                ReplacementLayer.Other).size();
     }
 }
