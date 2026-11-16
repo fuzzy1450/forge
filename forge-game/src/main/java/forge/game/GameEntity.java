@@ -333,7 +333,14 @@ public abstract class GameEntity implements GameObject, IIdentifiable {
     }
 
     public void setCounters(final CounterType counterType, final Integer num) {
+        if (num > 0 && counters.isEmpty()) {
+            countersBecomeNonEmpty();
+        }
         counters.setCount(counterType, num);
+    }
+
+    /** Called right before a counter is put on this entity when it has none. */
+    protected void countersBecomeNonEmpty() {
     }
 
     abstract public void setCounters(final Multiset<CounterType> allCounters);
