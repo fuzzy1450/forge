@@ -2033,6 +2033,10 @@ public class ComputerUtilCard {
         if (!hiddenKws.isEmpty()) {
             pumped.addHiddenExtrinsicKeywords(timestamp, 0, hiddenKws);
         }
+        // pumped holds c's own counters, not a copy: the one place two cards share a multiset. The replacement walk's
+        // zone summaries (Zone#summarizeWalk) rely on any such pair being cards of one game, which it is (pumped is
+        // copied into c's game): a first counter put through either one moves that game's counter epoch. Never share
+        // a multiset with a card of another game or of none.
         pumped.setCounters(c.getCounters());
         //Copies tap-state and extra keywords (auras, equipment, etc.) 
         if (c.isTapped()) {

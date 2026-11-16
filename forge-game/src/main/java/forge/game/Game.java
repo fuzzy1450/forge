@@ -569,7 +569,11 @@ public class Game {
         mayHavePhasedOutCards = true;
     }
 
-    /** Moved on every time a card of this game gets a counter when it has none (Zone#summarizeWalk); only grows. */
+    /**
+     * Moved on every time a card of this game gets a counter when it has none (Zone#summarizeWalk). It only grows
+     * while the game plays; the GUI's undo (GameMemento) sets it back with every other field, the zones' summaries
+     * included (see Zone.WalkSummary).
+     */
     public final long getWalkCounterEpoch() {
         return walkCounterEpoch;
     }
@@ -996,9 +1000,7 @@ public class Game {
      */
     public void forEachCardInGameSummarized(final Visitor<Card> visitor, final long events,
             final java.util.function.BooleanSupplier summaryUsable) {
-        if (WalkSummaryProbe.verify) {
-            WalkSummaryProbe.WALKS.increment();
-        }
+        WalkSummaryProbe.noteWalk();
         for (final Player player : getPlayers()) {
             if (!player.getZone(ZoneType.Graveyard).visitSummarized(visitor, events, summaryUsable)) {
                 return;

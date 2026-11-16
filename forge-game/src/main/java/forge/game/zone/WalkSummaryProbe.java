@@ -9,65 +9,112 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 
+import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.util.SimScope;
 import forge.util.Visitor;
 
 /**
- * A check of the replacement walk's summaries for tests, off unless a test turns it on (before its games start).
- * With {@link #verify} on, Zone#visitSummarized does not jump over the cards its summary passes: it steps through
- * every position, and at each one it would pass it checks, right then, that the card is known to have no
- * replacement effect for the walk's events (so the visit would have returned at once), that the card is marked with
- * the zone and is a card of its game, and around each stretch of passed cards that no id counter of the bound
- * SimScope moved and that its random stream is the same object in the same state. It counts what it saw. Turning it
- * on changes no game: the same cards are visited and passed.
+ * A test seam for the replacement walk's summaries (Zone#visitSummarized). It is off in every production launch: only
+ * a test turns it on, through {@link #start}, before its games start, and off through {@link #stop}. While it is off
+ * nothing here runs but a flag read once per walk, per zone walk, per summary built or dropped and per counter epoch
+ * move, never per card.
+ *
+ * <p>While it is on, Zone#visitSummarized does not jump over the cards its summary passes: it steps through every
+ * position, and at each one it would pass it checks, right then, that the card is known to have no replacement effect
+ * for the walk's events (so the visit would have returned at once), that the card is marked with the zone and is a
+ * card of its game, and around each stretch of passed cards that no id counter of the bound SimScope and no card id
+ * of the game moved and that the scope's random stream is the same object in the same state. It counts what it saw.
+ * Turning it on changes no game: the same cards are visited and passed. With {@code plain} it passes no card at all
+ * (the walk as forEachCardInGame makes it), as a reference run.</p>
  */
 public final class WalkSummaryProbe {
-    /** Read by the walk; set by a test before any game it checks starts. */
-    public static boolean verify = false;
-    /** With verify on, pass no card: every card is visited, as forEachCardInGame visits it (a reference run). */
-    public static boolean plain = false;
+    static boolean verify = false;
+    static boolean plain = false;
 
-    public static final LongAdder WALKS = new LongAdder();
-    public static final LongAdder ZONE_WALKS = new LongAdder();
-    /** Zone walks that found a summary that holds, and the summary usable, at their first card. */
-    public static final LongAdder ZONE_WALKS_SUMMARIZED = new LongAdder();
-    public static final LongAdder VISITED = new LongAdder();
-    public static final LongAdder SKIPPED = new LongAdder();
-    public static final LongAdder BUILDS = new LongAdder();
-    /** Summaries dropped by a card's write (Card#walkInputsChanged). */
-    public static final LongAdder DROPPED = new LongAdder();
-    /** Zone walks that started without a summary that holds: none kept, the list changed, the counter epoch moved. */
-    public static final LongAdder START_NONE = new LongAdder();
-    public static final LongAdder START_VERSION = new LongAdder();
-    public static final LongAdder START_EPOCH = new LongAdder();
-    public static final LongAdder STRETCHES = new LongAdder();
-    /** Stretches checked against a bound scope, and those that ran with none bound (only the cards were checked). */
-    public static final LongAdder STRETCHES_SCOPED = new LongAdder();
-    public static final LongAdder STRETCHES_UNSCOPED = new LongAdder();
-    public static final LongAdder FAILURES = new LongAdder();
-    public static final AtomicReference<String> FIRST_FAILURE = new AtomicReference<>();
+    static final LongAdder WALKS = new LongAdder();
+    static final LongAdder ZONE_WALKS = new LongAdder();
+    /** Zone walks by what they found first: a summary that held, or none kept (one that no longer held is ended). */
+    static final LongAdder START_VALID = new LongAdder();
+    static final LongAdder START_NONE = new LongAdder();
+    static final LongAdder VISITED = new LongAdder();
+    static final LongAdder SKIPPED = new LongAdder();
+    static final LongAdder BUILDS = new LongAdder();
+    /** Summaries ended, [0] in real games, [1] in simulation copies: dropped by a card's write, found with the list
+     *  changed, found with the counter epoch moved. */
+    static final LongAdder[] DROPPED = { new LongAdder(), new LongAdder() };
+    static final LongAdder[] ENDED_VERSION = { new LongAdder(), new LongAdder() };
+    static final LongAdder[] ENDED_EPOCH = { new LongAdder(), new LongAdder() };
+    /** Counter epoch moves, [real game, simulation copy], by whether the card that got its first counter is the very
+     *  object its last known zone's list holds, or a detached one (an LKI or other copy). */
+    static final LongAdder[] BUMPS_IN_ZONE = { new LongAdder(), new LongAdder() };
+    static final LongAdder[] BUMPS_DETACHED = { new LongAdder(), new LongAdder() };
+    static final LongAdder STRETCHES = new LongAdder();
+    static final LongAdder STRETCHES_SCOPED = new LongAdder();
+    static final LongAdder STRETCHES_UNSCOPED = new LongAdder();
+    static final LongAdder FAILURES = new LongAdder();
+    static final AtomicReference<String> FIRST_FAILURE = new AtomicReference<>();
 
     private WalkSummaryProbe() {
     }
 
-    public static void reset() {
-        for (LongAdder a : new LongAdder[] { WALKS, ZONE_WALKS, ZONE_WALKS_SUMMARIZED, VISITED, SKIPPED, BUILDS,
-                DROPPED, START_NONE, START_VERSION, START_EPOCH, STRETCHES, STRETCHES_SCOPED, STRETCHES_UNSCOPED,
-                FAILURES }) {
+    /** Clears the counts and turns the checks on; with {@code plainWalk}, no card is passed. */
+    public static void start(final boolean plainWalk) {
+        for (LongAdder a : all()) {
             a.reset();
         }
         FIRST_FAILURE.set(null);
+        plain = plainWalk;
+        verify = true;
     }
 
+    /** Turns the checks off (the counts stay readable). */
+    public static void stop() {
+        verify = false;
+        plain = false;
+    }
+
+    public static long walks() {
+        return WALKS.sum();
+    }
+
+    public static long skipped() {
+        return SKIPPED.sum();
+    }
+
+    public static long failures() {
+        return FAILURES.sum();
+    }
+
+    public static String firstFailure() {
+        return FIRST_FAILURE.get();
+    }
+
+    private static LongAdder[] all() {
+        return new LongAdder[] { WALKS, ZONE_WALKS, START_VALID, START_NONE, VISITED, SKIPPED, BUILDS, DROPPED[0],
+                DROPPED[1], ENDED_VERSION[0], ENDED_VERSION[1], ENDED_EPOCH[0], ENDED_EPOCH[1], BUMPS_IN_ZONE[0],
+                BUMPS_IN_ZONE[1], BUMPS_DETACHED[0], BUMPS_DETACHED[1], STRETCHES, STRETCHES_SCOPED,
+                STRETCHES_UNSCOPED, FAILURES };
+    }
+
+    private static String pair(final LongAdder[] a) {
+        return a[0].sum() + "/" + a[1].sum();
+    }
+
+    /** The counts; each pair is real games / simulation copies. */
     public static String counts() {
-        return "walks=" + WALKS.sum() + " zoneWalks=" + ZONE_WALKS.sum() + " zoneWalksSummarized="
-                + ZONE_WALKS_SUMMARIZED.sum() + " visited=" + VISITED.sum() + " skipped=" + SKIPPED.sum()
-                + " builds=" + BUILDS.sum() + " dropped=" + DROPPED.sum() + " startNone=" + START_NONE.sum()
-                + " startVersion=" + START_VERSION.sum() + " startEpoch=" + START_EPOCH.sum() + " stretches="
-                + STRETCHES.sum() + " stretchesScoped=" + STRETCHES_SCOPED.sum() + " stretchesUnscoped="
-                + STRETCHES_UNSCOPED.sum() + " failures=" + FAILURES.sum();
+        return "walks=" + WALKS.sum() + " zoneWalks=" + ZONE_WALKS.sum() + " startValid=" + START_VALID.sum()
+                + " startNone=" + START_NONE.sum() + " visited=" + VISITED.sum() + " skipped=" + SKIPPED.sum()
+                + " builds=" + BUILDS.sum() + " endedByDrop=" + pair(DROPPED) + " endedByVersion="
+                + pair(ENDED_VERSION) + " endedByEpoch=" + pair(ENDED_EPOCH) + " bumpsInZone=" + pair(BUMPS_IN_ZONE)
+                + " bumpsDetached=" + pair(BUMPS_DETACHED) + " stretches=" + STRETCHES.sum() + " stretchesScoped="
+                + STRETCHES_SCOPED.sum() + " stretchesUnscoped=" + STRETCHES_UNSCOPED.sum() + " failures="
+                + FAILURES.sum();
+    }
+
+    private static int kind(final Game game) {
+        return game != null && game.isSimulationCopy() ? 1 : 0;
     }
 
     static void fail(final String what) {
@@ -75,41 +122,71 @@ public final class WalkSummaryProbe {
         FIRST_FAILURE.compareAndSet(null, what);
     }
 
-    static void noteInvalid(final Zone.WalkSummary kept, final int listVersion) {
-        if (kept == null) {
-            START_NONE.increment();
-        } else if (kept.version != listVersion) {
-            START_VERSION.increment();
-        } else {
-            START_EPOCH.increment();
+    /** Game#forEachCardInGameSummarized, once per walk. */
+    public static void noteWalk() {
+        if (verify) {
+            WALKS.increment();
         }
     }
 
-    /** The id counters and the random stream of the bound scope, read without stepping or drawing. */
+    /** Card#countersBecomeNonEmpty, after it moved {@code game}'s counter epoch. */
+    public static void noteEpochBump(final Card c, final Game game) {
+        if (!verify) {
+            return;
+        }
+        final Zone z = c.getLastKnownZone();
+        final boolean inZone = z != null && z.game == game && z.holdsObject(c);
+        (inZone ? BUMPS_IN_ZONE : BUMPS_DETACHED)[kind(game)].increment();
+    }
+
+    static void noteDropped(final Zone zone) {
+        DROPPED[kind(zone.game)].increment();
+    }
+
+    static void noteBuild(final Zone zone) {
+        BUILDS.increment();
+    }
+
+    static void noteValid(final Zone zone) {
+        START_VALID.increment();
+    }
+
+    static void noteNone(final Zone zone) {
+        START_NONE.increment();
+    }
+
+    static void noteInvalid(final Zone zone, final Zone.WalkSummary kept, final int listVersion) {
+        (kept.version != listVersion ? ENDED_VERSION : ENDED_EPOCH)[kind(zone.game)].increment();
+    }
+
+    /** The id counters and the random stream of the bound scope, and the game's card id, read without stepping or
+     *  drawing. */
     private static final class ScopeState {
         final SimScope scope;
         final int[] ids;
+        final int cardId;
         final Random random;
         final byte[] randomState;
 
-        ScopeState(final SimScope scope) {
+        ScopeState(final SimScope scope, final Game game) {
             this.scope = scope;
             final SimScope.Counter[] all = SimScope.Counter.values();
             ids = new int[all.length];
             for (int i = 0; i < all.length; i++) {
                 ids[i] = scope.peek(all[i]);
             }
+            cardId = game.getCardIdCounter();
             random = scope.random();
             randomState = serialize(random);
         }
 
         /** Null when no scope is bound, or a cancelled one (whose random stream throws). */
-        static ScopeState read() {
+        static ScopeState read(final Game game) {
             final SimScope scope = SimScope.current();
             if (scope == null || scope.isCancelled()) {
                 return null;
             }
-            return new ScopeState(scope);
+            return new ScopeState(scope, game);
         }
 
         void checkUnmoved(final ScopeState after, final Zone zone) {
@@ -120,6 +197,10 @@ public final class WalkSummaryProbe {
             if (!Arrays.equals(ids, after.ids)) {
                 fail("an id counter moved across a passed stretch in " + zone + ": " + Arrays.toString(ids) + " -> "
                         + Arrays.toString(after.ids));
+            }
+            if (cardId != after.cardId) {
+                fail("a card id was taken across a passed stretch in " + zone + ": " + cardId + " -> "
+                        + after.cardId);
             }
             if (random != after.random || !Arrays.equals(randomState, after.randomState)) {
                 fail("the random stream moved across a passed stretch in " + zone);
@@ -144,10 +225,6 @@ public final class WalkSummaryProbe {
     static boolean visitLockStep(final Zone zone, final CardCollection list, final Visitor<Card> visitor,
             final long events, final BooleanSupplier summaryUsable) {
         ZONE_WALKS.increment();
-        if (!list.isEmpty() && zone.validWalkSummary() != null
-                && (summaryUsable == null || summaryUsable.getAsBoolean())) {
-            ZONE_WALKS_SUMMARIZED.increment();
-        }
         boolean inStretch = false;
         boolean scoped = false;
         ScopeState before = null;
@@ -162,7 +239,7 @@ public final class WalkSummaryProbe {
             if (pass) {
                 if (!inStretch) {
                     inStretch = true;
-                    before = ScopeState.read();
+                    before = ScopeState.read(zone.game);
                     scoped = before != null;
                 }
                 final Card c = list.get(i);
@@ -202,7 +279,7 @@ public final class WalkSummaryProbe {
         STRETCHES.increment();
         if (scoped) {
             STRETCHES_SCOPED.increment();
-            before.checkUnmoved(ScopeState.read(), zone);
+            before.checkUnmoved(ScopeState.read(zone.game), zone);
         } else {
             STRETCHES_UNSCOPED.increment();
         }
