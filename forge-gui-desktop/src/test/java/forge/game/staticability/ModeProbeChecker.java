@@ -9,8 +9,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
@@ -53,11 +55,53 @@ public final class ModeProbeChecker implements StaticAbilityModeProbe.Listener {
     }
 
     public void install() {
-        StaticAbilityModeProbe.listener = this;
+        StaticAbilityModeProbe.setListener(this);
     }
 
     public static void uninstall() {
-        StaticAbilityModeProbe.listener = null;
+        StaticAbilityModeProbe.setListener(null);
+    }
+
+    // what the probe saw of the flags themselves (counts by a key naming the event and the kind of game)
+    public final Map<String, AtomicLong> saturations = new ConcurrentSkipListMap<>();
+    public final Map<String, AtomicLong> newModesAfterTurnOne = new ConcurrentSkipListMap<>();
+    public final Map<String, AtomicLong> fullScans = new ConcurrentSkipListMap<>();
+    // the checks themselves ask the flags: those answers are not the game's
+    private final ThreadLocal<int[]> checking = ThreadLocal.withInitial(() -> new int[1]);
+
+    private static String kind(final Game game) {
+        return game.isSimulationCopy() ? "rollout copy" : "real game";
+    }
+
+    private static void count(final Map<String, AtomicLong> map, final String key) {
+        map.computeIfAbsent(key, k -> new AtomicLong()).incrementAndGet();
+    }
+
+    @Override
+    public void mayHave(final Game game, final StaticAbilityMode mode, final boolean saturated) {
+        if (checking.get()[0] == 0) {
+            count(fullScans, (saturated ? "saturated" : "mode noted") + ", " + kind(game));
+        }
+    }
+
+    @Override
+    public void noted(final Game game, final Set<StaticAbilityMode> added) {
+        if (game.getPhaseHandler().getTurn() >= 1) {
+            for (final StaticAbilityMode m : added) {
+                count(newModesAfterTurnOne, m + ", " + kind(game));
+            }
+        }
+    }
+
+    @Override
+    public void saturated(final Game game, final Object cause) {
+        count(saturations, (cause instanceof ZoneType ? "R6 card of another game in " + cause : String.valueOf(cause))
+                + ", " + kind(game) + ", turn " + game.getPhaseHandler().getTurn());
+    }
+
+    public String flagCounts() {
+        return "saturations=" + saturations + " | new modes after turn 1 began=" + newModesAfterTurnOne
+                + " | fast-path-eligible calls that scanned=" + fullScans;
     }
 
     private void mismatch(final String what) {
@@ -70,6 +114,16 @@ public final class ModeProbeChecker implements StaticAbilityModeProbe.Listener {
     public void skipped(final Game game, final Set<StaticAbilityMode> modes, final List<Card> extraCards,
             final BooleanSupplier scanFindsNothing) {
         final long n = skips.incrementAndGet();
+        checking.get()[0]++;
+        try {
+            checkSkip(game, modes, extraCards, scanFindsNothing, n);
+        } finally {
+            checking.get()[0]--;
+        }
+    }
+
+    private void checkSkip(final Game game, final Set<StaticAbilityMode> modes, final List<Card> extraCards,
+            final BooleanSupplier scanFindsNothing, final long n) {
         for (final StaticAbilityMode m : modes) {
             if (game.mayHaveStaticAbilityMode(m)) {
                 mismatch("skipped a scan for " + m + ", which the game may have");

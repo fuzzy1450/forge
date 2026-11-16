@@ -70,7 +70,8 @@ public class StaticAbilityModeProbeGamesTest {
         } finally {
             ModeProbeChecker.uninstall();
         }
-        System.err.println("static ability mode probe: " + checker.summary() + "\n  " + String.join("\n  ", results));
+        System.err.println("static ability mode probe: " + checker.summary() + "\n  " + checker.flagCounts() + "\n  "
+                + String.join("\n  ", results));
         Assert.assertTrue(checker.mismatches.isEmpty(), checker.summary() + " " + checker.mismatches);
         Assert.assertTrue(checker.scopedSkips.get() > 1000, checker.summary());
         Assert.assertTrue(checker.visitCalls.get() > 1000, checker.summary());

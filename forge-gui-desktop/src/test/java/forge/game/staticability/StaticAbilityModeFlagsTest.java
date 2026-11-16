@@ -20,9 +20,12 @@ import org.testng.annotations.Test;
 import forge.ai.AITest;
 import forge.ai.simulation.GameCopier;
 import forge.game.Game;
+import forge.game.GameSnapshot;
 import forge.game.card.Card;
 import forge.game.card.CardCopyService;
 import forge.game.card.CounterEnumType;
+import forge.game.keyword.Keyword;
+import forge.game.keyword.KeywordInterface;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
@@ -337,6 +340,89 @@ public class StaticAbilityModeFlagsTest extends AITest {
         ai(game).getZone(ZoneType.Graveyard).add(foreign);
         assertTrue(game.mayHaveStaticAbilityMode(StaticAbilityMode.CantRegenerate));
         assertTrue(game.mayHaveStaticAbilityMode(StaticAbilityMode.Devotion));
+    }
+
+    /** The same through Zone.setCards, which replaces a zone's cards wholesale. */
+    @Test
+    public void aCardOfAnotherGameSetIntoAZoneSaturatesTheGame() {
+        Game game = initAndCreateGame();
+        Game other = initAndCreateGame();
+        Card own = createCard("Grizzly Bears", ai(game));
+        Card foreign = createCard("Grizzly Bears", ai(other));
+        ai(game).getZone(ZoneType.Exile).setCards(List.of(own));
+        assertFalse(game.mayHaveStaticAbilityMode(StaticAbilityMode.CantRegenerate)); // a card of the game: nothing
+        ai(game).getZone(ZoneType.Exile).setCards(List.of(own, foreign));
+        assertTrue(game.mayHaveStaticAbilityMode(StaticAbilityMode.CantRegenerate));
+        assertTrue(game.mayHaveStaticAbilityMode(StaticAbilityMode.Devotion));
+    }
+
+    /** A static ability hosted by a card of another game, put straight into a state of a card of this game. */
+    @Test
+    public void aStaticAbilityAddedToAStateNotesItsModeInTheStatesGame() {
+        Game game = initAndCreateGame();
+        Game other = initAndCreateGame();
+        Card cardOfB = addCard("Grizzly Bears", ai(other));
+        StaticAbility st = StaticAbility.create("Mode$ CantRegenerate | ValidCard$ Creature", cardOfB,
+                cardOfB.getCurrentState(), true);
+        assertTrue(other.mayHaveStaticAbilityMode(StaticAbilityMode.CantRegenerate));
+        Card cardOfA = addCard("Grizzly Bears", ai(game));
+        assertFalse(game.mayHaveStaticAbilityMode(StaticAbilityMode.CantRegenerate));
+        cardOfA.getCurrentState().addStaticAbility(st);
+        assertTrue(game.mayHaveStaticAbilityMode(StaticAbilityMode.CantRegenerate));
+        assertFalse(game.mayHaveStaticAbilityMode(StaticAbilityMode.Devotion));
+    }
+
+    /** The same through a keyword instance whose host is a card of this game. */
+    @Test
+    public void aStaticAbilityAddedToAKeywordNotesItsModeInTheKeywordHostsGame() {
+        Game game = initAndCreateGame();
+        Game other = initAndCreateGame();
+        Card cardOfB = addCard("Grizzly Bears", ai(other));
+        StaticAbility st = StaticAbility.create("Mode$ CantRegenerate | ValidCard$ Creature", cardOfB,
+                cardOfB.getCurrentState(), true);
+        Card cardOfA = addCard("Grizzly Bears", ai(game));
+        KeywordInterface ki = Keyword.getInstance("Vigilance");
+        ki.setHostCard(cardOfA); // it has no static ability yet, so this notes nothing
+        assertFalse(game.mayHaveStaticAbilityMode(StaticAbilityMode.CantRegenerate));
+        ki.addStaticAbility(st);
+        assertTrue(game.mayHaveStaticAbilityMode(StaticAbilityMode.CantRegenerate));
+        assertFalse(game.mayHaveStaticAbilityMode(StaticAbilityMode.Devotion));
+    }
+
+    /** A GameSnapshot copy starts with every mode of the game it copies, even one no card of it has any more. */
+    @Test
+    public void aSnapshotCopyStartsWithTheGamesModes() {
+        Game game = initAndCreateGame();
+        Player p = ai(game);
+        Card bears = addCard("Grizzly Bears", p);
+        Card gone = addCard("Grizzly Bears", p);
+        gone.addStaticAbility("Mode$ CantRegenerate | ValidCard$ Creature");
+        p.getZone(ZoneType.Battlefield).remove(gone);
+        assertTrue(game.mayHaveStaticAbilityMode(StaticAbilityMode.CantRegenerate));
+
+        Game copy = new GameSnapshot(game).makeCopy();
+        assertTrue(copy != game);
+        assertSame(copy.findById(bears.getId()).getGame(), copy);
+        assertTrue(copy.mayHaveStaticAbilityMode(StaticAbilityMode.CantRegenerate));
+        assertFalse(copy.mayHaveStaticAbilityMode(StaticAbilityMode.CantPreventDamage));
+    }
+
+    /** The second and third modes of the guards that test more than one: a lone static of each makes the scan run. */
+    @Test
+    public void everyModeOfTheLifeGuardsMakesTheScanRun() {
+        Game lose = initAndCreateGame();
+        addCard("Grizzly Bears", ai(lose)).addStaticAbility("Mode$ CantChangeLife | ValidPlayer$ Player");
+        assertTrue(StaticAbilityCantGainLosePayLife.anyCantLoseLife(ai(lose)));
+        assertTrue(StaticAbilityCantGainLosePayLife.anyCantGainLife(ai(lose)));
+        assertTrue(StaticAbilityCantGainLosePayLife.anyCantPayLife(ai(lose), false, null));
+
+        Game pay = initAndCreateGame();
+        addCard("Grizzly Bears", ai(pay)).addStaticAbility("Mode$ CantLoseLife | ValidPlayer$ Player");
+        assertTrue(StaticAbilityCantGainLosePayLife.anyCantPayLife(ai(pay), false, null));
+        assertTrue(StaticAbilityCantGainLosePayLife.anyCantLoseLife(ai(pay)));
+        assertFalse(StaticAbilityCantGainLosePayLife.anyCantGainLife(ai(pay))); // skipped
+        assertEquals(checker.skips.get(), 1L);
+        assertNoMismatch();
     }
 
     /** A static ability without a mode keeps every scan, so the scan still fails on it as it did. */
