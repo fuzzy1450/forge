@@ -108,6 +108,10 @@ public abstract class GameEntity implements GameObject, IIdentifiable {
         }
 
         for (final Card ca : getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
+            // none of its effects would pass the mode test below, and the rebuild would make none
+            if (ca.knownToHaveNoReplacementEffectOf(ReplacementType.DamageDone)) {
+                continue;
+            }
             for (final ReplacementEffect re : ca.getReplacementEffects()) {
                 if (!re.getMode().equals(ReplacementType.DamageDone) ||
                         (!re.hasParam("PreventionEffect") && !re.hasParam("Prevent"))) {

@@ -356,4 +356,14 @@ public abstract class ReplacementEffect extends TriggerReplacementBase {
     public boolean modeCheck(ReplacementType event, Map<AbilityKey, Object> runParams) {
         return event.equals(getMode());
     }
+
+    /**
+     * Every event modeCheck can accept, whatever the run params, as bits {@code 1L << event.ordinal()}: this effect's
+     * mode (every bit without one, so that no caller takes it for an effect of another mode). A subclass that overrides
+     * modeCheck to accept more events adds their bits here.
+     */
+    public long modeCheckEvents() {
+        final ReplacementType mode = getMode();
+        return mode == null ? -1L : 1L << mode.ordinal();
+    }
 }

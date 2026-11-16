@@ -124,6 +124,11 @@ public class ReplacementHandler {
             if (noLKIstate && c.knownToHaveNoReplacementEffects()) {
                 return true;
             }
+            // and so is one it knows to have none modeCheck accepts the event for: collectReplacer would turn each down
+            // after reading only hasRun and the layer, and the rebuild would make none
+            if (noLKIstate && c.knownToHaveNoReplacementEffectOf(event)) {
+                return true;
+            }
             final FCollectionView<ReplacementEffect> firstEffects = c.getReplacementEffects();
             if (noLKIstate && firstEffects.isEmpty()) {
                 return true;
@@ -980,6 +985,10 @@ public class ReplacementHandler {
         // a fog effect can only be active from a zone in STATIC_ABILITIES_SOURCE_ZONES
         // (zonesCheck below rejects other zones), so don't scan libraries and hands
         for (final Card c : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
+            // none of its effects would pass the mode test below, and the rebuild would make none
+            if (c.knownToHaveNoReplacementEffectOf(ReplacementType.DamageDone)) {
+                continue;
+            }
             for (final ReplacementEffect re : c.getReplacementEffects()) {
                 if (re.getMode() == ReplacementType.DamageDone
                         && re.getLayer() == ReplacementLayer.Other

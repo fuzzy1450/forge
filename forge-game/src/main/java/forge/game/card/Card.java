@@ -169,6 +169,11 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     private int noStaticAbilitiesVersion = 0;
     private CardState noTriggersState = null;
     private int noTriggersVersion = 0;
+    // the events (ReplacementEffect#modeCheckEvents bits) any replacement effect of the state last read had, with the
+    // trait version it was read at, kept under the same conditions as the memos above (see knownToHaveNoReplacementEffectOf)
+    private CardState replacementEventsState = null;
+    private int replacementEventsVersion = 0;
+    private long replacementEvents = 0L;
 
     // stores the card traits created by static abilities
     private final Table<StaticAbility, String, SpellAbility> storedSpellAbility = FSnapshotTable.createTree();
@@ -7321,9 +7326,20 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         final int version = traitVersion;
         final FCollectionView<ReplacementEffect> result = state.getReplacementEffects();
         // kept only when the rebuild read no type but the state's own (see CardState.hasOwnLiteralType)
-        if (result.isEmpty() && version == traitVersion && state.hasOwnLiteralType()) {
-            noReplacementEffectsState = state;
-            noReplacementEffectsVersion = version;
+        if (version == traitVersion && state.hasOwnLiteralType()) {
+            if (result.isEmpty()) {
+                noReplacementEffectsState = state;
+                noReplacementEffectsVersion = version;
+            }
+            if (replacementEventsState != state || replacementEventsVersion != version) {
+                long events = 0L;
+                for (final ReplacementEffect re : result) {
+                    events |= re.modeCheckEvents();
+                }
+                replacementEventsState = state;
+                replacementEventsVersion = version;
+                replacementEvents = events;
+            }
         }
         return result;
     }
@@ -7337,6 +7353,20 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     private boolean knownToHaveNoReplacementEffects(final CardState state) {
         return noReplacementEffectsState == state && noReplacementEffectsVersion == traitVersion
                 && !mayHaveSplitStates && !mayHaveChangedCardTraits && getNumAllCounters() == 0;
+    }
+
+    // whether getReplacementEffects() would find no effect whose modeCheck can accept the event, without rebuilding
+    // them: the effects found for the current state at the current trait version had none, under the conditions above.
+    // A rebuild under them returns those same effects (the lazily made ones were made by the read that found them, and
+    // none is ever dropped), and an effect's mode is fixed when it is made; its layer is not, so it is not read here
+    public final boolean knownToHaveNoReplacementEffectOf(final ReplacementType event) {
+        final CardState state = currentState;
+        if (knownToHaveNoReplacementEffects(state)) {
+            return true;
+        }
+        return event != null && replacementEventsState == state && replacementEventsVersion == traitVersion
+                && !mayHaveSplitStates && !mayHaveChangedCardTraits && getNumAllCounters() == 0
+                && (replacementEvents & 1L << event.ordinal()) == 0;
     }
 
     public ReplacementEffect addReplacementEffect(final ReplacementEffect replacementEffect) {
