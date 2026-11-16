@@ -310,7 +310,10 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
      * a card nothing is known of. Every other card was knownToHaveNoReplacementEffects. It holds while the list's
      * version and the game's counter epoch are those it was made at and the zone keeps it: every card it passes or
      * knows events of is marked with this zone (Card#getWalkSummaryZone), and a write to what those answers read
-     * drops it first (Card#walkInputsChanged).
+     * drops it first (Card#walkInputsChanged). The list's version only grows. The epoch, the zone's summary, the
+     * marks and the cards' answers can go back together, when the GUI's undo (GameMemento) restores every field to
+     * a capture: a summary it brings back then holds only for a list untouched since that capture (a restored list
+     * moves its version on), whose cards' answers are what they were when the summary held.
      */
     static final class WalkSummary {
         final int version;
@@ -335,9 +338,14 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
             walkSummary = null;
             lastWalkVersion = Long.MIN_VALUE;
             if (WalkSummaryProbe.verify) {
-                WalkSummaryProbe.DROPPED.increment();
+                WalkSummaryProbe.noteDropped(this);
             }
         }
+    }
+
+    /** Whether this very card object (not only an equal one, as an LKI copy is) is in this zone's list. */
+    final boolean holdsObject(final Card c) {
+        return cardList.contains(c) && cardList.get(c) == c;
     }
 
     /** This zone's replacement walk summary if it still holds, else null. */
@@ -388,7 +396,7 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
                 Arrays.copyOf(index, k), Arrays.copyOf(events, k));
         walkSummary = s;
         if (WalkSummaryProbe.verify) {
-            WalkSummaryProbe.BUILDS.increment();
+            WalkSummaryProbe.noteBuild(this);
         }
         return s;
     }
@@ -404,9 +412,16 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
     public final boolean visitSummarized(final Visitor<Card> visitor, final long events,
             final java.util.function.BooleanSupplier summaryUsable) {
         final CardCollection list = cardList;
+        final boolean probe = WalkSummaryProbe.verify;
         if (validWalkSummary() == null) {
-            if (WalkSummaryProbe.verify) {
-                WalkSummaryProbe.noteInvalid(walkSummary, list.version());
+            if (walkSummary != null) {
+                // a summary that no longer holds never holds again (unless an undo restores the whole game)
+                if (probe) {
+                    WalkSummaryProbe.noteInvalid(this, walkSummary, list.version());
+                }
+                walkSummary = null;
+            } else if (probe) {
+                WalkSummaryProbe.noteNone(this);
             }
             final long version = list.version();
             final long epoch = game.getWalkCounterEpoch();
@@ -416,8 +431,10 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
                 lastWalkVersion = version;
                 lastWalkCounterEpoch = epoch;
             }
+        } else if (probe) {
+            WalkSummaryProbe.noteValid(this);
         }
-        if (WalkSummaryProbe.verify) {
+        if (probe) {
             return WalkSummaryProbe.visitLockStep(this, list, visitor, events, summaryUsable);
         }
         WalkSummary seen = null;
@@ -428,8 +445,10 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
             if (s != null && (summaryUsable == null || summaryUsable.getAsBoolean())) {
                 final int[] index = s.index;
                 if (s != seen) {
+                    // a summary made since (by a walk a visit made): its entries are positions in today's list, and
+                    // the scan below passes those before i
                     seen = s;
-                    e = firstAtOrAfter(index, i);
+                    e = 0;
                 }
                 while (e < index.length && (index[e] < i || (s.events[e] & events) == 0)) {
                     e++;

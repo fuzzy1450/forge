@@ -52,6 +52,7 @@ import forge.game.staticability.*;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerHandler;
 import forge.game.trigger.TriggerType;
+import forge.game.zone.WalkSummaryProbe;
 import forge.game.zone.Zone;
 import forge.game.zone.ZoneType;
 import forge.item.IPaperCard;
@@ -7270,6 +7271,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         // this card gets, so every summary of the game is dropped (a summary passes only cards of its zone's game)
         if (game != null) {
             game.bumpWalkCounterEpoch();
+            WalkSummaryProbe.noteEpochBump(this, game);
         }
     }
 
