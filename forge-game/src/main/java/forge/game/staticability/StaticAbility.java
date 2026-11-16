@@ -100,6 +100,16 @@ public class StaticAbility extends CardTraitBase implements IIdentifiable, Clone
     }
     public void setMode(Set<StaticAbilityMode> modes) {
         this.modes = modes;
+        noteModesInHostGame();
+    }
+
+    // see Game#mayHaveStaticAbilityMode: called whenever the modes or the host are set
+    private void noteModesInHostGame() {
+        final Card host = getHostCard();
+        final Game game = host == null ? null : host.getGame();
+        if (game != null) {
+            game.noteStaticAbilityModes(modes);
+        }
     }
 
     public SpellAbility getPayingTrigSA() {
@@ -264,6 +274,7 @@ public class StaticAbility extends CardTraitBase implements IIdentifiable, Clone
             setMode(StaticAbilityMode.setValueOf(getParam("Mode")));
         }
         this.layers = this.generateLayer();
+        noteModesInHostGame(); // without a mode as well
     }
 
     public StaticAbilityView getView() {
@@ -592,6 +603,7 @@ public class StaticAbility extends CardTraitBase implements IIdentifiable, Clone
         if (payingTrigSA != null) {
             payingTrigSA.setHostCard(host);
         }
+        noteModesInHostGame();
     }
 
     public final StaticAbility copy(Card newHost, boolean lki) {
@@ -619,6 +631,7 @@ public class StaticAbility extends CardTraitBase implements IIdentifiable, Clone
             if (modes != null) {
                 clone.setMode(EnumSet.copyOf(modes));
             }
+            clone.noteModesInHostGame(); // without a mode as well
         } catch (final CloneNotSupportedException e) {
             System.err.println(e);
         }

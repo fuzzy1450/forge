@@ -199,6 +199,10 @@ public abstract class KeywordInstance<T extends KeywordInstance<?>> implements K
     public final void addStaticAbility(final StaticAbility st) {
         st.setKeyword(this);
         traitsChanged();
+        if (hostCard != null && hostCard.getGame() != null) {
+            // whatever its host, it is now one of this keyword's (see Game#mayHaveStaticAbilityMode)
+            hostCard.getGame().noteStaticAbilityModes(st.getMode());
+        }
         staticAbilities.add(st);
     }
 

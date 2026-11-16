@@ -112,6 +112,8 @@ public class GameCopier {
         Game newGame = new Game(newPlayers, currentRules, newMatch);
         newGame.markAsSimulationCopy();
         newGame.setNoGUIUser();
+        // the copy's cards get copies of the original's static abilities (see Game#mayHaveStaticAbilityMode)
+        newGame.inheritStaticAbilityModes(origGame);
         newGame.dangerouslySetTimestamp(origGame.getTimestamp());
 
         for (int i = 0; i < origGame.getPlayers().size(); i++) {
