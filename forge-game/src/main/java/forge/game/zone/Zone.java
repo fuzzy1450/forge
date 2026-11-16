@@ -156,7 +156,7 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
     // game can no longer tell which modes its zones hold (see Game#mayHaveStaticAbilityMode)
     private void noteCardOfAnotherGame(final Card c) {
         if (game != null && c.getGame() != game) {
-            game.saturateStaticAbilityModes();
+            game.saturateStaticAbilityModes(zoneType); // the zone type, for the probe
         }
     }
 

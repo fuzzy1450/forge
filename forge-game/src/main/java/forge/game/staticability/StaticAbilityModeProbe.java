@@ -10,8 +10,9 @@ import forge.game.Game;
 import forge.game.card.Card;
 
 /**
- * A hook for tests that check the static ability scans' shortcuts against the scans they stand for. Off (no listener)
- * unless a test installs one; while off, a shortcut reads one static field and nothing else.
+ * A test seam: tests that check the static ability scans' shortcuts against the scans they stand for install a listener
+ * here through {@link #setListener}. No production launch ever sets one, so the listener is null there, and a
+ * shortcut, or a write of a game's modes, reads the one static field and nothing else.
  */
 public final class StaticAbilityModeProbe {
     private StaticAbilityModeProbe() {
@@ -33,10 +34,29 @@ public final class StaticAbilityModeProbe {
         <T> T visits(List<Card> collectionOrder, Supplier<T> scan, Predicate<T> noMatch);
 
         void visited(Card c);
+
+        /** {@code game} answered true for {@code mode}, so the scan runs; {@code saturated}: every answer is true. */
+        default void mayHave(Game game, StaticAbilityMode mode, boolean saturated) { }
+
+        /** {@code game} noted modes it had not noted before. */
+        default void noted(Game game, Set<StaticAbilityMode> added) { }
+
+        /** {@code game} now answers true for every mode, for {@code cause}. */
+        default void saturated(Game game, Object cause) { }
     }
 
-    /** null: off. */
-    public static Listener listener;
+    // the test seam: null in every production launch. Plain (neither public nor volatile), so a read can be hoisted
+    static Listener listener;
+
+    /** For tests: installs {@code l}, or removes the listener with {@code null}. */
+    public static void setListener(final Listener l) {
+        listener = l;
+    }
+
+    /** The listener, null in every production launch. */
+    public static Listener listener() {
+        return listener;
+    }
 
     static void skipped(final Game game, final StaticAbilityMode mode, final BooleanSupplier scanFindsNothing) {
         skipped(game, Set.of(mode), List.of(), scanFindsNothing);

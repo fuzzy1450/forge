@@ -7632,7 +7632,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             if (game != null) {
                 newGame.inheritStaticAbilityModes(game);
             } else {
-                newGame.saturateStaticAbilityModes();
+                newGame.saturateStaticAbilityModes("a card without a game joined it");
             }
         }
         game = newGame;

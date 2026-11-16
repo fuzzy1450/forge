@@ -45,6 +45,7 @@ import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.staticability.StaticAbilityCantChangeDayTime;
 import forge.game.staticability.StaticAbilityMode;
+import forge.game.staticability.StaticAbilityModeProbe;
 import forge.game.trigger.TriggerHandler;
 import forge.game.trigger.TriggerType;
 import forge.game.undo.UndoManager;
@@ -76,7 +77,7 @@ public class Game {
     // (a static ability without a mode has existed, or a card this game cannot account for joined it): see
     // mayHaveStaticAbilityMode. First among the fields, so a static ability made while the others are set notes here
     private final EnumSet<StaticAbilityMode> staticAbilityModes = EnumSet.noneOf(StaticAbilityMode.class);
-    private boolean mayHaveAnyStaticAbilityMode = false;
+    private volatile boolean mayHaveAnyStaticAbilityMode = false;
 
     /** The ID. */
     private int id;
@@ -583,16 +584,34 @@ public class Game {
      * without a mode, which a scan would fail on, makes every answer true.
      */
     public final boolean mayHaveStaticAbilityMode(final StaticAbilityMode mode) {
-        return mayHaveAnyStaticAbilityMode || staticAbilityModes.contains(mode);
+        final boolean result = mayHaveAnyStaticAbilityMode || staticAbilityModes.contains(mode);
+        if (result && StaticAbilityModeProbe.listener() != null) {
+            StaticAbilityModeProbe.listener().mayHave(this, mode, mayHaveAnyStaticAbilityMode);
+        }
+        return result;
     }
+
+    // The writes below look first without the lock and take it only when there is something to write, so a game that
+    // already has the modes (as a game copy has nearly all of its cards' modes) is never locked. The lock is for the
+    // GUI, whose other threads may build static abilities of a game too; a simulated game is written from its own
+    // thread only.
 
     /** Notes the modes of a static ability of a card of this game: {@code null} for one without a mode. */
     public final void noteStaticAbilityModes(final Set<StaticAbilityMode> modes) {
         if (modes == null) {
-            mayHaveAnyStaticAbilityMode = true;
+            saturateStaticAbilityModes("a static ability without a mode");
         } else if (!staticAbilityModes.containsAll(modes)) {
             // written only when something is new, so copying a game's cards elsewhere leaves that game unwritten
-            staticAbilityModes.addAll(modes);
+            synchronized (staticAbilityModes) {
+                if (StaticAbilityModeProbe.listener() != null) {
+                    final EnumSet<StaticAbilityMode> added = EnumSet.copyOf(modes);
+                    added.removeAll(staticAbilityModes);
+                    if (!added.isEmpty()) {
+                        StaticAbilityModeProbe.listener().noted(this, added);
+                    }
+                }
+                staticAbilityModes.addAll(modes);
+            }
         }
     }
 
@@ -603,13 +622,24 @@ public class Game {
         }
         noteStaticAbilityModes(from.staticAbilityModes);
         if (from.mayHaveAnyStaticAbilityMode) {
-            mayHaveAnyStaticAbilityMode = true;
+            saturateStaticAbilityModes("inherited from a saturated game");
         }
     }
 
-    /** Makes every {@link #mayHaveStaticAbilityMode} answer true: a card whose modes no game noted joined this one. */
-    public final void saturateStaticAbilityModes() {
-        mayHaveAnyStaticAbilityMode = true;
+    /**
+     * Makes every {@link #mayHaveStaticAbilityMode} answer true: a card whose modes no game noted joined this one.
+     * {@code cause} says why, for {@link StaticAbilityModeProbe} alone.
+     */
+    public final void saturateStaticAbilityModes(final Object cause) {
+        if (mayHaveAnyStaticAbilityMode) {
+            return;
+        }
+        synchronized (staticAbilityModes) {
+            if (!mayHaveAnyStaticAbilityMode && StaticAbilityModeProbe.listener() != null) {
+                StaticAbilityModeProbe.listener().saturated(this, cause);
+            }
+            mayHaveAnyStaticAbilityMode = true;
+        }
     }
 
     public CardCollectionView getCardsPlayerCanActivateInStack() {
