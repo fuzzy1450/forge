@@ -269,6 +269,10 @@ public final class ActivationGuard {
         }
         if (api == ApiType.Attach && node.isEquip() && node.getHostCard().isEquipping()
                 && !attachPayoff(ai, node.getHostCard())) {
+            if (equippedThisTurn(node.getHostCard())) {
+                // one move a turn: see equippedThisTurn
+                return Verdict.IDLE_TARGETS;
+            }
             final Card current = node.getHostCard().getEquipping();
             for (final GameEntity e : tr.getAllCandidates(node)) {
                 if (e != current) {
@@ -278,6 +282,27 @@ public final class ActivationGuard {
             return Verdict.IDLE_TARGETS;
         }
         return null;
+    }
+
+    /**
+     * Whether an Equip ability of this Equipment has been activated this turn. An Equipment that is on a creature and
+     * was equipped this turn is not moved again in the same turn (the heuristics' own rule for the moves they make:
+     * AttachAi's ATTACHED_THIS_TURN), unless a combo pays for the attachment ({@link #attachPayoff}). Without this the
+     * search goes round and round with a free equip: a rollout plays the rest of the turn after the play it tries, so
+     * a move that costs nothing is credited with whatever the AI would do later in the turn anyway and beats passing
+     * every time, from either creature (Lightning Greaves, whose shroud makes its holder no target: 494 moves between
+     * two creatures in one turn, each a full decision, until the turn's and then the game's rollout budget was gone,
+     * and the seat played the rest of the game without search). An Equipment whose creature has left (Skullclamp) is
+     * attached to nothing and may be equipped again. Reads the Equipment's own table of this turn's activations, which
+     * the cleanup step empties for every card; draws nothing.
+     */
+    static boolean equippedThisTurn(final Card equipment) {
+        for (final SpellAbility activated : equipment.getAbilityActivatedThisTurn().rowKeySet()) {
+            if (activated.isEquip()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

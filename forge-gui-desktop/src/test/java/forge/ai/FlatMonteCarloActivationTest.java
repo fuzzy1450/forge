@@ -305,6 +305,74 @@ public class FlatMonteCarloActivationTest extends AITest {
         AssertJUnit.assertNull("an artifact to sacrifice", ActivationGuard.problem(ai, minus));
     }
 
+    // ------------------------------------------------------------------------------------------ one equip move a turn
+
+    private SpellAbility equip(final Card equipment) {
+        for (final SpellAbility sa : equipment.getSpellAbilities()) {
+            if (sa.isEquip()) {
+                sa.setActivatingPlayer(ai);
+                return sa;
+            }
+        }
+        throw new IllegalStateException("no equip ability on " + equipment);
+    }
+
+    @Test
+    public void anEquipmentOnACreatureMovesOnceATurn() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card greaves = addCardToZone("Lightning Greaves", ai, ZoneType.Battlefield);
+        final Card bears = addCardToZone("Grizzly Bears", ai, ZoneType.Battlefield);
+        addCardToZone("Hill Giant", ai, ZoneType.Battlefield);
+        greaves.attachToEntity(bears, null);
+        game.getAction().checkStateEffects(true);
+        final SpellAbility sa = equip(greaves);
+        AssertJUnit.assertNull("not equipped this turn, another creature to move to", ActivationGuard.problem(ai, sa));
+        greaves.addAbilityActivated(sa); // what the stack records when the equip is activated
+        AssertJUnit.assertEquals("equipped this turn and still on a creature: no second move", "no-valid-targets",
+                ActivationGuard.problem(ai, sa));
+        AssertJUnit.assertEquals("the combo guard takes the heuristics' own second move out as well", "no-valid-targets",
+                ComboGuard.problem(ai, sa, null, ComboPlan.EMPTY));
+        greaves.resetActivationsPerTurn(); // the cleanup step
+        AssertJUnit.assertNull("the next turn it may move again", ActivationGuard.problem(ai, sa));
+    }
+
+    @Test
+    public void anEquipmentWhoseCreatureLeftIsEquippedAgainTheSameTurn() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card clamp = addCardToZone("Skullclamp", ai, ZoneType.Battlefield);
+        addCardToZone("Grizzly Bears", ai, ZoneType.Battlefield);
+        game.getAction().checkStateEffects(true);
+        final SpellAbility sa = equip(clamp);
+        clamp.addAbilityActivated(sa); // equipped once this turn; the creature it was on has died since
+        AssertJUnit.assertFalse(clamp.isEquipping());
+        AssertJUnit.assertNull("attached to nothing: it may be equipped again", ActivationGuard.problem(ai, sa));
+    }
+
+    @Test
+    public void anotherAbilityActivatedThisTurnIsNoEquipMove() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        // Cranial Plating: "{B}{B}: Attach to target creature you control" beside its Equip {1}
+        final Card plating = addCardToZone("Cranial Plating", ai, ZoneType.Battlefield);
+        final Card bears = addCardToZone("Grizzly Bears", ai, ZoneType.Battlefield);
+        addCardToZone("Hill Giant", ai, ZoneType.Battlefield);
+        plating.attachToEntity(bears, null);
+        game.getAction().checkStateEffects(true);
+        final SpellAbility sa = equip(plating);
+        int others = 0;
+        for (final SpellAbility other : plating.getSpellAbilities()) {
+            if (other.isActivatedAbility() && !other.isEquip() && !other.isManaAbility()) {
+                other.setActivatingPlayer(ai);
+                plating.addAbilityActivated(other);
+                others++;
+            }
+        }
+        AssertJUnit.assertEquals("the Plating's own attach ability", 1, others);
+        AssertJUnit.assertNull("only an Equip activation counts as this turn's move", ActivationGuard.problem(ai, sa));
+    }
+
     // ------------------------------------------------------------------------------------------ outside its remit
 
     @Test
