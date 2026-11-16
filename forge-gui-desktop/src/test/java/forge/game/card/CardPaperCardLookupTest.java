@@ -18,6 +18,7 @@ import forge.StaticData;
 import forge.ai.AITest;
 import forge.card.CardDb;
 import forge.card.CardDb.CardArtPreference;
+import forge.card.CardEdition;
 import forge.card.CardRarity;
 import forge.card.CardRules;
 import forge.card.GamePieceType;
@@ -273,6 +274,9 @@ public class CardPaperCardLookupTest extends AITest {
         final CardRules solRing = data.getCommonCards().getRules("Sol Ring", false);
         final CardRules elves = data.getCommonCards().getRules("Llanowar Elves", false);
         final CardRules counterspell = data.getCommonCards().getRules("Counterspell", false);
+        final CardRules bolt = data.getCommonCards().getRules("Lightning Bolt", false);
+        final CardRules fireIce = data.getCommonCards().getRules("Fire // Ice", false);
+        Assert.assertNotNull(fireIce);
         final Map<String, CardRules> rules = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         rules.put(solRing.getName(), solRing);
 
@@ -297,9 +301,34 @@ public class CardPaperCardLookupTest extends AITest {
         db.loadCard("Llanowar Elves", "LEA", elves);
         Assert.assertEquals(CardDb.getChangeCount(), count, "loading a loaded card again changes nothing");
 
-        db.getEditor().putCard(counterspell);
-        count = assertCounted(count, "the editor");
-        Assert.assertNotNull(db.getCard("Counterspell"));
+        // a split card's print is filed under each half's name too, and counted after them
+        db.addCard(new PaperCard(fireIce, "LEA", CardRarity.Uncommon, 1, false, "", "", null));
+        count = assertCounted(count, "addCard of a split card");
+        Assert.assertNotNull(db.getCard("Fire // Ice"));
+        db.addUnassignedCardPrints(false);
+        count = assertCounted(count, "addUnassignedCardPrints");
+
+        // new rules loaded from an edition that does not print them: no print is added, only the rules and their faces
+        String noCounterspell = null;
+        for (final CardEdition e : data.getEditions()) {
+            if (e.getCardInSet("Counterspell").isEmpty()) {
+                noCounterspell = e.getCode();
+                break;
+            }
+        }
+        Assert.assertNotNull(noCounterspell);
+        db.loadCard("Counterspell", noCounterspell, counterspell);
+        count = assertCounted(count, "loading new rules with no print");
+        Assert.assertTrue(db.getAllCards("Counterspell").isEmpty(), "no print of Counterspell was added");
+        Assert.assertSame(db.getRules("Counterspell", false), counterspell, "but its rules were");
+
+        db.getEditor().setImmediateReindex(false); // this small database's full reindex is not what is tested
+        db.getEditor().putCard(bolt);
+        count = assertCounted(count, "the editor adding new rules");
+        Assert.assertNotNull(db.getCard("Lightning Bolt"));
+        db.getEditor().putCard(counterspell); // rules it has by that name: their properties are taken again
+        count = assertCounted(count, "the editor replacing rules' properties");
+        Assert.assertSame(db.getRules("Counterspell", false), counterspell);
 
         db.clearLoadedCards();
         count = assertCounted(count, "clearing the loaded cards");
@@ -312,6 +341,237 @@ public class CardPaperCardLookupTest extends AITest {
         final boolean hadImage = print.hasImage(true);
         assertCounted(count, "a print's image looked for again");
         Assert.assertEquals(print.hasImage(false), hadImage);
+    }
+
+    // ---- prints added to the shared database for one test, and taken out again
+
+    /** An edition that prints no Sol Ring, so the prints a test adds there are the only candidates by name and set. */
+    private static String editionWithoutSolRing() {
+        for (final String code : List.of("DOM", "WAR", "ELD", "KHM")) {
+            final CardEdition e = StaticData.instance().getEditions().get(code);
+            if (e != null && e.getCardInSet("Sol Ring").isEmpty()) {
+                return e.getCode();
+            }
+        }
+        throw new AssertionError("no edition without Sol Ring among the candidates");
+    }
+
+    private static void addPrints(final PaperCard... prints) {
+        for (final PaperCard pc : prints) {
+            StaticData.instance().getCommonCards().addCard(pc);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void removePrints(final PaperCard... prints) throws Exception {
+        final CardDb common = StaticData.instance().getCommonCards();
+        for (final String field : List.of("allCardsByName", "allCardsByRules")) {
+            final Field f = CardDb.class.getDeclaredField(field);
+            f.setAccessible(true);
+            final com.google.common.collect.ListMultimap<Object, PaperCard> map =
+                    (com.google.common.collect.ListMultimap<Object, PaperCard>) f.get(common);
+            for (final PaperCard pc : prints) {
+                final Object key = field.equals("allCardsByName") ? pc.getName() : pc.getRules();
+                map.get(key).removeIf(x -> x == pc);
+            }
+        }
+        CardDb.noteChange(); // the test's own write, counted as a writer counts it
+    }
+
+    private static void setHasImage(final PaperCard pc, final Boolean value) throws Exception {
+        final Field f = PaperCard.class.getDeclaredField("hasImage");
+        f.setAccessible(true);
+        f.set(pc, value);
+    }
+
+    /** A print whose image check runs a write the first time it is asked, and answers what it held before the write. */
+    static final class WritingPrint extends PaperCard {
+        boolean image;
+        Runnable onFirstAsk;
+
+        WritingPrint(final CardRules rules, final String edition, final String collectorNumber, final boolean image) {
+            super(rules, edition, CardRarity.Special, 1, false, collectorNumber, "", null);
+            this.image = image;
+        }
+
+        @Override
+        public boolean hasImage() {
+            final Runnable write = onFirstAsk;
+            if (write != null) {
+                onFirstAsk = null;
+                final boolean before = image;
+                write.run();
+                return before;
+            }
+            return image;
+        }
+    }
+
+    /**
+     * The count is read before the lookup: a write that lands while a lookup runs leaves that lookup's answer under the
+     * count it started at, so the next call looks up again. Here the write is a print's image being found (as
+     * ImageFetcher's hasImage(true) does), made from inside the lookup itself by the first print's image check.
+     */
+    @Test
+    public void anAnswerFoundAcrossAWriteIsNotKeptAsCurrent() throws Exception {
+        final Game game = initAndCreateGame();
+        final CardRules solRing = StaticData.instance().getCommonCards().getRules("Sol Ring", false);
+        final String edition = editionWithoutSolRing();
+        final WritingPrint first = new WritingPrint(solRing, edition, "9001", false);
+        final WritingPrint second = new WritingPrint(solRing, edition, "9002", true);
+        first.onFirstAsk = () -> {
+            first.image = true;
+            CardDb.noteChange();
+        };
+        addPrints(first, second);
+        try {
+            final Card c = noPaperCard(game, "Sol Ring", edition);
+            Assert.assertSame(c.getPaperCard(), second, "the lookup the write landed in found the print with an image then");
+            Assert.assertNull(first.onFirstAsk, "the write ran inside the lookup");
+            Assert.assertSame(c.getPaperCard(), first, "the next call looks up again and finds the first print's image");
+            Assert.assertSame(uncached(c), first);
+            Assert.assertSame(c.getPaperCard(), first, "and keeps that answer");
+        } finally {
+            removePrints(first, second);
+        }
+    }
+
+    /** Another StaticData (as tests that build their own database make) is looked up in, never served the old answers. */
+    @Test
+    public void anotherStaticDataIsLookedUpInItself() throws Exception {
+        final Game game = initAndCreateGame();
+        final StaticData original = StaticData.instance();
+        final Field last = StaticData.class.getDeclaredField("lastInstance");
+        last.setAccessible(true);
+        final StaticData other;
+        try {
+            other = forge.gamesimulationtests.util.CardDatabaseHelper.createStaticData("CardPaperCardLookupTest", true);
+        } finally {
+            last.set(null, original);
+        }
+        Assert.assertNotSame(other, original);
+        final Card c = noPaperCard(game, "Sol Ring", "C21");
+        final IPaperCard ours = assertSameAsLookup(c, "Sol Ring from C21 in the shared database");
+        final long count = CardDb.getChangeCount();
+        try {
+            last.set(null, other);
+            final IPaperCard theirs = c.getPaperCard();
+            Assert.assertNotNull(theirs);
+            Assert.assertNotSame(theirs, ours, "the other database's own print, not the one kept from the shared one");
+            Assert.assertEquals(theirs.getEdition(), "C21");
+            Assert.assertSame(uncached(c), theirs);
+        } finally {
+            last.set(null, original);
+        }
+        Assert.assertSame(c.getPaperCard(), ours, "back on the shared database, its print again");
+        Assert.assertTrue(count <= CardDb.getChangeCount());
+    }
+
+    /**
+     * A lookup among the prints of one set takes the first print with an image. When ImageFetcher downloads one, it
+     * asks hasImage(true), and the answer moves to that print at once.
+     */
+    @SuppressWarnings("unchecked")
+    @Test
+    public void anImageFoundAgainMovesTheAnswer() throws Exception {
+        final Game game = initAndCreateGame();
+        final CardRules solRing = StaticData.instance().getCommonCards().getRules("Sol Ring", false);
+        final String edition = editionWithoutSolRing();
+        final PaperCard first = new PaperCard(solRing, edition, CardRarity.Special, 1, false, "9003", "", null);
+        final PaperCard second = new PaperCard(solRing, edition, CardRarity.Special, 1, false, "9004", "", null);
+        setHasImage(first, false);
+        setHasImage(second, true);
+
+        final Field lookupField = forge.ImageKeys.class.getDeclaredField("editionImageLookup");
+        lookupField.setAccessible(true);
+        final Map<String, Boolean> editionImageLookup = (Map<String, Boolean>) lookupField.get(null);
+        final Field contentField = forge.ImageKeys.class.getDeclaredField("cachedContent");
+        contentField.setAccessible(true);
+        final Map<String, HashSet<String>> cachedContent = (Map<String, HashSet<String>>) contentField.get(null);
+        final String[] keyParts = StringUtils.split(first.getCardImageKey(), "//");
+        final String folder = forge.ImageKeys.getSetFolder(edition);
+        final boolean hadLookup = editionImageLookup.containsKey(edition);
+        final Boolean lookupBefore = editionImageLookup.get(edition);
+        final Map<String, HashSet<String>> contentBefore = new HashMap<>();
+        for (final String k : List.of(keyParts[0], folder)) {
+            contentBefore.put(k, cachedContent.get(k));
+        }
+
+        addPrints(first, second);
+        try {
+            final Card c = noPaperCard(game, "Sol Ring", edition);
+            Assert.assertSame(assertSameAsLookup(c, "only the second print has an image"), second);
+
+            // the image of the first print arrives in the cache folder
+            editionImageLookup.put(edition, true);
+            final HashSet<String> content = new HashSet<>();
+            content.add(keyParts[1].split("\\.")[0]);
+            cachedContent.put(keyParts[0], content);
+            cachedContent.put(folder, content);
+            Assert.assertSame(c.getPaperCard(), second, "until it is asked again, the first print still has none");
+            Assert.assertTrue(first.hasImage(true), "the image is found again");
+            Assert.assertSame(assertSameAsLookup(c, "the first print now has an image"), first);
+        } finally {
+            removePrints(first, second);
+            if (hadLookup) {
+                editionImageLookup.put(edition, lookupBefore);
+            } else {
+                editionImageLookup.remove(edition);
+            }
+            for (final Map.Entry<String, HashSet<String>> e : contentBefore.entrySet()) {
+                if (e.getValue() == null) {
+                    cachedContent.remove(e.getKey());
+                } else {
+                    cachedContent.put(e.getKey(), e.getValue());
+                }
+            }
+        }
+    }
+
+    /**
+     * A name that is a request string with flags is looked up every call, and each call gets a new flagged copy: the
+     * variant database (planes, schemes...) answers such a request with copyWithFlags, a new object each time.
+     */
+    @Test
+    public void aRequestStringWithFlagsGetsANewCopyEachCall() {
+        final Game game = initAndCreateGame();
+        final PaperCard plane = StaticData.instance().getVariantCards().getAllCards().iterator().next();
+        final String request = plane.getName() + CardDb.NameSetSeparator + plane.getEdition() + CardDb.NameSetSeparator
+                + plane.getArtIndex() + CardDb.NameSetSeparator + "#{noSellValue=true}";
+        final Card c = noPaperCard(game, request, null);
+        final IPaperCard a = c.getPaperCard();
+        final IPaperCard b = c.getPaperCard();
+        final IPaperCard fresh = uncached(c);
+        Assert.assertNotNull(a, request);
+        Assert.assertEquals(a.getName(), plane.getName());
+        Assert.assertEquals(a.getEdition(), plane.getEdition());
+        Assert.assertTrue(((PaperCard) a).hasNoSellValue(), "the flag is on the copy");
+        Assert.assertNotSame(b, a, "a new copy each call, as the lookup makes one");
+        Assert.assertNotSame(fresh, a);
+        Assert.assertEquals(b, a);
+        Assert.assertEquals(fresh, a);
+    }
+
+    /** Past 20,000 kept answers an answer is looked up and not kept; every answer is still the lookup's. */
+    @Test(timeOut = 300_000)
+    public void pastTheCapAnswersAreLookedUpAndNotKept() throws Exception {
+        final Game game = initAndCreateGame();
+        final Class<?> holderClass = Class.forName("forge.game.card.Card$PaperCardLookups");
+        final Field current = holderClass.getDeclaredField("current");
+        current.setAccessible(true);
+        final Field answers = holderClass.getDeclaredField("answers");
+        answers.setAccessible(true);
+        final Card c = noPaperCard(game, "Probe Token 0", "C21");
+        final long count = CardDb.getChangeCount();
+        for (int i = 0; i < 20_050; i++) {
+            c.setName("Probe Token " + i);
+            Assert.assertNull(c.getPaperCard());
+        }
+        c.setName("Sol Ring");
+        Assert.assertSame(c.getPaperCard(), uncached(c), "an answer past the cap is still the lookup's");
+        Assert.assertEquals(CardDb.getChangeCount(), count, "nothing changed the database meanwhile");
+        final Map<?, ?> kept = (Map<?, ?>) answers.get(current.get(null));
+        Assert.assertEquals(kept.size(), 20_000, "no more answers are kept than the cap");
     }
 
     private static long assertCounted(final long before, final String what) {
