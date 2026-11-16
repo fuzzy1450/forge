@@ -217,6 +217,9 @@ public class PaperCard implements Comparable<IPaperCard>, InventoryItemFromSet, 
     public boolean hasImage(boolean update) {
         if (hasImage == null || update) { //cache value since it's not free to calculate
             hasImage = ImageKeys.hasImage(this, update);
+            if (update) {
+                CardDb.noteChange(); // a lookup among the prints of one set prefers a print with an image
+            }
         }
         return hasImage;
     }

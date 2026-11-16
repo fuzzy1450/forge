@@ -7611,7 +7611,8 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public CardRules getRules() {
-        return getPaperCard() == null ? null : getPaperCard().getRules();
+        final IPaperCard pc = getPaperCard();
+        return pc == null ? null : pc.getRules();
     }
     public void updateRulesView() {
         currentState.getView().updateRulesText(getRules());
@@ -7870,7 +7871,58 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         if (name.isEmpty()) {
             return null; // no paper, and no name to look one up by: a token copy of a face-down double-faced or split card
         }
-        if (StringUtils.isNotBlank(set)) {
+        return findPaperCard(name, StringUtils.isNotBlank(set) ? set : null);
+    }
+
+    /**
+     * The answers of {@link #lookUpPaperCard} kept for every card of every game: the lookup reads nothing but its
+     * name, its set and the card databases, so an answer stays right until a database changes what a lookup can
+     * answer, which {@link CardDb#getChangeCount()} counts, or another {@link StaticData} is loaded.
+     */
+    private static final class PaperCardLookups {
+        private static final int MAX_ANSWERS = 20000; // past it, an answer is looked up again rather than kept
+        private static final Object NO_CARD = new Object();
+        private static volatile PaperCardLookups current;
+
+        private final StaticData data;
+        private final long dbChanges;
+        private final Map<Pair<String, String>, Object> answers = new ConcurrentHashMap<>();
+
+        private PaperCardLookups(final StaticData data, final long dbChanges) {
+            this.data = data;
+            this.dbChanges = dbChanges;
+        }
+    }
+
+    private static IPaperCard findPaperCard(final String name, final String set) {
+        if (name.indexOf(CardDb.NameSetSeparator) >= 0) {
+            return lookUpPaperCard(name, set); // a request string, not a name: its flags would make a new copy each time
+        }
+        // the count is read before the lookup, so an answer found while a database changes is never kept as current
+        final long dbChanges = CardDb.getChangeCount();
+        final StaticData data = StaticData.instance();
+        PaperCardLookups lookups = PaperCardLookups.current;
+        if (lookups == null || lookups.data != data || lookups.dbChanges != dbChanges) {
+            lookups = new PaperCardLookups(data, dbChanges);
+            PaperCardLookups.current = lookups;
+        }
+        final Pair<String, String> key = Pair.of(name, set);
+        final Object known = lookups.answers.get(key);
+        if (known != null) {
+            return known == PaperCardLookups.NO_CARD ? null : (IPaperCard) known;
+        }
+        final IPaperCard cp = lookUpPaperCard(name, set);
+        if (lookups.answers.size() < PaperCardLookups.MAX_ANSWERS) {
+            lookups.answers.put(key, cp == null ? PaperCardLookups.NO_CARD : cp);
+        }
+        return cp;
+    }
+
+    /** The paper card a card built without one has by its name and set (null: no set): the variant then the common
+     *  database's print in that set, then by name alone the variant database's, the art preference's print, any print. */
+    private static IPaperCard lookUpPaperCard(final String name, final String set) {
+        IPaperCard cp;
+        if (set != null) {
             cp = StaticData.instance().getVariantCards().getCard(name, set);
             if (cp != null) {
                 return cp;
