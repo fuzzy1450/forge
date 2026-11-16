@@ -6,6 +6,7 @@ import java.util.Set;
 import com.google.common.collect.Lists;
 
 import forge.card.mana.ManaCostParser;
+import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.cost.Cost;
@@ -18,6 +19,20 @@ public class StaticAbilityAlternativeCost {
 
     public static List<SpellAbility> alternativeCosts(final SpellAbility sa, final Card source, final Player pl) {
         List<SpellAbility> result = Lists.newArrayList();
+        final Game game = source.getGame();
+        if (!game.mayHaveStaticAbilityMode(StaticAbilityMode.AlternativeCost)) {
+            // no static ability of this game, the source's included, has the mode, so the scan would add nothing
+            if (StaticAbilityModeProbe.listener != null) {
+                StaticAbilityModeProbe.skipped(game, Set.of(StaticAbilityMode.AlternativeCost), List.of(source),
+                        () -> scan(sa, source, pl, Lists.newArrayList()).isEmpty());
+            }
+            return result;
+        }
+        return scan(sa, source, pl, result);
+    }
+
+    private static List<SpellAbility> scan(final SpellAbility sa, final Card source, final Player pl,
+            final List<SpellAbility> result) {
         // add source first in case it's LKI (alternate host)
         CardCollection list = new CardCollection(source);
         list.addAllUnique(source.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));

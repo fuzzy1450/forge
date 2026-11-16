@@ -138,6 +138,7 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
         }
 
         c.setZone(this);
+        noteCardOfAnotherGame(c);
 
         if ((zoneType == ZoneType.Battlefield || !c.isToken() || c.getCurrentStateName() == CardStateName.PreparedSpell) || (zoneType == ZoneType.Stack && c.getCopiedPermanent() != null)) {
             if (index == null) {
@@ -150,6 +151,14 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
 
         game.fireEvent(new GameEventZone(zoneType, getPlayer(), EventValueChangeType.Added, c));
    }
+
+    // a card of another game (or of none) in this game's zone: its static abilities note their modes elsewhere, so this
+    // game can no longer tell which modes its zones hold (see Game#mayHaveStaticAbilityMode)
+    private void noteCardOfAnotherGame(final Card c) {
+        if (game != null && c.getGame() != game) {
+            game.saturateStaticAbilityModes();
+        }
+    }
 
     public final boolean contains(final Card c) {
         return cardList.contains(c);
@@ -170,6 +179,7 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
         cardList.clear();
         for (Card c : cards) {
             c.setZone(this);
+            noteCardOfAnotherGame(c);
             cardList.add(c);
         }
         onChanged();

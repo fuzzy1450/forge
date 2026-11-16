@@ -10,6 +10,19 @@ public class StaticAbilityBlockRestrict {
 
     static public int blockRestrictNum(Player defender) {
         final Game game = defender.getGame();
+        if (!game.mayHaveStaticAbilityMode(StaticAbilityMode.BlockRestrict)) {
+            // no static ability of this game has the mode, so the scan would find none
+            if (StaticAbilityModeProbe.listener != null) {
+                StaticAbilityModeProbe.skipped(game, StaticAbilityMode.BlockRestrict,
+                        () -> scan(defender) == Integer.MAX_VALUE);
+            }
+            return Integer.MAX_VALUE;
+        }
+        return scan(defender);
+    }
+
+    private static int scan(Player defender) {
+        final Game game = defender.getGame();
         int num = Integer.MAX_VALUE;
         for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {

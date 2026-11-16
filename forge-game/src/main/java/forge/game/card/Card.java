@@ -7627,6 +7627,14 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             // a phased-out card joins the game, whose battlefields are searched for phased-out cards from now on
             newGame.notePhasedOutCard();
         }
+        if (newGame != null && newGame != game) {
+            // the card's static abilities noted their modes in the game it leaves (see Game#mayHaveStaticAbilityMode)
+            if (game != null) {
+                newGame.inheritStaticAbilityModes(game);
+            } else {
+                newGame.saturateStaticAbilityModes();
+            }
+        }
         game = newGame;
     }
 

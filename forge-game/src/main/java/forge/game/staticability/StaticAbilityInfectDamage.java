@@ -9,6 +9,18 @@ public class StaticAbilityInfectDamage {
 
     static public boolean isInfectDamage(Player target) {
         final Game game = target.getGame();
+        if (!game.mayHaveStaticAbilityMode(StaticAbilityMode.InfectDamage)) {
+            // no static ability of this game has the mode, so the scan would find none
+            if (StaticAbilityModeProbe.listener != null) {
+                StaticAbilityModeProbe.skipped(game, StaticAbilityMode.InfectDamage, () -> !scan(target));
+            }
+            return false;
+        }
+        return scan(target);
+    }
+
+    private static boolean scan(final Player target) {
+        final Game game = target.getGame();
         for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.InfectDamage)) {

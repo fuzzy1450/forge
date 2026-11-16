@@ -71,6 +71,8 @@ public class GameSnapshot {
     }
 
     public void assignGameState(Game fromGame, Game toGame, boolean includeStack) {
+        // toGame's cards get copies of fromGame's static abilities (see Game#mayHaveStaticAbilityMode)
+        toGame.inheritStaticAbilityModes(fromGame);
         for (int i = 0; i < fromGame.getPlayers().size(); i++) {
             Player origPlayer = fromGame.getPlayers().get(i);
             Player newPlayer = findBy(toGame, origPlayer);

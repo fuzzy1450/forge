@@ -19,6 +19,19 @@ public class StaticAbilityMustAttack {
     public static List<GameEntity> entitiesMustAttack(final Card attacker) {
         final List<GameEntity> entityList = new ArrayList<>();
         final Game game = attacker.getGame();
+        if (!game.mayHaveStaticAbilityMode(StaticAbilityMode.MustAttack)) {
+            // no static ability of this game has the mode, so the scan would add nothing
+            if (StaticAbilityModeProbe.listener != null) {
+                StaticAbilityModeProbe.skipped(game, StaticAbilityMode.MustAttack,
+                        () -> entitiesMustAttackScan(attacker, new ArrayList<>()).isEmpty());
+            }
+            return entityList;
+        }
+        return entitiesMustAttackScan(attacker, entityList);
+    }
+
+    private static List<GameEntity> entitiesMustAttackScan(final Card attacker, final List<GameEntity> entityList) {
+        final Game game = attacker.getGame();
         for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.MustAttack)) {

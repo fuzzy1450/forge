@@ -44,6 +44,7 @@ import forge.game.replacement.ReplacementHandler;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.staticability.StaticAbilityCantChangeDayTime;
+import forge.game.staticability.StaticAbilityMode;
 import forge.game.trigger.TriggerHandler;
 import forge.game.trigger.TriggerType;
 import forge.game.undo.UndoManager;
@@ -70,6 +71,12 @@ public class Game {
     private static int nextId() { return SimScope.nextId(SimScope.Counter.GAME, () -> ++maxId); }
 
     private boolean noGUIUser;
+
+    // every mode a static ability of a card of this game has had (it only grows), and whether any mode may be present
+    // (a static ability without a mode has existed, or a card this game cannot account for joined it): see
+    // mayHaveStaticAbilityMode. First among the fields, so a static ability made while the others are set notes here
+    private final EnumSet<StaticAbilityMode> staticAbilityModes = EnumSet.noneOf(StaticAbilityMode.class);
+    private boolean mayHaveAnyStaticAbilityMode = false;
 
     /** The ID. */
     private int id;
@@ -565,6 +572,44 @@ public class Game {
      */
     public final void notePhasedOutCard() {
         mayHavePhasedOutCards = true;
+    }
+
+    /**
+     * Whether a static ability of mode {@code mode} may be in the static ability list of a card of this game. When
+     * false, no static ability of any card of this game has that mode, so a scan of this game's cards for one finds
+     * none. An answer only ever changes from false to true: a static ability notes its modes in its host's game when it
+     * is made or copied, when its modes are set and when its host is set; a card joining this game from another brings
+     * every mode that game noted; a game copy starts with every mode of the game it copies; and a static ability
+     * without a mode, which a scan would fail on, makes every answer true.
+     */
+    public final boolean mayHaveStaticAbilityMode(final StaticAbilityMode mode) {
+        return mayHaveAnyStaticAbilityMode || staticAbilityModes.contains(mode);
+    }
+
+    /** Notes the modes of a static ability of a card of this game: {@code null} for one without a mode. */
+    public final void noteStaticAbilityModes(final Set<StaticAbilityMode> modes) {
+        if (modes == null) {
+            mayHaveAnyStaticAbilityMode = true;
+        } else if (!staticAbilityModes.containsAll(modes)) {
+            // written only when something is new, so copying a game's cards elsewhere leaves that game unwritten
+            staticAbilityModes.addAll(modes);
+        }
+    }
+
+    /** Notes every mode {@code from} noted: its cards, or copies of them, are becoming cards of this game. */
+    public final void inheritStaticAbilityModes(final Game from) {
+        if (from == null || from == this) {
+            return;
+        }
+        noteStaticAbilityModes(from.staticAbilityModes);
+        if (from.mayHaveAnyStaticAbilityMode) {
+            mayHaveAnyStaticAbilityMode = true;
+        }
+    }
+
+    /** Makes every {@link #mayHaveStaticAbilityMode} answer true: a card whose modes no game noted joined this one. */
+    public final void saturateStaticAbilityModes() {
+        mayHaveAnyStaticAbilityMode = true;
     }
 
     public CardCollectionView getCardsPlayerCanActivateInStack() {

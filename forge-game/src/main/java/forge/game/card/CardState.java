@@ -848,6 +848,10 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     }
     public final boolean addStaticAbility(StaticAbility stab) {
         card.traitsChanged();
+        if (stab != null && card.getGame() != null) {
+            // whatever its host, it is now one of this card's (see Game#mayHaveStaticAbilityMode)
+            card.getGame().noteStaticAbilityModes(stab.getMode());
+        }
         final boolean changed = staticAbilities.add(stab);
         staticAbilitiesVersion++;
         return changed;
