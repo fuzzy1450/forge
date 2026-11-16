@@ -74,7 +74,8 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
 
     // How many times any card database changed what a card lookup can answer: cards loaded, added or cleared, rules
     // replaced, art preferences set, or a print's image found again. Counted after each change, so a caller that keeps
-    // lookup answers drops those it read under an earlier count.
+    // lookup answers drops those it read under an earlier count. getAllCards(String) and getAllCardsNoAlt(String)
+    // return the database's own lists, whose order the lookups read: a caller that reorders one in place counts it too.
     private static final AtomicLong changeCount = new AtomicLong();
 
     public static long getChangeCount() {

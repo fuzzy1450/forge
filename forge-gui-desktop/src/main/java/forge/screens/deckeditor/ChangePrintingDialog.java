@@ -14,6 +14,7 @@ import javax.swing.Timer;
 import com.google.common.collect.ImmutableList;
 
 import forge.StaticData;
+import forge.card.CardDb;
 import forge.card.CardEdition;
 import forge.gui.FThreads;
 import forge.item.PaperCard;
@@ -51,6 +52,9 @@ public final class ChangePrintingDialog {
         if (printings.remove(currentNonFoil)) {
             printings.add(0, currentNonFoil);
         }
+        // the list is the database's own, reordered in place: a lookup that picks a print by list order reads the new
+        // order, so the change is counted for those that keep lookup answers
+        CardDb.noteChange();
 
         final CardImageGrid grid = new CardImageGrid(COLUMNS, THUMB_W, THUMB_H);
         grid.setItems(printings);

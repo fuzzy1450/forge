@@ -1131,19 +1131,23 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final boolean isTransformable() {
-        return getRules() != null && getRules().isTransformable();
+        final CardRules rules = getRules();
+        return rules != null && rules.isTransformable();
     }
 
     public final boolean isMeldable() {
-        return getRules() != null && getRules().getSplitType() == CardSplitType.Meld;
+        final CardRules rules = getRules();
+        return rules != null && rules.getSplitType() == CardSplitType.Meld;
     }
 
     public final boolean isModal() {
-        return getRules() != null && getRules().getSplitType() == CardSplitType.Modal;
+        final CardRules rules = getRules();
+        return rules != null && rules.getSplitType() == CardSplitType.Modal;
     }
 
     public final boolean isDoubleFaced() {
-        return isTransformable() || isMeldable();
+        final CardRules rules = getRules();
+        return rules != null && (rules.isTransformable() || rules.getSplitType() == CardSplitType.Meld);
     }
 
     public final boolean isFlipCard() {
@@ -1152,7 +1156,8 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
     public final boolean isSplitCard() {
         // Normal Split Cards, these need to return true before Split States are added
-        if (getRules() != null && getRules().getSplitType() == CardSplitType.Split) {
+        final CardRules rules = getRules();
+        if (rules != null && rules.getSplitType() == CardSplitType.Split) {
             return true;
         }
         // in case or clones or copies
@@ -6907,7 +6912,8 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         specialized = bool;
     }
     public final boolean canSpecialize() {
-        return getRules() != null && getRules().getSplitType() == CardSplitType.Specialize;
+        final CardRules rules = getRules();
+        return rules != null && rules.getSplitType() == CardSplitType.Specialize;
     }
 
     public boolean canCrew() {
@@ -7913,7 +7919,11 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         }
         final IPaperCard cp = lookUpPaperCard(name, set);
         if (lookups.answers.size() < PaperCardLookups.MAX_ANSWERS) {
-            lookups.answers.put(key, cp == null ? PaperCardLookups.NO_CARD : cp);
+            // the first answer kept wins, so no two threads hold different objects for one key under one count
+            final Object kept = lookups.answers.putIfAbsent(key, cp == null ? PaperCardLookups.NO_CARD : cp);
+            if (kept != null) {
+                return kept == PaperCardLookups.NO_CARD ? null : (IPaperCard) kept;
+            }
         }
         return cp;
     }
