@@ -34,6 +34,7 @@ import forge.game.event.GameEventZone;
 import forge.game.player.Player;
 import forge.game.player.PlayerView;
 import forge.util.MyRandom;
+import forge.util.Visitor;
 
 /**
  * <p>
@@ -53,6 +54,12 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
     protected final transient ListMultimap<ZoneType, Card> cardsAddedThisTurn = MultimapBuilder.enumKeys(ZoneType.class).arrayListValues().build();
     protected final transient ListMultimap<ZoneType, Card> cardsAddedLastTurn = MultimapBuilder.enumKeys(ZoneType.class).arrayListValues().build();
     protected final transient Map<Card, ZoneType> enteredFromThisTurn = Maps.newHashMap();
+
+    // the replacement walk's summary of this zone (summarizeWalk), or null, and the list version and counter epoch
+    // the zone had at the last summarized walk that found none valid
+    private transient WalkSummary walkSummary;
+    private transient long lastWalkVersion = Long.MIN_VALUE;
+    private transient long lastWalkCounterEpoch;
 
     // might support different order via preference later
     private static final Comparator<Card> COMPARATOR = Comparator.comparingInt((Card c) -> c.getCMC())
@@ -295,6 +302,164 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
         Card lki = CardCopyService.getLKICopy(c);
         cardsAddedThisTurn.put(zt, lki);
         enteredFromThisTurn.put(lki, zt);
+    }
+
+    /**
+     * What the replacement walk may pass in this zone's list: the positions of the cards it must still visit, in
+     * order, each with the events (Card#knownReplacementEvents) it is known to have a replacement effect for, -1 for
+     * a card nothing is known of. Every other card was knownToHaveNoReplacementEffects. It holds while the list's
+     * version and the game's counter epoch are those it was made at and the zone keeps it: every card it passes or
+     * knows events of is marked with this zone (Card#getWalkSummaryZone), and a write to what those answers read
+     * drops it first (Card#walkInputsChanged).
+     */
+    static final class WalkSummary {
+        final int version;
+        final long counterEpoch;
+        final int[] index;
+        final long[] events;
+
+        WalkSummary(final int version, final long counterEpoch, final int[] index, final long[] events) {
+            this.version = version;
+            this.counterEpoch = counterEpoch;
+            this.index = index;
+            this.events = events;
+        }
+    }
+
+    /**
+     * Drops this zone's replacement walk summary (Card#walkInputsChanged). The next walk only notes the zone, so that
+     * the card that changed is read by it before a summary is made again.
+     */
+    public final void dropWalkSummary() {
+        if (walkSummary != null) {
+            walkSummary = null;
+            lastWalkVersion = Long.MIN_VALUE;
+            if (WalkSummaryProbe.verify) {
+                WalkSummaryProbe.DROPPED.increment();
+            }
+        }
+    }
+
+    /** This zone's replacement walk summary if it still holds, else null. */
+    final WalkSummary validWalkSummary() {
+        final WalkSummary s = walkSummary;
+        if (s == null || s.version != cardList.version() || s.counterEpoch != game.getWalkCounterEpoch()) {
+            return null;
+        }
+        return s;
+    }
+
+    public final boolean hasValidWalkSummary() {
+        return validWalkSummary() != null;
+    }
+
+    /**
+     * Makes this zone's replacement walk summary from what its cards are known to have, reading them only: no card's
+     * replacement effects are read, so nothing is made, no id is taken and nothing is drawn. A card is passed or has
+     * its events kept only when it is a card of this zone's game (so that a counter put on it through another card
+     * moves the epoch this summary was made at) and no other zone's summary that still holds marks it (a card in two
+     * lists stays a card to visit in the second); each such card is marked with this zone.
+     */
+    final WalkSummary summarizeWalk() {
+        final CardCollection list = cardList;
+        final int n = list.size();
+        final int[] index = new int[n];
+        final long[] events = new long[n];
+        int k = 0;
+        for (int i = 0; i < n; i++) {
+            final Card c = list.get(i);
+            final Zone mark = c.getWalkSummaryZone();
+            long known = -1L;
+            if (c.getGame() == game && (mark == null || mark == this || !mark.hasValidWalkSummary())) {
+                known = c.knownReplacementEvents();
+            }
+            if (known != 0L) {
+                index[k] = i;
+                events[k] = known;
+                k++;
+            }
+            if (known != -1L) {
+                c.setWalkSummaryZone(this);
+            } else if (mark == this) {
+                c.setWalkSummaryZone(null);
+            }
+        }
+        final WalkSummary s = new WalkSummary(list.version(), game.getWalkCounterEpoch(),
+                Arrays.copyOf(index, k), Arrays.copyOf(events, k));
+        walkSummary = s;
+        if (WalkSummaryProbe.verify) {
+            WalkSummaryProbe.BUILDS.increment();
+        }
+        return s;
+    }
+
+    /**
+     * Visitor.visitAll over this zone's list for Game#forEachCardInGameSummarized: the same visits in the same order,
+     * except that while this zone's summary holds and {@code summaryUsable} does (null: always), the cards the visitor
+     * would return true for at once having done nothing (see there) are passed. The summary is looked up again before
+     * every jump, so that a visit that changes the list, a card or the counters, or makes a new summary, is followed
+     * from the next position exactly as the plain loop would follow it. A summary is made, at the start of a walk, for
+     * a zone that has none that holds and has not changed since the last such walk.
+     */
+    public final boolean visitSummarized(final Visitor<Card> visitor, final long events,
+            final java.util.function.BooleanSupplier summaryUsable) {
+        final CardCollection list = cardList;
+        if (validWalkSummary() == null) {
+            if (WalkSummaryProbe.verify) {
+                WalkSummaryProbe.noteInvalid(walkSummary, list.version());
+            }
+            final long version = list.version();
+            final long epoch = game.getWalkCounterEpoch();
+            if (version == lastWalkVersion && epoch == lastWalkCounterEpoch) {
+                summarizeWalk();
+            } else {
+                lastWalkVersion = version;
+                lastWalkCounterEpoch = epoch;
+            }
+        }
+        if (WalkSummaryProbe.verify) {
+            return WalkSummaryProbe.visitLockStep(this, list, visitor, events, summaryUsable);
+        }
+        WalkSummary seen = null;
+        int e = 0;
+        int i = 0;
+        while (i < list.size()) {
+            final WalkSummary s = validWalkSummary();
+            if (s != null && (summaryUsable == null || summaryUsable.getAsBoolean())) {
+                final int[] index = s.index;
+                if (s != seen) {
+                    seen = s;
+                    e = firstAtOrAfter(index, i);
+                }
+                while (e < index.length && (index[e] < i || (s.events[e] & events) == 0)) {
+                    e++;
+                }
+                if (e == index.length) {
+                    return true;
+                }
+                i = index[e];
+            }
+            if (!visitor.visit(list.get(i))) {
+                return false;
+            }
+            i++;
+        }
+        return true;
+    }
+
+    /** The first k with index[k] >= i (index ascending), or index.length. */
+    static int firstAtOrAfter(final int[] index, final int i) {
+        int lo = 0;
+        int hi = index.length;
+        while (lo < hi) {
+            final int mid = (lo + hi) >>> 1;
+            if (index[mid] < i) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
     }
 
     public void updateLKI(Card c) {

@@ -169,6 +169,14 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     private int noStaticAbilitiesVersion = 0;
     private CardState noTriggersState = null;
     private int noTriggersVersion = 0;
+    // the events (ReplacementEffect#modeCheckEvents bits) any replacement effect of the state last read had, with the
+    // trait version it was read at, kept under the same conditions as the memos above (see knownToHaveNoReplacementEffectOf)
+    private CardState replacementEventsState = null;
+    private int replacementEventsVersion = 0;
+    private long replacementEvents = 0L;
+    // the zone whose replacement walk summary passes this card (Zone#summarizeWalk), or null; dropped, with that
+    // summary, right before every write to something the two answers above read (see walkInputsChanged)
+    private Zone walkSummaryZone = null;
 
     // stores the card traits created by static abilities
     private final Table<StaticAbility, String, SpellAbility> storedSpellAbility = FSnapshotTable.createTree();
@@ -590,7 +598,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
     public void setOriginalStateAsFaceDown() {
         // For Ertai's Meddling a morph spell
-        currentState = CardUtil.getFaceDownCharacteristic(this, CardStateName.Original);
+        final CardState faceDown = CardUtil.getFaceDownCharacteristic(this, CardStateName.Original);
+        walkInputsChanged();
+        currentState = faceDown;
         states.put(CardStateName.Original, currentState);
     }
 
@@ -631,7 +641,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         }
 
         currentStateName = state;
-        currentState = getState(state);
+        final CardState newState = getState(state);
+        walkInputsChanged();
+        currentState = newState;
         // CR 123.6c - name stickers apply to the name the object has now, face-down included
         if (isStickered()) {
             recomputeStickerName();
@@ -672,6 +684,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     // use by CopyPermanent
     public void setStates(Map<CardStateName, CardState> map) {
         if (map.containsKey(CardStateName.LeftSplit) || map.containsKey(CardStateName.RightSplit)) {
+            walkInputsChanged();
             mayHaveSplitStates = true;
         }
         states.clear();
@@ -680,6 +693,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
     public final void addAlternateState(final CardStateName state, final boolean updateView) {
         if (state == CardStateName.LeftSplit || state == CardStateName.RightSplit) {
+            walkInputsChanged();
             mayHaveSplitStates = true;
         }
         states.put(state, new CardState(this, state));
@@ -1991,6 +2005,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     @Override
     public final void setCounters(final Multiset<CounterType> allCounters) {
         boolean changed = counters.contains(CounterEnumType.MANABOND) || counters.elementSet().stream().anyMatch(CounterType::isKeywordCounter);
+        if (!allCounters.isEmpty()) {
+            walkInputsChanged();
+        }
         counters = allCounters;
         view.updateCounters(this);
 
@@ -4349,6 +4366,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final void addCloneState(CardCloneStates states, final long timestamp) {
+        walkInputsChanged();
         mayHaveSplitStates = true;
         clonedStates.put(timestamp, states);
         updateCloneState(true);
@@ -4406,6 +4424,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
     public final void setCloneStates(Map<Long, CardCloneStates> val) {
         if (!val.isEmpty()) {
+            walkInputsChanged();
             mayHaveSplitStates = true;
         }
         clonedStates.clear();
@@ -5091,6 +5110,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
     public final void setChangedCardTraitsByText(Table<Long, Long, CardTraitChanges> changes) {
         if (!changes.isEmpty()) {
+            walkInputsChanged();
             mayHaveChangedCardTraits = true;
         }
         changedCardTraitsByText.clear();
@@ -5100,6 +5120,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
     public final void addChangedCardTraitsByText(Collection<SpellAbility> spells,
             Collection<Trigger> trigger, Collection<ReplacementEffect> replacements, Collection<StaticAbility> statics, long timestamp, long staticId) {
+        walkInputsChanged();
         mayHaveChangedCardTraits = true;
         changedCardTraitsByText.put(timestamp, staticId, new CardTraitChanges(
             spells, trigger, replacements, statics, e -> true
@@ -5125,6 +5146,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return addChangedCardTraits(result, timestamp, staticId, updateView);
     }
     public final ICardTraitChanges addChangedCardTraits(ICardTraitChanges changes, long timestamp, long staticId, boolean updateView) {
+        walkInputsChanged();
         mayHaveChangedCardTraits = true;
         changedCardTraits.put(timestamp, staticId, changes);
         if (updateView) {
@@ -5166,6 +5188,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
     public final void setChangedCardTraits(Table<Long, Long, ICardTraitChanges> changes) {
         if (!changes.isEmpty()) {
+            walkInputsChanged();
             mayHaveChangedCardTraits = true;
         }
         changedCardTraits.clear();
@@ -7212,7 +7235,42 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     // installed keywords, the trait lists of those keywords, and the card's Layer 4 type changes. Split and clone
     // states, changed traits and counters move no version: the getters check them instead
     public final void traitsChanged() {
+        walkInputsChanged();
         traitVersion++;
+    }
+
+    /**
+     * Drops the replacement walk summary that passes this card, if there is one (Zone#summarizeWalk). Called right
+     * before every write that can turn knownToHaveNoReplacementEffects or knownToHaveNoReplacementEffectOf from true
+     * to false: to the trait version, the current state, the split-state and changed-trait flags, the card's game,
+     * and its counters from none to some.
+     */
+    public final void walkInputsChanged() {
+        final Zone z = walkSummaryZone;
+        if (z != null) {
+            walkSummaryZone = null;
+            z.dropWalkSummary();
+        }
+    }
+
+    /** The zone whose replacement walk summary passes this card, or null (Zone#summarizeWalk). */
+    public final Zone getWalkSummaryZone() {
+        return walkSummaryZone;
+    }
+
+    /** Only for Zone#summarizeWalk, which passes this card in that zone's summary. */
+    public final void setWalkSummaryZone(final Zone zone) {
+        walkSummaryZone = zone;
+    }
+
+    @Override
+    protected void countersBecomeNonEmpty() {
+        walkInputsChanged();
+        // another card can hold this card's counters (ComputerUtilCard.getPumpedCreature): a counter it gets is one
+        // this card gets, so every summary of the game is dropped (a summary passes only cards of its zone's game)
+        if (game != null) {
+            game.bumpWalkCounterEpoch();
+        }
     }
 
     /** The version {@link #traitsChanged} moves (it only grows): CardState's trait caches are stamped with it. */
@@ -7327,9 +7385,20 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         final int version = traitVersion;
         final FCollectionView<ReplacementEffect> result = state.getReplacementEffects();
         // kept only when the rebuild read no type but the state's own (see CardState.hasOwnLiteralType)
-        if (result.isEmpty() && version == traitVersion && state.hasOwnLiteralType()) {
-            noReplacementEffectsState = state;
-            noReplacementEffectsVersion = version;
+        if (version == traitVersion && state.hasOwnLiteralType()) {
+            if (result.isEmpty()) {
+                noReplacementEffectsState = state;
+                noReplacementEffectsVersion = version;
+            }
+            if (replacementEventsState != state || replacementEventsVersion != version) {
+                long events = 0L;
+                for (final ReplacementEffect re : result) {
+                    events |= re.modeCheckEvents();
+                }
+                replacementEventsState = state;
+                replacementEventsVersion = version;
+                replacementEvents = events;
+            }
         }
         return result;
     }
@@ -7343,6 +7412,37 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     private boolean knownToHaveNoReplacementEffects(final CardState state) {
         return noReplacementEffectsState == state && noReplacementEffectsVersion == traitVersion
                 && !mayHaveSplitStates && !mayHaveChangedCardTraits && getNumAllCounters() == 0;
+    }
+
+    // whether getReplacementEffects() would find no effect whose modeCheck can accept the event, without rebuilding
+    // them: the effects found for the current state at the current trait version had none, under the conditions above.
+    // A rebuild under them returns those same effects (the lazily made ones were made by the read that found them, and
+    // none is ever dropped), and an effect's mode is fixed when it is made; its layer is not, so it is not read here
+    public final boolean knownToHaveNoReplacementEffectOf(final ReplacementType event) {
+        final CardState state = currentState;
+        if (knownToHaveNoReplacementEffects(state)) {
+            return true;
+        }
+        return event != null && replacementEventsState == state && replacementEventsVersion == traitVersion
+                && !mayHaveSplitStates && !mayHaveChangedCardTraits && getNumAllCounters() == 0
+                && (replacementEvents & 1L << event.ordinal()) == 0;
+    }
+
+    /**
+     * The events (ReplacementEffect#modeCheckEvents bits) getReplacementEffects() is known to find an effect for,
+     * without rebuilding them: 0 when knownToHaveNoReplacementEffects(), every bit (-1) when nothing is known. Bit e
+     * clear means knownToHaveNoReplacementEffectOf(e).
+     */
+    public final long knownReplacementEvents() {
+        final CardState state = currentState;
+        if (knownToHaveNoReplacementEffects(state)) {
+            return 0L;
+        }
+        if (replacementEventsState == state && replacementEventsVersion == traitVersion
+                && !mayHaveSplitStates && !mayHaveChangedCardTraits && getNumAllCounters() == 0) {
+            return replacementEvents;
+        }
+        return -1L;
     }
 
     public ReplacementEffect addReplacementEffect(final ReplacementEffect replacementEffect) {
@@ -7642,6 +7742,8 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
                 newGame.saturateStaticAbilityModes("a card without a game joined it");
             }
         }
+        // a walk summary passes only cards of its zone's game (see countersBecomeNonEmpty)
+        walkInputsChanged();
         game = newGame;
     }
 

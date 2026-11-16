@@ -111,6 +111,8 @@ public class Game {
     // false until a card of this game is phased out, so until then the battlefields are known to hold no
     // phased-out card without looking at each card on them
     private boolean mayHavePhasedOutCards = false;
+    // see getWalkCounterEpoch
+    private long walkCounterEpoch = 0L;
     // the last snapshot getCardsIn made of the zones static abilities work from, and of each zone type
     private ZoneSnapshot staticAbilitySourcesSnapshot;
     private final ZoneSnapshot[] zoneSnapshots = new ZoneSnapshot[ZoneType.values().length];
@@ -642,6 +644,15 @@ public class Game {
         }
     }
 
+    /** Moved on every time a card of this game gets a counter when it has none (Zone#summarizeWalk); only grows. */
+    public final long getWalkCounterEpoch() {
+        return walkCounterEpoch;
+    }
+
+    public final void bumpWalkCounterEpoch() {
+        walkCounterEpoch++;
+    }
+
     public CardCollectionView getCardsPlayerCanActivateInStack() {
         return CardLists.filter(stackZone.getCards(), c -> {
             for (final SpellAbility sa : c.getSpellAbilities()) {
@@ -1042,6 +1053,45 @@ public class Game {
                 return;
             }
             if (withSideboard && !visitor.visitAll(player.getZone(ZoneType.Sideboard).getCards())) {
+                return;
+            }
+            if (!visitor.visitAll(player.getInboundTokens())) {
+                return;
+            }
+        }
+        visitor.visitAll(getStackZone().getCards());
+    }
+
+    /**
+     * forEachCardInGame(visitor, false), for a visitor that, while {@code summaryUsable} holds (null: always), returns
+     * true at once having done nothing for every card {@link Card#knownToHaveNoReplacementEffects()} and every card
+     * whose {@link Card#knownReplacementEvents()} share no bit with {@code events}: the replacement walk. Graveyard,
+     * hand, library, battlefield and exile pass those cards by their summaries (Zone#visitSummarized), visiting every
+     * other card as forEachCardInGame does, in the same order; the other zones are walked as there.
+     */
+    public void forEachCardInGameSummarized(final Visitor<Card> visitor, final long events,
+            final java.util.function.BooleanSupplier summaryUsable) {
+        if (WalkSummaryProbe.verify) {
+            WalkSummaryProbe.WALKS.increment();
+        }
+        for (final Player player : getPlayers()) {
+            if (!player.getZone(ZoneType.Graveyard).visitSummarized(visitor, events, summaryUsable)) {
+                return;
+            }
+            if (!player.getZone(ZoneType.Hand).visitSummarized(visitor, events, summaryUsable)) {
+                return;
+            }
+            if (!player.getZone(ZoneType.Library).visitSummarized(visitor, events, summaryUsable)) {
+                return;
+            }
+            // the raw list, phased-out cards included, as getCards(false) returns it
+            if (!player.getZone(ZoneType.Battlefield).visitSummarized(visitor, events, summaryUsable)) {
+                return;
+            }
+            if (!player.getZone(ZoneType.Exile).visitSummarized(visitor, events, summaryUsable)) {
+                return;
+            }
+            if (!visitor.visitAll(player.getCardsIn(ZoneType.PART_OF_COMMAND_ZONE))) {
                 return;
             }
             if (!visitor.visitAll(player.getInboundTokens())) {

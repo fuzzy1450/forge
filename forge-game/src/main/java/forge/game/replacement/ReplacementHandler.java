@@ -111,7 +111,7 @@ public class ReplacementHandler {
         final List<ReplacementEffect> possibleReplacers = Lists.newArrayList();
 
         // Round up Static replacement effects
-        game.forEachCardInGame(crd -> {
+        final Visitor<Card> roundUp = crd -> {
             Card c = preList == null ? crd : preList.get(crd);
 
             // only when not prelist
@@ -122,6 +122,11 @@ public class ReplacementHandler {
             final Card firstCard = c;
             // a card Card's emptiness memo already knows to have none is skipped without the rebuild or the list
             if (noLKIstate && c.knownToHaveNoReplacementEffects()) {
+                return true;
+            }
+            // and so is one it knows to have none modeCheck accepts the event for: collectReplacer would turn each down
+            // after reading only hasRun and the layer, and the rebuild would make none
+            if (noLKIstate && c.knownToHaveNoReplacementEffectOf(event)) {
                 return true;
             }
             final FCollectionView<ReplacementEffect> firstEffects = c.getReplacementEffects();
@@ -175,7 +180,17 @@ public class ReplacementHandler {
                 }
             }
             return true;
-        }, affectedCard != null && affectedCard.isInZone(ZoneType.Sideboard));
+        };
+        if (preList == null && (event != ReplacementType.Moved || runParams.get(AbilityKey.LastStateBattlefield) == null)) {
+            // without a pre-list or a last state every card is its own and noLKIstate holds for it, so the visit of a
+            // card known to have no effect the event's modeCheck accepts returns at once having done nothing: the
+            // zones' walk summaries pass those cards (Game#forEachCardInGameSummarized), while the run params still
+            // name no last state
+            game.forEachCardInGameSummarized(roundUp, event == null ? -1L : 1L << event.ordinal(),
+                    event == ReplacementType.Moved ? () -> runParams.get(AbilityKey.LastStateBattlefield) == null : null);
+        } else {
+            game.forEachCardInGame(roundUp, affectedCard != null && affectedCard.isInZone(ZoneType.Sideboard));
+        }
 
         if (affectedLKI != null) {
             // need to set the Host Card there so it is not connected to LKI anymore?
@@ -935,7 +950,9 @@ public class ReplacementHandler {
      */
     public int getTotalPreventionShieldAmount(GameEntity o) {
         final List<ReplacementEffect> list = Lists.newArrayList();
-        game.forEachCardInGame(new Visitor<Card>() {
+        // a card known to have no DamageDone effect adds nothing, and reading its effects makes none: the zones' walk
+        // summaries pass it (Game#forEachCardInGameSummarized)
+        game.forEachCardInGameSummarized(new Visitor<Card>() {
             @Override
             public boolean visit(Card c) {
                 for (final ReplacementEffect re : c.getReplacementEffects()) {
@@ -952,7 +969,7 @@ public class ReplacementHandler {
                 return true;
             }
 
-        });
+        }, 1L << ReplacementType.DamageDone.ordinal(), null);
 
         int totalAmount = 0;
         for (ReplacementEffect re : list) {
@@ -980,6 +997,10 @@ public class ReplacementHandler {
         // a fog effect can only be active from a zone in STATIC_ABILITIES_SOURCE_ZONES
         // (zonesCheck below rejects other zones), so don't scan libraries and hands
         for (final Card c : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
+            // none of its effects would pass the mode test below, and the rebuild would make none
+            if (c.knownToHaveNoReplacementEffectOf(ReplacementType.DamageDone)) {
+                continue;
+            }
             for (final ReplacementEffect re : c.getReplacementEffects()) {
                 if (re.getMode() == ReplacementType.DamageDone
                         && re.getLayer() == ReplacementLayer.Other

@@ -103,4 +103,9 @@ public class ReplaceAddCounter extends ReplacementEffect {
         }
         return super.modeCheck(event, runParams);
     }
+
+    @Override
+    public long modeCheckEvents() {
+        return super.modeCheckEvents() | 1L << ReplacementType.Moved.ordinal();
+    }
 }
