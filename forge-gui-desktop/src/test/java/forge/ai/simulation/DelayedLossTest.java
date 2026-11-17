@@ -755,6 +755,29 @@ public class DelayedLossTest extends FlatMcTestBase {
     }
 
     /**
+     * DESIGN.md 1.7, T2 review finding 5: a mana part with X is refused while a debt is due now, however much is
+     * untapped, since X is chosen after the decision and may tap every source the debt needs. Pact of Negation's
+     * trigger (3UU) under an opponent's Serra Angel, Island x10 untapped: Counterspell leaves eight Islands, allowed;
+     * Condescend's {X}{U} is refused.
+     */
+    @Test(timeOut = 300_000)
+    public void anXManaCostIsRefusedWhileADebtIsDueNow() {
+        Scoped.under(new SimScope(103L), () -> {
+            upkeepWithThePactsTrigger();
+            final SpellAbility angel = onStack("Serra Angel", opp, null);
+            put("Island", 10, ai, ZoneType.Battlefield);
+            final SpellAbility counterspell = spell("Counterspell");
+            counterspell.getTargets().add(angel);
+            assertNull(problemOf(counterspell), "Counterspell's {U}{U}: eight Islands are left for 3UU");
+            final SpellAbility condescend = spell("Condescend");
+            condescend.getTargets().add(angel);
+            assertEquals(problemOf(condescend), DelayedLoss.DEBT_DUE_NOW,
+                    "Condescend's X is chosen after the decision: it may tap the Islands the trigger needs");
+            return null;
+        });
+    }
+
+    /**
      * problem's answers for three plays whose life cannot be read as a number (RULINGS-R3 M17, T2 review finding 4):
      * Toxic Deluge (its additional cost, {@code PayLife<X>}), Stroke of Genius ({X}{2}{U}: X mana, any of it perhaps
      * tapped from a painful source) and Reanimate (its own LoseLife of X, the creature's mana value). A throw is
