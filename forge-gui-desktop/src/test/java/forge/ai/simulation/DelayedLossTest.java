@@ -129,12 +129,10 @@ public class DelayedLossTest extends FlatMcTestBase {
     }
 
     /**
-     * The AI's upkeep with its Pact of Negation's trigger on the stack, a debt due now (3UU): Pact of Negation resolved
-     * in the opponent's first main phase over their Grizzly Bears, then the game played into the AI's upkeep, with no AI
-     * deadline. Run it inside {@code Scoped.under}. The AI controls nothing yet; the trigger (a WrappedAbility) is
-     * returned.
+     * Pact of Negation resolved in the opponent's first main phase over their Grizzly Bears, with no AI deadline: a debt
+     * due at the AI's next upkeep (3UU). Run it inside {@code Scoped.under}. The AI controls nothing yet.
      */
-    private SpellAbility upkeepWithThePactsTrigger() {
+    private void resolveAPactOfNegation() {
         setUpGame();
         noDeadline();
         fillLibrary(ai, 10);
@@ -144,6 +142,16 @@ public class DelayedLossTest extends FlatMcTestBase {
         onStack("Pact of Negation", ai, bears);
         game.getPhaseHandler().onStackResolved();
         playUntilStackClear(game);
+        assertTrue(DelayedLoss.owed(ai, null).hasNext(), "the resolved Pact's debt is due at the next upkeep");
+    }
+
+    /**
+     * The AI's upkeep with its Pact of Negation's trigger on the stack, a debt due now (3UU): the Pact resolved as in
+     * {@link #resolveAPactOfNegation}, then the game played into the AI's upkeep. Run it inside {@code Scoped.under}.
+     * The AI controls nothing yet; the trigger (a WrappedAbility) is returned.
+     */
+    private SpellAbility upkeepWithThePactsTrigger() {
+        resolveAPactOfNegation();
         for (int i = 0; i < 500 && !game.isGameOver()
                 && !(game.getPhaseHandler().is(PhaseType.UPKEEP, ai) && !game.getStack().isEmpty()); i++) {
             game.getPhaseHandler().mainLoopStep();
@@ -542,6 +550,47 @@ public class DelayedLossTest extends FlatMcTestBase {
                 return null;
             });
         }
+    }
+
+    /**
+     * RULINGS-R3 M17: while a debt's cover needs a painful unit, the life the play's own effects cost and the pain its
+     * mana may cost come off the life budget. A pending Pact of Negation debt (3UU), Island x3 and Ancient Tomb, the
+     * opponent's end step: at 6 life the Tomb fits (2 + 3 < 6), and Vampiric Tutor's 2 life, with its {B} perhaps
+     * tapped from the untapped Tomb (1 x 2), leaves it none. Each half alone, too; and nothing is asked of the play
+     * while the painless sources cover the debt.
+     */
+    @Test(timeOut = 300_000)
+    public void thePlaysOwnLifeLossIsBudgetedWhileTheCoverNeedsPain() {
+        Scoped.under(new SimScope(47L), () -> {
+            resolveAPactOfNegation();
+            put("Island", 3, ai, ZoneType.Battlefield);
+            final Card tomb = put("Ancient Tomb", ai, ZoneType.Battlefield);
+            at(PhaseType.END_OF_TURN, opp);
+            ai.setLife(6, null);
+            assertEquals(DelayedLoss.count(ai, DelayedLoss.Due.NEXT, DelayedLoss.Removal.NONE).units().size(), 5,
+                    "at 6 life the Tomb is counted: 3 + 2 for 3UU");
+            assertEquals(problemOf(spell("Vampiric Tutor")), DelayedLoss.DEBT_UNPROTECTED,
+                    "6 - 2 (its own loss) - 1 x 2 (its {B} from the Tomb) = 2: the Tomb no longer fits");
+            ai.setLife(40, null);
+            assertNull(problemOf(spell("Vampiric Tutor")), "at 40 life the Tomb fits after it");
+
+            ai.setLife(6, null);
+            tomb.setTapped(true); // it untaps for the upkeep; no untapped painful source can pay the Tutor's {B}
+            assertEquals(problemOf(spell("Vampiric Tutor")), DelayedLoss.DEBT_UNPROTECTED,
+                    "its own 2 life alone: 6 - 2 = 4, and 2 + 3 < 4 fails");
+            tomb.setTapped(false);
+            ai.setLife(7, null);
+            assertEquals(problemOf(spell("Brainstorm")), DelayedLoss.DEBT_UNPROTECTED,
+                    "no loss of its own, but its {U} may be tapped from the Tomb: 7 - 1 x 2 = 5, and 2 + 3 < 5 fails");
+            tomb.setTapped(true);
+            assertNull(problemOf(spell("Brainstorm")), "with the Tomb tapped its mana costs no life");
+
+            tomb.setTapped(false);
+            put("Island", 2, ai, ZoneType.Battlefield);
+            ai.setLife(3, null);
+            assertNull(problemOf(spell("Vampiric Tutor")), "five Islands cover 3UU without the Tomb: nothing to budget");
+            return null;
+        });
     }
 
     /**

@@ -617,6 +617,13 @@ public final class DelayedLoss {
             return lifeUnread;
         }
 
+        /** This removal with more cards taken and more life paid. */
+        Removal plus(final List<Card> more, final int moreLife) {
+            final List<Card> all = new ArrayList<>(cards);
+            all.addAll(more);
+            return new Removal(all, life + moreLife, lifeUnread, oneOf);
+        }
+
         /** Whether the card is among those taken (identity: the cards of this game). */
         boolean takes(final Card c) {
             for (final Card x : cards) {
@@ -1190,6 +1197,16 @@ public final class DelayedLoss {
                 }
             }
         }
+        final int damage = selfDamage(ma);
+        final int[] out = new int[units.size()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = units.get(i);
+        }
+        return new Option(out, payLife, damage, taps ? tapPain : 0, filterInput);
+    }
+
+    /** The life a mana ability's own sub-abilities cost its controller: a DealDamage or LoseLife with Defined$ You. */
+    private static int selfDamage(final SpellAbility ma) {
         int damage = 0;
         for (SpellAbility p = ma; p != null; p = p.getSubAbility()) {
             if (p.getManaPart() != null || !"You".equals(p.getParam("Defined"))) {
@@ -1201,11 +1218,7 @@ public final class DelayedLoss {
                 damage += Math.max(0, AbilityUtils.calculateAmount(p.getHostCard(), p.getParam("LifeAmount"), p));
             }
         }
-        final int[] out = new int[units.size()];
-        for (int i = 0; i < out.length; i++) {
-            out[i] = units.get(i);
-        }
-        return new Option(out, payLife, damage, taps ? tapPain : 0, filterInput);
+        return damage;
     }
 
     /** B5: a part of the ability's chain makes mana with a spending restriction. */
@@ -1722,12 +1735,17 @@ public final class DelayedLoss {
      * mana value T is allowed only while the painless sources cover the debt whichever T of them the payment taps,
      * and an X is refused. When both kinds are owed, both must stay covered.
      * <p>
+     * RULINGS-R3 M17: while a debt's cover needs a painful unit (the painless count does not cover it), the life the
+     * play's own effects cost (a LoseLife or DealDamage of its own) and T times the largest pain of an untapped
+     * painful source (the play's own mana payment may tap it) come off the life budget too; an amount that is not a
+     * number refuses the play.
+     * <p>
      * The reader comes first: in a game where no Pact was cast it finds nothing after two empty scans, and the cost is
      * never looked at.
      */
     static String protection(final Player ai, final Cost cost, final SpellAbility judged) {
         final Debts owed = owed(ai, judged);
-        if (owed.isEmpty() || cost == null) {
+        if (owed.isEmpty()) {
             return null;
         }
         final int t = manaValue(cost);
@@ -1740,7 +1758,7 @@ public final class DelayedLoss {
         return owed.hasNext() ? guard(ai, cost, judged, Due.NEXT, owed.next(), t) : null;
     }
 
-    /** Debt protection against the debts due at one time (DESIGN.md 1.7). */
+    /** Debt protection against the debts due at one time (DESIGN.md 1.7, RULINGS-R3 M17). */
     private static String guard(final Player ai, final Cost cost, final SpellAbility judged, final Due due,
                                 final Debt debt, final int t) {
         final boolean now = due == Due.NOW;
@@ -1750,7 +1768,10 @@ public final class DelayedLoss {
         }
         final Removal removal = Removal.of(ai, cost, judged, due);
         final boolean spends = now && t > 0; // for a debt due next upkeep mana costs nothing: every counted source untaps
-        if (removal.isEmpty() && !spends) {
+        final boolean takes = !removal.isEmpty() || spends;
+        final Integer ownLoss = ownLifeLoss(judged);                // M17 (i); null: not a number
+        final int manaPain = t != 0 ? largestUntappedPain(ai) : 0;  // M17 (ii); -1: unreadable
+        if (!takes && ownLoss != null && ownLoss == 0 && manaPain == 0) {
             return null;
         }
         final List<Card> counted = count(ai, due, Removal.NONE).cards();
@@ -1758,16 +1779,95 @@ public final class DelayedLoss {
         for (final Removal taken : removal.cases(relevant)) {
             final Mana left = count(ai, due, taken);
             if (!left.pays(debt)) {
+                if (!takes) {
+                    continue; // the play only loses life, and the debt was not covered before it: M17 asks nothing
+                }
                 return code; // uncovered after the play: what it takes, or what it spends, the debt needed
             }
-            if (removal.lifeUnread() && !left.painless().pays(debt)) {
-                return code; // a life cost that is not a number, while the cover needs a painful unit
+            if (!left.painless().pays(debt)) { // the cover needs a painful unit (M17)
+                if (removal.lifeUnread() || ownLoss == null || manaPain < 0 || t < 0 && manaPain > 0) {
+                    return code; // a life amount that is not a number
+                }
+                final int extra = ownLoss + Math.max(0, t) * manaPain;
+                if (extra > 0 && !count(ai, due, taken.plus(Collections.emptyList(), extra)).pays(debt)) {
+                    return code; // the play's own life loss, and its mana's pain, leave the pain no margin
+                }
             }
             if (spends && !left.painless().paysAfterAnyTapped(debt, t)) {
                 return code; // 1.7: whichever t painless sources the payment taps, the rest must cover the debt
             }
         }
         return null;
+    }
+
+    /**
+     * RULINGS-R3 M17 (i): the life the play's own effects cost the AI: every LoseLife of its own (not targeted,
+     * {@code Defined$} absent, You or Player) and every DealDamage with {@code Defined$} You or Player in its chain.
+     * Null when such an amount is not a number (an X, a count): it cannot be budgeted. Script parameters only.
+     */
+    static Integer ownLifeLoss(final SpellAbility play) {
+        int loss = 0;
+        for (SpellAbility p = play; p != null; p = p.getSubAbility()) {
+            final String amount;
+            if (p.getApi() == ApiType.LoseLife && !p.usesTargeting() && own(p.getParam("Defined"), true)) {
+                amount = p.getParam("LifeAmount");
+            } else if (p.getApi() == ApiType.DealDamage && own(p.getParam("Defined"), false)) {
+                amount = p.getParam("NumDmg");
+            } else {
+                continue;
+            }
+            final Integer n = number(amount);
+            if (n == null) {
+                return null;
+            }
+            loss += n;
+        }
+        return loss;
+    }
+
+    /** A {@code Defined$} that takes in the AI itself: You, or Player (each player); absent where that means You. */
+    private static boolean own(final String defined, final boolean absentIsYou) {
+        return defined == null ? absentIsYou : "You".equals(defined) || "Player".equals(defined);
+    }
+
+    /**
+     * RULINGS-R3 M17 (ii): the most life one tap of an untapped mana source of the AI's costs (a life payment, a
+     * self-damage sub-ability, City of Brass's tap trigger): what each mana of a payment the play makes now may cost.
+     * -1 when a source cannot be read. The same reads as the count's.
+     */
+    static int largestUntappedPain(final Player ai) {
+        int largest = 0;
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            if (c.isTapped() || c.isPhasedOut()) {
+                continue;
+            }
+            try {
+                final int tapPain = tapTriggerPain(c);
+                if (tapPain < 0) {
+                    return -1;
+                }
+                for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(c)) {
+                    int pain = selfDamage(ma);
+                    boolean taps = false;
+                    final Cost cost = ma.getPayCosts();
+                    if (cost != null) {
+                        for (final CostPart part : cost.getCostParts()) {
+                            if (part instanceof CostTap) {
+                                taps = true;
+                            } else if (part instanceof CostPayLife) {
+                                pain += Math.max(0, part.getAbilityAmount(ma));
+                            }
+                        }
+                    }
+                    largest = Math.max(largest, pain + (taps ? tapPain : 0));
+                }
+            } catch (final AITimeoutTracker.Expired e) {
+                throw e;
+            } catch (final RuntimeException e) {
+                return -1;
+            }
+        }
+        return largest;
     }
 
     /** DESIGN.md 1.7's T: the mana value of a cost's mana part, 0 without one, -1 with an X (chosen later). */
