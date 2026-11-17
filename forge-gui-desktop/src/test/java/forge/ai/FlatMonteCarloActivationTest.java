@@ -341,18 +341,18 @@ public class FlatMonteCarloActivationTest extends AITest {
     }
 
     /** Puts the ability on the stack aimed at the creature, as an activation does, and resolves it. */
-    private void activate(final SpellAbility sa, final Card equipment, final Card to) {
+    private void activate(final SpellAbility sa, final Card to) {
         sa.setActivatingPlayer(ai);
         sa.resetTargets();
         sa.getTargets().add(to);
         game.getStack().add(sa);
         game.getStack().resolveStack();
         game.getAction().checkStateEffects(true);
-        AssertJUnit.assertSame("the Equipment moved", to, equipment.getEquipping());
     }
 
     private void move(final Card equipment, final Card to) {
-        activate(equip(equipment), equipment, to);
+        activate(equip(equipment), to);
+        AssertJUnit.assertSame("the Equipment moved", to, equipment.getEquipping());
     }
 
     @Test
@@ -498,13 +498,15 @@ public class FlatMonteCarloActivationTest extends AITest {
             }
         }
         AssertJUnit.assertEquals("the Plating's own attach ability", 1, others);
-        activate(attach, plating, giant);
+        activate(attach, giant); // where the AI lets it resolve to is its own affair: the activation is on record
+        AssertJUnit.assertEquals("the stack recorded the activation", 1, game.getStack().getAbilityActivatedThisTurn().size());
+        final Card elsewhere = plating.getEquipping() == bears ? giant : bears;
         final SpellAbility sa = equip(plating);
         AssertJUnit.assertFalse("only an Equip counts as the turn's move: the Equip's first is still open",
-                ActivationGuard.equipTargetClosed(ai, sa, bears));
+                ActivationGuard.equipTargetClosed(ai, sa, elsewhere));
         AssertJUnit.assertNull(ActivationGuard.problem(ai, sa));
         AssertJUnit.assertFalse("and the rule has nothing to say about the other ability",
-                ActivationGuard.equipTargetClosed(ai, attach, bears));
+                ActivationGuard.equipTargetClosed(ai, attach, elsewhere));
     }
 
     // ------------------------------------------------------------------------------------------ outside its remit
