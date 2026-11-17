@@ -5,6 +5,8 @@ import org.testng.annotations.Test;
 
 import forge.ai.simulation.ComboGuard;
 import forge.ai.simulation.ComboPlan;
+import forge.card.CardRarity;
+import forge.card.CardRules;
 import forge.game.Game;
 import forge.game.GameActionUtil;
 import forge.game.ability.ApiType;
@@ -16,6 +18,7 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
+import forge.item.PaperCard;
 
 /**
  * Pacts (Pact of Negation, Summoner's Pact, Slaughter Pact, Pact of the Titan, Intervention Pact): the AI loses the game
@@ -937,5 +940,80 @@ public class FlatMonteCarloPactGuardTest extends AITest {
         again.getTargets().add(angel);
         AssertJUnit.assertEquals("Island x6 and Mana Confluence: the painful Confluence is never spared, 6 - 2 < 5",
                 "debt-due-now", verdict(ai, again));
+    }
+
+    // ------------------------------------------------------------------------ copies (DESIGN.md 1.8)
+
+    /** The first ability of a card's that copies a spell or ability, the AI its activator. */
+    private static SpellAbility copyAbilityOf(final Card c, final Player ai) {
+        for (final SpellAbility sa : c.getSpellAbilities()) {
+            if (sa.getApi() == ApiType.CopySpellAbility) {
+                sa.setActivatingPlayer(ai);
+                return sa;
+            }
+        }
+        throw new AssertionError(c + " has no copy ability");
+    }
+
+    /** Finding C6: a copy of the AI's own Pact of Negation is a second debt for the same upkeep. */
+    @Test
+    public void copyingTheAIsOwnPactIsRefused() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        final Player opp = opponentOf(game, ai);
+        addCards("Island", 12, ai); // mana for both debts: the refusal is the second debt's, not the count's
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        final SpellAbility pact = onStack(game, "Pact of Negation", ai, onStack(game, "Grizzly Bears", opp, null));
+        final SpellAbility twincast = fromHand(ai, "Twincast");
+        twincast.getTargets().add(pact);
+        AssertJUnit.assertEquals("the copy's debt is the AI's too, beside the Pact's own", "pact-debt-pending",
+                verdict(ai, twincast));
+    }
+
+    /** Finding C6: a copy of Final Fortune is an extra turn that ends in a loss. */
+    @Test
+    public void copyingFinalFortuneIsRefused() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        addCards("Island", 2, ai);
+        addCards("Mountain", 2, ai);
+        final SpellAbility fortune = onStack(game, "Final Fortune", ai, null);
+        final SpellAbility twincast = fromHand(ai, "Twincast");
+        twincast.getTargets().add(fortune);
+        AssertJUnit.assertEquals("extra-turn-loses", verdict(ai, twincast));
+    }
+
+    /**
+     * Round 2's M8: a copy of the Pact's pay-or-lose trigger at the AI's upkeep is a second debt, due now: Strionic
+     * Resonator's ability, and a free copy (a card made for this test, the same CopySpellAbility at no cost) alike.
+     */
+    @Test(timeOut = 300_000)
+    public void copyingTheAIsOwnPactTriggerIsRefused() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        final SpellAbility trigger = upkeepWithThePactsTrigger(game, ai);
+        addCards("Island", 12, ai);
+        final SpellAbility resonator = copyAbilityOf(addCard("Strionic Resonator", ai), ai);
+        resonator.getTargets().add(trigger);
+        AssertJUnit.assertEquals("Strionic Resonator copying the trigger", "pact-debt-pending", verdict(ai, resonator));
+
+        final CardRules.Reader reader = new CardRules.Reader();
+        for (final String line : new String[] {
+                "Name:Free Trigger Copier",
+                "ManaCost:0",
+                "Types:Artifact",
+                "A:AB$ CopySpellAbility | Cost$ 0 | TargetType$ Triggered.YouCtrl | ValidTgts$ Card,Emblem"
+                        + " | TgtPrompt$ Choose target triggered ability you control | SpellDescription$ Copy target"
+                        + " triggered ability you control.",
+                "Oracle:{0}: Copy target triggered ability you control." }) {
+            reader.parseLine(line);
+        }
+        final Card copier = Card.fromPaperCard(new PaperCard(reader.getCard(), "M11", CardRarity.Common), ai);
+        copier.setGameTimestamp(game.getNextTimestamp());
+        ai.getZone(ZoneType.Battlefield).add(copier);
+        final SpellAbility free = copyAbilityOf(copier, ai);
+        free.getTargets().add(trigger);
+        AssertJUnit.assertEquals("a free copy of the trigger", "pact-debt-pending", verdict(ai, free));
     }
 }

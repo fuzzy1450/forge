@@ -1976,11 +1976,45 @@ public final class DelayedLoss {
     }
 
     /**
-     * DESIGN.md 1.8: the kind and cost a copy of a flagged spell, or of a pay-or-lose trigger, is judged by; null when
-     * the play copies none.
+     * DESIGN.md 1.8 (D26, round 2's M8): the kind and cost a copy is judged by, or null when the play copies nothing
+     * flagged. A play with a {@code CopySpellAbility} anywhere in its chain copies its target spells and abilities on
+     * the stack, or, while it has no target yet, any item on the stack. A flagged spell is judged as that kind, a Pact
+     * with its own cost (the copy's debt is the AI's); a {@code LosesGame} with an {@code UnlessCost$} (a Pact's
+     * pay-or-lose trigger, read through its WrappedAbility) as a Pact with that cost, which the trigger itself, a debt,
+     * always refuses. Only the five Pacts' scripts have that shape (DESIGN.md 1.3). Script parameters, the targets and
+     * the stack's items only; a play that copies nothing reads its chain's API words and nothing else.
      */
     static Copied copiedFlagged(final SpellAbility sa) {
-        return null; // copies of a flagged spell or trigger (DESIGN.md 1.8, M8) are the next task's: until then none
+        for (SpellAbility a = sa; a != null; a = a.getSubAbility()) {
+            if (a.getApi() != ApiType.CopySpellAbility) {
+                continue;
+            }
+            final List<SpellAbility> copied = new ArrayList<>();
+            if (a.getTargets() != null) {
+                for (final SpellAbility s : a.getTargets().getTargetSpells()) {
+                    copied.add(s);
+                }
+            }
+            final Card host = a.getHostCard();
+            if (copied.isEmpty() && host != null && host.getGame() != null) {
+                for (final SpellAbilityStackInstance si : host.getGame().getStack()) {
+                    copied.add(si.getSpellAbility());
+                }
+            }
+            for (final SpellAbility s : copied) {
+                if (s == null) {
+                    continue;
+                }
+                final Kind k = kind(s);
+                if (k != null) {
+                    return new Copied(k, k == Kind.PACT ? ComboGuard.pactCost(s) : null);
+                }
+                if (s.getApi() == ApiType.LosesGame && s.hasParam("UnlessCost")) {
+                    return new Copied(Kind.PACT, s.getParam("UnlessCost"));
+                }
+            }
+        }
+        return null;
     }
 
     private static String judge(final Player ai, final SpellAbility sa, final Kind kind, final String cost,

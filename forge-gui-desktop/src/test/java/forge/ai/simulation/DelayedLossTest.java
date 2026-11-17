@@ -666,6 +666,34 @@ public class DelayedLossTest extends FlatMcTestBase {
         }
     }
 
+    // --------------------------------------------------------------------------------------------- copies
+
+    /**
+     * DESIGN.md 1.8 (D26): a copy of a flagged spell is judged as that spell cast by the AI. A copy of the opponent's
+     * Pact of Negation is a debt of the AI's, covered or not by the AI's count; a copy of a spell nothing flags is
+     * nothing; a copy with no target yet copies any item on the stack.
+     */
+    @Test
+    public void aCopyIsJudgedAsWhatItCopies() {
+        opponentsTurn();
+        put("Island", 3, ai, ZoneType.Battlefield);
+        final SpellAbility theirs = onStack("Pact of Negation", opp, onStack("Grizzly Bears", ai, null));
+        SpellAbility twincast = spell("Twincast");
+        twincast.getTargets().add(theirs);
+        assertEquals(problemOf(twincast), DelayedLoss.PACT_UNPAYABLE, "the copy's 3UU is the AI's: three Islands");
+        put("Island", 2, ai, ZoneType.Battlefield);
+        assertNull(problemOf(twincast), "five Islands pay it");
+
+        opponentsTurn();
+        final SpellAbility counter = onStack("Counterspell", opp, onStack("Grizzly Bears", ai, null));
+        twincast = spell("Twincast");
+        twincast.getTargets().add(counter);
+        assertNull(problemOf(twincast), "a copy of Counterspell is nothing to judge");
+        onStack("Final Fortune", ai, null);
+        assertEquals(problemOf(spell("Twincast")), DelayedLoss.EXTRA_TURN_LOSES,
+                "with no target yet, a copy may copy Final Fortune on the stack");
+    }
+
     /**
      * DESIGN.md section 4 (finding I5), with RULINGS-R3 M29(d): the same two boards built in three orders (seeded
      * shuffles of the order the AI's permanents are made in, so of their ids) give the same verdicts. Neither board
