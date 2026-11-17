@@ -288,6 +288,28 @@ public class DelayedLossVetoTest extends AITest {
                 Arrays.asList(false, 1), Arrays.asList(cast, game.getStack().size()));
     }
 
+    /**
+     * Review TB-1's row: S5 leaves a mandatory free cast alone (DESIGN.md S5, D13: "a mandatory cast is still cast:
+     * the rules force it"). S5's board; Pact of Negation's free copy, its cost and its targeting made mandatory as
+     * PlayEffect makes them when its effect is not optional (PlayEffect.java:392-405, 432-434): the Pact is cast, on
+     * top of the Serra Angel. A guards row: the parent, which has no S5, casts it too.
+     */
+    @Test(timeOut = 120_000)
+    public void reviewAMandatoryFreeCastOfAFlaggedCardIsStillCast() {
+        final Game game = freeCastBoard();
+        final Player ai = game.getPlayers().get(1);
+        final SpellAbility pact = addCardToZone("Pact of Negation", ai, ZoneType.Exile).getFirstSpellAbility();
+        pact.setActivatingPlayer(ai);
+        final SpellAbility forced = pact.copyWithNoManaCost();
+        AssertJUnit.assertTrue("Pact of Negation's free copy targets", forced.usesTargeting());
+        forced.getPayCosts().setMandatory(true);
+        forced.getTargetRestrictions().setMandatory(true);
+        final boolean cast = ((PlayerControllerAi) ai.getController()).playSaFromPlayEffect(forced);
+        AssertJUnit.assertEquals("[whether the mandatory free Pact of Negation was cast, the stack's size, the card on"
+                        + " top]: cast, above the Serra Angel", Arrays.asList(true, 2, "Pact of Negation"),
+                Arrays.asList(cast, game.getStack().size(), game.getStack().peekAbility().getHostCard().getName()));
+    }
+
     // --------------------------------------------------------------------------------------------- S5b
 
     /**
