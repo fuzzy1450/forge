@@ -1269,4 +1269,36 @@ public class DelayedLossTest extends FlatMcTestBase {
         assertFalse(orders.get(1).equals(orders.get(3)) && orders.get(3).equals(orders.get(5)),
                 "and the duals: " + orders);
     }
+
+    // --------------------------------------------------------------------------------------------- review wf-1
+
+    /**
+     * Review wf-1, mutant W3: while a debt is due now a tap of the play's own source is a removal (DESIGN.md 1.7: "for
+     * a debt due now only, CostTap (its source)"). The AI's upkeep with its Pact of Negation's trigger on the stack
+     * (3UU): Island x4 and Mishra's Factory are exactly the debt, and the Factory's {T} pump would tap the Factory;
+     * with Island x5 beside it the debt stays covered.
+     */
+    @Test(timeOut = 300_000)
+    public void reviewATapOfACountedSourceIsARemovalWhileADebtIsDueNow() {
+        final List<String> verdicts = new ArrayList<>();
+        for (final int islands : new int[] { 4, 5 }) {
+            Scoped.under(new SimScope(229L), () -> {
+                upkeepWithThePactsTrigger();
+                put("Island", islands, ai, ZoneType.Battlefield);
+                final Card factory = put("Mishra's Factory", ai, ZoneType.Battlefield);
+                SpellAbility pump = null;
+                for (final SpellAbility sa : factory.getSpellAbilities()) {
+                    if (sa.getApi() == ApiType.Pump) {
+                        pump = sa;
+                    }
+                }
+                assertNotNull(pump, "Mishra's Factory's {T} pump");
+                pump.setActivatingPlayer(ai);
+                verdicts.add(problemOf(pump));
+                return null;
+            });
+        }
+        assertEquals(verdicts, Arrays.asList(DelayedLoss.DEBT_DUE_NOW, null),
+                "[Island x4 and the Factory, Island x5 and the Factory] = " + verdicts);
+    }
 }
