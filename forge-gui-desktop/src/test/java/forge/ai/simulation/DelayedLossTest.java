@@ -1410,4 +1410,29 @@ public class DelayedLossTest extends FlatMcTestBase {
         assertEquals(verdicts, Arrays.asList(DelayedLoss.PACT_UNPAYABLE, null, null),
                 "[the opponent's first main phase, second main phase, end step] = " + verdicts);
     }
+
+    /**
+     * Review wf-1, mutant W6: a play that takes nothing the count reads is not refused for a debt the count does not
+     * cover anyway (RULINGS-R3 M17 asks only while the cover needs a painful unit). A pending Pact of Negation debt
+     * (3UU), Island x3 and an untapped Ancient Tomb at 4 life, the opponent's end step: the Tomb does not fit (2 + 3 <
+     * 4 fails), so the debt is uncovered before any play. Vampiric Tutor (2 life of its own) and Brainstorm (its {U}
+     * perhaps from the Tomb) take nothing and are not refused.
+     */
+    @Test(timeOut = 300_000)
+    public void reviewAPlayThatTakesNothingIsNotRefusedForAnUncoveredDebt() {
+        final List<String> verdicts = Scoped.under(new SimScope(239L), () -> {
+            resolveAPactOfNegation();
+            put("Island", 3, ai, ZoneType.Battlefield);
+            put("Ancient Tomb", ai, ZoneType.Battlefield);
+            at(PhaseType.END_OF_TURN, opp);
+            ai.setLife(4, null);
+            assertEquals(DelayedLoss.count(ai, DelayedLoss.Due.NEXT, DelayedLoss.Removal.NONE).units().size(), 3,
+                    "at 4 life the Tomb does not fit: three units for 3UU");
+            final List<String> out = new ArrayList<>();
+            out.add(problemOf(spell("Vampiric Tutor")));
+            out.add(problemOf(spell("Brainstorm")));
+            return out;
+        });
+        assertEquals(verdicts, Arrays.asList(null, null), "[Vampiric Tutor, Brainstorm] = " + verdicts);
+    }
 }
