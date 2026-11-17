@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import forge.ai.AiCardMemory;
 import forge.ai.ComputerUtilMana;
 import forge.card.CardRules;
 import forge.card.ColorSet;
@@ -2187,6 +2188,18 @@ public final class DelayedLoss {
         }
         return false;
     }
+
+    /**
+     * S6 (DESIGN.md D28, round 1's L4): the AI's held-mana memory sets, which its payment of its own Pact debt clears
+     * first, so that every source the count relied on pays: the payment refuses a source held for a later spell
+     * (ComputerUtilMana.isManaSourceReserved), and a hold can be made after the Pact was cast, or outlive the
+     * opponent's turn. In this order: the next spell's, the second main phase's, the AI's declare-blockers step's,
+     * the opponent's declare-blockers step's.
+     */
+    public static final List<AiCardMemory.MemorySet> HELD_MANA_SETS = List.of(
+            AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2,
+            AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK,
+            AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK);
 
     /**
      * S6 and S6b (DESIGN.md D28): whether the unless cost being paid is the AI's own pay-or-lose debt, its Pact's

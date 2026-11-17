@@ -1552,6 +1552,16 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public boolean payCostToPreventEffect(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
+        // MTG_DeckMaker's self-kill fix, S6 (DESIGN.md D28, round 1's L4): at the AI's payment of its own Pact debt (its
+        // pay-or-lose trigger's LosesGame, or a copy of it) the held-mana sets are cleared first, so every source the
+        // count relied on pays: the payment refuses a source held for a later spell, and a hold can be made after the
+        // Pact was cast or outlive the opponent's turn. A reservation is worth less than the game. AI memory only,
+        // written only at such a payment.
+        if (isOwnPactDebt(sa)) {
+            for (final AiCardMemory.MemorySet held : DelayedLoss.HELD_MANA_SETS) {
+                AiCardMemory.clearMemorySet(player, held);
+            }
+        }
         if (SpellApiToAi.Converter.get(sa).willPayUnlessCost(player, sa, cost, alreadyPaid, allPayers)) {
             if (!ComputerUtilCost.canPayCost(cost, sa, player, true)) {
                 return false;
@@ -1569,6 +1579,21 @@ public class PlayerControllerAi extends PlayerController {
             return pay.payComputerCosts(new AiCostDecision(player, sa, true));
         }
         return false;
+    }
+
+    /**
+     * Whether the unless cost being paid is the AI's own pay-or-lose debt (MTG_DeckMaker's self-kill fix, DESIGN.md S6,
+     * D28): an own LosesGame with an UnlessCost$, which only the five Pacts' scripts hold, read by its shape alone. A
+     * RuntimeException leaves the payment as it is today (DESIGN.md 1.11); AITimeoutTracker.Expired is rethrown.
+     */
+    private boolean isOwnPactDebt(final SpellAbility sa) {
+        try {
+            return DelayedLoss.isOwnPactDebt(player, sa);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return false;
+        }
     }
 
     public boolean payCostDuringRoll(final Cost cost, final SpellAbility sa) {

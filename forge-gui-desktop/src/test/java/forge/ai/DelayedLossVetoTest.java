@@ -16,6 +16,7 @@ import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostReturn;
+import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -313,6 +314,76 @@ public class DelayedLossVetoTest extends AITest {
         final boolean bolt = castsTheDiscoveredCard(ai, discover, addCardToZone("Lightning Bolt", ai, ZoneType.Exile));
         AssertJUnit.assertEquals("[whether the discovered Pact of Negation is cast, whether the discovered Lightning"
                         + " Bolt is]", Arrays.asList(false, true), Arrays.asList(pact, bolt));
+    }
+
+    // --------------------------------------------------------------------------------------------- S6
+
+    /** How many of these cards are tapped. */
+    private static int tapped(final List<Card> cards) {
+        int n = 0;
+        for (final Card c : cards) {
+            n += c.isTapped() ? 1 : 0;
+        }
+        return n;
+    }
+
+    /**
+     * Plays the game on from turn {@code turn} until the AI's next upkeep is over: its untap step and upkeep, where
+     * Pact of the Titan's trigger asks for {4}{R}. Stops in the draw step that follows, or when the game is over.
+     */
+    private static void playThroughTheNextUpkeep(final Game game, final Player ai, final int turn) {
+        final PhaseHandler ph = game.getPhaseHandler();
+        for (int i = 0; i < 2000 && !game.isGameOver() && !(ph.isPlayerTurn(ai) && ph.getTurn() > turn
+                && ph.getPhase() != null && ph.getPhase().isAfter(PhaseType.UPKEEP)); i++) {
+            ph.mainLoopStep();
+        }
+    }
+
+    /**
+     * T-UPK (DESIGN.md D15): the Pact's pay-or-lose trigger resolves before Mana Vault's optional untap. Pact of the
+     * Titan resolved in the AI's first main phase ({4}{R} due at its next upkeep), Mountain x5 and a tapped Mana Vault,
+     * then the game played on through the AI's next upkeep: the AI is still in the game, and the five Mountains paid
+     * the debt. Had Mana Vault's trigger resolved first, paying its {4} would have left one Mountain and the Vault's
+     * {C}{C}{C} for {4}{R}. Green today: it pins D15.
+     */
+    @Test(timeOut = 300_000)
+    public void thePactIsPaidBeforeManaVaultsUntap() {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        final Player ai = game.getPlayers().get(1);
+        final List<Card> mountains = addCards("Mountain", 5, ai);
+        addCard("Mana Vault", ai).setTapped(true);
+        resolvePactOfTheTitan(game, ai);
+        playThroughTheNextUpkeep(game, ai, game.getPhaseHandler().getTurn());
+        AssertJUnit.assertEquals("[whether the AI lost, its Mountains tapped once its upkeep is over]",
+                Arrays.asList(false, 5), Arrays.asList(ai.hasLost(), tapped(mountains)));
+    }
+
+    /**
+     * T-UPK-HELD (DESIGN.md S6, D28, round 1's L4): a mana source the AI holds for a later spell still pays its Pact.
+     * Pact of the Titan resolved in the AI's first main phase ({4}{R} due at its next upkeep), Mountain x5, exactly the
+     * debt; then, in the opponent's turn, one Mountain held for the opponent's declare-blockers step and one for the
+     * AI's own second main phase: holds its memory keeps until its own end step, and which its payments refuse. Played
+     * on through the AI's upkeep: the AI is still in the game, and its payment of the Pact cleared both holds. Today the
+     * two held Mountains are refused at the upkeep, three Mountains do not pay {4}{R}, and the AI loses.
+     */
+    @Test(timeOut = 300_000)
+    public void aHeldSourceStillPaysThePact() {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        final Player ai = game.getPlayers().get(1);
+        final List<Card> mountains = addCards("Mountain", 5, ai);
+        resolvePactOfTheTitan(game, ai);
+        final int turn = game.getPhaseHandler().getTurn();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, opponentOf(game, ai));
+        AiCardMemory.rememberCard(ai, mountains.get(0), AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK);
+        AiCardMemory.rememberCard(ai, mountains.get(1), AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2);
+        playThroughTheNextUpkeep(game, ai, turn);
+        AssertJUnit.assertEquals("[whether the AI lost, its hold for the opponent's blockers empty, its hold for its"
+                        + " second main phase empty]", Arrays.asList(false, true, true),
+                Arrays.asList(ai.hasLost(),
+                        AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK),
+                        AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2)));
     }
 
     // The play-before-land return's veto (RULINGS-R3 M23) has no row here: no board reaches that return with a play
