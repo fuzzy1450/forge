@@ -20,12 +20,15 @@ import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardFactory;
 import forge.game.card.CounterEnumType;
+import forge.game.cost.Cost;
 import forge.game.cost.CostPart;
+import forge.game.cost.CostPayLife;
 import forge.game.cost.CostReturn;
 import forge.game.keyword.KeywordInterface;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
+import forge.game.trigger.WrappedAbility;
 import forge.game.zone.ZoneType;
 import forge.util.MyRandom;
 import forge.util.SimScope;
@@ -692,6 +695,109 @@ public class DelayedLossTest extends FlatMcTestBase {
         onStack("Final Fortune", ai, null);
         assertEquals(problemOf(spell("Twincast")), DelayedLoss.EXTRA_TURN_LOSES,
                 "with no target yet, a copy may copy Final Fortune on the stack");
+    }
+
+    // --------------------------------------------------------------------------------------------- resolution sites
+
+    /**
+     * S5 and S5b's predicate (DESIGN.md D13): an optional free cast of a flagged card is declined, covered or not, and
+     * so is a copy of one; while a debt is pending, so is a free cast with a cost part beyond its waived mana. No mana
+     * is counted.
+     */
+    @Test
+    public void aFreeCastIsDeclinedForAFlaggedCardACopyOrACostBeyondManaWhileADebtIsPending() {
+        opponentsTurn();
+        put("Island", 10, ai, ZoneType.Battlefield);
+        assertTrue(DelayedLoss.declinesFreeCast(ai, spell("Pact of Negation")), "a Pact, though ten Islands cover it");
+        assertTrue(DelayedLoss.declinesFreeCast(ai, spell("Final Fortune")), "an extra turn that loses");
+        assertTrue(DelayedLoss.declinesFreeCast(ai, spell("Glorious End")), "a loss at an end step");
+        assertFalse(DelayedLoss.declinesFreeCast(ai, spell("Lightning Bolt")), "a play nothing flags");
+        assertFalse(DelayedLoss.declinesFreeCast(ai, spell("Crop Rotation")), "a sacrifice, while no debt is pending");
+        final SpellAbility fortune = onStack("Final Fortune", ai, null);
+        final SpellAbility twincast = spell("Twincast");
+        twincast.getTargets().add(fortune);
+        assertTrue(DelayedLoss.declinesFreeCast(ai, twincast), "a copy of Final Fortune");
+
+        opponentsTurn();
+        put("Island", 10, ai, ZoneType.Battlefield);
+        onStack("Pact of Negation", ai, onStack("Grizzly Bears", opp, null)); // a debt due at the next upkeep
+        assertTrue(DelayedLoss.declinesFreeCast(ai, spell("Crop Rotation")), "a sacrifice while a debt is pending");
+        assertTrue(DelayedLoss.declinesFreeCast(ai, alternative(spell("Force of Will"), CostPayLife.class)),
+                "life and a card while a debt is pending");
+        assertFalse(DelayedLoss.declinesFreeCast(ai, spell("Lightning Bolt")), "nothing beyond the waived mana");
+    }
+
+    /**
+     * S6's predicate (DESIGN.md D28): the AI's own pay-or-lose debt by its shape, an own LosesGame with an UnlessCost$,
+     * read through the trigger's wrapper or on the ability it wraps; S6b never declines it.
+     */
+    @Test(timeOut = 300_000)
+    public void theAIsOwnPactDebtIsReadByItsShape() {
+        Scoped.under(new SimScope(67L), () -> {
+            final SpellAbility trigger = upkeepWithThePactsTrigger();
+            put("Island", 3, ai, ZoneType.Battlefield);
+            assertTrue(DelayedLoss.isOwnPactDebt(ai, trigger), "the trigger on the stack, through its wrapper");
+            assertTrue(DelayedLoss.isOwnPactDebt(ai, ((WrappedAbility) trigger).getWrappedAbility()),
+                    "the LosesGame the unless payment is made for");
+            assertFalse(DelayedLoss.isOwnPactDebt(opp, trigger), "the AI's debt, not the opponent's");
+            assertFalse(DelayedLoss.isOwnPactDebt(ai, spell("Lightning Bolt")), "a play nothing flags");
+            assertFalse(DelayedLoss.isOwnPactDebt(ai, null), "nothing");
+            assertFalse(DelayedLoss.declinesUnlessPayment(ai, trigger, new Cost("3 U U", true)),
+                    "S6b never declines the AI's own debt, though three Islands cannot pay it");
+            return null;
+        });
+    }
+
+    /**
+     * S6b's predicate (DESIGN.md D32, round 2's B1): an unless cost the AI is about to pay is declined when paying it
+     * would spend a debt due now, whichever sources the payment taps, or uncover a pending debt; its mana is free for a
+     * debt due next upkeep; and the asking ability's own effects are not read, as a play's are.
+     */
+    @Test(timeOut = 300_000)
+    public void anUnlessPaymentTheDebtCannotSpareIsDeclined() {
+        for (final int islands : new int[] { 5, 6 }) {
+            Scoped.under(new SimScope(71L), () -> {
+                upkeepWithThePactsTrigger();
+                put("Island", islands, ai, ZoneType.Battlefield);
+                final SpellAbility leak = put("Mana Leak", opp, ZoneType.Hand).getFirstSpellAbility();
+                leak.setActivatingPlayer(opp);
+                final boolean declined = DelayedLoss.declinesUnlessPayment(ai, leak, new Cost("1", true));
+                if (islands == 5) {
+                    assertTrue(declined, "the trigger due now needs all five Islands: 5 - 1 < 5");
+                } else {
+                    assertFalse(declined, "a sixth Island to spare");
+                }
+                return null;
+            });
+        }
+        Scoped.under(new SimScope(73L), () -> {
+            resolveAPactOfNegation();
+            put("Island", 5, ai, ZoneType.Battlefield);
+            final SpellAbility leak = put("Mana Leak", opp, ZoneType.Hand).getFirstSpellAbility();
+            leak.setActivatingPlayer(opp);
+            assertFalse(DelayedLoss.declinesUnlessPayment(ai, leak, new Cost("1", true)),
+                    "due at the next upkeep, the {1} costs nothing: the Island untaps");
+            assertTrue(DelayedLoss.declinesUnlessPayment(ai, leak, new Cost("Sac<1/Land>", true)),
+                    "a sacrificed land would uncover 3UU");
+            return null;
+        });
+        Scoped.under(new SimScope(79L), () -> {
+            resolveAPactOfNegation();
+            put("Island", 3, ai, ZoneType.Battlefield);
+            put("Ancient Tomb", ai, ZoneType.Battlefield);
+            ai.setLife(6, null);
+            final SpellAbility tutor = spell("Vampiric Tutor");
+            assertEquals(problemOf(tutor), DelayedLoss.DEBT_UNPROTECTED, "a play's own 2 life is budgeted (M17)");
+            assertFalse(DelayedLoss.declinesUnlessPayment(ai, tutor, new Cost("0", true)),
+                    "the asking ability's effects are not read: an unless cost of {0} takes nothing");
+            return null;
+        });
+        opponentsTurn();
+        put("Island", 5, ai, ZoneType.Battlefield);
+        final SpellAbility leak = put("Mana Leak", opp, ZoneType.Hand).getFirstSpellAbility();
+        leak.setActivatingPlayer(opp);
+        assertFalse(DelayedLoss.declinesUnlessPayment(ai, leak, new Cost("Sac<1/Land>", true)),
+                "no debt: nothing to protect");
     }
 
     /**

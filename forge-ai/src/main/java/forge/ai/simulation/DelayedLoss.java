@@ -1779,23 +1779,31 @@ public final class DelayedLoss {
      * never looked at.
      */
     static String protection(final Player ai, final Cost cost, final SpellAbility judged) {
+        return protection(ai, cost, judged, true);
+    }
+
+    /**
+     * Debt protection for a play ({@code play}: its own effects are read too, M17 (i) and M18), or for an unless cost
+     * the AI is about to pay (S6b: the asking ability's effects are what the payment stops, so they are not read).
+     */
+    private static String protection(final Player ai, final Cost cost, final SpellAbility judged, final boolean play) {
         final Debts owed = owed(ai, judged);
         if (owed.isEmpty()) {
             return null;
         }
         final int t = manaValue(cost);
         if (owed.hasNow()) {
-            final String now = guard(ai, cost, judged, Due.NOW, owed.now(), t);
+            final String now = guard(ai, cost, judged, play, Due.NOW, owed.now(), t);
             if (now != null) {
                 return now;
             }
         }
-        return owed.hasNext() ? guard(ai, cost, judged, Due.NEXT, owed.next(), t) : null;
+        return owed.hasNext() ? guard(ai, cost, judged, play, Due.NEXT, owed.next(), t) : null;
     }
 
     /** Debt protection against the debts due at one time (DESIGN.md 1.7, RULINGS-R3 M17 and M18). */
-    private static String guard(final Player ai, final Cost cost, final SpellAbility judged, final Due due,
-                                final Debt debt, final int t) {
+    private static String guard(final Player ai, final Cost cost, final SpellAbility judged, final boolean play,
+                                final Due due, final Debt debt, final int t) {
         final boolean now = due == Due.NOW;
         final String code = now ? DEBT_DUE_NOW : DEBT_UNPROTECTED;
         if (now && t < 0) {
@@ -1803,8 +1811,8 @@ public final class DelayedLoss {
         }
         final Removal cut = Removal.of(ai, cost, judged, due);
         final boolean spends = now && t > 0; // for a debt due next upkeep mana costs nothing: every counted source untaps
-        final boolean wipes = wipesBoard(judged);                   // M18
-        final Integer ownLoss = ownLifeLoss(judged);                // M17 (i); null: not a number
+        final boolean wipes = play && wipesBoard(judged);                         // M18, the play's own effects
+        final Integer ownLoss = play ? ownLifeLoss(judged) : Integer.valueOf(0);  // M17 (i); null: not a number
         final int manaPain = t != 0 ? largestUntappedPain(ai) : 0;  // M17 (ii); -1: unreadable
         if (cut.isEmpty() && !spends && !wipes && ownLoss != null && ownLoss == 0 && manaPain == 0) {
             return null;
@@ -2015,6 +2023,56 @@ public final class DelayedLoss {
             }
         }
         return null;
+    }
+
+    // ------------------------------------------------------------------------- resolution sites (S5, S5b, S6, S6b)
+
+    /**
+     * S5 and S5b (DESIGN.md D13): whether an optional free cast at resolution (cascade, Beseech the Mirror, Isochron
+     * Scepter's copy, Discover) is declined: a flagged card, covered or not; a copy of one; or, while a debt is
+     * pending, a play with any cost part beyond its waived mana. Counts no mana: resolution is not a priority decision.
+     * Script parameters, the copy's targets and, for a cost beyond mana, the reader's two scans.
+     */
+    public static boolean declinesFreeCast(final Player ai, final SpellAbility sa) {
+        if (ai == null || sa == null) {
+            return false;
+        }
+        return kind(sa) != null || copiedFlagged(sa) != null
+                || hasCostBeyondMana(sa.getPayCosts()) && !owed(ai, sa).isEmpty();
+    }
+
+    /** Whether a cost has a part besides mana: a sacrifice, a discard, life, a tap. */
+    static boolean hasCostBeyondMana(final Cost cost) {
+        if (cost == null) {
+            return false;
+        }
+        for (final CostPart part : cost.getCostParts()) {
+            if (!(part instanceof CostPartMana)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * S6 and S6b (DESIGN.md D28): whether the unless cost being paid is the AI's own pay-or-lose debt, its Pact's
+     * {@code LosesGame} or a copy of it, by its shape alone: an own {@code LosesGame} with an {@code UnlessCost$},
+     * which only the five Pacts' scripts hold (DESIGN.md 1.3). A WrappedAbility delegates all three reads. Script
+     * parameters and the activator only.
+     */
+    public static boolean isOwnPactDebt(final Player ai, final SpellAbility sa) {
+        return ai != null && sa != null && sa.getApi() == ApiType.LosesGame && sa.hasParam("UnlessCost")
+                && ai.equals(sa.getActivatingPlayer());
+    }
+
+    /**
+     * S6b (DESIGN.md D32, round 2's B1): whether an unless cost the AI is about to pay is declined because paying it
+     * would spend a debt due now (whichever sources the payment taps) or uncover a pending one: debt protection asked
+     * of the cost, never of the asking ability's effects, which are what the payment stops. Never the AI's own Pact
+     * debt, which S6 pays. In a game where no Pact was cast the reader finds nothing and the cost is never read.
+     */
+    public static boolean declinesUnlessPayment(final Player ai, final SpellAbility sa, final Cost cost) {
+        return !isOwnPactDebt(ai, sa) && protection(ai, cost, sa, false) != null;
     }
 
     private static String judge(final Player ai, final SpellAbility sa, final Kind kind, final String cost,
