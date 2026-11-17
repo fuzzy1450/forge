@@ -728,4 +728,30 @@ public class FlatMonteCarloPactGuardTest extends AITest {
             }
         }
     }
+
+    /**
+     * T1 review finding 9: Mirrex makes any color only on the turn it entered ({@code IsPresent$
+     * Card.Self+ThisTurnEntered}), which today's board holds and the next upkeep's cannot. A timing condition is judged
+     * at the due time (RULINGS-R3 M22), so Mirrex counts {C} for the upkeep.
+     */
+    @Test
+    public void mirrexMakesOnlyColorlessAtTheNextUpkeep() {
+        for (final String third : new String[] { "Mountain", "Forest" }) {
+            final Game game = initAndCreateGame();
+            final Player ai = game.getPlayers().get(1);
+            game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+            ai.setLandsPlayedThisTurn(1);
+            addCard("Forest", ai);
+            addCard("Mountain", ai);
+            addCard(third, ai);
+            final Card mirrex = addCard("Mirrex", ai);
+            AssertJUnit.assertTrue("Mirrex is the land played this turn", mirrex.enteredThisTurn());
+            final String v = verdict(ai, fromHand(ai, "Summoner's Pact"));
+            if ("Mountain".equals(third)) {
+                AssertJUnit.assertEquals("Mirrex makes {C} at the upkeep: one G for GG", "pact-unpayable", v);
+            } else {
+                assertAllowed("two Forests", v);
+            }
+        }
+    }
 }

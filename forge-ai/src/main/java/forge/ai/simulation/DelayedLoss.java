@@ -967,13 +967,17 @@ public final class DelayedLoss {
      * M9: the timing words and limits the upkeep payment's {@code canPlay()} refuses, read as fields for the debt's due
      * time (the AI's upkeep), never for the moment of the read: sorcery speed, the opponent's turn, instant speed only,
      * a phase list without the upkeep, first combat or after blockers only, a per-game limit, and for a debt due now a
-     * per-turn limit too. The AI's own turn ({@code PlayerTurn$}) holds at its upkeep.
+     * per-turn limit too. The AI's own turn ({@code PlayerTurn$}) holds at its upkeep. For a debt due next upkeep, a
+     * condition on this turn ({@code IsPresent$ Card.Self+ThisTurnEntered}: Mirrex, the five Dark Fortress lands) is
+     * one today's board can hold and the upkeep's cannot, so it drops the ability too (RULINGS-R3 M22; T1 review
+     * finding 9). The Dark Fortress lands' other alternative, a basic land, is dropped with it: that only refuses more.
      */
     private static boolean cannotActivateAtUpkeep(final SpellAbilityRestriction r, final boolean now) {
         return r.isSorcerySpeed() || r.isOpponentTurn() || r.isInstantSpeed()
                 || !r.getPhases().isEmpty() && !r.getPhases().contains(PhaseType.UPKEEP)
                 || r.getFirstCombatOnly() || r.getAfterBlockersOnly() || r.getGameLimitToCheck() != null
-                || now && r.getLimitToCheck() != null;
+                || now && r.getLimitToCheck() != null
+                || !now && r.getIsPresent() != null && r.getIsPresent().contains("ThisTurn");
     }
 
     /** The units one mana part makes: Bloom Tender's shape one per own color, any color, a combination, or tokens. */
