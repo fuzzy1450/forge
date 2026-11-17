@@ -288,7 +288,17 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
     public Zone getLKICopy(Map<Integer, Card> cachedMap) {
         Zone result = new Zone(zoneType, game);
 
-        result.setCards(CardCopyService.getLKICopyList(getCards(), cachedMap));
+        // a snapshot of the whole zone: ReplacementEffect.copy leaves out what an effect's last run left on its ability
+        if (game != null) {
+            game.beginZoneSnapshot();
+        }
+        try {
+            result.setCards(CardCopyService.getLKICopyList(getCards(), cachedMap));
+        } finally {
+            if (game != null) {
+                game.endZoneSnapshot();
+            }
+        }
 
         return result;
     }

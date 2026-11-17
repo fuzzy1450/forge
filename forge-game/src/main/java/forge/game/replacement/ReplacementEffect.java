@@ -196,16 +196,23 @@ public abstract class ReplacementEffect extends TriggerReplacementBase {
         if (sa != null) {
             final SpellAbility overridingAbilityCopy = sa.copy(host, lki);
             if (overridingAbilityCopy != null) {
-                if (lki) {
-                    // ReplacementHandler.executeReplacement hands this ability the snapshot of the battlefield and
-                    // the graveyards each time the effect runs, and the ability keeps it. A last-known copy that
-                    // took the reference along (SpellAbility.copy clones it) made every snapshot keep the one before
-                    // it alive: Game.copyLastState copies each card with its effects, so the copy in the new
-                    // snapshot pointed at the cards of the old one, whose copy pointed further back, for the rest of
-                    // the game. The copy is given its own snapshot when the effect runs from it; until then it has
-                    // none, as an effect that has not run has none. CardCopyService.getLKICopy does the same for
-                    // a card's cast ability.
+                if (lki && host != null && host.getGame() != null && host.getGame().isTakingZoneSnapshot()) {
+                    // ReplacementHandler.executeReplacement leaves two things on this ability each time the effect
+                    // runs: the snapshot of the battlefield and the graveyards (SpellAbility keeps a collection of
+                    // its cards) and the mark of a replacement ability. The ability's own later readers use them (a
+                    // prevention effect's buffered sub-ability is resolved after the run), so the game's effect
+                    // keeps them. A copy made for a snapshot of a zone (Game.copyLastState, through
+                    // Zone.getLKICopy) must not: SpellAbility.copy clones the reference, so the card's copy in the
+                    // new snapshot pointed at the cards of the snapshot the effect last saw, whose copy of the card
+                    // pointed further back, and every snapshot kept the one before it alive for the rest of the
+                    // game. The snapshot's copy is left as the ability of an effect that has not run. When the
+                    // effect runs from a snapshot's card (a permanent that leaves the battlefield is replaced
+                    // through its last-known state), executeReplacement sets both again before anything reads them.
+                    // Every other last-known copy (of a single card, of a simulation's card) is made as before.
+                    // CardCopyService.getLKICopy cuts a card's cast ability in a similar way: it gives it empty
+                    // collections.
                     overridingAbilityCopy.clearLastState();
+                    overridingAbilityCopy.setReplacementEffect(null);
                 }
                 res.setOverridingAbility(overridingAbilityCopy);
             }

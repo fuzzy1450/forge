@@ -296,6 +296,25 @@ public class Game {
         return copyLastState(ZoneType.Graveyard);
     }
 
+    /**
+     * How many whole-zone last-known copies are being made right now ({@link Zone#getLKICopy}): the snapshots of the
+     * battlefield and the graveyards that {@link #copyLastState()} and {@link #copyLastState(ZoneType)} take.
+     * {@link forge.game.replacement.ReplacementEffect#copy(Card, boolean, boolean)} reads it.
+     */
+    private int zoneSnapshotsInProgress;
+
+    public void beginZoneSnapshot() {
+        zoneSnapshotsInProgress++;
+    }
+
+    public void endZoneSnapshot() {
+        zoneSnapshotsInProgress--;
+    }
+
+    public boolean isTakingZoneSnapshot() {
+        return zoneSnapshotsInProgress > 0;
+    }
+
     public void updateLastStateForCard(Card c) {
         if (c == null || c.getZone() == null) {
             return;
