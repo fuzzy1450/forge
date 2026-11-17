@@ -28,6 +28,7 @@ import forge.game.keyword.KeywordInterface;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
+import forge.game.trigger.Trigger;
 import forge.game.trigger.WrappedAbility;
 import forge.game.zone.ZoneType;
 import forge.util.MyRandom;
@@ -260,6 +261,135 @@ public class DelayedLossTest extends FlatMcTestBase {
             assertEquals(flagged, 11, "the eleven cards' delayed-loss spell abilities, Alchemist's cleave not among them");
             assertEquals(counters(scope), before, "no SimScope counter moved: " + List.of(SimScope.Counter.values()));
             assertEquals(random.draws, 0, "and nothing was drawn");
+            return null;
+        });
+    }
+
+    /** Every card's spell abilities (mana abilities among them), in every zone a read can reach, asked once. */
+    private void askEveryCardsAbilities() {
+        for (final ZoneType zone : new ZoneType[] { ZoneType.Battlefield, ZoneType.Hand, ZoneType.Command,
+                ZoneType.Graveyard, ZoneType.Exile, ZoneType.Library, ZoneType.Stack }) {
+            for (final Card c : game.getCardsIn(zone)) {
+                c.getSpellAbilities();
+            }
+        }
+    }
+
+    /**
+     * DESIGN.md section 4 (findings I2, round 2's B1 and B4), now that every predicate exists: the count, debt
+     * protection, copies and the resolution sites' predicates take no SimScope id and draw nothing. Every card's spell
+     * abilities are asked first; then, with no read in between, states whose replacement effects were never built:
+     * an opposing creature's first shield counter, a Saga, and the first stun counters of the AI's tapped Birds of
+     * Paradise and untapped Sol Ring (a {@code Card.canUntap} would build them all). Then each call twice, with the
+     * seven SimScope counters and the draws of a counting random compared: on the first board (every source kind, the
+     * opponent's first main phase) {@code problem} of Pact of Negation and {@code declinesFreeCast} of it with no debt,
+     * then, a Pact of the Titan's debt pending, {@code problem} and {@code declinesFreeCast} of Crop Rotation; on the
+     * second (the AI's upkeep, Pact of Negation's trigger on the stack under an opponent's spell) {@code problem} of
+     * Daze's alternative cost and of Counterspell, and {@code declinesUnlessPayment} of a {1} the opponent asks.
+     */
+    @Test(timeOut = 300_000)
+    public void theCoverageReadTakesNoIdAndDrawsNothing() {
+        Scoped.under(new SimScope(7L), () -> {
+            setUpGame();
+            noDeadline();
+            fillLibrary(ai, 10);
+            fillLibrary(opp, 10);
+            at(PhaseType.MAIN1, ai);
+            onStack("Pact of the Titan", ai, null);
+            game.getPhaseHandler().onStackResolved();
+            playUntilStackClear(game);
+            final List<Trigger> titanDebt = new ArrayList<>(game.getTriggerHandler().getDelayedTriggersView());
+            assertEquals(titanDebt.size(), 1, "Pact of the Titan's upkeep trigger");
+            at(PhaseType.MAIN1, opp);
+            for (final String name : List.of("Island", "Ancient Tomb", "Mana Confluence", "City of Brass",
+                    "Tarnished Citadel", "Gemstone Caverns", "City of Traitors", "Mox Opal", "Mox Amber", "Chrome Mox",
+                    "Mana Vault", "Dimir Signet", "Talisman of Creativity", "Exotic Orchard", "Bloom Tender",
+                    "Vivi Ornitier", "Springleaf Drum", "The Cabbage Merchant", "Lotus Petal", "Teferi's Isle",
+                    "Lavinia, Foil to Conspiracy")) {
+                put(name, ai, ZoneType.Battlefield);
+            }
+            final Card birds = put("Birds of Paradise", ai, ZoneType.Battlefield);
+            birds.setTapped(true);
+            final Card ring = put("Sol Ring", ai, ZoneType.Battlefield);
+            final Card elves = put("Llanowar Elves", ai, ZoneType.Battlefield);
+            put("Claustrophobia", opp, ZoneType.Battlefield).attachToEntity(elves, null);
+            final Card marsh = put("Cinder Marsh", ai, ZoneType.Battlefield);
+            SpellAbility colored = null;
+            for (final SpellAbility ma : marsh.getManaAbilities()) {
+                if (ma.getSubAbility() != null && ma.getSubAbility().getApi() == ApiType.Effect) {
+                    colored = ma;
+                }
+            }
+            assertNotNull(colored, "Cinder Marsh's {B} or {R} ability");
+            colored.setActivatingPlayer(ai);
+            marsh.setTapped(true);
+            AbilityUtils.resolve(colored.getSubAbility()); // its effect keeps the Marsh tapped
+            assertEquals(game.getCardsIn(ZoneType.Command).size(), 1, "the effect that remembers Cinder Marsh");
+            put("Mountain", opp, ZoneType.Battlefield);
+            final Card bears = put("Grizzly Bears", opp, ZoneType.Battlefield);
+            put("Island", ai, ZoneType.Hand);
+            final SpellAbility pon = spell("Pact of Negation");
+            final SpellAbility crop = spell("Crop Rotation");
+            game.getTriggerHandler().clearDelayedTrigger(); // the Titan's debt waits outside the handler for now
+            askEveryCardsAbilities();
+            bears.setCounters(CounterEnumType.SHIELD, 1);
+            put("History of Benalia", opp, ZoneType.Battlefield);
+            birds.setCounters(CounterEnumType.STUN, 1);
+            ring.setCounters(CounterEnumType.STUN, 1);
+
+            final SimScope scope = SimScope.current();
+            final CountingRandom random = new CountingRandom(7L);
+            MyRandom.setRandom(random);
+            int[] before = counters(scope);
+            final List<String> first = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                first.add(problemOf(pon));
+                first.add(String.valueOf(DelayedLoss.declinesFreeCast(ai, pon)));
+            }
+            game.getTriggerHandler().registerDelayedTrigger(titanDebt.get(0)); // a list's add: the debt is pending
+            for (int i = 0; i < 2; i++) {
+                first.add(problemOf(crop));
+                first.add(String.valueOf(DelayedLoss.declinesFreeCast(ai, crop)));
+            }
+            assertEquals(counters(scope), before, "the first board: no SimScope counter moved "
+                    + List.of(SimScope.Counter.values()) + "; verdicts " + first);
+            assertEquals(random.draws, 0, "and nothing was drawn");
+            assertEquals(first, Arrays.asList(null, "true", null, "true", null, "true", null, "true"),
+                    "every source kind counted, Pact of Negation covered; Crop Rotation counted with each land taken in"
+                            + " turn, the Titan's 4R covered each time; both free casts declined");
+
+            final SpellAbility trigger = upkeepWithThePactsTrigger();
+            final SpellAbility angel = onStack("Serra Angel", opp, null);
+            final List<Card> islands = put("Island", 5, ai, ZoneType.Battlefield);
+            put("Mana Confluence", ai, ZoneType.Battlefield);
+            final Card theirs = put("Grizzly Bears", opp, ZoneType.Battlefield);
+            final SpellAbility daze = alternative(spell("Daze"), CostReturn.class);
+            daze.getTargets().add(angel);
+            final SpellAbility counterspell = spell("Counterspell");
+            counterspell.getTargets().add(angel);
+            final SpellAbility leak = put("Mana Leak", opp, ZoneType.Hand).getFirstSpellAbility();
+            leak.setActivatingPlayer(opp);
+            final Cost one = new Cost("1", true);
+            askEveryCardsAbilities();
+            theirs.setCounters(CounterEnumType.SHIELD, 1);
+            islands.get(0).setCounters(CounterEnumType.STUN, 1);
+
+            final CountingRandom random2 = new CountingRandom(8L);
+            MyRandom.setRandom(random2);
+            before = counters(scope);
+            final List<String> second = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                second.add(problemOf(daze));
+                second.add(problemOf(counterspell));
+                second.add(String.valueOf(DelayedLoss.declinesUnlessPayment(ai, leak, one)));
+                second.add(String.valueOf(DelayedLoss.isOwnPactDebt(ai, trigger)));
+            }
+            assertEquals(counters(scope), before, "the second board: no SimScope counter moved "
+                    + List.of(SimScope.Counter.values()) + "; verdicts " + second);
+            assertEquals(random2.draws, 0, "and nothing was drawn");
+            assertEquals(second, Arrays.asList(null, DelayedLoss.DEBT_DUE_NOW, "true", "true", null,
+                    DelayedLoss.DEBT_DUE_NOW, "true", "true"), "Daze's return leaves four Islands and Mana Confluence;"
+                    + " Counterspell and the {1} would tap Islands the trigger needs; the trigger is the AI's own debt");
             return null;
         });
     }
