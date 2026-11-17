@@ -702,6 +702,59 @@ public class DelayedLossTest extends FlatMcTestBase {
     }
 
     /**
+     * DESIGN.md 1.7 (round 2's B1), T2 review finding 3: while a debt is due now, a play's mana payment must leave the
+     * debt covered whichever sources it taps, its colors included, not only its total. Pact of Negation's trigger (3UU)
+     * on the stack, Sol Ring x3 and Island x2 untapped: Brainstorm's {U} can only be paid by an Island, and one Island
+     * is then left for UU, though the payment that takes off the source with the most units (a Sol Ring) leaves six
+     * mana and both Islands. With a third Island the payment can spare one.
+     */
+    @Test(timeOut = 300_000)
+    public void aDebtDueNowKeepsTheColorsItNeedsWhicheverSourceThePaymentTaps() {
+        for (final int islands : new int[] { 2, 3 }) {
+            Scoped.under(new SimScope(97L), () -> {
+                upkeepWithThePactsTrigger();
+                put("Sol Ring", 3, ai, ZoneType.Battlefield);
+                put("Island", islands, ai, ZoneType.Battlefield);
+                final String v = problemOf(spell("Brainstorm"));
+                if (islands == 2) {
+                    assertEquals(v, DelayedLoss.DEBT_DUE_NOW,
+                            "Brainstorm's {U} taps one of the two Islands: one U is left for UU");
+                } else {
+                    assertNull(v, "a third Island: two are left for UU whichever Island pays the {U}");
+                }
+                return null;
+            });
+        }
+    }
+
+    /**
+     * DESIGN.md 1.7, T2 review finding 3: a filter the payment may use takes off a second source, the one that feeds
+     * it, so a payment of mana value t may tap t + min(t, the counted filters) sources. Pact of Negation's trigger
+     * (3UU) on the stack, Dimir Signet and Island x5 untapped: an opponent's {1} unless cost may be paid with the
+     * Signet's mana, fed by an Island, which leaves four Islands; with a sixth Island five are left.
+     */
+    @Test(timeOut = 300_000)
+    public void aFilterThePaymentMayUseTakesTheSourceThatFeedsIt() {
+        for (final int islands : new int[] { 5, 6 }) {
+            Scoped.under(new SimScope(101L), () -> {
+                upkeepWithThePactsTrigger();
+                put("Dimir Signet", ai, ZoneType.Battlefield);
+                put("Island", islands, ai, ZoneType.Battlefield);
+                final SpellAbility leak = put("Mana Leak", opp, ZoneType.Hand).getFirstSpellAbility();
+                leak.setActivatingPlayer(opp);
+                final boolean declined = DelayedLoss.declinesUnlessPayment(ai, leak, new Cost("1", true));
+                if (islands == 5) {
+                    assertTrue(declined,
+                            "the Signet and the Island that feeds it may pay the {1}: four Islands for 3UU");
+                } else {
+                    assertFalse(declined, "a sixth Island: five are left whichever two pay");
+                }
+                return null;
+            });
+        }
+    }
+
+    /**
      * RULINGS-R3 M17: while a debt's cover needs a painful unit, the life the play's own effects cost and the pain its
      * mana may cost come off the life budget. A pending Pact of Negation debt (3UU), Island x3 and Ancient Tomb, the
      * opponent's end step: at 6 life the Tomb fits (2 + 3 < 6), and Vampiric Tutor's 2 life, with its {B} perhaps
