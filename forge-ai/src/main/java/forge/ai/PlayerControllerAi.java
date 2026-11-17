@@ -8,6 +8,7 @@ import forge.ai.ability.PutStickerAi;
 import forge.ai.combo.ComboExecute;
 import forge.ai.combo.ComboFetch;
 import forge.ai.simulation.ComboPlan;
+import forge.ai.simulation.DelayedLoss;
 import forge.ai.simulation.OpeningHand;
 import forge.card.CardStateName;
 import forge.card.ColorSet;
@@ -1695,6 +1696,14 @@ public class PlayerControllerAi extends PlayerController {
                 || realState != null && realState.hasKeyword(Keyword.BARGAIN))) {
                 return ComputerUtil.playStack(tgtSA, player, getGame());
             }
+            // MTG_DeckMaker's self-kill fix, S5 (DESIGN.md D13): an optional free cast of a delayed-loss card (a Pact,
+            // an extra turn that loses, Glorious End), of a copy of one, or, while a pay-or-lose debt is pending, of a
+            // play with a cost beyond its waived mana is declined, covered or not: a cascaded card goes to the bottom,
+            // a Beseech the Mirror card to the hand, a Scepter copy is not cast. Asked before the generic check, so a
+            // declined cast draws nothing more; a mandatory cast is still cast.
+            if (optional && declinesFreeCast(tgtSA)) {
+                return false;
+            }
             // TODO if mandatory AI is only forced to use mana when it's already in the pool
             if (brains.canPlayFromEffectAI(spell, !optional, noManaCost) == AiPlayDecision.WillPlay || !optional) {
                 return ComputerUtil.playStack(tgtSA, player, getGame());
@@ -1702,6 +1711,23 @@ public class PlayerControllerAi extends PlayerController {
             return false; // didn't play spell
         }
         return true;
+    }
+
+    /**
+     * Whether DelayedLoss declines an optional free cast at resolution (MTG_DeckMaker's self-kill fix, DESIGN.md S5,
+     * D13): a delayed-loss card, a copy of one, or, while a debt is pending, a cost beyond the waived mana. No mana is
+     * counted: resolution is not a priority decision. The sites' catches (DESIGN.md 1.11): AITimeoutTracker.Expired is
+     * rethrown, and a cast that cannot be judged is declined only when it is a Pact or a card DelayedLoss flags. In a
+     * game whose decks list none of the eleven cards it answers false after reads only (DESIGN.md 1.10).
+     */
+    private boolean declinesFreeCast(final SpellAbility sa) {
+        try {
+            return DelayedLoss.declinesFreeCast(player, sa);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return DelayedLoss.refusalWhenUnread(sa) != null;
+        }
     }
 
     @Override

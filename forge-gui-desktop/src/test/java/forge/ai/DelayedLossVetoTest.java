@@ -27,7 +27,7 @@ import forge.game.zone.ZoneType;
  * DelayedLoss member, no vetoDelayedLoss), so it compiles at the parent 65940c9d323, where each row fails with the
  * play its site is there to stop; where a row needs a verdict it asks ComboGuard.problem, which asks DelayedLoss
  * first. Rows that must call what the fix added are DelayedLossVetoApiTest's. The resolution sites' rows (S5, S5b,
- * S6, S6b) join this class with their task, under the same rule.
+ * S6, S6b) ask PlayerControllerAi and DiscoverAi, as the effects that resolve ask them, under the same rule.
  */
 public class DelayedLossVetoTest extends AITest {
 
@@ -240,6 +240,47 @@ public class DelayedLossVetoTest extends AITest {
                         + " same with Island x7]",
                 Arrays.asList(null, null, "debt-due-now", null, null),
                 Arrays.asList(chosen, dazeAtSix, counterspellAtSix, dazeAtSeven, counterspellAtSeven));
+    }
+
+    // --------------------------------------------------------------------------------------------- S5
+
+    /**
+     * Round 2's M11 board for the free casts at resolution (S5, S5b): the opponent's first main phase, their Serra
+     * Angel on the stack (mana value 5, above CounterAi's random refusals of cheap spells), and the AI with Island x5:
+     * five lands, Pact of Negation's NumLands GE5, which would also pay its {3}{U}{U} at the next upkeep. Flat MC off.
+     */
+    private Game freeCastBoard() {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        final Player ai = game.getPlayers().get(1);
+        final Player opp = opponentOf(game, ai);
+        fillLibrary(ai, 10);
+        fillLibrary(opp, 10);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        addCards("Island", 5, ai);
+        onStack(game, "Serra Angel", opp, null);
+        return game;
+    }
+
+    /**
+     * S5 (DESIGN.md D13): an optional free cast of a delayed-loss card at resolution is declined, covered or not.
+     * Pact of Negation in the AI's exile, as cascade or Beseech the Mirror leaves it, cast through
+     * playSaFromPlayEffect as PlayEffect asks it: a copy without its mana cost, its cost not mandatory. The board
+     * covers the Pact's debt, and the free Pact is still declined: nothing is added to the stack. Today
+     * canPlayFromEffectAI approves it on this board, and the Pact is cast.
+     */
+    @Test(timeOut = 120_000)
+    public void anOptionalFreeCastOfAFlaggedCardIsDeclined() {
+        final Game game = freeCastBoard();
+        final Player ai = game.getPlayers().get(1);
+        final SpellAbility pact = addCardToZone("Pact of Negation", ai, ZoneType.Exile).getFirstSpellAbility();
+        pact.setActivatingPlayer(ai);
+        final SpellAbility free = pact.copyWithNoManaCost();
+        AssertJUnit.assertFalse("the free cast is optional", free.getPayCosts().isMandatory());
+        final boolean cast = ((PlayerControllerAi) ai.getController()).playSaFromPlayEffect(free);
+        AssertJUnit.assertEquals("[whether the free Pact of Negation was cast, the stack's size]: declined, and the"
+                        + " stack holds the Serra Angel alone",
+                Arrays.asList(false, 1), Arrays.asList(cast, game.getStack().size()));
     }
 
     // The play-before-land return's veto (RULINGS-R3 M23) has no row here: no board reaches that return with a play
