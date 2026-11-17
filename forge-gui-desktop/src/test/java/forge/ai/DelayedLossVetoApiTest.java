@@ -67,6 +67,37 @@ public class DelayedLossVetoApiTest extends AITest {
     }
 
     /**
+     * The AI's own second main phase, a land played this turn, Forest x2 and Grizzly Bears in hand, Flat Monte Carlo
+     * off (the test game's default): a decision whose pick is a play nothing flags.
+     */
+    private Player bearsInTheSecondMainPhase() {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        final Player ai = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+        ai.setLandsPlayedThisTurn(1);
+        addCards("Forest", 2, ai);
+        addCardToZone("Grizzly Bears", ai, ZoneType.Hand);
+        fillLibrary(ai, 10);
+        game.getAction().checkStateEffects(true);
+        return ai;
+    }
+
+    /**
+     * An AiController for {@code ai} whose final veto refuses every play of the card {@code name} and asks the real
+     * veto of every other play: a stand-in for a refusal at one of chooseSpellAbilityToPlayImpl's spell returns.
+     */
+    private static AiController vetoing(final Player ai, final String name) {
+        return new AiController(ai, ai.getGame()) {
+            @Override
+            SpellAbility vetoDelayedLoss(final SpellAbility chosen) {
+                return chosen != null && name.equals(chosen.getHostCard().getName()) ? null
+                        : super.vetoDelayedLoss(chosen);
+            }
+        };
+    }
+
+    /**
      * S4 (DESIGN.md D12): a play DelayedLoss refuses becomes a pass, is noted in FlatMonteCarloStats as
      * "DelayedLoss:" and its code, and is a failed cast for the rest of the turn; every other play is returned itself,
      * and nothing is noted for it. The opponent's first main phase: with Island x3 the AI's upkeep cannot pay Pact of
@@ -128,5 +159,24 @@ public class DelayedLossVetoApiTest extends AITest {
         final String vetoed = describe(vetoing.chooseSpellAbilityToPlay());
         AssertJUnit.assertEquals("[the stock pick, the pick with Mox Diamond vetoed]",
                 Arrays.asList("Mox Diamond", "Island (land)"), Arrays.asList(stock, vetoed));
+    }
+
+    /**
+     * DESIGN.md S4, D12 (review TA, finding 1): the veto at the last return, getSpellAbilityToPlay()'s. On target it is
+     * the only DelayedLoss check of the paths that ask no other site: the combo-table loops (LoopDriver's response and
+     * main-phase action, LoopRunner), ComboExecute.goOffFirst, the sure plays, and a search-only seat's own Flat MC
+     * choice, whose ComboGuard is off (DESIGN.md S4, "What can still reach the veto"). As in M23's row, an AiController
+     * whose vetoDelayedLoss refuses Grizzly Bears (and asks the real veto of every other play) stands in for a refusal
+     * there: the row pins the veto's place at this return, theVetoPassesInsteadOfARefusedPlay its answers. On
+     * {@link #bearsInTheSecondMainPhase}'s board the stock pick is Grizzly Bears, which getSpellAbilityToPlay returns;
+     * with Grizzly Bears vetoed the decision is a pass.
+     */
+    @Test(timeOut = 120_000)
+    public void theLastReturnPassesTheVeto() {
+        final Player ai = bearsInTheSecondMainPhase();
+        final String stock = describe(brainOf(ai).chooseSpellAbilityToPlay());
+        final String vetoed = describe(vetoing(ai, "Grizzly Bears").chooseSpellAbilityToPlay());
+        AssertJUnit.assertEquals("[the stock pick, the pick with Grizzly Bears vetoed at the last return]",
+                Arrays.asList("Grizzly Bears", null), Arrays.asList(stock, vetoed));
     }
 }
