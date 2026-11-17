@@ -35,8 +35,9 @@ import forge.util.SimScope;
  * sections C and F). With its property unset it is inert: no trace is built, so no file is opened, and the sites'
  * judgments take no id and draw nothing, as the same judgments asked of DelayedLoss directly. With its printing path
  * on, for each combination of the copies and markers flags, its lines carry their fields in RULINGS-R3 F's order,
- * name the bound scope's seed (and "-" with none bound), and its judgments leave the seven SimScope counters and the
- * draws of a counting random where the same judgments asked of DelayedLoss directly leave them.
+ * name the bound scope's seed (and "-" with none bound) and the seats' decks (their players, for unnamed decks), and
+ * its judgments leave the seven SimScope counters and the draws of a counting random where the same judgments asked
+ * of DelayedLoss directly leave them.
  * <p>
  * The gate, {@link DelayedLossTrace#ON}, is read once when the class loads, and the test JVM does not set the property,
  * so the printing path is driven through the class's package-private seam: an instance built here with a file and flags
@@ -56,6 +57,16 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
             "debts", "units");
     private static final List<String> OPTIONAL = List.of("unread", "held", "paid", "heard", "winner", "threat");
     private static final List<String> TAIL = List.of("copy_judged", "copy_refused");
+
+    /**
+     * The seats' deck names on the boards, a label and a hash as the harness's .dck files are named. RULINGS-R3 F
+     * (amended 05:08) makes the players field each seat's deck name: the harness names every player Seat0, Seat1, ...,
+     * and the deck names are what tell apart two games of one serve JVM that share a seed.
+     */
+    private static final String OPP_DECK = "Opponent Deck 0123abcd";
+    private static final String AI_DECK = "AI Deck 89abcdef";
+    /** The players field of every line made on the boards: seat 0's deck name, then seat 1's. */
+    private static final String PLAYERS = OPP_DECK + "|" + AI_DECK;
 
     // --------------------------------------------------------------------------------------------- helpers
 
@@ -147,12 +158,23 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
     }
 
     /**
+     * A fresh game ({@link #setUpGame}) whose seats' decks carry names, as the harness's decks do: the opponent's, seat
+     * 0, {@link #OPP_DECK}, and the AI's, seat 1, {@link #AI_DECK}. Each seat's deck is its own copy
+     * (RegisteredPlayer.restoreDeck), so each is named apart, and a simulation copy's seats copy them, names and all.
+     */
+    private void setUpNamedGame() {
+        setUpGame();
+        opp.getRegisteredPlayer().getDeck().setName(OPP_DECK);
+        ai.getRegisteredPlayer().getDeck().setName(AI_DECK);
+    }
+
+    /**
      * The AI's own second main phase, a land played, life 6, Ancient Tomb and {@code forests} Forests, and the
      * opponent's Memnite: with Memnite's 1 power to come, the Tomb's 2 damage leaves no margin (2 + 3 &lt; 5 fails),
      * so a Summoner's Pact ({2}{G}{G}) is counted from the Forests alone.
      */
     private void tombAndForests(final int forests) {
-        setUpGame();
+        setUpNamedGame();
         noDeadline();
         fillLibrary(ai, 10);
         fillLibrary(opp, 10);
@@ -186,7 +208,8 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
     }
 
     /**
-     * Five boards, with every card's abilities asked afterwards:
+     * Five boards, each a game whose seats' decks are named ({@link #setUpNamedGame}), with every card's abilities
+     * asked afterwards:
      * <ul>
      *   <li>the threat board: {@link #tombAndForests} with Forest x2, Summoner's Pact in hand: refused, two units for
      *       {2}{G}{G}; with no threat term the Tomb's two count too and it is allowed
@@ -213,7 +236,7 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         b.copyPact = copysSummonersPact(b);
         b.copyAi = b.copyPact.getActivatingPlayer();
 
-        setUpGame();
+        setUpNamedGame();
         noDeadline();
         fillLibrary(ai, 10);
         fillLibrary(opp, 10);
@@ -231,7 +254,7 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         b.fortuneFree = b.fortune.copyWithNoManaCost();
         b.games.add(game);
 
-        setUpGame();
+        setUpNamedGame();
         noDeadline();
         fillLibrary(ai, 10);
         fillLibrary(opp, 10);
@@ -253,7 +276,7 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         b.debtPaid = ((WrappedAbility) trigger).getWrappedAbility();
         b.games.add(game);
 
-        setUpGame();
+        setUpNamedGame();
         noDeadline();
         fillLibrary(ai, 10);
         fillLibrary(opp, 10);
@@ -348,7 +371,7 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
 
     /** The lines the trace wrote for {@link #askedThroughTheTrace}, field for field, with these flags. */
     private static List<String> expectedLines(final long seed, final boolean copies, final boolean markers) {
-        final String head = "seed=" + seed + "\tplayers=p2|p1\t";
+        final String head = "seed=" + seed + "\tplayers=" + PLAYERS + "\t";
         final String threat = head + "turn=1\tphase=MAIN2\t";
         final String debt = head + "turn=1\tphase=MAIN1\t";
         final String upkeep = head + "turn=2\tphase=UPKEEP\t";
@@ -360,7 +383,7 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         final String two = "\tcopy_judged=2\tcopy_refused=1"; // and the copy's allowed one: judged, not refused
         final List<String> lines = new ArrayList<>();
         if (markers) {
-            lines.add("decision\t1\tMAIN2\tseed=" + seed + "\tplayers=p2|p1");
+            lines.add("decision\t1\tMAIN2\tseed=" + seed + "\tplayers=" + PLAYERS);
         }
         lines.add(threat + "site=S1\tverdict=pact-unpayable\tcard=Summoner's Pact\tdebts=-\tunits=" + twoForests
                 + "\tthreat=threat-only" + none);
@@ -470,10 +493,11 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
      * {@link #boards()}, every kind of line (S1, a veto, an M19 judgment that threw, a copy's judgment, S3, S5, S5b, an
      * S2 skip, S6b, a payment, a refusal with a winner's trigger on the stack; and, review TB-2's, allowed judgments at
      * S4, S3b and S1 with no veto, heard, threat or winner field, a copy's allowed judgment and a payment that failed),
-     * each field in its order, the bound scope's seed in each, the copies' judgments counted, judged and refused apart,
-     * and printed only with the copies on, the marker only with the markers on and only for a real game. The trace's
-     * judgments answer as DelayedLoss's own, and leave the seven SimScope counters and the draws of a counting random
-     * where the same judgments asked of DelayedLoss directly leave them: unchanged.
+     * each field in its order, the bound scope's seed and the seats' deck names (review TB-3) in each, a simulation
+     * copy's lines and the markers included, the copies' judgments counted, judged and refused apart, and printed only
+     * with the copies on, the marker only with the markers on and only for a real game. The trace's judgments answer as
+     * DelayedLoss's own, and leave the seven SimScope counters and the draws of a counting random where the same
+     * judgments asked of DelayedLoss directly leave them: unchanged.
      */
     @Test(timeOut = 600_000)
     public void theLinesCarryTheirFieldsInOrderAndTheTraceOnlyPrints() throws IOException {
@@ -524,7 +548,9 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
 
     /**
      * RULINGS-R3 C: a line made on a thread with no SimScope bound names no seed ("seed=-"), and the copy counts it
-     * gives are its thread's. The opponent's first main phase, Island x3, Pact of Negation: refused.
+     * gives are its thread's. The opponent's first main phase, Island x3, Pact of Negation: refused. The game's decks
+     * are left unnamed, as a test game's are, and each seat's player's name stands in for its deck's (RULINGS-R3 F,
+     * amended 05:08: a seat whose deck cannot be read prints its player's name).
      */
     @Test(timeOut = 120_000)
     public void aLineMadeWithNoScopeBoundSaysSeedDash() throws IOException {
@@ -544,7 +570,7 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         Files.delete(file);
         assertEquals(lines, List.of("seed=-\tplayers=p2|p1\tturn=1\tphase=MAIN1\tsite=S1\tverdict=pact-unpayable\tcard="
                 + "Pact of Negation\tdebts=-\tunits=NEXT(life=20,threat=0):3{Island=U;Island=U;Island=U}\tcopy_judged=0"
-                + "\tcopy_refused=0"), "one line, with no seed");
+                + "\tcopy_refused=0"), "one line, with no seed, and the players' names for the unnamed decks");
         assertFieldsInOrder(lines.get(0));
     }
 }
