@@ -6,6 +6,7 @@ import org.testng.annotations.Test;
 import forge.ai.simulation.ActivationGuard;
 import forge.ai.simulation.ComboGuard;
 import forge.ai.simulation.ComboPlan;
+import forge.ai.simulation.FlatMonteCarloPicker;
 import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.phase.PhaseType;
@@ -305,7 +306,7 @@ public class FlatMonteCarloActivationTest extends AITest {
         AssertJUnit.assertNull("an artifact to sacrifice", ActivationGuard.problem(ai, minus));
     }
 
-    // ------------------------------------------------------------------------------------------ one equip move a turn
+    // ------------------------------------------------------------------- an Equipment that has moved this turn
 
     private SpellAbility equip(final Card equipment) {
         for (final SpellAbility sa : equipment.getSpellAbilities()) {
@@ -317,60 +318,193 @@ public class FlatMonteCarloActivationTest extends AITest {
         throw new IllegalStateException("no equip ability on " + equipment);
     }
 
-    @Test
-    public void anEquipmentOnACreatureMovesOnceATurn() {
-        setUp();
-        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+    /** A creature the AI has had since before this turn. */
+    private Card old(final String name) {
+        final Card c = addCardToZone(name, ai, ZoneType.Battlefield);
+        c.setSickness(false);
+        return c;
+    }
+
+    /** A creature that came under the AI's control this turn. */
+    private Card arrived(final String name) {
+        final Card c = addCardToZone(name, ai, ZoneType.Battlefield);
+        c.setSickness(true);
+        return c;
+    }
+
+    /** Lightning Greaves on this creature, as the turn finds them. */
+    private Card greavesOn(final Card creature) {
         final Card greaves = addCardToZone("Lightning Greaves", ai, ZoneType.Battlefield);
-        final Card bears = addCardToZone("Grizzly Bears", ai, ZoneType.Battlefield);
-        addCardToZone("Hill Giant", ai, ZoneType.Battlefield);
-        greaves.attachToEntity(bears, null);
+        greaves.attachToEntity(creature, null);
         game.getAction().checkStateEffects(true);
-        final SpellAbility sa = equip(greaves);
-        AssertJUnit.assertNull("not equipped this turn, another creature to move to", ActivationGuard.problem(ai, sa));
-        greaves.addAbilityActivated(sa); // what the stack records when the equip is activated
-        AssertJUnit.assertEquals("equipped this turn and still on a creature: no second move", "no-valid-targets",
-                ActivationGuard.problem(ai, sa));
-        AssertJUnit.assertEquals("the combo guard takes the heuristics' own second move out as well", "no-valid-targets",
-                ComboGuard.problem(ai, sa, null, ComboPlan.EMPTY));
-        greaves.resetActivationsPerTurn(); // the cleanup step
-        AssertJUnit.assertNull("the next turn it may move again", ActivationGuard.problem(ai, sa));
+        return greaves;
+    }
+
+    /** Puts the ability on the stack aimed at the creature, as an activation does, and resolves it. */
+    private void activate(final SpellAbility sa, final Card equipment, final Card to) {
+        sa.setActivatingPlayer(ai);
+        sa.resetTargets();
+        sa.getTargets().add(to);
+        game.getStack().add(sa);
+        game.getStack().resolveStack();
+        game.getAction().checkStateEffects(true);
+        AssertJUnit.assertSame("the Equipment moved", to, equipment.getEquipping());
+    }
+
+    private void move(final Card equipment, final Card to) {
+        activate(equip(equipment), equipment, to);
     }
 
     @Test
-    public void anEquipmentWhoseCreatureLeftIsEquippedAgainTheSameTurn() {
+    public void anEquipmentsFirstMoveOfATurnGoesAnywhere() {
         setUp();
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
-        final Card clamp = addCardToZone("Skullclamp", ai, ZoneType.Battlefield);
-        addCardToZone("Grizzly Bears", ai, ZoneType.Battlefield);
-        game.getAction().checkStateEffects(true);
-        final SpellAbility sa = equip(clamp);
-        clamp.addAbilityActivated(sa); // equipped once this turn; the creature it was on has died since
-        AssertJUnit.assertFalse(clamp.isEquipping());
-        AssertJUnit.assertNull("attached to nothing: it may be equipped again", ActivationGuard.problem(ai, sa));
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
+        final Card greaves = greavesOn(bears);
+        final SpellAbility sa = equip(greaves);
+        AssertJUnit.assertNull("not moved this turn, another creature to move to", ActivationGuard.problem(ai, sa));
+        AssertJUnit.assertFalse(ActivationGuard.equipTargetClosed(ai, sa, giant));
+        AssertJUnit.assertTrue("never onto the creature it is on", ActivationGuard.equipTargetClosed(ai, sa, bears));
     }
 
     @Test
-    public void anotherAbilityActivatedThisTurnIsNoEquipMove() {
+    public void afterAMoveACreatureOfEarlierTurnsIsClosedUntilTheNextTurn() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
+        final Card greaves = greavesOn(bears);
+        move(greaves, giant); // through the stack: the record the rule reads is the stack's own
+        final SpellAbility sa = equip(greaves);
+        AssertJUnit.assertTrue("moved this turn: not onto a creature that was there all along",
+                ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertEquals("nowhere left to go: the Equip is idle", "no-valid-targets",
+                ActivationGuard.problem(ai, sa));
+        AssertJUnit.assertEquals("the combo guard takes the heuristics' own move out with it", "no-valid-targets",
+                ComboGuard.problem(ai, sa, null, ComboPlan.EMPTY));
+        game.getStack().onNextTurn(); // the stack forgets the turn's activations
+        AssertJUnit.assertNull("the next turn it may move again", ActivationGuard.problem(ai, sa));
+        AssertJUnit.assertFalse(ActivationGuard.equipTargetClosed(ai, sa, bears));
+    }
+
+    @Test
+    public void aCreatureThatArrivedThisTurnTakesItOnce() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
+        final Card greaves = greavesOn(bears);
+        move(greaves, giant); // the turn's first move
+        final Card elves = arrived("Llanowar Elves");
+        final Card ogre = arrived("Gray Ogre");
+        final SpellAbility sa = equip(greaves);
+        AssertJUnit.assertFalse("a creature just cast: haste, to tap for its ability at once",
+                ActivationGuard.equipTargetClosed(ai, sa, elves));
+        AssertJUnit.assertNull(ActivationGuard.problem(ai, sa));
+        move(greaves, elves);
+        AssertJUnit.assertFalse("and the next one just cast", ActivationGuard.equipTargetClosed(ai, sa, ogre));
+        move(greaves, ogre);
+        AssertJUnit.assertTrue("it has had the Greaves this turn", ActivationGuard.equipTargetClosed(ai, sa, elves));
+        AssertJUnit.assertTrue(ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertTrue(ActivationGuard.equipTargetClosed(ai, sa, giant));
+        AssertJUnit.assertEquals("no-valid-targets", ActivationGuard.problem(ai, sa));
+    }
+
+    @Test
+    public void itGoesBackOntoACommanderButNotFromOneCommanderToAnother() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
+        final Card commander = old("Serra Angel");
+        commander.setCommander(true);
+        final Card partner = old("Air Elemental");
+        partner.setCommander(true);
+        final Card greaves = greavesOn(commander);
+        move(greaves, bears); // the turn's first move, off the commander
+        final SpellAbility sa = equip(greaves);
+        AssertJUnit.assertFalse("back onto the commander", ActivationGuard.equipTargetClosed(ai, sa, commander));
+        AssertJUnit.assertTrue("not onto another creature of earlier turns", ActivationGuard.equipTargetClosed(ai, sa, giant));
+        AssertJUnit.assertNull(ActivationGuard.problem(ai, sa));
+        move(greaves, commander);
+        AssertJUnit.assertTrue("from one commander to the other is no return",
+                ActivationGuard.equipTargetClosed(ai, sa, partner));
+        AssertJUnit.assertTrue(ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertEquals("no-valid-targets", ActivationGuard.problem(ai, sa));
+        final Card elves = arrived("Llanowar Elves"); // a creature is cast: off the commander once more, and back
+        AssertJUnit.assertFalse(ActivationGuard.equipTargetClosed(ai, sa, elves));
+        move(greaves, elves);
+        AssertJUnit.assertFalse("back onto the commander a second time", ActivationGuard.equipTargetClosed(ai, sa, commander));
+        move(greaves, commander);
+        AssertJUnit.assertTrue("the creature that arrived has had it", ActivationGuard.equipTargetClosed(ai, sa, elves));
+        AssertJUnit.assertEquals("no-valid-targets", ActivationGuard.problem(ai, sa));
+    }
+
+    @Test
+    public void anEquipmentWhoseCreatureLeftIsFreeAgain() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
+        final Card greaves = greavesOn(bears);
+        move(greaves, giant);
+        game.getAction().moveToGraveyard(giant, null); // the creature it moved onto dies
+        game.getAction().checkStateEffects(true);
+        AssertJUnit.assertFalse(greaves.isEquipping());
+        final SpellAbility sa = equip(greaves);
+        AssertJUnit.assertFalse("attached to nothing: any creature", ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertNull(ActivationGuard.problem(ai, sa));
+    }
+
+    @Test
+    public void theSearchAimsOnlyWhereTheEquipmentMayGo() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
+        final Card angel = old("Serra Angel");
+        final Card greaves = greavesOn(bears);
+        final SpellAbility sa = equip(greaves);
+        AssertJUnit.assertSame("the turn's first move: the best creature", angel, FlatMonteCarloPicker.loyaltyTarget(ai, sa));
+        move(greaves, giant);
+        final Card elves = arrived("Llanowar Elves");
+        AssertJUnit.assertSame("after a move the best creature is closed, the one that arrived is not", elves,
+                FlatMonteCarloPicker.loyaltyTarget(ai, sa));
+        AssertJUnit.assertTrue(FlatMonteCarloPicker.applyTarget(sa, elves)); // the heuristics' aim, say
+        AssertJUnit.assertTrue("no creature of earlier turns is offered in its place",
+                FlatMonteCarloPicker.alternativeTargets(ai, sa, 3).isEmpty());
+        final Card ogre = arrived("Gray Ogre");
+        AssertJUnit.assertEquals("another creature that arrived is", 1, FlatMonteCarloPicker.alternativeTargets(ai, sa, 3).size());
+        AssertJUnit.assertSame(ogre, FlatMonteCarloPicker.alternativeTargets(ai, sa, 3).get(0));
+    }
+
+    @Test
+    public void anotherAttachAbilityIsNoMoveOfTheEquip() {
         setUp();
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
         // Cranial Plating: "{B}{B}: Attach to target creature you control" beside its Equip {1}
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
         final Card plating = addCardToZone("Cranial Plating", ai, ZoneType.Battlefield);
-        final Card bears = addCardToZone("Grizzly Bears", ai, ZoneType.Battlefield);
-        addCardToZone("Hill Giant", ai, ZoneType.Battlefield);
         plating.attachToEntity(bears, null);
         game.getAction().checkStateEffects(true);
-        final SpellAbility sa = equip(plating);
+        SpellAbility attach = null;
         int others = 0;
         for (final SpellAbility other : plating.getSpellAbilities()) {
             if (other.isActivatedAbility() && !other.isEquip() && !other.isManaAbility()) {
-                other.setActivatingPlayer(ai);
-                plating.addAbilityActivated(other);
+                attach = other;
                 others++;
             }
         }
         AssertJUnit.assertEquals("the Plating's own attach ability", 1, others);
-        AssertJUnit.assertNull("only an Equip activation counts as this turn's move", ActivationGuard.problem(ai, sa));
+        activate(attach, plating, giant);
+        final SpellAbility sa = equip(plating);
+        AssertJUnit.assertFalse("only an Equip counts as the turn's move: the Equip's first is still open",
+                ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertNull(ActivationGuard.problem(ai, sa));
+        AssertJUnit.assertFalse("and the rule has nothing to say about the other ability",
+                ActivationGuard.equipTargetClosed(ai, attach, bears));
     }
 
     // ------------------------------------------------------------------------------------------ outside its remit

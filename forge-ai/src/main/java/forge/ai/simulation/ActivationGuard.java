@@ -20,6 +20,7 @@ import forge.game.cost.CostSacrifice;
 import forge.game.cost.CostTapType;
 import forge.game.cost.CostUntapType;
 import forge.game.GameEntity;
+import forge.game.GameObject;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.TargetRestrictions;
@@ -255,6 +256,8 @@ public final class ActivationGuard {
      * (Ozolith, the Shattered Spire and its like also name noncreature artifacts, and a counter there does nothing),
      * and an Equipment moved onto the creature it is already attached to does nothing, unless something in play
      * pays for every attachment (a "becomes attached" trigger), which is what makes an equip {0} loop worth going round.
+     * An Equipment that has already moved this turn has fewer places left to go ({@link #equipTargetOpen}), and with
+     * none left its Equip is idle.
      */
     private static Verdict targetedRefinement(final Player ai, final SpellAbility node) {
         final TargetRestrictions tr = node.getTargetRestrictions();
@@ -269,14 +272,9 @@ public final class ActivationGuard {
         }
         if (api == ApiType.Attach && node.isEquip() && node.getHostCard().isEquipping()
                 && !attachPayoff(ai, node.getHostCard())) {
-            if (equippedThisTurn(node.getHostCard())) {
-                // one move a turn: see equippedThisTurn
-                return Verdict.IDLE_TARGETS;
-            }
-            final Card current = node.getHostCard().getEquipping();
             for (final GameEntity e : tr.getAllCandidates(node)) {
-                if (e != current) {
-                    return null;
+                if (equipTargetOpen(node, e)) {
+                    return null; // somewhere to move it: the ordinary count decides
                 }
             }
             return Verdict.IDLE_TARGETS;
@@ -285,24 +283,81 @@ public final class ActivationGuard {
     }
 
     /**
-     * Whether an Equip ability of this Equipment has been activated this turn. An Equipment that is on a creature and
-     * was equipped this turn is not moved again in the same turn (the heuristics' own rule for the moves they make:
-     * AttachAi's ATTACHED_THIS_TURN), unless a combo pays for the attachment ({@link #attachPayoff}). Without this the
-     * search goes round and round with a free equip: a rollout plays the rest of the turn after the play it tries, so
+     * Whether the search should leave this target out for this play: an Equip of an Equipment that is on a creature,
+     * aimed where {@link #equipTargetOpen} says it may not go now. False for every other play and target, and when a
+     * combo pays for the attachment ({@link #attachPayoff}).
+     */
+    public static boolean equipTargetClosed(final Player ai, final SpellAbility equip, final GameObject target) {
+        if (ai == null || equip == null || equip.getApi() != ApiType.Attach || !equip.isEquip()
+                || equip.getHostCard() == null || !equip.getHostCard().isEquipping()) {
+            return false;
+        }
+        try {
+            return !attachPayoff(ai, equip.getHostCard()) && !equipTargetOpen(equip, target);
+        } catch (final RuntimeException e) {
+            return false; // a refinement only: never let it break a turn
+        }
+    }
+
+    /**
+     * Where an Equipment that is on a creature may move with this Equip. Never onto the creature it is on. Its first
+     * move of a turn goes wherever a target is legal. After that it goes only onto a creature that came under its
+     * controller's control this turn, once each (Lightning Greaves onto each creature just cast, to attack or to tap
+     * for its ability at once), or back onto a commander from a creature that is none (the shroud returns to the
+     * commander when the turn's work is done).
+     *
+     * <p>The heuristics keep a rule of the kind for the moves they make (AttachAi's ATTACHED_THIS_TURN), but a play the
+     * search discovers never passes through it. Without a limit the search goes round and round with a free equip: a
+     * rollout plays the rest of the turn after the play it tries and compares it with passing for the whole turn, so
      * a move that costs nothing is credited with whatever the AI would do later in the turn anyway and beats passing
      * every time, from either creature (Lightning Greaves, whose shroud makes its holder no target: 494 moves between
      * two creatures in one turn, each a full decision, until the turn's and then the game's rollout budget was gone,
-     * and the seat played the rest of the game without search). An Equipment whose creature has left (Skullclamp) is
-     * attached to nothing and may be equipped again. Reads the Equipment's own table of this turn's activations, which
-     * the cleanup step empties for every card; draws nothing.
+     * and the seat played the rest of the game without search). With this rule the search's moves of an Equipment in a
+     * turn are bounded by the creatures that arrived in it, and it cannot go round: the first move is one, a creature
+     * that arrived takes it once, and each return to a commander needs a move away from one first.
+     *
+     * <p>The heuristics' own aim is not judged target by target (their rules bound their moves: Lightning Greaves go
+     * to the commander and stay); the search's choices of target are ({@link #equipTargetClosed}), and an Equip with no
+     * open target left is idle for both. An Equipment whose creature has left (Skullclamp) is attached to nothing and
+     * is no business of this rule. Reads the stack's record of the abilities activated this turn, which the next turn
+     * empties; draws nothing.
      */
-    static boolean equippedThisTurn(final Card equipment) {
-        for (final SpellAbility activated : equipment.getAbilityActivatedThisTurn().rowKeySet()) {
-            if (activated.isEquip()) {
-                return true;
+    static boolean equipTargetOpen(final SpellAbility equip, final GameObject target) {
+        final Card equipment = equip.getHostCard();
+        final Card holder = equipment.getEquipping();
+        if (holder == null) {
+            return true;
+        }
+        if (target == holder) {
+            return false;
+        }
+        if (!(target instanceof Card)) {
+            return true;
+        }
+        final Card to = (Card) target;
+        final List<Integer> aimed = equipAimsThisTurn(equipment);
+        if (aimed.isEmpty()) {
+            return true; // the first move of the turn
+        }
+        if (to.isCommander() && !holder.isCommander()) {
+            return true; // back onto a commander
+        }
+        return to.isFirstTurnControlled() && !aimed.contains(to.getId()); // a creature that arrived this turn, once
+    }
+
+    /** The ids of the cards this Equipment's Equip abilities were aimed at this turn, by anyone and at any cost. */
+    static List<Integer> equipAimsThisTurn(final Card equipment) {
+        final List<Integer> aimed = new ArrayList<>();
+        for (final SpellAbility activated : equipment.getGame().getStack().getAbilityActivatedThisTurn()) {
+            final Card host = activated.getHostCard();
+            if (host == null || host.getId() != equipment.getId() || !activated.isEquip()) {
+                continue;
+            }
+            for (final Card c : activated.getTargets().getTargetCards()) {
+                aimed.add(c.getId());
             }
         }
-        return false;
+        return aimed;
     }
 
     /**
