@@ -1954,7 +1954,9 @@ public final class DelayedLoss {
      * RULINGS-R3 M18: the counted sources the board-wide removals of the AI's own play take, each matched by its
      * filter over the counted sources only ({@code CardLists.getValidCards}), among all its {@link #parts} (every mode
      * of a Charm: Austere Command's artifact mode is one). Every counted source when the parts nest deeper than they
-     * are read.
+     * are read, or when a filter cannot be read (T2 review Minor 6: what cannot be read is not counted on, as an
+     * unreadable cost part takes every card it may; the throw would leave {@link #problem}, and a site's catch lets a
+     * play nothing flags through).
      */
     static List<Card> boardWide(final Player ai, final SpellAbility play, final List<Card> counted) {
         final List<Part> parts = parts(play);
@@ -1968,7 +1970,15 @@ public final class DelayedLoss {
             if (valid == null) {
                 continue;
             }
-            for (final Card c : CardLists.getValidCards(counted, valid, ai, p.getHostCard(), p)) {
+            final List<Card> matched;
+            try {
+                matched = CardLists.getValidCards(counted, valid, ai, p.getHostCard(), p);
+            } catch (final AITimeoutTracker.Expired e) {
+                throw e;
+            } catch (final RuntimeException e) {
+                return new ArrayList<>(counted);
+            }
+            for (final Card c : matched) {
                 if (!out.contains(c)) {
                     out.add(c);
                 }

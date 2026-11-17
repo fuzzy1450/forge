@@ -14,11 +14,14 @@ import java.util.Random;
 
 import org.testng.annotations.Test;
 
+import forge.card.CardRarity;
+import forge.card.CardRules;
 import forge.game.GameActionUtil;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardFactory;
+import forge.game.card.CardLists;
 import forge.game.card.CounterEnumType;
 import forge.game.cost.Cost;
 import forge.game.cost.CostPart;
@@ -31,6 +34,7 @@ import forge.game.spellability.SpellAbility;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.WrappedAbility;
 import forge.game.zone.ZoneType;
+import forge.item.PaperCard;
 import forge.util.MyRandom;
 import forge.util.SimScope;
 
@@ -941,6 +945,76 @@ public class DelayedLossTest extends FlatMcTestBase {
                 return null;
             });
         }
+    }
+
+    /**
+     * A card made for the test, in the AI's hand, its first spell ability: a {0} sorcery whose DestroyAll filter asks
+     * for the card whose id is "x". CardProperty reads a {@code CardUID_} property with Integer.parseInt, which
+     * throws: no script in the cardsfolder has a filter that cannot be read.
+     */
+    private SpellAbility unreadableWipe() {
+        final CardRules.Reader reader = new CardRules.Reader();
+        for (final String line : new String[] {
+                "Name:Unreadable Wipe",
+                "ManaCost:0",
+                "Types:Sorcery",
+                "A:SP$ DestroyAll | ValidCards$ Card.CardUID_x | SpellDescription$ Destroy the card whose id is x.",
+                "Oracle:Destroy the card whose id is x." }) {
+            reader.parseLine(line);
+        }
+        final Card c = Card.fromPaperCard(new PaperCard(reader.getCard(), "M11", CardRarity.Common), ai);
+        c.setGameTimestamp(game.getNextTimestamp());
+        ai.getZone(ZoneType.Hand).add(c);
+        final SpellAbility sa = c.getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+        return sa;
+    }
+
+    /** ComboGuard's verdict, the one Flat MC's lists, the walk, the counter pick and the veto act on. */
+    private String guardVerdict(final SpellAbility sa) {
+        return ComboGuard.problem(ai, sa, null, ComboPlan.EMPTY);
+    }
+
+    /**
+     * T2 review Minor 6: a board-wide removal whose filter cannot be read takes every counted source, as an unreadable
+     * cost part takes every card it may, so the play is refused while a debt is pending: "debt-unprotected", or
+     * "debt-due-now" while the Pact's trigger is on the stack. Before, the throw left DelayedLoss.problem, and
+     * ComboGuard's catch let a play nothing flags through. Island x5 cover {3}{U}{U} exactly; with no debt the filter
+     * is never read.
+     */
+    @Test(timeOut = 300_000)
+    public void aBoardWideRemovalWhoseFilterCannotBeReadTakesEveryCountedSource() {
+        final List<Object> seen = new ArrayList<>();
+        Scoped.under(new SimScope(61L), () -> {
+            opponentsTurn();
+            put("Island", 5, ai, ZoneType.Battlefield);
+            seen.add(guardVerdict(unreadableWipe()));
+            return null;
+        });
+        Scoped.under(new SimScope(67L), () -> {
+            resolveAPactOfNegation();
+            final List<Card> islands = put("Island", 5, ai, ZoneType.Battlefield);
+            final SpellAbility wipe = unreadableWipe();
+            String read;
+            try {
+                read = "read " + CardLists.getValidCards(islands, wipe.getParam("ValidCards"), ai, wipe.getHostCard(),
+                        wipe);
+            } catch (final RuntimeException e) {
+                read = "throws";
+            }
+            seen.add(read);
+            seen.add(guardVerdict(wipe));
+            return null;
+        });
+        Scoped.under(new SimScope(71L), () -> {
+            upkeepWithThePactsTrigger();
+            put("Island", 5, ai, ZoneType.Battlefield);
+            seen.add(guardVerdict(unreadableWipe()));
+            return null;
+        });
+        assertEquals(seen, Arrays.asList(null, "throws", DelayedLoss.DEBT_UNPROTECTED, DelayedLoss.DEBT_DUE_NOW),
+                "[no debt; the filter's read, the verdict with a debt due at the next upkeep; with the debt due now] = "
+                        + seen);
     }
 
     /**
