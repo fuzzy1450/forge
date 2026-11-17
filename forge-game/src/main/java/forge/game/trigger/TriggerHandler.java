@@ -56,6 +56,11 @@ public class TriggerHandler {
         game = gameState;
     }
 
+    /** The delayed triggers waiting to run, read-only: the AI's self-kill guard reads the "pay or lose" debts it owes. */
+    public final List<Trigger> getDelayedTriggersView() {
+        return Collections.unmodifiableList(delayedTriggers);
+    }
+
     public final void registerDelayedTrigger(final Trigger trig) {
         delayedTriggers.add(trig);
     }
