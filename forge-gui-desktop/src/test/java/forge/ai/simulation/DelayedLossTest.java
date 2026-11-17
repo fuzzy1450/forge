@@ -1387,4 +1387,27 @@ public class DelayedLossTest extends FlatMcTestBase {
         assertEquals(seen, Arrays.asList(1, true, true, null), "[the delayed triggers, the opponent owes a debt, the AI"
                 + " owes none, the AI's Pact of Negation over Island x5] = " + seen);
     }
+
+    /**
+     * Review wf-1, mutant W7: the threat term counts the opponents' creatures only while a combat of theirs can still
+     * come before the AI's next upkeep (DESIGN.md 1.4). The opponent's turn, their Grizzly Bears (power 2) on the
+     * battlefield, the AI at 3 life with Island x4 and Mana Confluence: Pact of Negation needs the Confluence's unit.
+     * In the opponent's first main phase 3 - 2 leaves no margin for its 1 life; in their second main phase and their
+     * end step no combat of theirs is left, and the Confluence fits (3 - 1 >= 1).
+     */
+    @Test
+    public void reviewNoThreatOnceTheOpponentsCombatIsOver() {
+        final List<String> verdicts = new ArrayList<>();
+        for (final PhaseType phase : new PhaseType[] { PhaseType.MAIN1, PhaseType.MAIN2, PhaseType.END_OF_TURN }) {
+            setUpGame();
+            at(phase, opp);
+            ai.setLife(3, null);
+            put("Grizzly Bears", opp, ZoneType.Battlefield);
+            put("Island", 4, ai, ZoneType.Battlefield);
+            put("Mana Confluence", ai, ZoneType.Battlefield);
+            verdicts.add(pactOfNegation());
+        }
+        assertEquals(verdicts, Arrays.asList(DelayedLoss.PACT_UNPAYABLE, null, null),
+                "[the opponent's first main phase, second main phase, end step] = " + verdicts);
+    }
 }
