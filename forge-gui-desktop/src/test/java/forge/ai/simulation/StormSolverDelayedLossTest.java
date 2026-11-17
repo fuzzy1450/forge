@@ -24,10 +24,13 @@ import forge.util.SimScope;
  * The storm solver never plays a delayed-loss card (MTG_DeckMaker's self-kill fix, DESIGN.md S2): no line it finds,
  * kill or setup, holds a step of one of the eleven cards (a Pact, an extra turn that loses, Glorious End), so a kill
  * that needs one is not taken, and every other kill still is. And a step of its line that the real game's debt
- * protection refuses is never returned (RULINGS-R3 M19): the solver drops the line and marks the state as searched,
- * so the final veto never meets the step. The class names nothing the self-kill fix added, so it compiles at the
- * parent 65940c9d323, where every row that says "today" fails with the play it gives. Each body runs on a fresh game
- * thread bound to a SimScope ({@link Scoped}), where a search reads no clock and its state cap alone stops it.
+ * protection refuses is never returned (RULINGS-R3 M19), at any of the four places next() matches one (a new line's
+ * first step, a followed step, a response step, a setup's first step): the solver drops the line and marks the state
+ * as searched, so the final veto never meets the step. The class names nothing the self-kill fix added, so it
+ * compiles at the parent 65940c9d323, where every row that says "today" fails with the play it gives. Each body runs
+ * on a fresh game thread bound to a SimScope ({@link Scoped}), where a search reads no clock and its state cap alone
+ * stops it; the rows that set the line themselves hand next() a stub search through its package-private seam,
+ * StormSolver.search, as StormSolverScopeTest does, and put the real one back.
  */
 public class StormSolverDelayedLossTest extends FlatMcTestBase {
     /** The eleven cards of the self-kill fix's three classes. */
@@ -78,11 +81,19 @@ public class StormSolverDelayedLossTest extends FlatMcTestBase {
 
     /** A card cast as far as the stack by {@code p}, with nothing paid. */
     private SpellAbility onStack(final String name, final Player p) {
+        return onStack(name, p, null);
+    }
+
+    /** A card cast as far as the stack by {@code p}, with nothing paid, aimed at {@code target} when one is given. */
+    private SpellAbility onStack(final String name, final Player p, final Player target) {
         final Card c = createCard(name, p);
         c.setGameTimestamp(game.getNextTimestamp());
         game.getStackZone().add(c);
         final SpellAbility sa = c.getFirstSpellAbility();
         sa.setActivatingPlayer(p);
+        if (target != null) {
+            sa.getTargets().add(target);
+        }
         game.getStack().add(sa);
         return sa;
     }
@@ -222,5 +233,127 @@ public class StormSolverDelayedLossTest extends FlatMcTestBase {
                 "the solver returns nothing, twice, the second time without searching again; the AI's decision does"
                         + " not make the play, and the final veto never met it: [first, second, second note, decision"
                         + " is Crop Rotation, a failed cast] = " + seen);
+    }
+
+    /**
+     * The board of M19's stub rows: a tutor storm seat resolved Summoner's Pact in its first main phase and owes
+     * {2}{G}{G} at its next upkeep, which Forest x2 and Mountain x2 pay exactly; Lightning Bolt and Crop Rotation (an
+     * instant whose additional cost sacrifices a land) in hand. Bolt's {R} leaves the debt covered; Crop Rotation's
+     * sacrifice would leave three lands for it, which debt protection refuses ("debt-unprotected"). Returns the two
+     * cards' spell abilities, Bolt's first: the rows' stub lines are made of them.
+     */
+    private List<SpellAbility> boltAndCropRotationUnderASummonersPactDebt() {
+        setUpGame();
+        noDeadline();
+        addTutorStormDeck(); // no green creature in it: the Pact finds nothing
+        fillLibrary(opp, 10);
+        at(PhaseType.MAIN1, ai);
+        onStack("Summoner's Pact", ai);
+        game.getPhaseHandler().onStackResolved();
+        playUntilStackClear(game);
+        assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai), "still the AI's first main phase");
+        put("Forest", 2, ai, ZoneType.Battlefield);
+        put("Mountain", 2, ai, ZoneType.Battlefield);
+        final SpellAbility bolt = put("Lightning Bolt", ai, ZoneType.Hand).getFirstSpellAbility();
+        final SpellAbility cropRotation = put("Crop Rotation", ai, ZoneType.Hand).getFirstSpellAbility();
+        game.getAction().checkStateEffects(true);
+        return List.of(bolt, cropRotation);
+    }
+
+    /**
+     * RULINGS-R3 M19 at a followed step (review TA, finding 3): a step past the line's first, as Crop Rotation is in
+     * Glint-Eye's [ritual, Crop Rotation, Grapeshot]. On {@link #boltAndCropRotationUnderASummonersPactDebt}'s board
+     * the search is a stub whose line is [Lightning Bolt, Crop Rotation]: the solver starts the line with Bolt, which
+     * leaves the debt covered, and asked again it returns nothing, its note "step refused (debt-unprotected)". Today
+     * it follows the line into Crop Rotation.
+     */
+    @Test(timeOut = 300_000)
+    public void aFollowedStepDebtProtectionRefusesIsNeverReturned() {
+        final List<Object> seen = Scoped.under(new SimScope(113L), () -> {
+            final List<SpellAbility> hand = boltAndCropRotationUnderASummonersPactDebt();
+            final ComboPlan combos = tutorStorm();
+            final StormSolver.Step cropRotation = new StormSolver.Step(hand.get(1));
+            final StormSolver.Line line = new StormSolver.Line(
+                    List.of(new StormSolver.Step(hand.get(0)), cropRotation), 0, 0L);
+            final StormSolver.Search real = StormSolver.search;
+            StormSolver.search = (p, c, n, b) -> line;
+            try {
+                final StormSolver solver = new StormSolver();
+                final String first = nameOf(solver.next(ai, combos));
+                final String second = nameOf(solver.next(ai, combos));
+                return Arrays.asList(first, second, solver.lastNote,
+                        "step refused (debt-unprotected): " + cropRotation);
+            } finally {
+                StormSolver.search = real;
+            }
+        });
+        assertEquals(seen.subList(0, 3), Arrays.asList("Lightning Bolt", null, seen.get(3)),
+                "the stub line's first step, then nothing for its refused second step: [first, second, note] = "
+                        + seen.subList(0, 3));
+    }
+
+    /**
+     * RULINGS-R3 M19 at a response step (review TA, finding 3): a step played in answer to the spell the line cast just
+     * before, as Lion's Eye Diamond answers Infernal Tutor. On {@link #boltAndCropRotationUnderASummonersPactDebt}'s
+     * board the search is a stub whose line is [Lightning Bolt, Crop Rotation in response]: the solver starts the line
+     * with Bolt; with the AI's Bolt on the stack it expects the response, and it returns nothing, its note "step
+     * refused (debt-unprotected)". Today it returns Crop Rotation in response to the Bolt.
+     */
+    @Test(timeOut = 300_000)
+    public void aResponseStepDebtProtectionRefusesIsNeverReturned() {
+        final List<Object> seen = Scoped.under(new SimScope(127L), () -> {
+            final List<SpellAbility> hand = boltAndCropRotationUnderASummonersPactDebt();
+            final ComboPlan combos = tutorStorm();
+            final StormSolver.Step cropRotation = new StormSolver.Step(hand.get(1), true);
+            final StormSolver.Line line = new StormSolver.Line(
+                    List.of(new StormSolver.Step(hand.get(0)), cropRotation), 0, 0L);
+            final StormSolver.Search real = StormSolver.search;
+            StormSolver.search = (p, c, n, b) -> line;
+            try {
+                final StormSolver solver = new StormSolver();
+                final String first = nameOf(solver.next(ai, combos));
+                onStack("Lightning Bolt", ai, opp); // the line's Bolt cast: the AI's own spell is on the stack
+                final boolean expects = solver.expectsResponse(ai);
+                final String second = nameOf(solver.next(ai, combos));
+                return Arrays.asList(first, expects, second, solver.lastNote,
+                        "step refused (debt-unprotected): " + cropRotation);
+            } finally {
+                StormSolver.search = real;
+            }
+        });
+        assertEquals(seen.subList(0, 4), Arrays.asList("Lightning Bolt", true, null, seen.get(4)),
+                "the stub line's first step, then nothing for its refused response: [first, the response expected,"
+                        + " second, note] = " + seen.subList(0, 4));
+    }
+
+    /**
+     * RULINGS-R3 M19 at a setup's first step (review TA, finding 3): when the search finds no kill, the solver plays
+     * the setup it left (StormSolver.lastSetup) as it plays a line. On
+     * {@link #boltAndCropRotationUnderASummonersPactDebt}'s board the search is a stub that finds no line and leaves
+     * the setup [Crop Rotation], through the private setter solve uses (by reflection, which reaches it at the parent
+     * too): the solver returns nothing, its note "step refused (debt-unprotected)". Today it returns Crop Rotation, the
+     * setup's first step.
+     */
+    @Test(timeOut = 300_000)
+    public void aSetupStepDebtProtectionRefusesIsNeverReturned() {
+        final List<Object> seen = Scoped.under(new SimScope(131L), () -> {
+            final List<SpellAbility> hand = boltAndCropRotationUnderASummonersPactDebt();
+            final ComboPlan combos = tutorStorm();
+            final StormSolver.Step cropRotation = new StormSolver.Step(hand.get(1));
+            final StormSolver.Search real = StormSolver.search;
+            StormSolver.search = (p, c, n, b) -> {
+                Reflect.callStatic(StormSolver.class, "setLastSetup", List.of(cropRotation)); // as solve leaves one
+                return null;
+            };
+            try {
+                final StormSolver solver = new StormSolver();
+                final String first = nameOf(solver.next(ai, combos));
+                return Arrays.asList(first, solver.lastNote, "step refused (debt-unprotected): " + cropRotation);
+            } finally {
+                StormSolver.search = real;
+            }
+        });
+        assertEquals(seen.subList(0, 2), Arrays.asList(null, seen.get(2)),
+                "nothing for the refused setup step: [first, note] = " + seen.subList(0, 2));
     }
 }
