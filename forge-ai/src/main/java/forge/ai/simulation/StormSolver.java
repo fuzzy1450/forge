@@ -220,6 +220,9 @@ public final class StormSolver {
             final Step pending = line.steps.get(index);
             for (final SpellAbility sa : movesOf(ai)) {
                 if (pending.matches(sa)) {
+                    if (refused(ai, combos, sa, pending)) {
+                        return null;
+                    }
                     index++;
                     lastNote = "follow " + pending;
                     aimAt(ai, sa);
@@ -244,6 +247,9 @@ public final class StormSolver {
             final Step step = line.steps.get(index);
             for (final SpellAbility sa : moves) {
                 if (step.matches(sa)) {
+                    if (refused(ai, combos, sa, step)) {
+                        return null;
+                    }
                     index++;
                     lastNote = "follow " + step;
                     aimAt(ai, sa);
@@ -294,6 +300,9 @@ public final class StormSolver {
                 index = 0;
                 for (final SpellAbility sa : moves) {
                     if (setup.get(0).matches(sa)) {
+                        if (refused(ai, combos, sa, setup.get(0))) {
+                            return null;
+                        }
                         index = 1;
                         lastNote = "setup " + setup;
                         aimAt(ai, sa);
@@ -309,6 +318,9 @@ public final class StormSolver {
         final Step step = line.steps.get(0);
         for (final SpellAbility sa : moves) {
             if (step.matches(sa)) {
+                if (refused(ai, combos, sa, step)) {
+                    return null;
+                }
                 index = 1;
                 lastNote = "start " + line.steps + " (" + line.nodes + " states, " + line.nanos / 1_000_000 + " ms)";
                 aimAt(ai, sa);
@@ -318,6 +330,33 @@ public final class StormSolver {
         line = null;
         lastNote = "first step not playable";
         return null;
+    }
+
+    /**
+     * RULINGS-R3 M19: whether DelayedLoss refuses the real game's play a step of the line matched, as the final veto
+     * would (debt protection: a Crop Rotation whose sacrifice takes a land a pending Pact's debt needs). The search
+     * cannot ask it, since a copy holds no delayed trigger, and the search's moves read no failed cast, so a refused
+     * step would be returned, vetoed into a pass and found again at the next priority. A refusal drops the line and
+     * marks this state as searched, as a search that found nothing marks it: the solver returns nothing in it again
+     * this turn, and Flat Monte Carlo decides. A play that cannot be judged is refused only when it is a Pact or a card
+     * DelayedLoss flags. In a game whose decks list none of the eleven cards, DelayedLoss answers null after reads only.
+     */
+    private boolean refused(final Player ai, final ComboPlan combos, final SpellAbility sa, final Step step) {
+        String problem;
+        try {
+            problem = DelayedLoss.problem(ai, sa, () -> combos);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            problem = DelayedLoss.refusalWhenUnread(sa);
+        }
+        if (problem == null) {
+            return false;
+        }
+        line = null;
+        failed.add(stateKey(ai));
+        lastNote = "step refused (" + problem + "): " + step;
+        return true;
     }
 
     /**

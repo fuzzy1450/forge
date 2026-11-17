@@ -11,9 +11,11 @@ import java.util.List;
 
 import org.testng.annotations.Test;
 
+import forge.ai.PlayerControllerAi;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.phase.PhaseType;
+import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
 import forge.util.SimScope;
@@ -21,10 +23,11 @@ import forge.util.SimScope;
 /**
  * The storm solver never plays a delayed-loss card (MTG_DeckMaker's self-kill fix, DESIGN.md S2): no line it finds,
  * kill or setup, holds a step of one of the eleven cards (a Pact, an extra turn that loses, Glorious End), so a kill
- * that needs one is not taken, and every other kill still is. The class names nothing the self-kill fix added, so it
- * compiles at the parent 65940c9d323, where every row that says "today" fails with the play it gives. Each body runs
- * on a fresh game thread bound to a SimScope ({@link Scoped}), where a search reads no clock and its state cap alone
- * stops it.
+ * that needs one is not taken, and every other kill still is. And a step of its line that the real game's debt
+ * protection refuses is never returned (RULINGS-R3 M19): the solver drops the line and marks the state as searched,
+ * so the final veto never meets the step. The class names nothing the self-kill fix added, so it compiles at the
+ * parent 65940c9d323, where every row that says "today" fails with the play it gives. Each body runs on a fresh game
+ * thread bound to a SimScope ({@link Scoped}), where a search reads no clock and its state cap alone stops it.
  */
 public class StormSolverDelayedLossTest extends FlatMcTestBase {
     /** The eleven cards of the self-kill fix's three classes. */
@@ -71,6 +74,22 @@ public class StormSolverDelayedLossTest extends FlatMcTestBase {
             }
         }
         return out;
+    }
+
+    /** A card cast as far as the stack by {@code p}, with nothing paid. */
+    private SpellAbility onStack(final String name, final Player p) {
+        final Card c = createCard(name, p);
+        c.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(c);
+        final SpellAbility sa = c.getFirstSpellAbility();
+        sa.setActivatingPlayer(p);
+        game.getStack().add(sa);
+        return sa;
+    }
+
+    /** The name of the card a play is of, or null for no play. */
+    private static String nameOf(final SpellAbility sa) {
+        return sa == null || sa.getHostCard() == null ? null : sa.getHostCard().getName();
     }
 
     /**
@@ -151,5 +170,57 @@ public class StormSolverDelayedLossTest extends FlatMcTestBase {
         });
         assertNull(line, "a kill that needs Final Fortune is not taken, found " + describe(line == null ? null
                 : line.steps));
+    }
+
+    // --------------------------------------------------------------------------------------------- M19
+
+    /**
+     * RULINGS-R3 M19: a tutor storm seat resolved Summoner's Pact in its first main phase and owes {2}{G}{G} at its
+     * next upkeep, which Forest x2 and Mountain x2 pay exactly. Crop Rotation (an additional cost: sacrifice a land)
+     * and Grapeshot are in its hand, the opponent at 3, one spell cast this turn: Crop Rotation's cast makes Grapeshot
+     * lethal, so the search's line is [Crop Rotation, Grapeshot]. In the real game its sacrifice would leave three
+     * lands for the debt, which debt protection refuses ("debt-unprotected"): the solver returns nothing, and asked
+     * again in the same state it does not search it again. The AI's own decision then never makes the play, and the
+     * final veto never meets it: Crop Rotation is not among its failed casts. Today the solver returns Crop Rotation.
+     */
+    @Test(timeOut = 300_000)
+    public void aStepDebtProtectionRefusesIsNeverReturned() {
+        final List<Object> seen = Scoped.under(new SimScope(109L), () -> {
+            setUpGame();
+            noDeadline();
+            addTutorStormDeck(); // no green creature in it: the Pact finds nothing
+            fillLibrary(opp, 10);
+            at(PhaseType.MAIN1, ai);
+            onStack("Summoner's Pact", ai);
+            game.getPhaseHandler().onStackResolved();
+            playUntilStackClear(game);
+            assertTrue(game.getPhaseHandler().is(PhaseType.MAIN1, ai), "still the AI's first main phase");
+            put("Forest", 2, ai, ZoneType.Battlefield);
+            put("Mountain", 2, ai, ZoneType.Battlefield);
+            final SpellAbility cropRotation = put("Crop Rotation", ai, ZoneType.Hand).getFirstSpellAbility();
+            put("Grapeshot", ai, ZoneType.Hand);
+            opp.setLife(3, null);
+            game.getAction().checkStateEffects(true);
+            stormCount(1);
+            final ComboPlan combos = tutorStorm();
+            final StormSolver.Line line = StormSolver.solve(ai, combos, STATES, BUDGET_NANOS);
+            assertNotNull(line, "Crop Rotation, then a lethal Grapeshot: " + StormSolver.lastDiagnostic());
+            assertEquals(line.steps.get(0).host, "Crop Rotation", "the search's line: " + line.steps);
+
+            final StormSolver solver = new StormSolver();
+            final String first = nameOf(solver.next(ai, combos));
+            final String firstNote = solver.lastNote;
+            final String second = nameOf(solver.next(ai, combos));
+            final String secondNote = solver.lastNote;
+            game.AI_FLAT_MONTE_CARLO = true; // the AI's own solver runs under Flat MC alone
+            final List<SpellAbility> chosen = ((PlayerControllerAi) ai.getController()).chooseSpellAbilityToPlay();
+            final String decision = chosen == null || chosen.isEmpty() ? null : nameOf(chosen.get(0));
+            return Arrays.asList(first, second, secondNote, "Crop Rotation".equals(decision),
+                    brain().hasFailedToCast(cropRotation), "first note: " + firstNote + "; decision: " + decision);
+        });
+        assertEquals(seen.subList(0, 5), Arrays.asList(null, null, "same state, no winning line", false, false),
+                "the solver returns nothing, twice, the second time without searching again; the AI's decision does"
+                        + " not make the play, and the final veto never met it: [first, second, second note, decision"
+                        + " is Crop Rotation, a failed cast] = " + seen);
     }
 }
