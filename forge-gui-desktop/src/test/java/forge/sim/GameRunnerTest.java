@@ -17,6 +17,7 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
@@ -103,6 +104,17 @@ public class GameRunnerTest {
         Assert.assertEquals(b.violations(), 0L, "strict mode refused nothing while the game played: " + b);
         Assert.assertFalse(runner.isPoisoned());
         Assert.assertEquals(runner.exitCodeAfterDrain(), 0);
+    }
+
+    /** MTG_DeckMaker's self-kill fix (RULINGS-R3 C): the scope a game plays under carries the game's seed, which the
+     *  fix's trace names each line's game by. Read by the observer, on the game thread under that scope; the first-turn
+     *  stop then ends the game. */
+    @Test(timeOut = 300_000)
+    public void aGamesScopeCarriesItsSeed() throws Exception {
+        GameRunner runner = new GameRunner(1);
+        AtomicLong seen = new AtomicLong(-1L);
+        runner.play(spec(7_000_123L, 300), game -> seen.set(SimScope.current().seed()), game -> { });
+        Assert.assertEquals(seen.get(), 7_000_123L, "the game's scope carries the spec's seed");
     }
 
     /** The count play() reports is the process-wide count's delta over the game, so a refusal anywhere while the game

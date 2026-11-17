@@ -222,6 +222,24 @@ public class SimScopeTest {
         Assert.assertTrue(s.adoptedThreads().isEmpty(), "a finished task leaves its scope's threads");
     }
 
+    /** MTG_DeckMaker's self-kill fix (RULINGS-R3 C): a scope keeps the seed it was made with, whatever is drawn from it
+     *  and whatever MyRandom.setRandom reseeds its stream with; its trace names each line's game by it. */
+    @Test
+    public void aScopeKeepsTheSeedItWasMadeWith() {
+        Assert.assertEquals(new SimScope(42L).seed(), 42L);
+        Assert.assertEquals(new SimScope(-7L).seed(), -7L);
+        SimScope s = new SimScope(9_000_000_123L);
+        SimScope.enter(s);
+        try {
+            s.random().nextInt();
+            forge.util.MyRandom.setRandom(new Random(1L));
+            s.nextId(SimScope.Counter.SPELL_ABILITY);
+            Assert.assertEquals(s.seed(), 9_000_000_123L, "drawn from, reseeded and asked for an id, the seed stays");
+        } finally {
+            SimScope.exit();
+        }
+    }
+
     @Test
     public void scratchIsPerScope() {
         SimScope a = new SimScope(1L);
