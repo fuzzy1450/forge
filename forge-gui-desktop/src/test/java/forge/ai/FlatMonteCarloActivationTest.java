@@ -1,9 +1,17 @@
 package forge.ai;
 
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.function.Supplier;
+
 import org.testng.AssertJUnit;
+import org.testng.annotations.AfterMethod;
 import org.testng.annotations.Test;
 
 import forge.ai.simulation.ActivationGuard;
+import forge.ai.simulation.ComboCatalog;
 import forge.ai.simulation.ComboGuard;
 import forge.ai.simulation.ComboPlan;
 import forge.ai.simulation.FlatMonteCarloPicker;
@@ -306,16 +314,24 @@ public class FlatMonteCarloActivationTest extends AITest {
         AssertJUnit.assertNull("an artifact to sacrifice", ActivationGuard.problem(ai, minus));
     }
 
-    // ------------------------------------------------------------------- an Equipment that has moved this turn
+    // ------------------------------------------------------- an Equipment whose Equip was already used this turn
 
-    private SpellAbility equip(final Card equipment) {
+    private List<SpellAbility> equips(final Card equipment) {
+        final List<SpellAbility> found = new ArrayList<>();
         for (final SpellAbility sa : equipment.getSpellAbilities()) {
             if (sa.isEquip()) {
                 sa.setActivatingPlayer(ai);
-                return sa;
+                found.add(sa);
             }
         }
-        throw new IllegalStateException("no equip ability on " + equipment);
+        if (found.isEmpty()) {
+            throw new IllegalStateException("no equip ability on " + equipment);
+        }
+        return found;
+    }
+
+    private SpellAbility equip(final Card equipment) {
+        return equips(equipment).get(0);
     }
 
     /** A creature the AI has had since before this turn. */
@@ -332,12 +348,52 @@ public class FlatMonteCarloActivationTest extends AITest {
         return c;
     }
 
+    /** This Equipment on this creature, as the turn finds them. */
+    private Card attached(final String equipmentName, final Card creature) {
+        final Card equipment = addCardToZone(equipmentName, ai, ZoneType.Battlefield);
+        equipment.attachToEntity(creature, null);
+        game.getAction().checkStateEffects(true);
+        return equipment;
+    }
+
     /** Lightning Greaves on this creature, as the turn finds them. */
     private Card greavesOn(final Card creature) {
-        final Card greaves = addCardToZone("Lightning Greaves", ai, ZoneType.Battlefield);
-        greaves.attachToEntity(creature, null);
-        game.getAction().checkStateEffects(true);
-        return greaves;
+        return attached("Lightning Greaves", creature);
+    }
+
+    /** What the combo catalogue was configured with before {@link #catalogue} replaced it for a test method. */
+    private Supplier<List<String>> catalogueBefore;
+    private boolean catalogueReplaced;
+
+    /**
+     * The combo catalogue (ai-combos.txt) holding only these lines until the test method ends. The catalogue is one
+     * for the JVM, which every test class shares, so {@link #putTheCatalogueBack} restores it after a failure too (as
+     * forge.ai.combo.NoComboCatalog does for its classes, and reading what was configured the same way).
+     */
+    @SuppressWarnings("unchecked")
+    private void catalogue(final String... lines) {
+        synchronized (ComboCatalog.class) {
+            if (!catalogueReplaced) {
+                try {
+                    final Field file = ComboCatalog.class.getDeclaredField("file");
+                    file.setAccessible(true);
+                    catalogueBefore = (Supplier<List<String>>) file.get(null);
+                } catch (final ReflectiveOperationException e) {
+                    throw new IllegalStateException("cannot read the combo catalogue's configured file", e);
+                }
+                catalogueReplaced = true;
+            }
+            final List<String> text = Arrays.asList(lines);
+            ComboCatalog.configure(() -> text);
+        }
+    }
+
+    @AfterMethod(alwaysRun = true)
+    public void putTheCatalogueBack() {
+        if (catalogueReplaced) {
+            ComboCatalog.configure(catalogueBefore);
+            catalogueReplaced = false;
+        }
     }
 
     /** Puts the ability on the stack aimed at the creature, as an activation does, and resolves it. */
@@ -356,20 +412,44 @@ public class FlatMonteCarloActivationTest extends AITest {
     }
 
     @Test
-    public void anEquipmentsFirstMoveOfATurnGoesAnywhere() {
+    public void theTurnsFirstEquipIsAimedAsItAlwaysWas() {
         setUp();
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card angel = old("Serra Angel");
         final Card bears = old("Grizzly Bears");
         final Card giant = old("Hill Giant");
-        final Card greaves = greavesOn(bears);
-        final SpellAbility sa = equip(greaves);
-        AssertJUnit.assertNull("not moved this turn, another creature to move to", ActivationGuard.problem(ai, sa));
+        // Swiftfoot Boots give hexproof, not shroud: the creature they are on stays a legal target of their Equip
+        final Card boots = attached("Swiftfoot Boots", angel);
+        final SpellAbility sa = equip(boots);
+        AssertJUnit.assertNull("no Equip yet this turn, another creature to move to", ActivationGuard.problem(ai, sa));
         AssertJUnit.assertFalse(ActivationGuard.equipTargetClosed(ai, sa, giant));
-        AssertJUnit.assertTrue("never onto the creature it is on", ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertFalse("the filter says nothing about the turn's first Equip, the creature it is on included",
+                ActivationGuard.equipTargetClosed(ai, sa, angel));
+        AssertJUnit.assertSame("so the search aims it at the best creature, as it did before the rule, the Boots' own",
+                angel, FlatMonteCarloPicker.loyaltyTarget(ai, sa));
+        AssertJUnit.assertTrue(FlatMonteCarloPicker.applyTarget(sa, bears)); // the heuristics' aim, say
+        AssertJUnit.assertEquals("and tries every other creature in place of the heuristics' aim, as before",
+                Arrays.asList(angel, giant), FlatMonteCarloPicker.alternativeTargets(ai, sa, 3));
+        move(boots, bears);
+        AssertJUnit.assertTrue("after an Equip this turn the creature it is on is closed",
+                ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertTrue("and so is the one it came from", ActivationGuard.equipTargetClosed(ai, sa, angel));
+        AssertJUnit.assertNull("nothing the search may aim at: no target", FlatMonteCarloPicker.loyaltyTarget(ai, sa));
     }
 
     @Test
-    public void afterAMoveACreatureOfEarlierTurnsIsClosedUntilTheNextTurn() {
+    public void anEquipWhoseOnlyTargetIsItsOwnCreatureIsIdle() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card boots = attached("Swiftfoot Boots", old("Grizzly Bears"));
+        AssertJUnit.assertEquals("the only legal target is the creature the Boots are on: the move does nothing",
+                "no-valid-targets", ActivationGuard.problem(ai, equip(boots)));
+        old("Hill Giant");
+        AssertJUnit.assertNull("with another creature there is a move to make", ActivationGuard.problem(ai, equip(boots)));
+    }
+
+    @Test
+    public void afterAnEquipACreatureOfEarlierTurnsIsClosedUntilTheNextTurn() {
         setUp();
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
         final Card bears = old("Grizzly Bears");
@@ -379,6 +459,7 @@ public class FlatMonteCarloActivationTest extends AITest {
         final SpellAbility sa = equip(greaves);
         AssertJUnit.assertTrue("moved this turn: not onto a creature that was there all along",
                 ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertTrue("nor onto the creature it is on", ActivationGuard.equipTargetClosed(ai, sa, giant));
         AssertJUnit.assertEquals("nowhere left to go: the Equip is idle", "no-valid-targets",
                 ActivationGuard.problem(ai, sa));
         AssertJUnit.assertEquals("the combo guard takes the heuristics' own move out with it", "no-valid-targets",
@@ -409,6 +490,10 @@ public class FlatMonteCarloActivationTest extends AITest {
         AssertJUnit.assertTrue(ActivationGuard.equipTargetClosed(ai, sa, bears));
         AssertJUnit.assertTrue(ActivationGuard.equipTargetClosed(ai, sa, giant));
         AssertJUnit.assertEquals("no-valid-targets", ActivationGuard.problem(ai, sa));
+        final Card goblin = arrived("Raging Goblin");
+        AssertJUnit.assertFalse("a creature with haste of its own arrived this turn all the same",
+                ActivationGuard.equipTargetClosed(ai, sa, goblin));
+        AssertJUnit.assertNull(ActivationGuard.problem(ai, sa));
     }
 
     @Test
@@ -455,6 +540,60 @@ public class FlatMonteCarloActivationTest extends AITest {
         final SpellAbility sa = equip(greaves);
         AssertJUnit.assertFalse("attached to nothing: any creature", ActivationGuard.equipTargetClosed(ai, sa, bears));
         AssertJUnit.assertNull(ActivationGuard.problem(ai, sa));
+    }
+
+    @Test
+    public void anEquipmentJustCastHasItsFirstEquipOfTheTurnToo() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
+        final Card greaves = addCardToZone("Lightning Greaves", ai, ZoneType.Battlefield); // on nothing yet
+        final SpellAbility sa = equip(greaves);
+        AssertJUnit.assertFalse(ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertNull(ActivationGuard.problem(ai, sa));
+        move(greaves, bears);
+        AssertJUnit.assertTrue("that was its Equip of the turn: not on to a creature of earlier turns",
+                ActivationGuard.equipTargetClosed(ai, sa, giant));
+        AssertJUnit.assertEquals("no-valid-targets", ActivationGuard.problem(ai, sa));
+    }
+
+    @Test
+    public void everyEquipAbilityOfAnEquipmentIsItsEquip() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        // Hand of Vecna: "Equip - Pay 1 life for each card in your hand" beside "Equip {2}"
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
+        final Card ogre = old("Gray Ogre");
+        final Card hand = attached("Hand of Vecna", bears);
+        final List<SpellAbility> both = equips(hand);
+        AssertJUnit.assertEquals("its two Equip abilities", 2, both.size());
+        AssertJUnit.assertFalse(ActivationGuard.equipTargetClosed(ai, both.get(1), ogre));
+        activate(both.get(0), giant);
+        AssertJUnit.assertSame(giant, hand.getEquipping());
+        AssertJUnit.assertTrue("the other Equip is the same Equipment's: closed as well",
+                ActivationGuard.equipTargetClosed(ai, both.get(1), ogre));
+        AssertJUnit.assertEquals("no-valid-targets", ActivationGuard.problem(ai, both.get(1)));
+    }
+
+    @Test
+    public void aComboThatPaysForTheAttachmentSwitchesTheRuleOff() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
+        final Card greaves = greavesOn(bears);
+        move(greaves, giant);
+        final SpellAbility sa = equip(greaves);
+        AssertJUnit.assertTrue("no combo: the rule holds", ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertEquals("no-valid-targets", ActivationGuard.problem(ai, sa));
+        // a combo of the catalogue, whole on the AI's side of the table, with the Equipment as one of its pieces
+        catalogue("win | Lightning Greaves + Grizzly Bears | Lightning Greaves | Grizzly Bears");
+        AssertJUnit.assertFalse("the combo pays for every attachment: the search aims as the combo needs",
+                ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertNull("and the Equip is no idle play", ActivationGuard.problem(ai, sa));
+        AssertJUnit.assertSame(bears, FlatMonteCarloPicker.loyaltyTarget(ai, sa));
     }
 
     @Test
@@ -520,10 +659,16 @@ public class FlatMonteCarloActivationTest extends AITest {
         AssertJUnit.assertEquals("the stack recorded the activation", 1, game.getStack().getAbilityActivatedThisTurn().size());
         final Card elsewhere = plating.getEquipping() == bears ? giant : bears;
         final SpellAbility sa = equip(plating);
-        AssertJUnit.assertFalse("only an Equip counts as the turn's move: the Equip's first is still open",
+        AssertJUnit.assertFalse("only an Equip counts as the turn's Equip: its first is still open",
                 ActivationGuard.equipTargetClosed(ai, sa, elsewhere));
         AssertJUnit.assertNull(ActivationGuard.problem(ai, sa));
-        AssertJUnit.assertFalse("and the rule has nothing to say about the other ability",
+        final Card from = plating.getEquipping();
+        move(plating, elsewhere); // the Equip's first of the turn
+        AssertJUnit.assertTrue("the Equip has been used: a creature of earlier turns is closed for it",
+                ActivationGuard.equipTargetClosed(ai, sa, from));
+        AssertJUnit.assertFalse("and the rule has nothing to say about the other ability, aimed at that creature",
+                ActivationGuard.equipTargetClosed(ai, attach, from));
+        AssertJUnit.assertFalse("or at the creature the Plating is on",
                 ActivationGuard.equipTargetClosed(ai, attach, elsewhere));
     }
 
