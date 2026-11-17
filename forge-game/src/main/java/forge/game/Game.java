@@ -44,6 +44,8 @@ import forge.game.replacement.ReplacementHandler;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.staticability.StaticAbilityCantChangeDayTime;
+import forge.game.staticability.StaticAbilityMode;
+import forge.game.staticability.StaticAbilityModeProbe;
 import forge.game.trigger.TriggerHandler;
 import forge.game.trigger.TriggerType;
 import forge.game.undo.UndoManager;
@@ -70,6 +72,12 @@ public class Game {
     private static int nextId() { return SimScope.nextId(SimScope.Counter.GAME, () -> ++maxId); }
 
     private boolean noGUIUser;
+
+    // every mode a static ability of a card of this game has had (it only grows), and whether any mode may be present
+    // (a static ability without a mode has existed, or a card this game cannot account for joined it): see
+    // mayHaveStaticAbilityMode. First among the fields, so a static ability made while the others are set notes here
+    private final EnumSet<StaticAbilityMode> staticAbilityModes = EnumSet.noneOf(StaticAbilityMode.class);
+    private volatile boolean mayHaveAnyStaticAbilityMode = false;
 
     /** The ID. */
     private int id;
@@ -103,6 +111,8 @@ public class Game {
     // false until a card of this game is phased out, so until then the battlefields are known to hold no
     // phased-out card without looking at each card on them
     private boolean mayHavePhasedOutCards = false;
+    // see getWalkCounterEpoch
+    private long walkCounterEpoch = 0L;
     // the last snapshot getCardsIn made of the zones static abilities work from, and of each zone type
     private ZoneSnapshot staticAbilitySourcesSnapshot;
     private final ZoneSnapshot[] zoneSnapshots = new ZoneSnapshot[ZoneType.values().length];
@@ -286,6 +296,26 @@ public class Game {
         return copyLastState(ZoneType.Graveyard);
     }
 
+    /**
+     * How many copies for a snapshot of the battlefield or the graveyards are being made right now: the whole-zone
+     * last-known copies ({@link Zone#getLKICopy}) that {@link #copyLastState()} and {@link #copyLastState(ZoneType)}
+     * take, and the single card {@link #updateLastStateForCard} puts into the game's snapshot.
+     * {@link forge.game.replacement.ReplacementEffect#copy(Card, boolean, boolean)} reads it.
+     */
+    private int zoneSnapshotsInProgress;
+
+    public void beginZoneSnapshot() {
+        zoneSnapshotsInProgress++;
+    }
+
+    public void endZoneSnapshot() {
+        zoneSnapshotsInProgress--;
+    }
+
+    public boolean isTakingZoneSnapshot() {
+        return zoneSnapshotsInProgress > 0;
+    }
+
     public void updateLastStateForCard(Card c) {
         if (c == null || c.getZone() == null) {
             return;
@@ -299,7 +329,13 @@ public class Game {
         if (lookup != null) {
             lastStateBattlefield.remove(c);
             lastStateGraveyard.remove(c);
-            lookup.add(CardCopyService.getLKICopy(c));
+            // the card's place in the snapshot is taken by a new copy: a snapshot's copy like the others
+            beginZoneSnapshot();
+            try {
+                lookup.add(CardCopyService.getLKICopy(c));
+            } finally {
+                endZoneSnapshot();
+            }
         }
     }
 
@@ -565,6 +601,86 @@ public class Game {
      */
     public final void notePhasedOutCard() {
         mayHavePhasedOutCards = true;
+    }
+
+    /**
+     * Whether a static ability of mode {@code mode} may be in the static ability list of a card of this game. When
+     * false, no static ability of any card of this game has that mode, so a scan of this game's cards for one finds
+     * none. An answer only ever changes from false to true: a static ability notes its modes in its host's game when it
+     * is made or copied, when its modes are set and when its host is set; a card joining this game from another brings
+     * every mode that game noted; a game copy starts with every mode of the game it copies; and a static ability
+     * without a mode, which a scan would fail on, makes every answer true.
+     */
+    public final boolean mayHaveStaticAbilityMode(final StaticAbilityMode mode) {
+        final boolean result = mayHaveAnyStaticAbilityMode || staticAbilityModes.contains(mode);
+        if (result && StaticAbilityModeProbe.listener() != null) {
+            StaticAbilityModeProbe.listener().mayHave(this, mode, mayHaveAnyStaticAbilityMode);
+        }
+        return result;
+    }
+
+    // The writes below look first without the lock and take it only when there is something to write, so a game that
+    // already has the modes (as a game copy has nearly all of its cards' modes) is never locked. The lock is for the
+    // GUI, whose other threads may build static abilities of a game too; a simulated game is written from its own
+    // thread only.
+
+    /** Notes the modes of a static ability of a card of this game: {@code null} for one without a mode. */
+    public final void noteStaticAbilityModes(final Set<StaticAbilityMode> modes) {
+        if (modes == null) {
+            saturateStaticAbilityModes("a static ability without a mode");
+        } else if (!staticAbilityModes.containsAll(modes)) {
+            // written only when something is new, so copying a game's cards elsewhere leaves that game unwritten
+            synchronized (staticAbilityModes) {
+                if (StaticAbilityModeProbe.listener() != null) {
+                    final EnumSet<StaticAbilityMode> added = EnumSet.copyOf(modes);
+                    added.removeAll(staticAbilityModes);
+                    if (!added.isEmpty()) {
+                        StaticAbilityModeProbe.listener().noted(this, added);
+                    }
+                }
+                staticAbilityModes.addAll(modes);
+            }
+        }
+    }
+
+    /** Notes every mode {@code from} noted: its cards, or copies of them, are becoming cards of this game. */
+    public final void inheritStaticAbilityModes(final Game from) {
+        if (from == null || from == this) {
+            return;
+        }
+        noteStaticAbilityModes(from.staticAbilityModes);
+        if (from.mayHaveAnyStaticAbilityMode) {
+            saturateStaticAbilityModes("inherited from a saturated game");
+        }
+    }
+
+    /**
+     * Makes every {@link #mayHaveStaticAbilityMode} answer true: a card whose modes no game noted joined this one.
+     * {@code cause} says why, for {@link StaticAbilityModeProbe} alone.
+     */
+    public final void saturateStaticAbilityModes(final Object cause) {
+        if (mayHaveAnyStaticAbilityMode) {
+            return;
+        }
+        synchronized (staticAbilityModes) {
+            if (!mayHaveAnyStaticAbilityMode && StaticAbilityModeProbe.listener() != null) {
+                StaticAbilityModeProbe.listener().saturated(this, cause);
+            }
+            mayHaveAnyStaticAbilityMode = true;
+        }
+    }
+
+    /**
+     * Moved on every time a card of this game gets a counter when it has none (Zone#summarizeWalk). It only grows
+     * while the game plays; the GUI's undo (GameMemento) sets it back with every other field, the zones' summaries
+     * included (see Zone.WalkSummary).
+     */
+    public final long getWalkCounterEpoch() {
+        return walkCounterEpoch;
+    }
+
+    public final void bumpWalkCounterEpoch() {
+        walkCounterEpoch++;
     }
 
     public CardCollectionView getCardsPlayerCanActivateInStack() {
@@ -967,6 +1083,43 @@ public class Game {
                 return;
             }
             if (withSideboard && !visitor.visitAll(player.getZone(ZoneType.Sideboard).getCards())) {
+                return;
+            }
+            if (!visitor.visitAll(player.getInboundTokens())) {
+                return;
+            }
+        }
+        visitor.visitAll(getStackZone().getCards());
+    }
+
+    /**
+     * forEachCardInGame(visitor, false), for a visitor that, while {@code summaryUsable} holds (null: always), returns
+     * true at once having done nothing for every card {@link Card#knownToHaveNoReplacementEffects()} and every card
+     * whose {@link Card#knownReplacementEvents()} share no bit with {@code events}: the replacement walk. Graveyard,
+     * hand, library, battlefield and exile pass those cards by their summaries (Zone#visitSummarized), visiting every
+     * other card as forEachCardInGame does, in the same order; the other zones are walked as there.
+     */
+    public void forEachCardInGameSummarized(final Visitor<Card> visitor, final long events,
+            final java.util.function.BooleanSupplier summaryUsable) {
+        WalkSummaryProbe.noteWalk();
+        for (final Player player : getPlayers()) {
+            if (!player.getZone(ZoneType.Graveyard).visitSummarized(visitor, events, summaryUsable)) {
+                return;
+            }
+            if (!player.getZone(ZoneType.Hand).visitSummarized(visitor, events, summaryUsable)) {
+                return;
+            }
+            if (!player.getZone(ZoneType.Library).visitSummarized(visitor, events, summaryUsable)) {
+                return;
+            }
+            // the raw list, phased-out cards included, as getCards(false) returns it
+            if (!player.getZone(ZoneType.Battlefield).visitSummarized(visitor, events, summaryUsable)) {
+                return;
+            }
+            if (!player.getZone(ZoneType.Exile).visitSummarized(visitor, events, summaryUsable)) {
+                return;
+            }
+            if (!visitor.visitAll(player.getCardsIn(ZoneType.PART_OF_COMMAND_ZONE))) {
                 return;
             }
             if (!visitor.visitAll(player.getInboundTokens())) {

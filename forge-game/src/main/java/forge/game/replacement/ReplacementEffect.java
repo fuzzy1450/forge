@@ -196,6 +196,29 @@ public abstract class ReplacementEffect extends TriggerReplacementBase {
         if (sa != null) {
             final SpellAbility overridingAbilityCopy = sa.copy(host, lki);
             if (overridingAbilityCopy != null) {
+                if (lki && host != null && host.getGame() != null && host.getGame().isTakingZoneSnapshot()) {
+                    // ReplacementHandler.executeReplacement leaves two things on this ability each time the effect
+                    // runs: the snapshot of the battlefield and the graveyards (SpellAbility keeps a collection of
+                    // its cards) and the mark of a replacement ability. The ability's own later readers use them (a
+                    // prevention effect's buffered sub-ability is resolved after the run), so the game's effect
+                    // keeps them. A copy made for the game's snapshot (Game.copyLastState through
+                    // Zone.getLKICopy, and Game.updateLastStateForCard) must not: SpellAbility.copy clones the
+                    // reference, so the card's copy in the new snapshot pointed at the cards of the snapshot the
+                    // effect last saw, whose copy of the card pointed further back, and every snapshot kept the
+                    // one before it alive for the rest of the game. The snapshot's copy is left without the pair
+                    // and without the mark, as the ability of an effect that has not run has neither. When the
+                    // effect runs from a snapshot's card (a permanent that leaves the battlefield is replaced
+                    // through its last-known state), executeReplacement sets both again before the ability
+                    // resolves. A copy that is later made FROM a snapshot's card (a token that copies a creature
+                    // that died) starts without them too, where it used to start with the original's mark and
+                    // its stale snapshot: the one place a reader can tell the difference, and only one that
+                    // evaluates that copy's ability before its effect has run (the damage prediction of a
+                    // prevention effect whose amount counts permanents). Every other last-known copy (of a single
+                    // card, of a simulation's card) is made as before. CardCopyService.getLKICopy cuts a card's
+                    // cast ability in a similar way: it gives it empty collections.
+                    overridingAbilityCopy.clearLastState();
+                    overridingAbilityCopy.setReplacementEffect(null);
+                }
                 res.setOverridingAbility(overridingAbilityCopy);
             }
         }
@@ -355,5 +378,15 @@ public abstract class ReplacementEffect extends TriggerReplacementBase {
 
     public boolean modeCheck(ReplacementType event, Map<AbilityKey, Object> runParams) {
         return event.equals(getMode());
+    }
+
+    /**
+     * Every event modeCheck can accept, whatever the run params, as bits {@code 1L << event.ordinal()}: this effect's
+     * mode (every bit without one, so that no caller takes it for an effect of another mode). A subclass that overrides
+     * modeCheck to accept more events adds their bits here.
+     */
+    public long modeCheckEvents() {
+        final ReplacementType mode = getMode();
+        return mode == null ? -1L : 1L << mode.ordinal();
     }
 }

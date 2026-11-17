@@ -16,6 +16,7 @@ import java.util.stream.Collectors;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 
+import forge.card.CardDb;
 import forge.card.CardEdition;
 import forge.card.CardRarity;
 import forge.card.CardRules;
@@ -304,6 +305,8 @@ public class AdvancedSearch {
                 }
 
                 cards.sort(FModel.getMagicDb().getEditions().CARD_EDITION_COMPARATOR);
+                // the list is the database's own: a lookup that picks a print by list order reads the new order
+                CardDb.noteChange();
                 return cards.get(0) == input;
             }
         }),
@@ -562,6 +565,8 @@ public class AdvancedSearch {
                 }
 
                 cards.sort(FModel.getMagicDb().getEditions().CARD_EDITION_COMPARATOR);
+                // the list is the database's own: a lookup that picks a print by list order reads the new order
+                CardDb.noteChange();
                 return cards.get(0) == input;
             }
         }),

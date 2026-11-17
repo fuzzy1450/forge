@@ -34,6 +34,7 @@ import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -70,6 +71,20 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
 
     // written by every game's legend-rule check, from as many game threads as are playing
     private final Map<String, Boolean> nonLegendaryCreatureNames = new ConcurrentHashMap<>();
+
+    // How many times any card database changed what a card lookup can answer: cards loaded, added or cleared, rules
+    // replaced, art preferences set, or a print's image found again. Counted after each change, so a caller that keeps
+    // lookup answers drops those it read under an earlier count. getAllCards(String) and getAllCardsNoAlt(String)
+    // return the database's own lists, whose order the lookups read: a caller that reorders one in place counts it too.
+    private static final AtomicLong changeCount = new AtomicLong();
+
+    public static long getChangeCount() {
+        return changeCount.get();
+    }
+
+    public static void noteChange() {
+        changeCount.incrementAndGet();
+    }
 
     public enum CardArtPreference implements Comparator<CardEdition> {
         LATEST_ART_ALL_EDITIONS(false, true, false),
@@ -392,6 +407,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
         for(CardRules rule : needsPlaceholderFaces) {
             rule.supplyPlaceholderFaces(this.facesByName);
         }
+        noteChange();
     }
 
     private void addFaceToDbNames(ICardFace face, CardRules rules) {
@@ -522,6 +538,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
         flavorNameMappings.clear();
         artIds.clear();
         nonLegendaryCreatureNames.clear();
+        noteChange();
     }
 
     public void loadCard(String cardName, String setCode, CardRules cr) {
@@ -534,16 +551,20 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
             } catch (NoSuchElementException e) {
                 e.printStackTrace();
                 return;
+            } finally {
+                noteChange();
             }
         }
-        if (rulesByPrimaryName.putIfAbsent(cr.getName(), cr) == null
-                && !filtered.contains(cr.getPreInitName())) {
-            for (ICardFace face : cr.getAllFaces()) {
-                addFaceToDbNames(face, cr);
+        if (rulesByPrimaryName.putIfAbsent(cr.getName(), cr) == null) {
+            if (!filtered.contains(cr.getPreInitName())) {
+                for (ICardFace face : cr.getAllFaces()) {
+                    addFaceToDbNames(face, cr);
+                }
+                if (cr.hasFunctionalVariants()) {
+                    cacheRuleFlavorNames(cr);
+                }
             }
-            if (cr.hasFunctionalVariants()) {
-                cacheRuleFlavorNames(cr);
-            }
+            noteChange();
         }
         boolean reIndexNecessary = false;
         CardEdition ed = editions.get(setCode);
@@ -558,6 +579,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
 
         if (reIndexNecessary) {
             reIndex(cr);
+            noteChange();
         }
     }
 
@@ -666,6 +688,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
 
         initialized = true;
         reIndex();
+        noteChange();
     }
 
     public void addUnassignedCardPrints(boolean enableUnknownCards) {
@@ -704,6 +727,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
                 }
             }
         }
+        noteChange();
     }
 
     public void addCard(PaperCard paperCard) {
@@ -717,6 +741,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
         CardRules rules = paperCard.getRules();
         allCardsByRules.put(rules, paperCard);
         if (rules.getSplitType() == CardSplitType.None && !rules.hasFunctionalVariants()) {
+            noteChange();
             return;
         }
 
@@ -729,6 +754,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
         namesToAdd.remove(mainName);
         for(String name : namesToAdd)
             allCardsByName.put(name, paperCard);
+        noteChange();
     }
 
     private void reIndex() {
@@ -872,6 +898,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
         if (pc != null) {
             artPrefs.put(cardName, cardRequestForPreferredArt);
             uniqueCardsByRules.put(pc.getRules(), pc);
+            noteChange();
             return true;
         }
         return false;
@@ -894,6 +921,9 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
         if (changed && initialized) {
             reIndex();
         }
+        if (changed) {
+            noteChange();
+        }
     }
 
     public void setPreferredLanguageAvailability(BiPredicate<String, String> availability) {
@@ -901,6 +931,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
         if (initialized) {
             reIndex();
         }
+        noteChange();
     }
 
     /**
@@ -1535,6 +1566,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
             CardRules result = rulesByPrimaryName.get(cardName);
             if (result != null && result.getName().equals(cardName)) { // change properties only
                 result.reinitializeFromRules(rules);
+                noteChange();
                 return result;
             }
 
@@ -1583,6 +1615,7 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
             if (immediateReindex) {
                 reIndex();
             }
+            noteChange();
             return result;
         }
 

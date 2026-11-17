@@ -1406,6 +1406,9 @@ public final class FlatMonteCarloPicker {
             if (api == ApiType.Untap && e instanceof Card && !((Card) e).isTapped()) {
                 continue; // an untap is for something that is tapped
             }
+            if (ActivationGuard.equipTargetClosed(player, ts, e)) {
+                continue; // an Equip after its Equipment's first of the turn: where ActivationGuard.equipTargetOpen lets it go
+            }
             final int rank = targetRank(player, e);
             if (rank > bestRank) {
                 bestRank = rank;
@@ -1605,7 +1608,8 @@ public final class FlatMonteCarloPicker {
         final List<GameEntity> usable = new ArrayList<>();
         for (final GameEntity e : candidates) {
             // never offer the legend the AI already has working as a target to bring back: the legend rule ends it
-            if (e != current && wantsOwn == isOwnSide(player, e) && !ComboGuard.wouldBreakLegendRule(player, ts, e)) {
+            if (e != current && wantsOwn == isOwnSide(player, e) && !ComboGuard.wouldBreakLegendRule(player, ts, e)
+                    && !ActivationGuard.equipTargetClosed(player, ts, e)) { // an Equip after the turn's first
                 usable.add(e);
             }
         }

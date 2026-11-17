@@ -36,6 +36,19 @@ public class StaticAbilityCantTarget {
 
     public static StaticAbility cantTarget(final GameEntity entity, final SpellAbility spellAbility)  {
         final Game game = entity.getGame();
+        if (!game.mayHaveStaticAbilityMode(StaticAbilityMode.CantTarget)) {
+            // no static ability of this game has the mode, so the scan would find none
+            if (StaticAbilityModeProbe.listener != null) {
+                StaticAbilityModeProbe.skipped(game, StaticAbilityMode.CantTarget,
+                        () -> scan(entity, spellAbility) == null);
+            }
+            return null;
+        }
+        return scan(entity, spellAbility);
+    }
+
+    private static StaticAbility scan(final GameEntity entity, final SpellAbility spellAbility) {
+        final Game game = entity.getGame();
         for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.CantTarget)) {

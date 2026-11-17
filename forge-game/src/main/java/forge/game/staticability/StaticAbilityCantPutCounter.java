@@ -14,6 +14,19 @@ public class StaticAbilityCantPutCounter {
 
     public static boolean anyCantPutCounter(final Card card, final CounterType type, final Map<AbilityKey, Object> params) {
         final Game game = card.getGame();
+        if (!game.mayHaveStaticAbilityMode(StaticAbilityMode.CantPutCounter)) {
+            // no static ability of this game has the mode, so the scan would find none
+            if (StaticAbilityModeProbe.listener != null) {
+                StaticAbilityModeProbe.skipped(game, StaticAbilityMode.CantPutCounter,
+                        () -> !scan(card, type, params));
+            }
+            return false;
+        }
+        return scan(card, type, params);
+    }
+
+    private static boolean scan(final Card card, final CounterType type, final Map<AbilityKey, Object> params) {
+        final Game game = card.getGame();
         for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.CantPutCounter)) {
@@ -32,6 +45,18 @@ public class StaticAbilityCantPutCounter {
     }
 
     public static boolean anyCantPutCounter(final Player player, final CounterType type) {
+        final Game game = player.getGame();
+        if (!game.mayHaveStaticAbilityMode(StaticAbilityMode.CantPutCounter)) {
+            // no static ability of this game has the mode, so the scan would find none
+            if (StaticAbilityModeProbe.listener != null) {
+                StaticAbilityModeProbe.skipped(game, StaticAbilityMode.CantPutCounter, () -> !scan(player, type));
+            }
+            return false;
+        }
+        return scan(player, type);
+    }
+
+    private static boolean scan(final Player player, final CounterType type) {
         final Game game = player.getGame();
         for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {

@@ -8,6 +8,18 @@ import forge.game.zone.ZoneType;
 public class StaticAbilityDevotion {
 
     public static int getDevotionMod(final Player player) {
+        final Game game = player.getGame();
+        if (!game.mayHaveStaticAbilityMode(StaticAbilityMode.Devotion)) {
+            // no static ability of this game has the mode, so the scan would add nothing
+            if (StaticAbilityModeProbe.listener != null) {
+                StaticAbilityModeProbe.skipped(game, StaticAbilityMode.Devotion, () -> scan(player) == 0);
+            }
+            return 0;
+        }
+        return scan(player);
+    }
+
+    private static int scan(final Player player) {
         int i = 0;
         final Game game = player.getGame();
         for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
