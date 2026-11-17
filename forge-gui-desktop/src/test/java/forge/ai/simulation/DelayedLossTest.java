@@ -7,16 +7,21 @@ import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 
 import org.testng.annotations.Test;
 
+import forge.game.GameActionUtil;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardFactory;
 import forge.game.card.CounterEnumType;
+import forge.game.cost.CostPart;
+import forge.game.cost.CostReturn;
 import forge.game.keyword.KeywordInterface;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
@@ -121,6 +126,55 @@ public class DelayedLossTest extends FlatMcTestBase {
             out[i] = s.peek(kinds[i]);
         }
         return out;
+    }
+
+    /**
+     * The AI's upkeep with its Pact of Negation's trigger on the stack, a debt due now (3UU): Pact of Negation resolved
+     * in the opponent's first main phase over their Grizzly Bears, then the game played into the AI's upkeep, with no AI
+     * deadline. Run it inside {@code Scoped.under}. The AI controls nothing yet; the trigger (a WrappedAbility) is
+     * returned.
+     */
+    private SpellAbility upkeepWithThePactsTrigger() {
+        setUpGame();
+        noDeadline();
+        fillLibrary(ai, 10);
+        fillLibrary(opp, 10);
+        at(PhaseType.MAIN1, opp);
+        final SpellAbility bears = onStack("Grizzly Bears", opp, null);
+        onStack("Pact of Negation", ai, bears);
+        game.getPhaseHandler().onStackResolved();
+        playUntilStackClear(game);
+        for (int i = 0; i < 500 && !game.isGameOver()
+                && !(game.getPhaseHandler().is(PhaseType.UPKEEP, ai) && !game.getStack().isEmpty()); i++) {
+            game.getPhaseHandler().mainLoopStep();
+        }
+        assertTrue(game.getPhaseHandler().is(PhaseType.UPKEEP, ai) && !game.getStack().isEmpty(),
+                "the AI's upkeep with the Pact's trigger on the stack:\n" + gameStateToString(game));
+        final SpellAbility trigger = game.getStack().peekAbility();
+        assertEquals(trigger.getApi(), ApiType.LosesGame, "the Pact's pay-or-lose trigger is on top: " + trigger);
+        assertTrue(DelayedLoss.owed(ai, null).hasNow(), "a debt due now");
+        return trigger;
+    }
+
+    /** A spell's alternative-cost version with a part of this kind (Daze's Island return), the AI its activator. */
+    private SpellAbility alternative(final SpellAbility sa, final Class<? extends CostPart> part) {
+        for (final SpellAbility alt : GameActionUtil.getAlternativeCosts(sa, ai, true)) {
+            if (alt.getPayCosts() != null && alt.getPayCosts().hasSpecificCostType(part)) {
+                alt.setActivatingPlayer(ai);
+                return alt;
+            }
+        }
+        throw new AssertionError(sa.getHostCard() + " has no alternative cost with a " + part.getSimpleName());
+    }
+
+    /** The cards put onto the AI's battlefield in a seeded shuffle of this order, so their ids follow the shuffle. */
+    private List<String> board(final List<String> names, final long seed) {
+        final List<String> order = new ArrayList<>(names);
+        Collections.shuffle(order, new Random(seed));
+        for (final String name : order) {
+            put(name, ai, ZoneType.Battlefield);
+        }
+        return order;
     }
 
     // --------------------------------------------------------------------------------------------- recognition
@@ -439,5 +493,97 @@ public class DelayedLossTest extends FlatMcTestBase {
                     "the delayed trigger left the handler's list when it fired");
             return null;
         });
+    }
+
+    // --------------------------------------------------------------------------------------------- debt protection
+
+    /**
+     * DESIGN.md section 4 (round 2's B1): a debt due now is counted from what is untapped now. Daze's alternative cost
+     * returns an Island: one of the five untapped Islands, in the worst case.
+     */
+    @Test(timeOut = 300_000)
+    public void aDebtDueNowCountsOnlyWhatIsUntappedNow() {
+        Scoped.under(new SimScope(41L), () -> {
+            upkeepWithThePactsTrigger();
+            final List<Card> untapped = put("Island", 5, ai, ZoneType.Battlefield);
+            put("Island", ai, ZoneType.Battlefield).setTapped(true);
+            put("Island", ai, ZoneType.Hand);
+            final SpellAbility daze = alternative(spell("Daze"), CostReturn.class);
+            assertEquals(problemOf(daze), DelayedLoss.DEBT_DUE_NOW,
+                    "Daze returns an untapped Island: four untapped Islands are left for 3UU");
+            final DelayedLoss.Removal anIsland = new DelayedLoss.Removal(List.of(untapped.get(0)), 0);
+            assertEquals(DelayedLoss.count(ai, DelayedLoss.Due.NOW, anIsland).units().size(), 4,
+                    "what pays a debt due now: the untapped Islands left");
+            assertEquals(DelayedLoss.count(ai, DelayedLoss.Due.NEXT, anIsland).units().size(), 6,
+                    "the next-upkeep count would have said 6: the tapped Island untaps, the hand's Island is the drop");
+            return null;
+        });
+    }
+
+    /**
+     * RULINGS-R3 M20: for a debt due now a summoning-sick creature gives no tap unit. Five untapped Islands and Birds of
+     * Paradise: Daze's alternative cost returns an Island, which the Birds replace only when they can tap.
+     */
+    @Test(timeOut = 300_000)
+    public void aSummoningSickCreatureDoesNotPayADebtDueNow() {
+        for (final boolean sick : new boolean[] { true, false }) {
+            Scoped.under(new SimScope(43L), () -> {
+                upkeepWithThePactsTrigger();
+                put("Island", 5, ai, ZoneType.Battlefield);
+                final Card birds = put("Birds of Paradise", ai, ZoneType.Battlefield);
+                birds.setSickness(sick);
+                assertEquals(birds.isSick(), sick, "Birds of Paradise is summoning-sick: " + sick);
+                final String v = problemOf(alternative(spell("Daze"), CostReturn.class));
+                if (sick) {
+                    assertEquals(v, DelayedLoss.DEBT_DUE_NOW, "a sick Birds cannot tap: four Islands for 3UU");
+                } else {
+                    assertNull(v, "four Islands and the Birds pay 3UU after Daze's return");
+                }
+                return null;
+            });
+        }
+    }
+
+    /**
+     * DESIGN.md section 4 (finding I5), with RULINGS-R3 M29(d): the same two boards built in three orders (seeded
+     * shuffles of the order the AI's permanents are made in, so of their ids) give the same verdicts. Neither board
+     * holds two painful sources of different colors with the same pain, so (pain, card id) order never chooses
+     * between colors. The first board sits at the edge of the pain budget: Mana Confluence and City of Brass (pain 1,
+     * any color), Ancient Tomb (2), Tarnished Citadel (3; its {C} is painless); at life 3 both pain-1 sources fit, at
+     * life 2 only one. The second sits at the edge of a matching: Underground Sea and Volcanic Island are its only blue,
+     * so with a Pact of Negation of the AI's on the stack (a debt due next upkeep) Crop Rotation's sacrifice of either
+     * leaves one U.
+     */
+    @Test
+    public void theVerdictDoesNotDependOnBoardOrder() {
+        final List<String> painEdge = List.of("Island", "Island", "Mana Confluence", "City of Brass", "Ancient Tomb",
+                "Tarnished Citadel");
+        final List<String> matchingEdge = List.of("Underground Sea", "Volcanic Island", "Badlands", "Swamp", "Swamp",
+                "Mountain");
+        final List<List<String>> orders = new ArrayList<>();
+        for (final long seed : new long[] { 1L, 2L, 3L }) {
+            final List<String> verdicts = new ArrayList<>();
+            for (final int life : new int[] { 3, 2 }) {
+                opponentsTurn();
+                final List<String> order = board(painEdge, seed);
+                if (life == 3) {
+                    orders.add(order);
+                }
+                ai.setLife(life, null);
+                verdicts.add(pactOfNegation());
+            }
+            opponentsTurn();
+            orders.add(board(matchingEdge, seed));
+            verdicts.add(pactOfNegation());
+            onStack("Pact of Negation", ai, onStack("Grizzly Bears", opp, null));
+            verdicts.add(problemOf(spell("Crop Rotation")));
+            assertEquals(verdicts, Arrays.asList(null, DelayedLoss.PACT_UNPAYABLE, null, DelayedLoss.DEBT_UNPROTECTED),
+                    "seed " + seed + ": pain edge at life 3 and 2, the duals, Crop Rotation with the debt pending; orders "
+                            + orders);
+        }
+        assertFalse(orders.get(0).equals(orders.get(2)) && orders.get(2).equals(orders.get(4)),
+                "the seeds put the pain board down in different orders: " + orders);
+        assertFalse(orders.get(1).equals(orders.get(3)) && orders.get(3).equals(orders.get(5)),
+                "and the duals: " + orders);
     }
 }

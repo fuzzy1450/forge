@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import forge.ai.ComputerUtilMana;
@@ -25,11 +26,18 @@ import forge.game.card.CardUtil;
 import forge.game.card.CounterEnumType;
 import forge.game.card.ICardTraitChanges;
 import forge.game.cost.Cost;
+import forge.game.cost.CostDamage;
+import forge.game.cost.CostDiscard;
+import forge.game.cost.CostExile;
+import forge.game.cost.CostGainControl;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostPartMana;
 import forge.game.cost.CostPayLife;
+import forge.game.cost.CostPutCardToLib;
+import forge.game.cost.CostReturn;
 import forge.game.cost.CostSacrifice;
 import forge.game.cost.CostTap;
+import forge.game.cost.CostTapType;
 import forge.game.keyword.Keyword;
 import forge.game.keyword.KeywordInterface;
 import forge.game.phase.PhaseHandler;
@@ -403,23 +411,210 @@ public final class DelayedLoss {
     // ---------------------------------------------------------------------------------------------- removal (1.7)
 
     /**
-     * What a play's cost would take before a debt is paid: cards (from the battlefield, or from the hand while the
-     * land drop is counted) and life. {@link #count} leaves them out. Built by debt protection.
+     * What a play's cost would take before a debt is paid (DESIGN.md 1.7): the cards it takes whatever the payment
+     * chooses, the choices of each part that takes one card (the payment takes one of each group), and life.
+     * {@link #count} leaves a removal's cards and life out; {@link #cases} spells out the payment's picks.
      */
     public static final class Removal {
         /** Nothing taken. */
         public static final Removal NONE = new Removal(Collections.emptyList(), 0);
+        /** More ways to pay than this are not tried one by one: every relevant choice is taken at once (refuses more). */
+        static final int MAX_CASES = 64;
 
         private final List<Card> cards;
         private final int life;
+        private final boolean lifeUnread;
+        private final List<List<Card>> oneOf;
 
         Removal(final List<Card> cards, final int life) {
-            this.cards = Collections.unmodifiableList(new ArrayList<>(cards));
-            this.life = life;
+            this(cards, life, false, Collections.emptyList());
         }
 
+        private Removal(final List<Card> cards, final int life, final boolean lifeUnread,
+                        final List<List<Card>> oneOf) {
+            this.cards = Collections.unmodifiableList(new ArrayList<>(cards));
+            this.life = life;
+            this.lifeUnread = lifeUnread;
+            this.oneOf = Collections.unmodifiableList(new ArrayList<>(oneOf));
+        }
+
+        /** Whether the cost takes nothing the count reads: no card, no choice of one, no life. */
         public boolean isEmpty() {
-            return cards.isEmpty() && life == 0;
+            return cards.isEmpty() && oneOf.isEmpty() && life == 0 && !lifeUnread;
+        }
+
+        /**
+         * The parts of a cost that can take what a debt's count relies on (DESIGN.md 1.7, round 2's B1 and M5), by
+         * when the debt is due:
+         * <ul>
+         *   <li>either: a sacrifice, a return, an exile or a put-into-library from the battlefield, or a gain of
+         *       control (the AI's battlefield cards valid for the part's type; a part paid from its source takes the
+         *       source), and a life payment or damage to the AI;</li>
+         *   <li>{@link Due#NOW}: also a tap of the source, or of untapped permanents of a type: nothing untaps before
+         *       the trigger resolves. A hand part is free then, no land drop being counted;</li>
+         *   <li>{@link Due#NEXT}: also a discard, or an exile or a put-into-library from the hand, while the land drop
+         *       is still to come, and only of lands: the drop is the hand's only unit. A tap is free: a counted source
+         *       untaps.</li>
+         * </ul>
+         * A part that takes one card adds a group of its choices, one of which the payment takes; a part that takes
+         * more, X or all takes every valid choice. A life amount that is not a number is noted. A part that cannot be
+         * read takes every card of the AI's battlefield (and its hand's lands, due next upkeep). Reads only: script
+         * parameters, zones and {@code CardLists.getValidCards}.
+         */
+        public static Removal of(final Player ai, final Cost cost, final SpellAbility judged, final Due due) {
+            if (ai == null || cost == null) {
+                return NONE;
+            }
+            final boolean now = due == Due.NOW;
+            final Card host = judged == null ? null : judged.getHostCard();
+            final List<Card> cards = new ArrayList<>();
+            final List<List<Card>> oneOf = new ArrayList<>();
+            int life = 0;
+            boolean lifeUnread = false;
+            Boolean dropToCome = null; // read once, for a hand part due next upkeep
+            for (final CostPart part : cost.getCostParts()) {
+                try {
+                    if (part instanceof CostPayLife || part instanceof CostDamage) {
+                        final Integer amount = part.convertAmount();
+                        if (amount == null) {
+                            lifeUnread = true;
+                        } else {
+                            life += Math.max(0, amount);
+                        }
+                    } else if (part instanceof CostTap) {
+                        if (now && host != null && host.isInZone(ZoneType.Battlefield)
+                                && ai.equals(host.getController())) {
+                            cards.add(host);
+                        }
+                    } else if (part instanceof CostTapType) {
+                        if (now) {
+                            choose(ai, part, host, judged, ZoneType.Battlefield, cards, oneOf);
+                        }
+                    } else if (fromBattlefield(part)) {
+                        choose(ai, part, host, judged, ZoneType.Battlefield, cards, oneOf);
+                    } else if (!now && fromHand(part)) {
+                        if (dropToCome == null) {
+                            dropToCome = landMayBePlayed(ai);
+                        }
+                        if (dropToCome) {
+                            choose(ai, part, host, judged, ZoneType.Hand, cards, oneOf);
+                        }
+                    }
+                } catch (final AITimeoutTracker.Expired e) {
+                    throw e;
+                } catch (final RuntimeException e) {
+                    cards.addAll(ai.getCardsIn(ZoneType.Battlefield)); // what cannot be read is not counted on
+                    if (!now) {
+                        for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                            if (c.isLand()) {
+                                cards.add(c);
+                            }
+                        }
+                    }
+                }
+            }
+            return new Removal(cards, life, lifeUnread, oneOf);
+        }
+
+        private static boolean fromBattlefield(final CostPart part) {
+            return part instanceof CostSacrifice || part instanceof CostReturn || part instanceof CostGainControl
+                    || part instanceof CostExile && ((CostExile) part).getFrom().contains(ZoneType.Battlefield)
+                    || part instanceof CostPutCardToLib
+                    && ((CostPutCardToLib) part).getFrom() == ZoneType.Battlefield;
+        }
+
+        private static boolean fromHand(final CostPart part) {
+            return part instanceof CostDiscard
+                    || part instanceof CostExile && ((CostExile) part).getFrom().contains(ZoneType.Hand)
+                    || part instanceof CostPutCardToLib && ((CostPutCardToLib) part).getFrom() == ZoneType.Hand;
+        }
+
+        /**
+         * A part's choices among the AI's cards of a zone, the hand's lands only and a tap's untapped cards only: a
+         * group when the part takes one card, else every choice.
+         */
+        private static void choose(final Player ai, final CostPart part, final Card host, final SpellAbility judged,
+                                   final ZoneType zone, final List<Card> cards, final List<List<Card>> oneOf) {
+            final List<Card> inZone = new ArrayList<>(ai.getCardsIn(zone));
+            if (part.payCostFromSource()) {
+                if (host != null && inZone.contains(host)) {
+                    cards.add(host);
+                }
+                return;
+            }
+            final String type = part.getType().replace("+WithSameName", "").replace("+WithDifferentNames", "");
+            final List<Card> valid;
+            if ("Hand".equals(type) || "Random".equals(type) || type.contains("X")) {
+                valid = inZone;
+            } else if ("LastDrawn".equals(type)) {
+                final Card last = ai.getLastDrawnCard();
+                valid = last != null && inZone.contains(last) ? List.of(last) : List.of();
+            } else {
+                valid = CardLists.getValidCards(inZone, type.split(";"), ai, host, judged);
+            }
+            final List<Card> choices = new ArrayList<>();
+            for (final Card c : valid) {
+                if (zone == ZoneType.Hand ? c.isLand() : !(part instanceof CostTapType) || !c.isTapped()) {
+                    choices.add(c);
+                }
+            }
+            final Integer n = part.convertAmount();
+            if ("Hand".equals(type) || n == null || n > 1) {
+                cards.addAll(choices);
+            } else if (n == 1 && !choices.isEmpty()) {
+                oneOf.add(choices);
+            }
+        }
+
+        /**
+         * Each way the payment can take what the count relies on: the cards taken whatever it chooses, with one
+         * relevant choice of each group. A group with no relevant choice takes nothing the count reads. With more
+         * than {@link #MAX_CASES} ways, one case takes every relevant choice at once.
+         */
+        List<Removal> cases(final Predicate<Card> relevant) {
+            final List<List<Card>> groups = new ArrayList<>();
+            int ways = 1;
+            for (final List<Card> group : oneOf) {
+                final List<Card> picks = new ArrayList<>();
+                for (final Card c : group) {
+                    if (relevant.test(c) && !picks.contains(c)) {
+                        picks.add(c);
+                    }
+                }
+                if (!picks.isEmpty()) {
+                    groups.add(picks);
+                    ways = ways > MAX_CASES ? ways : ways * picks.size();
+                }
+            }
+            List<List<Card>> taken = new ArrayList<>();
+            taken.add(new ArrayList<>(cards));
+            if (ways > MAX_CASES) {
+                for (final List<Card> group : groups) {
+                    taken.get(0).addAll(group);
+                }
+            } else {
+                for (final List<Card> group : groups) {
+                    final List<List<Card>> next = new ArrayList<>();
+                    for (final List<Card> sofar : taken) {
+                        for (final Card c : group) {
+                            final List<Card> one = new ArrayList<>(sofar);
+                            one.add(c);
+                            next.add(one);
+                        }
+                    }
+                    taken = next;
+                }
+            }
+            final List<Removal> out = new ArrayList<>();
+            for (final List<Card> t : taken) {
+                out.add(new Removal(t, life, lifeUnread, Collections.emptyList()));
+            }
+            return out;
+        }
+
+        /** Whether a life amount of the cost cannot be read as a number. */
+        boolean lifeUnread() {
+            return lifeUnread;
         }
 
         /** Whether the card is among those taken (identity: the cards of this game). */
@@ -572,6 +767,71 @@ public final class DelayedLoss {
         /** The same sources counted without pain: each with its painless option, a source with none left out. */
         public Mana painless() {
             return painlessOnly ? this : new Mana(sources, landDrop, true);
+        }
+
+        /**
+         * DESIGN.md 1.7, a mana payment while a debt is due now: whether the debt stays covered whichever of these
+         * sources a payment of mana value {@code t} taps. Each counted source makes at least one mana, so the payment
+         * taps at most t of them, and one more for each filter it uses (a Signet's {1} comes from another source): k =
+         * t + min(t, the counted filters). Two worst cases decide it for a one-color debt, and each is tested for the
+         * whole coverage: the k sources with the most units taken off, and, for each color the pips ask, the k with
+         * the most units of that color. Mana a tapped source makes beyond the payment's need is not counted.
+         */
+        public boolean paysAfterAnyTapped(final Debt debt, final int t) {
+            if (debt == null) {
+                return true;
+            }
+            if (t <= 0) {
+                return pays(debt);
+            }
+            final int k = t + Math.min(t, filters());
+            if (!without(most(k, WUBRG | C)).pays(debt)) {
+                return false;
+            }
+            final List<Integer> asked = new ArrayList<>();
+            for (final int pip : debt.pips) {
+                if (pip != 0 && !asked.contains(pip)) {
+                    asked.add(pip);
+                }
+            }
+            for (final int mask : asked) {
+                if (!without(most(k, mask)).pays(debt)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /** The k counted sources with the most units of these colors; ties by more units in all, then the card id. */
+        private List<Source> most(final int k, final int mask) {
+            final List<Source> counted = new ArrayList<>();
+            for (final Source s : sources) {
+                if (option(s) != null) {
+                    counted.add(s);
+                }
+            }
+            counted.sort(Comparator.comparingInt((Source s) -> -unitsOf(option(s), mask))
+                    .thenComparingInt(s -> -option(s).units.length).thenComparingInt(s -> s.card.getId()));
+            return counted.subList(0, Math.min(k, counted.size()));
+        }
+
+        private static int unitsOf(final Option o, final int mask) {
+            int n = 0;
+            for (final int u : o.units) {
+                n += (u & mask) != 0 ? 1 : 0;
+            }
+            return n;
+        }
+
+        /** The same count with these sources tapped for another payment. */
+        private Mana without(final List<Source> tapped) {
+            final List<Source> left = new ArrayList<>();
+            for (final Source s : sources) {
+                if (!tapped.contains(s)) {
+                    left.add(s);
+                }
+            }
+            return new Mana(left, landDrop, painlessOnly);
         }
 
         /** The counted sources' cards, in count order. */
@@ -1454,10 +1714,81 @@ public final class DelayedLoss {
     }
 
     /**
-     * DESIGN.md 1.7, also S6b's test of an unless cost: null, {@link #DEBT_UNPROTECTED} or {@link #DEBT_DUE_NOW}.
+     * DESIGN.md 1.7, debt protection: null, {@link #DEBT_UNPROTECTED} or {@link #DEBT_DUE_NOW}. While the reader finds
+     * a debt, a play whose cost can take what the count relies on (a counted source, the hand land the land drop
+     * needs, the life the pain needs) is refused unless the debt stays covered without it, with each of the payment's
+     * choices taken in turn; a debt not covered before such a play is not covered after it. While a debt is due now
+     * (a Pact's trigger on the stack), the count is of what is untapped now, a tap is a removal too, a mana part of
+     * mana value T is allowed only while the painless sources cover the debt whichever T of them the payment taps,
+     * and an X is refused. When both kinds are owed, both must stay covered.
+     * <p>
+     * The reader comes first: in a game where no Pact was cast it finds nothing after two empty scans, and the cost is
+     * never looked at.
      */
     static String protection(final Player ai, final Cost cost, final SpellAbility judged) {
-        return null; // debt protection (DESIGN.md 1.7, RULINGS-R3 M17, M18, M28) is the next task's: until then none
+        final Debts owed = owed(ai, judged);
+        if (owed.isEmpty() || cost == null) {
+            return null;
+        }
+        final int t = manaValue(cost);
+        if (owed.hasNow()) {
+            final String now = guard(ai, cost, judged, Due.NOW, owed.now(), t);
+            if (now != null) {
+                return now;
+            }
+        }
+        return owed.hasNext() ? guard(ai, cost, judged, Due.NEXT, owed.next(), t) : null;
+    }
+
+    /** Debt protection against the debts due at one time (DESIGN.md 1.7). */
+    private static String guard(final Player ai, final Cost cost, final SpellAbility judged, final Due due,
+                                final Debt debt, final int t) {
+        final boolean now = due == Due.NOW;
+        final String code = now ? DEBT_DUE_NOW : DEBT_UNPROTECTED;
+        if (now && t < 0) {
+            return code; // an X is chosen after the decision: it may spend anything
+        }
+        final Removal removal = Removal.of(ai, cost, judged, due);
+        final boolean spends = now && t > 0; // for a debt due next upkeep mana costs nothing: every counted source untaps
+        if (removal.isEmpty() && !spends) {
+            return null;
+        }
+        final List<Card> counted = count(ai, due, Removal.NONE).cards();
+        final Predicate<Card> relevant = c -> counted.contains(c) || c.isArtifact() || c.isInZone(ZoneType.Hand);
+        for (final Removal taken : removal.cases(relevant)) {
+            final Mana left = count(ai, due, taken);
+            if (!left.pays(debt)) {
+                return code; // uncovered after the play: what it takes, or what it spends, the debt needed
+            }
+            if (removal.lifeUnread() && !left.painless().pays(debt)) {
+                return code; // a life cost that is not a number, while the cover needs a painful unit
+            }
+            if (spends && !left.painless().paysAfterAnyTapped(debt, t)) {
+                return code; // 1.7: whichever t painless sources the payment taps, the rest must cover the debt
+            }
+        }
+        return null;
+    }
+
+    /** DESIGN.md 1.7's T: the mana value of a cost's mana part, 0 without one, -1 with an X (chosen later). */
+    static int manaValue(final Cost cost) {
+        if (cost == null) {
+            return 0;
+        }
+        int t = 0;
+        for (final CostPart part : cost.getCostParts()) {
+            if (part instanceof CostPartMana) {
+                final ManaCost mana = ((CostPartMana) part).getMana();
+                if (mana == null) {
+                    continue;
+                }
+                if (mana.countX() > 0) {
+                    return -1;
+                }
+                t += mana.getCMC();
+            }
+        }
+        return t;
     }
 
     /**

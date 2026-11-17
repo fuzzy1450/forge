@@ -6,8 +6,12 @@ import org.testng.annotations.Test;
 import forge.ai.simulation.ComboGuard;
 import forge.ai.simulation.ComboPlan;
 import forge.game.Game;
+import forge.game.GameActionUtil;
+import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CounterEnumType;
+import forge.game.cost.CostPart;
+import forge.game.cost.CostPayLife;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -753,5 +757,185 @@ public class FlatMonteCarloPactGuardTest extends AITest {
                 assertAllowed("two Forests", v);
             }
         }
+    }
+
+    // ------------------------------------------------------------------------ debt protection (DESIGN.md 1.7)
+    // While a Pact's debt is pending, a play whose cost can take what the debt's count relies on is refused unless the
+    // debt stays covered without it ("debt-unprotected"); while the Pact's trigger is on the stack at the AI's upkeep,
+    // a play is refused when its costs, mana included, could leave that debt uncovered ("debt-due-now").
+
+    /** Pact of the Titan resolved in the AI's own first main phase: a debt due at its next upkeep (4R). */
+    private void resolvePactOfTheTitan(final Game game, final Player ai) {
+        fillLibrary(ai, 10);
+        fillLibrary(opponentOf(game, ai), 10);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        onStack(game, "Pact of the Titan", ai, null);
+        playUntilStackClear(game);
+        AssertJUnit.assertTrue("Pact of the Titan resolved: its Giant is on the battlefield",
+                ai.getCreaturesInPlay().anyMatch(Card::isToken));
+    }
+
+    /** Pact of Negation resolved in the opponent's first main phase over their Grizzly Bears: a debt due next (3UU). */
+    private void resolvePactOfNegation(final Game game, final Player ai) {
+        final Player opp = opponentOf(game, ai);
+        fillLibrary(ai, 10);
+        fillLibrary(opp, 10);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opp);
+        final SpellAbility bears = onStack(game, "Grizzly Bears", opp, null);
+        onStack(game, "Pact of Negation", ai, bears);
+        game.getPhaseHandler().onStackResolved();
+        playUntilStackClear(game);
+        AssertJUnit.assertEquals("Pact of Negation resolved: the Bears were countered", 1,
+                countCardsWithName(game, "Grizzly Bears", ZoneType.Graveyard));
+    }
+
+    /**
+     * The AI's upkeep with its Pact of Negation's trigger on the stack, a debt due now (3UU): the Pact resolved in the
+     * opponent's first main phase, then the game played into the AI's upkeep with no AI deadline. The AI controls
+     * nothing yet; the trigger is returned.
+     */
+    private SpellAbility upkeepWithThePactsTrigger(final Game game, final Player ai) {
+        game.AI_TIMEOUT = Integer.MAX_VALUE;
+        game.AI_CAN_USE_TIMEOUT = false;
+        resolvePactOfNegation(game, ai);
+        for (int i = 0; i < 500 && !game.isGameOver()
+                && !(game.getPhaseHandler().is(PhaseType.UPKEEP, ai) && !game.getStack().isEmpty()); i++) {
+            game.getPhaseHandler().mainLoopStep();
+        }
+        AssertJUnit.assertTrue("the AI's upkeep with the Pact's trigger on the stack:\n" + gameStateToString(game),
+                game.getPhaseHandler().is(PhaseType.UPKEEP, ai) && !game.getStack().isEmpty());
+        final SpellAbility trigger = game.getStack().peekAbility();
+        AssertJUnit.assertEquals("the Pact's pay-or-lose trigger is on top", ApiType.LosesGame, trigger.getApi());
+        return trigger;
+    }
+
+    /** A spell's alternative-cost version with a part of this kind (Force of Will's life), the AI its activator. */
+    private static SpellAbility alternative(final Player ai, final SpellAbility sa, final Class<? extends CostPart> part) {
+        for (final SpellAbility alt : GameActionUtil.getAlternativeCosts(sa, ai, true)) {
+            if (alt.getPayCosts() != null && alt.getPayCosts().hasSpecificCostType(part)) {
+                alt.setActivatingPlayer(ai);
+                return alt;
+            }
+        }
+        throw new AssertionError(sa.getHostCard() + " has no alternative cost with a " + part.getSimpleName());
+    }
+
+    /** Finding C3: Crop Rotation's sacrifice would take a land the pending Pact of the Titan's 4R needs. */
+    @Test(timeOut = 120_000)
+    public void cropRotationIsRefusedWhileTheDebtNeedsItsLand() {
+        for (final int lands : new int[] { 5, 6 }) {
+            final Game game = initAndCreateGame();
+            final Player ai = game.getPlayers().get(1);
+            resolvePactOfTheTitan(game, ai);
+            game.getPhaseHandler().devModeSet(PhaseType.MAIN1, opponentOf(game, ai));
+            addCards("Mountain", lands - 1, ai);
+            addCard("Forest", ai);
+            final String v = verdict(ai, fromHand(ai, "Crop Rotation"));
+            if (lands == 5) {
+                AssertJUnit.assertEquals("4 Mountains and a Forest are exactly 4R: a sacrificed Mountain leaves 4",
+                        "debt-unprotected", v);
+            } else {
+                assertAllowed("a sixth land: whichever is sacrificed, 4R is left", v);
+            }
+        }
+    }
+
+    /**
+     * Finding C3: Force of Will's alternative cost pays 1 life, which the pending Pact of Negation's cover needs at
+     * life 2 (Mana Confluence fits at 2, 2 - 1 >= 1, and not at 1).
+     */
+    @Test(timeOut = 120_000)
+    public void forceOfWillsLifeIsBudgetedWhileADebtIsPending() {
+        for (final int life : new int[] { 2, 20 }) {
+            final Game game = initAndCreateGame();
+            final Player ai = game.getPlayers().get(1);
+            resolvePactOfNegation(game, ai);
+            addCards("Island", 4, ai);
+            addCard("Mana Confluence", ai);
+            ai.setLife(life, null);
+            addCardToZone("Brainstorm", ai, ZoneType.Hand); // the blue card the alternative cost exiles
+            final String v = verdict(ai, alternative(ai, fromHand(ai, "Force of Will"), CostPayLife.class));
+            if (life == 2) {
+                AssertJUnit.assertEquals("after the 1 life, Mana Confluence no longer fits (1 - 1 < 1): 4 for 3UU",
+                        "debt-unprotected", v);
+            } else {
+                assertAllowed("at 20 life Mana Confluence still fits after it", v);
+            }
+        }
+    }
+
+    /**
+     * Round 2's M5: on the AI's own turn with a land play left, the land in hand is the debt's fifth unit, and
+     * Tormenting Voice's additional cost can discard it.
+     */
+    @Test(timeOut = 120_000)
+    public void discardingTheLastLandInHandIsRefusedWhileTheDropIsCounted() {
+        for (final int handLands : new int[] { 1, 2 }) {
+            final Game game = initAndCreateGame();
+            final Player ai = game.getPlayers().get(1);
+            resolvePactOfTheTitan(game, ai);
+            addCards("Mountain", 4, ai);
+            for (int i = 0; i < handLands; i++) {
+                addCardToZone("Mountain", ai, ZoneType.Hand);
+            }
+            AssertJUnit.assertEquals("no land played yet this turn", 0, ai.getLandsPlayedThisTurn());
+            final String v = verdict(ai, fromHand(ai, "Tormenting Voice"));
+            if (handLands == 1) {
+                AssertJUnit.assertEquals("discarding the Mountain in hand takes the land drop: 4 for 4R",
+                        "debt-unprotected", v);
+            } else {
+                assertAllowed("a second land in hand keeps the drop", v);
+            }
+        }
+    }
+
+    /**
+     * Round 2's B1: with the Pact's trigger on the stack (a debt due now) and an opponent's 5-mana creature spell above
+     * it, Force of Will's alternative cost stays open while the debt stays covered without the life; a hard-cast
+     * answer needs its mana value in painless sources to spare; Mana Confluence is painful, so it is never spared.
+     */
+    @Test(timeOut = 300_000)
+    public void forceOfWillsAlternativeCostIsAllowedWhileTheDebtDueNowStaysCovered() {
+        Game game = initAndCreateGame();
+        Player ai = game.getPlayers().get(1);
+        upkeepWithThePactsTrigger(game, ai);
+        SpellAbility angel = onStack(game, "Serra Angel", opponentOf(game, ai), null);
+        addCards("Island", 5, ai);
+        ai.setLife(20, null);
+        addCardToZone("Brainstorm", ai, ZoneType.Hand);
+        SpellAbility force = alternative(ai, fromHand(ai, "Force of Will"), CostPayLife.class);
+        force.getTargets().add(angel);
+        assertAllowed("Island x5: 1 life of 20 takes nothing the debt needs", verdict(ai, force));
+        final SpellAbility counterspell = fromHand(ai, "Counterspell");
+        counterspell.getTargets().add(angel);
+        AssertJUnit.assertEquals("Island x5: Counterspell taps two, 5 - 2 < 5", "debt-due-now",
+                verdict(ai, counterspell));
+        addCards("Island", 2, ai);
+        assertAllowed("Island x7: two to spare", verdict(ai, counterspell));
+
+        game = initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        upkeepWithThePactsTrigger(game, ai);
+        angel = onStack(game, "Serra Angel", opponentOf(game, ai), null);
+        addCards("Island", 4, ai);
+        addCard("Mana Confluence", ai);
+        ai.setLife(2, null);
+        addCardToZone("Brainstorm", ai, ZoneType.Hand);
+        force = alternative(ai, fromHand(ai, "Force of Will"), CostPayLife.class);
+        force.getTargets().add(angel);
+        AssertJUnit.assertEquals("Mana Confluence the fifth source at life 2: after the 1 life, 1 - 1 < 1",
+                "debt-due-now", verdict(ai, force));
+
+        game = initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        upkeepWithThePactsTrigger(game, ai);
+        angel = onStack(game, "Serra Angel", opponentOf(game, ai), null);
+        addCards("Island", 6, ai);
+        addCard("Mana Confluence", ai);
+        ai.setLife(20, null);
+        final SpellAbility again = fromHand(ai, "Counterspell");
+        again.getTargets().add(angel);
+        AssertJUnit.assertEquals("Island x6 and Mana Confluence: the painful Confluence is never spared, 6 - 2 < 5",
+                "debt-due-now", verdict(ai, again));
     }
 }
