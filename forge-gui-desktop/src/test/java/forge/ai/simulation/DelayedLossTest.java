@@ -859,7 +859,10 @@ public class DelayedLossTest extends FlatMcTestBase {
 
     /**
      * S6's predicate (DESIGN.md D28): the AI's own pay-or-lose debt by its shape, an own LosesGame with an UnlessCost$,
-     * read through the trigger's wrapper or on the ability it wraps; S6b never declines it.
+     * read through the trigger's wrapper or on the ability it wraps; S6b never declines it. At the payment the ability
+     * asked is the LosesGame the trigger wraps (WrappedAbility.resolve plays it, AbilityUtils.handleUnlessCost passes it
+     * to payCostToPreventEffect), while the trigger itself, still on the stack until it resolves, is a debt due now:
+     * only the exemption keeps that debt from refusing its own payment (T2 review finding 1).
      */
     @Test(timeOut = 300_000)
     public void theAIsOwnPactDebtIsReadByItsShape() {
@@ -874,6 +877,9 @@ public class DelayedLossTest extends FlatMcTestBase {
             assertFalse(DelayedLoss.isOwnPactDebt(ai, null), "nothing");
             assertFalse(DelayedLoss.declinesUnlessPayment(ai, trigger, new Cost("3 U U", true)),
                     "S6b never declines the AI's own debt, though three Islands cannot pay it");
+            assertFalse(DelayedLoss.declinesUnlessPayment(ai, ((WrappedAbility) trigger).getWrappedAbility(),
+                    new Cost("3 U U", true)), "nor at the payment, asked of the LosesGame the trigger wraps: the trigger"
+                    + " left on the stack is the debt due now, and three Islands do not cover it");
             return null;
         });
     }
