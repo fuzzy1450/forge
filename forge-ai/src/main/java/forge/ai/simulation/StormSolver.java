@@ -567,8 +567,11 @@ public final class StormSolver {
             }
             for (final SpellAbility sa : moves) {
                 final Card host = sa.getHostCard();
-                if (sa.isLandAbility() || host == null || ComboPlan.isStormFinisher(host) || combos.wastesTutor(sa)) {
-                    continue; // lands are the AI's own business, and the storm card is kept for the lethal cast
+                if (sa.isLandAbility() || host == null || ComboPlan.isStormFinisher(host) || combos.wastesTutor(sa)
+                        || delayedLoss(sa)) {
+                    // lands are the AI's own business, the storm card is kept for the lethal cast, and a Pact, an extra
+                    // turn that loses or Glorious End is never a step of a line, kill or setup (delayedLoss)
+                    continue;
                 }
                 final boolean fromGy = host.isInZone(ZoneType.Graveyard);
                 if (fromGy && node.gyCast.contains(host.getId())) {
@@ -670,6 +673,24 @@ public final class StormSolver {
         }
         child.releaseCopier(); // the play is applied: the child no longer needs its parent
         return child;
+    }
+
+    /**
+     * Whether the play is one of the delayed-loss cards (MTG_DeckMaker's self-kill fix, DESIGN.md S2): a Pact, an extra
+     * turn that ends in a loss, Glorious End ({@link DelayedLoss#kind}). No line holds one, kill or setup: the kill test
+     * is arithmetic and the finisher is never resolved in the search, so a Pact or a Final Fortune in a line is a bet
+     * that the finisher is not answered, and a Pact's debt cannot be read in a copy, which holds no delayed trigger. A
+     * kill that needs one is not taken. False when the script cannot be read, as for a play nothing flags. Script
+     * parameters only: in a game whose decks list none of the eleven cards the search expands the same nodes.
+     */
+    private static boolean delayedLoss(final SpellAbility sa) {
+        try {
+            return DelayedLoss.kind(sa) != null;
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return false;
+        }
     }
 
     /** Lets the node keep its game; the node that has kept it longest lets go of its game when there are too many. */

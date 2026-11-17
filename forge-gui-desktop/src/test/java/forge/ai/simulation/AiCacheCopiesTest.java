@@ -23,11 +23,14 @@ import forge.ai.AITest;
 import forge.ai.AiCache;
 import forge.ai.ComputerUtil;
 import forge.ai.ComputerUtilCombat;
+import forge.card.CardRarity;
+import forge.card.CardRules;
 import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.zone.ZoneType;
+import forge.item.PaperCard;
 import forge.util.SimScope;
 
 /**
@@ -60,15 +63,15 @@ public class AiCacheCopiesTest extends AITest {
 
     /**
      * A storm search whose copies ask the cache, as the census's Glint-Eye games' did, and which finds no line, so that
-     * it runs to its state cap. Summoner's Pact costs nothing, so every state that holds it casts it, and in each such
-     * copy the Pact's fetch, all of it creatures, has ChangeZoneAi.chooseCreature ask whether the AI's life is in
-     * danger (aiLifeInDanger: a row naming the copy's player), whose prediction of the opponent's Grizzly Bears
-     * attacking asks whether combat damage is prevented this turn (a row naming the copy's game). Once the search has
-     * returned, and before any decision clears the cache, a collection takes every copy those rows name.
+     * it runs to its state cap. The search for a green creature card in hand costs nothing, so every state that holds
+     * it casts it, and in each such copy its fetch, all of it creatures, has ChangeZoneAi.chooseCreature ask whether the
+     * AI's life is in danger (aiLifeInDanger: a row naming the copy's player), whose prediction of the opponent's
+     * Grizzly Bears attacking asks whether combat damage is prevented this turn (a row naming the copy's game). Once
+     * the search has returned, and before any decision clears the cache, a collection takes every copy those rows name.
      */
     @Test
     public void aStormSearchKeepsNoCopyAliveOnceItReturns() {
-        final Player p = beseechLineWithPact();
+        final Player p = beseechLineWithCreatureSearch();
         final int[] seen = Scoped.under(new SimScope(SEED), () -> {
             StormSolver.solve(p, tutorStorm(p), STATES, Long.MAX_VALUE);
             final Named named = namedCopies(p.getGame());
@@ -146,11 +149,14 @@ public class AiCacheCopiesTest extends AITest {
     }
 
     /**
-     * StormSolverScopeTest's Beseech line, with Summoner's Pact beside it in the hand, two Grizzly Bears in the
-     * library for the Pact to fetch, and a Grizzly Bears on the opponent's side to attack next turn; the opponent is at
-     * 40 life, out of the line's reach.
+     * StormSolverScopeTest's Beseech line, with a free search for a green creature card beside it in the hand, two
+     * Grizzly Bears in the library for it to fetch, and a Grizzly Bears on the opponent's side to attack next turn; the
+     * opponent is at 40 life, out of the line's reach. The search is Summoner's Pact's own without its pay-or-lose
+     * trigger, a card made for the test from script lines: the Pact was this test's search until the storm solver
+     * stopped playing the delayed-loss cards (MTG_DeckMaker's self-kill fix, DESIGN.md S2), whose copies never cast it
+     * now, and no other card the Swamps can pay searches for creature cards alone.
      */
-    private Player beseechLineWithPact() {
+    private Player beseechLineWithCreatureSearch() {
         final Game game = initAndCreateGame();
         noDeadline(game);
         final Player p = game.getPlayers().get(1);
@@ -166,7 +172,22 @@ public class AiCacheCopiesTest extends AITest {
             p.getZone(ZoneType.Library).remove(c);
             p.getZone(ZoneType.Hand).add(c);
         }
-        addCardToZone("Summoner's Pact", p, ZoneType.Hand);
+        final CardRules.Reader reader = new CardRules.Reader();
+        for (final String line : new String[] {
+                "Name:Summoner's Search",
+                "ManaCost:0",
+                "Colors:green",
+                "Types:Instant",
+                "A:SP$ ChangeZone | Origin$ Library | Destination$ Hand | ChangeType$ Creature.Green+YouOwn"
+                        + " | ChangeNum$ 1 | SpellDescription$ Search your library for a green creature card, reveal"
+                        + " it, put it into your hand, then shuffle.",
+                "Oracle:Search your library for a green creature card, reveal it, put it into your hand, then"
+                        + " shuffle." }) {
+            reader.parseLine(line);
+        }
+        final Card search = Card.fromPaperCard(new PaperCard(reader.getCard(), "M11", CardRarity.Common), p);
+        search.setGameTimestamp(game.getNextTimestamp());
+        p.getZone(ZoneType.Hand).add(search);
         addCards("Swamp", 6, p);
         addCard("Wishclaw Talisman", p);
         final Player opp = game.getPlayers().get(0);
