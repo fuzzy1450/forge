@@ -1301,4 +1301,34 @@ public class DelayedLossTest extends FlatMcTestBase {
         assertEquals(verdicts, Arrays.asList(DelayedLoss.DEBT_DUE_NOW, null),
                 "[Island x4 and the Factory, Island x5 and the Factory] = " + verdicts);
     }
+
+    /**
+     * Review wf-1, mutant W4: RULINGS-R3 M18 names a SacrificeAll and a ChangeZoneAll from the battlefield beside a
+     * DestroyAll. A pending Summoner's Pact debt (2GG): Upheaval returns every permanent to its owner's hand, Forest x2
+     * and Sol Ring, the whole cover, among them; Living Death has each player sacrifice every creature, Birds of
+     * Paradise beside Forest x3 among them. With Forest x4 beside the Birds, Living Death leaves four Forests for 2GG.
+     */
+    @Test(timeOut = 300_000)
+    public void reviewEveryBoardWideRemovalM18NamesTakesTheSourcesItMatches() {
+        final List<String> verdicts = new ArrayList<>();
+        Scoped.under(new SimScope(223L), () -> {
+            resolveASummonersPact();
+            put("Forest", 2, ai, ZoneType.Battlefield);
+            put("Sol Ring", ai, ZoneType.Battlefield);
+            verdicts.add(problemOf(spell("Upheaval")));
+            return null;
+        });
+        for (final int forests : new int[] { 3, 4 }) {
+            Scoped.under(new SimScope(227L), () -> {
+                resolveASummonersPact();
+                put("Forest", forests, ai, ZoneType.Battlefield);
+                put("Birds of Paradise", ai, ZoneType.Battlefield);
+                verdicts.add(problemOf(spell("Living Death")));
+                return null;
+            });
+        }
+        assertEquals(verdicts, Arrays.asList(DelayedLoss.DEBT_UNPROTECTED, DelayedLoss.DEBT_UNPROTECTED, null),
+                "[Upheaval over Forest x2 and Sol Ring; Living Death over Birds of Paradise and Forest x3, x4] = "
+                        + verdicts);
+    }
 }
