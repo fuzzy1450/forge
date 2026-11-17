@@ -6,8 +6,11 @@ import java.util.List;
 import org.testng.AssertJUnit;
 import org.testng.annotations.Test;
 
+import forge.ai.simulation.ComboPlan;
+import forge.ai.simulation.DelayedLoss;
 import forge.ai.simulation.FlatMonteCarloStats;
 import forge.game.Game;
+import forge.game.card.Card;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
@@ -97,6 +100,28 @@ public class DelayedLossVetoApiTest extends AITest {
                         : super.vetoDelayedLoss(chosen);
             }
         };
+    }
+
+    /** A card cast as far as the stack by {@code p}, with nothing paid. */
+    private SpellAbility onStack(final Game game, final String name, final Player p) {
+        final Card c = createCard(name, p);
+        c.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(c);
+        final SpellAbility sa = c.getFirstSpellAbility();
+        sa.setActivatingPlayer(p);
+        game.getStack().add(sa);
+        return sa;
+    }
+
+    /** Pact of the Titan resolved in the AI's own first main phase: a debt due at its next upkeep, {4}{R}. */
+    private void resolvePactOfTheTitan(final Game game, final Player ai) {
+        fillLibrary(ai, 10);
+        fillLibrary(opponentOf(game, ai), 10);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        onStack(game, "Pact of the Titan", ai);
+        playUntilStackClear(game);
+        AssertJUnit.assertTrue("Pact of the Titan resolved: its Giant is on the battlefield",
+                ai.getCreaturesInPlay().anyMatch(Card::isToken));
     }
 
     /**
@@ -199,5 +224,41 @@ public class DelayedLossVetoApiTest extends AITest {
         final String vetoed = describe(vetoingBrain.chooseSpellAbilityToPlay());
         AssertJUnit.assertEquals("[the full simulation's stock pick, its pick with Grizzly Bears vetoed]",
                 Arrays.asList("Grizzly Bears", null), Arrays.asList(stock, vetoed));
+    }
+
+    /**
+     * DESIGN.md 1.7, S4, D12 (review TA, finding 4): the veto refuses what debt protection refuses, not only a card of
+     * the eleven. Nothing flags Harrow, but its additional cost sacrifices a land, which a pending debt may need; on
+     * the paths that ask no other site (theLastReturnPassesTheVeto's) the veto is the only place it is refused. Pact of
+     * the Titan resolved in the AI's first main phase ({4}{R} due at its next upkeep), then its second main phase, a
+     * land played, Mountain and Forest x4 (exactly the debt), Forests in the library, Harrow in hand: Harrow is no
+     * delayed-loss play (kind null) and debt protection refuses it ("debt-unprotected"); the veto makes it a pass and
+     * a failed cast, and notes DelayedLoss:debt-unprotected once.
+     */
+    @Test(timeOut = 300_000)
+    public void theVetoRefusesWhatDebtProtectionRefuses() {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        final Player ai = game.getPlayers().get(1);
+        final AiController brain = brainOf(ai);
+        for (int i = 0; i < 6; i++) {
+            addCardToZone("Forest", ai, ZoneType.Library); // the basic lands Harrow finds
+        }
+        resolvePactOfTheTitan(game, ai);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+        ai.setLandsPlayedThisTurn(1);
+        addCard("Mountain", ai);
+        addCards("Forest", 4, ai);
+        final SpellAbility harrow = fromHand(ai, "Harrow");
+        game.getAction().checkStateEffects(true);
+        final int before = rejected("DelayedLoss:debt-unprotected");
+        final DelayedLoss.Kind kind = DelayedLoss.kind(harrow);
+        final String verdict = DelayedLoss.problem(ai, harrow, () -> ComboPlan.EMPTY);
+        final SpellAbility vetoed = brain.vetoDelayedLoss(harrow);
+        AssertJUnit.assertEquals("[Harrow's kind, its verdict, the veto's answer, a failed cast, notes of"
+                        + " DelayedLoss:debt-unprotected]",
+                Arrays.asList(null, "debt-unprotected", null, true, 1),
+                Arrays.asList(kind, verdict, vetoed == null ? null : vetoed.getHostCard().getName(),
+                        brain.hasFailedToCast(harrow), rejected("DelayedLoss:debt-unprotected") - before));
     }
 }
