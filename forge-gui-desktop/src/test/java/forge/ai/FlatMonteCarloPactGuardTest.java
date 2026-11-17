@@ -624,4 +624,17 @@ public class FlatMonteCarloPactGuardTest extends AITest {
         AssertJUnit.assertEquals("one U unit for UU", "pact-unpayable",
                 verdict(ai, onTheirTurn(game, ai, "Pact of Negation")));
     }
+
+    /** Review t1-1, proof A: a Signet's {1} is owed beside the debt (DESIGN.md 1.4, 1.6). */
+    @Test
+    public void reviewSignetInputIsOwed() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        addCards("Island", 3, ai);
+        addCard("Dimir Signet", ai);
+        AssertJUnit.assertEquals("3 Islands and a Signet make 4, one Island paying the Signet", "pact-unpayable",
+                verdict(ai, onTheirTurn(game, ai, "Pact of Negation")));
+        addCard("Island", ai);
+        assertAllowed("a fourth Island", verdict(ai, fromHand(ai, "Pact of Negation")));
+    }
 }
