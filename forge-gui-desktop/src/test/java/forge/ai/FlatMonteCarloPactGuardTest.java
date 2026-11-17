@@ -709,4 +709,23 @@ public class FlatMonteCarloPactGuardTest extends AITest {
             }
         }
     }
+
+    /** Review t1-1, proof F: Bloom Tender gives one unit of each of its own colors, no other (1.4, L1). */
+    @Test
+    public void reviewBloomTenderOnlyItsOwnColor() {
+        for (final String other : new String[] { "Forest", "Island" }) {
+            final Game game = initAndCreateGame();
+            final Player ai = game.getPlayers().get(1);
+            addCard("Island", ai);
+            addCard(other, ai);
+            addCard("Sol Ring", ai);
+            addCard("Bloom Tender", ai);
+            final String v = verdict(ai, onTheirTurn(game, ai, "Pact of Negation"));
+            if ("Forest".equals(other)) {
+                AssertJUnit.assertEquals("Bloom Tender is green: one U for UU", "pact-unpayable", v);
+            } else {
+                assertAllowed("two Islands", v);
+            }
+        }
+    }
 }
