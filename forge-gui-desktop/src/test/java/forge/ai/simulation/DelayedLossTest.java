@@ -1331,4 +1331,30 @@ public class DelayedLossTest extends FlatMcTestBase {
                 "[Upheaval over Forest x2 and Sol Ring; Living Death over Birds of Paradise and Forest x3, x4] = "
                         + verdicts);
     }
+
+    /**
+     * Review wf-1, mutant W2: a cost that can take an artifact the count does not count is still a removal when Mox
+     * Opal's metalcraft counts on it (DESIGN.md 1.7: "Metalcraft (1.4) is counted again on the board that is left"). A
+     * pending Pact of Negation debt (3UU): Island x2, Sol Ring, Mox Opal and Ornithopter (three lasting artifacts) are
+     * exactly the debt; Fling's sacrifice can take only the Ornithopter, after which Opal makes nothing. With a second
+     * Ornithopter, three artifacts stay.
+     */
+    @Test(timeOut = 300_000)
+    public void reviewASacrificeThatBreaksMetalcraftIsARemoval() {
+        final List<String> verdicts = new ArrayList<>();
+        for (final int thopters : new int[] { 1, 2 }) {
+            Scoped.under(new SimScope(233L), () -> {
+                resolveAPactOfNegation();
+                put("Island", 2, ai, ZoneType.Battlefield);
+                put("Sol Ring", ai, ZoneType.Battlefield);
+                final Card opal = put("Mox Opal", ai, ZoneType.Battlefield);
+                put("Ornithopter", thopters, ai, ZoneType.Battlefield);
+                assertTrue(counted(DelayedLoss.Due.NEXT).contains(opal), "Mox Opal with metalcraft: 5 for 3UU");
+                verdicts.add(problemOf(spell("Fling")));
+                return null;
+            });
+        }
+        assertEquals(verdicts, Arrays.asList(DelayedLoss.DEBT_UNPROTECTED, null),
+                "[one Ornithopter, two] = " + verdicts);
+    }
 }
