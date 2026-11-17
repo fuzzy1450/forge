@@ -863,6 +863,45 @@ public class DelayedLossTest extends FlatMcTestBase {
     }
 
     /**
+     * RULINGS-R3 M17 (i), T2 review Minor 8 (the controller's ruling): the AI may pay a Phyrexian shard with 2 life,
+     * so each shard of the play's mana cost counts 2 life of its own loss while the cover needs pain. A pending Pact of
+     * Negation debt (3UU), Island x3 and Ancient Tomb, tapped now (it untaps for the upkeep, and no untapped painful
+     * source can pay the play's mana), the opponent's end step: the cover needs the Tomb, which fits from 6 life (2 + 3
+     * < 6). Gitaxian Probe ({U/P}) is refused at 7 life (7 - 2 = 5, and 2 + 3 < 5 fails) and allowed at 8;
+     * Dismember ({1}{B/P}{B/P}) is refused at 9 (9 - 4 = 5) and allowed at 10; both are allowed at 40. With Island x5
+     * the painless sources cover the debt, and nothing is budgeted at 7.
+     */
+    @Test(timeOut = 300_000)
+    public void aPhyrexianShardsLifeIsBudgetedWhileTheCoverNeedsPain() {
+        final List<String> verdicts = Scoped.under(new SimScope(79L), () -> {
+            resolveAPactOfNegation();
+            put("Island", 3, ai, ZoneType.Battlefield);
+            put("Ancient Tomb", ai, ZoneType.Battlefield).setTapped(true);
+            at(PhaseType.END_OF_TURN, opp);
+            ai.setLife(6, null);
+            assertEquals(DelayedLoss.count(ai, DelayedLoss.Due.NEXT, DelayedLoss.Removal.NONE).units().size(), 5,
+                    "at 6 life the Tomb is counted: 3 + 2 for 3UU");
+            final List<String> out = new ArrayList<>();
+            for (final int life : new int[] { 7, 8, 40 }) {
+                ai.setLife(life, null);
+                out.add(problemOf(spell("Gitaxian Probe")));
+            }
+            for (final int life : new int[] { 9, 10, 40 }) {
+                ai.setLife(life, null);
+                out.add(problemOf(spell("Dismember")));
+            }
+            put("Island", 2, ai, ZoneType.Battlefield);
+            ai.setLife(7, null);
+            out.add(problemOf(spell("Gitaxian Probe")));
+            out.add(problemOf(spell("Dismember")));
+            return out;
+        });
+        assertEquals(verdicts, Arrays.asList(DelayedLoss.DEBT_UNPROTECTED, null, null, DelayedLoss.DEBT_UNPROTECTED,
+                null, null, null, null), "[Gitaxian Probe at 7, 8, 40; Dismember at 9, 10, 40; with Island x5, both at"
+                + " 7] = " + verdicts);
+    }
+
+    /**
      * RULINGS-R3 M18: a board-wide removal of the AI's own play takes the counted sources its filter matches. A pending
      * Summoner's Pact debt (2GG): Culling Ritual destroys each nonland permanent with mana value 2 or less, Sol Ring
      * among them.

@@ -101,6 +101,8 @@ public final class DelayedLoss {
     static final int DAMAGE_MARGIN = 3;
     /** With this few cards left in a library-out deck's library its turn is taken as won (from ComboGuard). */
     static final int PACT_LIBRARY_OUT_LEFT = 3;
+    /** The life the AI pays for a Phyrexian shard no source of its pays (ComputerUtilMana.java:705, 795-832). */
+    static final int PHYREXIAN_LIFE = 2;
     /**
      * How deep a script is followed: an extra turn's execute to its loss (Effect triggers, sub-abilities), and a play's
      * additional abilities under one another ({@link #parts}; no spell or activated ability of the cardsfolder nests
@@ -1775,10 +1777,11 @@ public final class DelayedLoss {
      * and an X is refused. When both kinds are owed, both must stay covered.
      * <p>
      * RULINGS-R3 M17: while a debt's cover needs a painful unit (the painless count does not cover it), the life the
-     * play's own effects cost (a LoseLife or DealDamage of its own) and T times the largest pain of an untapped
-     * painful source (the play's own mana payment may tap it) come off the life budget too; an amount that is not a
-     * number refuses the play. RULINGS-R3 M18: a board-wide removal of the play's own (a DestroyAll, a SacrificeAll, a
-     * ChangeZoneAll from the battlefield) takes the counted sources its filter matches.
+     * play's own effects cost (a LoseLife or DealDamage of its own), 2 for each Phyrexian shard of its mana cost (T2
+     * review Minor 8) and T times the largest pain of an untapped painful source (the play's own mana payment may tap
+     * it) come off the life budget too; an amount that is not a number refuses the play. RULINGS-R3 M18: a board-wide
+     * removal of the play's own (a DestroyAll, a SacrificeAll, a ChangeZoneAll from the battlefield) takes the counted
+     * sources its filter matches.
      * <p>
      * The reader comes first: in a game where no Pact was cast it finds nothing after two empty scans, and the cost is
      * never looked at.
@@ -1817,7 +1820,8 @@ public final class DelayedLoss {
         final Removal cut = Removal.of(ai, cost, judged, due);
         final boolean spends = now && t > 0; // for a debt due next upkeep mana costs nothing: every counted source untaps
         final boolean wipes = play && wipesBoard(judged);                         // M18, the play's own effects
-        final Integer ownLoss = play ? ownLifeLoss(judged) : Integer.valueOf(0);  // M17 (i); null: not a number
+        final Integer ownLoss = play ? plus(ownLifeLoss(judged), phyrexianLife(cost)) // M17 (i); null: not a number
+                : Integer.valueOf(0);
         final int manaPain = t != 0 ? largestUntappedPain(ai) : 0;  // M17 (ii); -1: unreadable
         if (cut.isEmpty() && !spends && !wipes && ownLoss != null && ownLoss == 0 && manaPain == 0) {
             return null;
@@ -2018,6 +2022,33 @@ public final class DelayedLoss {
             return origin != null && origin.contains("Battlefield") ? p.getParam("ChangeType") : null;
         }
         return null;
+    }
+
+    /**
+     * RULINGS-R3 M17 (i), T2 review Minor 8 (the controller's ruling): the life a cost's Phyrexian shards may take,
+     * {@link #PHYREXIAN_LIFE} each. The AI pays a shard with life when no source of its pays it, so the rule counts the
+     * life as the play's own loss: it only refuses more, and only while the cover needs a painful unit. A script's
+     * {@code AIPhyrexianPayment$} is not read (Gitaxian Probe's Never counts too). Cost and shard reads only.
+     */
+    static int phyrexianLife(final Cost cost) {
+        if (cost == null) {
+            return 0;
+        }
+        int life = 0;
+        for (final CostPart part : cost.getCostParts()) {
+            if (part instanceof CostPartMana) {
+                final ManaCost mana = ((CostPartMana) part).getMana();
+                if (mana != null) {
+                    life += PHYREXIAN_LIFE * mana.getPhyrexianCount();
+                }
+            }
+        }
+        return life;
+    }
+
+    /** {@code a + b}, or null when {@code a}, a life amount, is not a number. */
+    private static Integer plus(final Integer a, final int b) {
+        return a == null ? null : Integer.valueOf(a + b);
     }
 
     /** A {@code Defined$} that takes in the AI itself: You, or Player (each player); absent where that means You. */
