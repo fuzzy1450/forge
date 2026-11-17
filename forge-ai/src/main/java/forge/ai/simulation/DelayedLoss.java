@@ -671,9 +671,25 @@ public final class DelayedLoss {
         if (stops.all) {
             return Mana.NONE;
         }
-        final int budget = ai.getLife() - taken.life() - (now ? 0 : threat(ai));
-        final boolean landMayBePlayed = landMayBePlayed(ai);
-        final int lasting = lastingArtifacts(ai, taken);
+        int threat;
+        try {
+            threat = now ? 0 : threat(ai);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            threat = ai.getLife(); // an unreadable threat leaves no life for pain
+        }
+        final int budget = ai.getLife() - taken.life() - threat;
+        Boolean landPlay;
+        try {
+            landPlay = landMayBePlayed(ai);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            landPlay = null; // unreadable: City of Traitors may go, and no land drop is counted
+        }
+        final boolean landMayBePlayed = landPlay == null || landPlay;
+        final Lasting lasting = new Lasting(ai, taken);
         final List<Source> sources = new ArrayList<>();
         for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
             if (taken.takes(c)) {
@@ -692,7 +708,7 @@ public final class DelayedLoss {
         }
         fitPain(sources, budget);
         int drop = 0;
-        if (!now && landMayBePlayed) {
+        if (!now && landPlay != null && landPlay) {
             try {
                 drop = landDrop(ai, taken);
             } catch (final AITimeoutTracker.Expired e) {
@@ -755,13 +771,36 @@ public final class DelayedLoss {
         }
     }
 
-    /** One battlefield card as a source, or null when it gives nothing certain. */
+    /** Mox Opal's count of lasting artifacts, read the first time an ability with metalcraft asks for it. */
+    private static final class Lasting {
+        private final Player ai;
+        private final Removal taken;
+        private int count = -1;
+
+        Lasting(final Player ai, final Removal taken) {
+            this.ai = ai;
+            this.taken = taken;
+        }
+
+        int get() {
+            if (count < 0) {
+                count = lastingArtifacts(ai, taken);
+            }
+            return count;
+        }
+    }
+
+    /**
+     * One battlefield card as a source, or null when it gives nothing certain. For a debt due now the "will it untap"
+     * read is not asked, a tapped source does not untap before the payment, but Mana Vault and its kind still count
+     * nothing: the rule keeps one reading of that row (DESIGN.md 1.4, "A debt due now").
+     */
     private static Source source(final Player ai, final Card c, final boolean now, final Restrictors stops,
-                                 final int lasting, final boolean landMayBePlayed) {
+                                 final Lasting lasting, final boolean landMayBePlayed) {
         if (c.isPhasedOut() || c.hasSVar("EndOfTurnLeavePlay")) {
             return null; // gone first
         }
-        if (now ? c.isTapped() : !willUntap(ai, c, stops)) {
+        if (now ? c.isTapped() || printedSelfRestriction(c) : !willUntap(ai, c, stops)) {
             return null;
         }
         if (landMayBePlayed && sacrificedByLandPlay(c)) {
@@ -811,13 +850,15 @@ public final class DelayedLoss {
         int payLife = 0;
         int damage = 0;
         int tapPain = 0;
+        int filterInput = 0;
         for (final Option o : options) {
             mask |= o.units[0];
             payLife = Math.max(payLife, o.payLife);
             damage = Math.max(damage, o.damage);
             tapPain = Math.max(tapPain, o.tapPain);
+            filterInput = Math.max(filterInput, o.filterInput);
         }
-        return new Option(new int[] { mask }, payLife, damage, tapPain, 0);
+        return new Option(new int[] { mask }, payLife, damage, tapPain, filterInput);
     }
 
     /** Whether the option with pain gives more than the painless one: more units, or as many of more colors. */
@@ -835,7 +876,7 @@ public final class DelayedLoss {
 
     /** One mana ability as an option, or null when the upkeep's payment cannot count on it. */
     private static Option option(final Player ai, final Card c, final SpellAbility ma, final boolean now,
-                                 final int lasting, final int tapPain) {
+                                 final Lasting lasting, final int tapPain) {
         final Cost cost = ma.getPayCosts();
         boolean taps = false;
         int payLife = 0;
@@ -872,7 +913,7 @@ public final class DelayedLoss {
         }
         ManaConversion.withActivator(ma);
         if (r != null && (!r.checkZoneRestrictions(c, ma) || !r.checkOtherRestrictions(c, ma, ai)
-                || r.isMetalcraft() && lasting < 3)) {
+                || r.isMetalcraft() && lasting.get() < 3)) {
             return null; // M22: zone and state restrictions on today's board; Opal's metalcraft from lasting artifacts
         }
         final List<Integer> units = new ArrayList<>();
@@ -1309,6 +1350,29 @@ public final class DelayedLoss {
         }
     }
 
+    /**
+     * Step 3 of the untap read (DESIGN.md 1.5): a face of the card's printed card holds an untap restriction on itself
+     * (Mana Vault, Grim Monolith, Basalt Monolith; a conditional one counts). Static data, read by script line.
+     */
+    static boolean printedSelfRestriction(final Card c) {
+        final CardRules rules = c.getRules();
+        if (rules == null) {
+            return false;
+        }
+        for (final ICardFace face : rules.getAllFaces()) {
+            if (face == null || face.getReplacements() == null) {
+                continue;
+            }
+            for (final String line : face.getReplacements()) {
+                final Map<String, String> r = params(line);
+                if (untapStop(r.get("Event"), r.get("Layer")) && r.getOrDefault("ValidCard", "").startsWith("Card.Self")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static boolean untapStop(final String event, final String layer) {
         return "Untap".equals(event) && "CantHappen".equals(layer);
     }
@@ -1342,23 +1406,8 @@ public final class DelayedLoss {
         if (c.hasKeyword(Keyword.PHASING) || host != null && host.hasKeyword(Keyword.PHASING)) {
             return false;
         }
-        if (c.isCloned()) {
+        if (c.isCloned() || c.getRules() == null || printedSelfRestriction(c)) {
             return false;
-        }
-        final CardRules rules = c.getRules();
-        if (rules == null) {
-            return false;
-        }
-        for (final ICardFace face : rules.getAllFaces()) {
-            if (face == null || face.getReplacements() == null) {
-                continue;
-            }
-            for (final String line : face.getReplacements()) {
-                final Map<String, String> r = params(line);
-                if (untapStop(r.get("Event"), r.get("Layer")) && r.getOrDefault("ValidCard", "").startsWith("Card.Self")) {
-                    return false;
-                }
-            }
         }
         for (final ICardTraitChanges changes : c.getChangedCardTraitsList(c.getCurrentState())) {
             if (!(changes instanceof CardTraitChanges)) {

@@ -378,6 +378,28 @@ public class DelayedLossTest extends FlatMcTestBase {
         }
     }
 
+    /**
+     * A debt due now is counted from what is untapped now (DESIGN.md 1.4, round 2's B1), and Mana Vault and its kind
+     * still count nothing there: the rule keeps one reading of the "doesn't untap" row, untapped or not.
+     */
+    @Test
+    public void aDebtDueNowCountsWhatIsUntappedButNeverAManaVault() {
+        opponentsTurn();
+        final Card island = put("Island", ai, ZoneType.Battlefield);
+        final Card tapped = put("Island", ai, ZoneType.Battlefield);
+        tapped.setTapped(true);
+        final Card vault = put("Mana Vault", ai, ZoneType.Battlefield);
+        final Card monolith = put("Grim Monolith", ai, ZoneType.Battlefield);
+        final List<Card> now = counted(DelayedLoss.Due.NOW);
+        assertTrue(now.contains(island), "an untapped Island pays a debt due now: " + now);
+        assertFalse(now.contains(tapped), "a tapped one does not untap before it resolves: " + now);
+        assertFalse(now.contains(vault), "an untapped Mana Vault counts nothing, as for the next upkeep: " + now);
+        assertFalse(now.contains(monolith), "nor an untapped Grim Monolith: " + now);
+        final List<Card> next = counted(DelayedLoss.Due.NEXT);
+        assertTrue(next.contains(island) && next.contains(tapped), "both Islands untap for the next upkeep: " + next);
+        assertFalse(next.contains(vault) || next.contains(monolith), "the Vault and the Monolith do not: " + next);
+    }
+
     // --------------------------------------------------------------------------------------------- debts
 
     @Test(timeOut = 300_000)
