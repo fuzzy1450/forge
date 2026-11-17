@@ -1,7 +1,9 @@
 package forge.ai;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.testng.AssertJUnit;
 import org.testng.annotations.Test;
@@ -281,6 +283,36 @@ public class DelayedLossVetoTest extends AITest {
         AssertJUnit.assertEquals("[whether the free Pact of Negation was cast, the stack's size]: declined, and the"
                         + " stack holds the Serra Angel alone",
                 Arrays.asList(false, 1), Arrays.asList(cast, game.getStack().size()));
+    }
+
+    // --------------------------------------------------------------------------------------------- S5b
+
+    /**
+     * Whether the AI casts the card a Discover found, asked as DiscoverEffect asks it: the controller's confirmAction
+     * for the Discover ability, the found card (already exiled) in its params.
+     */
+    private static boolean castsTheDiscoveredCard(final Player ai, final SpellAbility discover, final Card found) {
+        final Map<String, Object> params = new HashMap<>();
+        params.put("Card", found);
+        return ai.getController().confirmAction(discover, null, "", Arrays.asList("Cast", "Hand"), found, params);
+    }
+
+    /**
+     * S5b (DESIGN.md D13, round 1's C5): a discovered delayed-loss card is put into the hand, not cast. Discover marks
+     * its free cast mandatory, so the choice is DiscoverAi.confirmAction's: on S5's board the AI's Hit the Mother Lode
+     * (Discover 10) has exiled Pact of Negation, then, asked again, Lightning Bolt. The Pact goes to the hand; the
+     * Bolt, which nothing flags, is still cast. Today the Pact is cast too.
+     */
+    @Test(timeOut = 120_000)
+    public void aDiscoveredPactGoesToTheHand() {
+        final Game game = freeCastBoard();
+        final Player ai = game.getPlayers().get(1);
+        final SpellAbility discover = addCardToZone("Hit the Mother Lode", ai, ZoneType.Hand).getFirstSpellAbility();
+        discover.setActivatingPlayer(ai);
+        final boolean pact = castsTheDiscoveredCard(ai, discover, addCardToZone("Pact of Negation", ai, ZoneType.Exile));
+        final boolean bolt = castsTheDiscoveredCard(ai, discover, addCardToZone("Lightning Bolt", ai, ZoneType.Exile));
+        AssertJUnit.assertEquals("[whether the discovered Pact of Negation is cast, whether the discovered Lightning"
+                        + " Bolt is]", Arrays.asList(false, true), Arrays.asList(pact, bolt));
     }
 
     // The play-before-land return's veto (RULINGS-R3 M23) has no row here: no board reaches that return with a play

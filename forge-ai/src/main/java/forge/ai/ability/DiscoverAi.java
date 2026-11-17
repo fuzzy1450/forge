@@ -1,6 +1,7 @@
 package forge.ai.ability;
 
 import forge.ai.*;
+import forge.ai.simulation.DelayedLoss;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
 import forge.game.cost.Cost;
@@ -9,6 +10,7 @@ import forge.game.player.PlayerActionConfirmMode;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.Spell;
 import forge.game.spellability.SpellAbility;
+import forge.util.AITimeoutTracker;
 
 import java.util.Map;
 
@@ -86,9 +88,33 @@ public class DiscoverAi extends SpellAbilityAi {
                     // if we won't be able to pay the cost, don't choose the card
                     return false;
                 }
+                // MTG_DeckMaker's self-kill fix, S5b (DESIGN.md D13, round 1's C5): a delayed-loss card (a Pact, an
+                // extra turn that loses, Glorious End), a copy of one, or, while a pay-or-lose debt is pending, a play
+                // with a cost beyond its waived mana goes into the hand instead. Discover marks the free cast's cost
+                // mandatory, so playSaFromPlayEffect's S5 does not see it; asked after the stock judgment, whose draws
+                // stay.
+                if (declinesFreeCast(ai, spell)) {
+                    return false;
+                }
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Whether DelayedLoss declines the discovered card's free cast (MTG_DeckMaker's self-kill fix, DESIGN.md S5b),
+     * counting no mana, with the sites' catches (DESIGN.md 1.11): AITimeoutTracker.Expired is rethrown, and a cast that
+     * cannot be judged is declined only when it is a Pact or a card DelayedLoss flags. In a game whose decks list none
+     * of the eleven cards it answers false after reads only (DESIGN.md 1.10).
+     */
+    private static boolean declinesFreeCast(final Player ai, final SpellAbility spell) {
+        try {
+            return DelayedLoss.declinesFreeCast(ai, spell);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return DelayedLoss.refusalWhenUnread(spell) != null;
+        }
     }
 }
