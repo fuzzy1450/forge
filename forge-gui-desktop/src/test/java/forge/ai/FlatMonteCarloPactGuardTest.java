@@ -637,4 +637,27 @@ public class FlatMonteCarloPactGuardTest extends AITest {
         addCard("Island", ai);
         assertAllowed("a fourth Island", verdict(ai, fromHand(ai, "Pact of Negation")));
     }
+
+    /** Review t1-1, proof B: on the AI's own turn after combat the opponent's attack still comes first (1.4). */
+    @Test
+    public void reviewThreatOnOwnTurnAfterCombat() {
+        for (final boolean attacker : new boolean[] { false, true }) {
+            final Game game = initAndCreateGame();
+            final Player ai = game.getPlayers().get(1);
+            game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+            ai.setLandsPlayedThisTurn(1);
+            addCard("Ancient Tomb", ai);
+            addCards("Forest", 2, ai);
+            ai.setLife(6, null);
+            if (attacker) {
+                addCard("Memnite", opponentOf(game, ai));
+            }
+            final String v = verdict(ai, fromHand(ai, "Summoner's Pact"));
+            if (attacker) {
+                AssertJUnit.assertEquals("6 life - 1 threat: 2 + 3 < 5 fails, the Tomb is not counted", "pact-unpayable", v);
+            } else {
+                assertAllowed("2 + 3 < 6", v);
+            }
+        }
+    }
 }
