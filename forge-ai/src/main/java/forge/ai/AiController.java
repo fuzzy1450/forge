@@ -2320,7 +2320,7 @@ public class AiController {
         }
 
         if (usesFullSimulation()) {
-            return singleSpellAbilityList(simPicker.chooseSpellAbilityToPlay(null));
+            return singleSpellAbilityList(vetoDelayedLoss(simPicker.chooseSpellAbilityToPlay(null)));
         }
 
         CardCollection playBeforeLand = CardLists.filter(
@@ -2330,7 +2330,9 @@ public class AiController {
             SpellAbility wantToPlayBeforeLand = chooseSpellAbilityToPlayFromList(
                     ComputerUtilAbility.getSpellAbilities(playBeforeLand, player), false
             );
-            if (wantToPlayBeforeLand != null) {
+            // RULINGS-R3 M23: the self-kill fix's veto sits inside the condition, so a vetoed pick falls through to the
+            // land play and the walk below instead of passing priority
+            if (wantToPlayBeforeLand != null && vetoDelayedLoss(wantToPlayBeforeLand) != null) {
                 return singleSpellAbilityList(wantToPlayBeforeLand);
             }
         }
@@ -2362,7 +2364,29 @@ public class AiController {
             }
         }
 
-        return singleSpellAbilityList(getSpellAbilityToPlay());
+        return singleSpellAbilityList(vetoDelayedLoss(getSpellAbilityToPlay()));
+    }
+
+    /**
+     * The last word on every spell the priority decision returns (MTG_DeckMaker's self-kill fix, DESIGN.md S4): a play
+     * DelayedLoss refuses is not made. The refusal is noted in FlatMonteCarloStats as "DelayedLoss:" and its code, and
+     * the play is a failed cast for the rest of the turn, so the heuristics do not offer it again (canPlaySa); null is a
+     * pass. Every other play is returned itself, and nothing is written. There is no exemption: the counter pick, the
+     * walk, Flat MC's lists and the storm solver refuse upstream, so the veto meets only the paths that ask none of them
+     * (combo-table loops, the sure plays, a search-only seat's own choice). The plan is read only for a Pact.
+     * Package-private: DelayedLossVetoApiTest asks it directly.
+     */
+    SpellAbility vetoDelayedLoss(final SpellAbility chosen) {
+        if (chosen == null) {
+            return null;
+        }
+        final String problem = delayedLossProblem(chosen, () -> deckPlan(player).combos);
+        if (problem == null) {
+            return chosen;
+        }
+        FlatMonteCarloStats.noteRejected("DelayedLoss:" + problem);
+        noteFailedCast(castKey(chosen));
+        return null;
     }
 
     /**
