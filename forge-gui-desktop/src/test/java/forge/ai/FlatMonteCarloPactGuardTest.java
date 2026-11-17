@@ -660,4 +660,23 @@ public class FlatMonteCarloPactGuardTest extends AITest {
             }
         }
     }
+
+    /** Review t1-1, proof C: Exotic Orchard makes only what the opponents' lands make (1.4, Produce). */
+    @Test
+    public void reviewExoticOrchardOnlyTheirColors() {
+        for (final String theirs : new String[] { "Mountain", "Island" }) {
+            final Game game = initAndCreateGame();
+            final Player ai = game.getPlayers().get(1);
+            addCard(theirs, opponentOf(game, ai));
+            addCard("Island", ai);
+            addCards("Swamp", 3, ai);
+            addCard("Exotic Orchard", ai);
+            final String v = verdict(ai, onTheirTurn(game, ai, "Pact of Negation"));
+            if ("Mountain".equals(theirs)) {
+                AssertJUnit.assertEquals("their Mountain: the Orchard makes R, one U for UU", "pact-unpayable", v);
+            } else {
+                assertAllowed("their Island: the Orchard makes U", v);
+            }
+        }
+    }
 }
