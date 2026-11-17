@@ -755,11 +755,32 @@ public class DelayedLossTest extends FlatMcTestBase {
     }
 
     /**
+     * problem's answers for three plays whose life cannot be read as a number (RULINGS-R3 M17, T2 review finding 4):
+     * Toxic Deluge (its additional cost, {@code PayLife<X>}), Stroke of Genius ({X}{2}{U}: X mana, any of it perhaps
+     * tapped from a painful source) and Reanimate (its own LoseLife of X, the creature's mana value). A throw is
+     * answered by its text: ComboGuard.problem would answer it with refusalWhenUnread, no refusal for a play nothing
+     * flags.
+     */
+    private List<String> unreadableLifeVerdicts() {
+        final List<String> out = new ArrayList<>();
+        for (final String name : List.of("Toxic Deluge", "Stroke of Genius", "Reanimate")) {
+            try {
+                out.add(problemOf(spell(name)));
+            } catch (final RuntimeException e) {
+                out.add("threw " + e);
+            }
+        }
+        return out;
+    }
+
+    /**
      * RULINGS-R3 M17: while a debt's cover needs a painful unit, the life the play's own effects cost and the pain its
      * mana may cost come off the life budget. A pending Pact of Negation debt (3UU), Island x3 and Ancient Tomb, the
      * opponent's end step: at 6 life the Tomb fits (2 + 3 < 6), and Vampiric Tutor's 2 life, with its {B} perhaps
      * tapped from the untapped Tomb (1 x 2), leaves it none. Each half alone, too; and nothing is asked of the play
-     * while the painless sources cover the debt.
+     * while the painless sources cover the debt. An amount that cannot be read as a number refuses the play while the
+     * cover needs pain, at any life (T2 review finding 4): a {@code PayLife<X>}, an X mana cost beside an untapped
+     * painful source, an own LoseLife of X.
      */
     @Test(timeOut = 300_000)
     public void thePlaysOwnLifeLossIsBudgetedWhileTheCoverNeedsPain() {
@@ -788,9 +809,20 @@ public class DelayedLossTest extends FlatMcTestBase {
             assertNull(problemOf(spell("Brainstorm")), "with the Tomb tapped its mana costs no life");
 
             tomb.setTapped(false);
+            ai.setLife(20, null);
+            List<String> unread = unreadableLifeVerdicts();
+            assertEquals(unread, Arrays.asList(DelayedLoss.DEBT_UNPROTECTED, DelayedLoss.DEBT_UNPROTECTED,
+                    DelayedLoss.DEBT_UNPROTECTED), "at 20 life the Tomb fits, but no number can be budgeted: Toxic"
+                    + " Deluge's PayLife<X>, Stroke of Genius's {X} beside the untapped Tomb, Reanimate's own LoseLife"
+                    + " X; verdicts " + unread);
+
             put("Island", 2, ai, ZoneType.Battlefield);
             ai.setLife(3, null);
             assertNull(problemOf(spell("Vampiric Tutor")), "five Islands cover 3UU without the Tomb: nothing to budget");
+            ai.setLife(20, null);
+            unread = unreadableLifeVerdicts();
+            assertEquals(unread, Arrays.asList(null, null, null), "nor for the three plays whose life cannot be read"
+                    + "; verdicts " + unread);
             return null;
         });
     }
