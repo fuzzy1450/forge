@@ -343,12 +343,16 @@ public final class StormSolver {
      */
     private boolean refused(final Player ai, final ComboPlan combos, final SpellAbility sa, final Step step) {
         String problem;
-        try {
-            problem = DelayedLoss.problem(ai, sa, () -> combos);
-        } catch (final AITimeoutTracker.Expired e) {
-            throw e;
-        } catch (final RuntimeException e) {
-            problem = DelayedLoss.refusalWhenUnread(sa);
+        if (DelayedLossTrace.ON) {
+            problem = DelayedLossTrace.problem(DelayedLossTrace.M19, ai, sa, () -> combos); // the same, traced
+        } else {
+            try {
+                problem = DelayedLoss.problem(ai, sa, () -> combos);
+            } catch (final AITimeoutTracker.Expired e) {
+                throw e;
+            } catch (final RuntimeException e) {
+                problem = DelayedLoss.refusalWhenUnread(sa);
+            }
         }
         if (problem == null) {
             return false;
@@ -577,6 +581,9 @@ public final class StormSolver {
         List<Step> bestSteps = first.steps;
         String bestState = describe(root.getSimulatedAiPlayer()); // only text is kept, never a simulation
         final String startState = bestState;
+        // the self-kill fix's trace (DelayedLossTrace, DESIGN.md 6.4): the cards whose delayed-loss moves this search
+        // has left out and said so, one line each
+        final Set<Integer> skipTraced = DelayedLossTrace.ON ? new HashSet<>() : null;
         final StringBuilder trail = new StringBuilder();
         if (TRACE) {
             trail.append(" | picker: ").append(new SpellAbilityPicker(ai).explainCandidates());
@@ -607,7 +614,7 @@ public final class StormSolver {
             for (final SpellAbility sa : moves) {
                 final Card host = sa.getHostCard();
                 if (sa.isLandAbility() || host == null || ComboPlan.isStormFinisher(host) || combos.wastesTutor(sa)
-                        || delayedLoss(sa)) {
+                        || delayedLoss(ai, sa, skipTraced)) {
                     // lands are the AI's own business, the storm card is kept for the lethal cast, and a Pact, an extra
                     // turn that loses or Glorious End is never a step of a line, kill or setup (delayedLoss)
                     continue;
@@ -720,16 +727,23 @@ public final class StormSolver {
      * is arithmetic and the finisher is never resolved in the search, so a Pact or a Final Fortune in a line is a bet
      * that the finisher is not answered, and a Pact's debt cannot be read in a copy, which holds no delayed trigger. A
      * kill that needs one is not taken. False when the script cannot be read, as for a play nothing flags. Script
-     * parameters only: in a game whose decks list none of the eleven cards the search expands the same nodes.
+     * parameters only: in a game whose decks list none of the eleven cards the search expands the same nodes. With the
+     * fix's trace on ({@code traced} not null), the first skip of each card in a search is traced with the real game's
+     * turn and phase ({@code ai}, the search's root player): one line per card left out, not one per node.
      */
-    private static boolean delayedLoss(final SpellAbility sa) {
+    private static boolean delayedLoss(final Player ai, final SpellAbility sa, final Set<Integer> traced) {
+        final boolean flagged;
         try {
-            return DelayedLoss.kind(sa) != null;
+            flagged = DelayedLoss.kind(sa) != null;
         } catch (final AITimeoutTracker.Expired e) {
             throw e;
         } catch (final RuntimeException e) {
             return false;
         }
+        if (flagged && traced != null && traced.add(sa.getHostCard().getId())) {
+            DelayedLossTrace.skipped(ai, sa);
+        }
+        return flagged;
     }
 
     /** Lets the node keep its game; the node that has kept it longest lets go of its game when there are too many. */

@@ -883,6 +883,32 @@ public final class DelayedLoss {
             return new Mana(left, landDrop, painlessOnly);
         }
 
+        /**
+         * The counted units source by source, for the trace (DelayedLossTrace): each source's name and its units'
+         * colors ({@code Island=U;Sol Ring=C+C}), its pain after a {@code ~} ({@code Ancient Tomb=C+C~2}), the land
+         * drop as {@code drop=R}. Field reads only.
+         */
+        String describe() {
+            final StringBuilder sb = new StringBuilder();
+            for (final Source s : sources) {
+                final Option o = option(s);
+                if (o == null) {
+                    continue;
+                }
+                sb.append(sb.length() == 0 ? "" : ";").append(s.card.getName()).append('=');
+                for (int i = 0; i < o.units.length; i++) {
+                    sb.append(i == 0 ? "" : "+").append(colors(o.units[i]));
+                }
+                if (o.pain() > 0) {
+                    sb.append('~').append(o.pain());
+                }
+            }
+            if (landDrop != 0) {
+                sb.append(sb.length() == 0 ? "" : ";").append("drop=").append(colors(landDrop));
+            }
+            return sb.toString();
+        }
+
         /** The counted sources' cards, in count order. */
         public List<Card> cards() {
             final List<Card> out = new ArrayList<>();
@@ -964,6 +990,15 @@ public final class DelayedLoss {
      * Total: a source whose reads throw is not counted.
      */
     public static Mana count(final Player ai, final Due due, final Removal removal) {
+        return count(ai, due, removal, null);
+    }
+
+    /**
+     * {@link #count}, for a judgment the trace watches ({@code seen} not null: DelayedLossTrace): the threat it is made
+     * with is noted, and a threat-free {@code seen} makes it with no threat term, the trace's second count of a refusal
+     * (DESIGN.md 6.4, round 2's M4). Null, the count is {@link #count}'s.
+     */
+    static Mana count(final Player ai, final Due due, final Removal removal, final Seen seen) {
         if (ai == null || ai.getGame() == null) {
             return Mana.NONE;
         }
@@ -982,11 +1017,14 @@ public final class DelayedLoss {
         }
         int threat;
         try {
-            threat = now ? 0 : threat(ai);
+            threat = now || seen != null && seen.threatFree ? 0 : threat(ai);
         } catch (final AITimeoutTracker.Expired e) {
             throw e;
         } catch (final RuntimeException e) {
             threat = ai.getLife(); // an unreadable threat leaves no life for pain
+        }
+        if (seen != null) {
+            seen.threat = threat;
         }
         final int budget = ai.getLife() - taken.life() - threat;
         Boolean landPlay;
@@ -1748,24 +1786,78 @@ public final class DelayedLoss {
     }
 
     /**
+     * What one judgment read, for the trace (DelayedLossTrace; DESIGN.md 6.4, RULINGS-R3 F): whether the play is a
+     * delayed-loss card or copies one, the debts the reader found (its last answer in the judgment), and each base
+     * count the judgment made, with the AI's life and the threat it was made with. As an input, whether the counts
+     * leave the threat term out: the trace's second judgment of a refusal, which tells one the threat term alone
+     * decides. Only the trace makes one; a judgment asked without one notes nothing, and its reads are the same either
+     * way.
+     */
+    static final class Seen {
+        /** The counts leave the threat term out. */
+        final boolean threatFree;
+        /** The play is a delayed-loss card, or copies one. */
+        boolean flagged;
+        /** The reader's last answer in the judgment. */
+        Debts debts = Debts.NONE;
+        /** Each base count the judgment made, in order. */
+        final List<Count> counts = new ArrayList<>();
+        /** The threat term of the last count made. */
+        int threat;
+
+        Seen(final boolean threatFree) {
+            this.threatFree = threatFree;
+        }
+
+        void counted(final Due due, final Player ai, final Mana mana) {
+            counts.add(new Count(due, ai.getLife(), threat, mana));
+        }
+
+        /** Whether a count for the next upkeep was made, the only count a threat term enters. */
+        boolean countedNext() {
+            for (final Count c : counts) {
+                if (c.due() == Due.NEXT) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    /** A base count a judgment made: its debt's due time, the AI's life, the threat it was made with, its mana. */
+    record Count(Due due, int life, int threat, Mana mana) {
+    }
+
+    /**
      * Why the play must not be made now, or null. A Pact whose debt the next upkeep cannot pay, or with another debt
      * pending; an extra turn that ends in a loss; a loss at an end step; a copy of one, or of a pay-or-lose trigger; a
      * cost that would uncover a pending debt, or spend the mana of one due now. Reads only (DESIGN.md 1.10); the plan
      * only for a Pact.
      */
     public static String problem(final Player ai, final SpellAbility sa, final Supplier<ComboPlan> plan) {
+        return problem(ai, sa, plan, null);
+    }
+
+    /** {@link #problem}, noting what it read in {@code seen} when the trace watches it (null: nothing is noted). */
+    static String problem(final Player ai, final SpellAbility sa, final Supplier<ComboPlan> plan, final Seen seen) {
         if (ai == null || sa == null) {
             return null;
         }
         final Kind kind = kind(sa);
         if (kind != null) {
-            return judge(ai, sa, kind, ComboGuard.pactCost(sa), plan);
+            if (seen != null) {
+                seen.flagged = true;
+            }
+            return judge(ai, sa, kind, ComboGuard.pactCost(sa), plan, seen);
         }
         final Copied copied = copiedFlagged(sa);
         if (copied != null) {
-            return judge(ai, sa, copied.kind(), copied.cost(), plan);
+            if (seen != null) {
+                seen.flagged = true;
+            }
+            return judge(ai, sa, copied.kind(), copied.cost(), plan, seen);
         }
-        return protection(ai, sa.getPayCosts(), sa);
+        return protection(ai, sa.getPayCosts(), sa, true, seen);
     }
 
     /**
@@ -1788,31 +1880,35 @@ public final class DelayedLoss {
      * never looked at.
      */
     static String protection(final Player ai, final Cost cost, final SpellAbility judged) {
-        return protection(ai, cost, judged, true);
+        return protection(ai, cost, judged, true, null);
     }
 
     /**
      * Debt protection for a play ({@code play}: its own effects are read too, M17 (i) and M18), or for an unless cost
      * the AI is about to pay (S6b: the asking ability's effects are what the payment stops, so they are not read).
      */
-    private static String protection(final Player ai, final Cost cost, final SpellAbility judged, final boolean play) {
+    private static String protection(final Player ai, final Cost cost, final SpellAbility judged, final boolean play,
+                                     final Seen seen) {
         final Debts owed = owed(ai, judged);
+        if (seen != null) {
+            seen.debts = owed;
+        }
         if (owed.isEmpty()) {
             return null;
         }
         final int t = manaValue(cost);
         if (owed.hasNow()) {
-            final String now = guard(ai, cost, judged, play, Due.NOW, owed.now(), t);
+            final String now = guard(ai, cost, judged, play, Due.NOW, owed.now(), t, seen);
             if (now != null) {
                 return now;
             }
         }
-        return owed.hasNext() ? guard(ai, cost, judged, play, Due.NEXT, owed.next(), t) : null;
+        return owed.hasNext() ? guard(ai, cost, judged, play, Due.NEXT, owed.next(), t, seen) : null;
     }
 
     /** Debt protection against the debts due at one time (DESIGN.md 1.7, RULINGS-R3 M17 and M18). */
     private static String guard(final Player ai, final Cost cost, final SpellAbility judged, final boolean play,
-                                final Due due, final Debt debt, final int t) {
+                                final Due due, final Debt debt, final int t, final Seen seen) {
         final boolean now = due == Due.NOW;
         final String code = now ? DEBT_DUE_NOW : DEBT_UNPROTECTED;
         if (now && t < 0) {
@@ -1827,13 +1923,17 @@ public final class DelayedLoss {
         if (cut.isEmpty() && !spends && !wipes && ownLoss != null && ownLoss == 0 && manaPain == 0) {
             return null;
         }
-        final List<Card> counted = count(ai, due, Removal.NONE).cards();
+        final Mana base = count(ai, due, Removal.NONE, seen);
+        if (seen != null) {
+            seen.counted(due, ai, base);
+        }
+        final List<Card> counted = base.cards();
         final List<Card> wiped = wipes ? boardWide(ai, judged, counted) : Collections.emptyList();
         final Removal removal = wiped.isEmpty() ? cut : cut.plus(wiped, 0);
         final boolean takes = !removal.isEmpty() || spends;
         final Predicate<Card> relevant = c -> counted.contains(c) || c.isArtifact() || c.isInZone(ZoneType.Hand);
         for (final Removal taken : removal.cases(relevant)) {
-            final Mana left = count(ai, due, taken);
+            final Mana left = count(ai, due, taken, seen);
             if (!left.pays(debt)) {
                 if (!takes) {
                     continue; // the play only loses life, and the debt was not covered before it: M17 asks nothing
@@ -1845,7 +1945,7 @@ public final class DelayedLoss {
                     return code; // a life amount that is not a number
                 }
                 final int extra = ownLoss + Math.max(0, t) * manaPain;
-                if (extra > 0 && !count(ai, due, taken.plus(Collections.emptyList(), extra)).pays(debt)) {
+                if (extra > 0 && !count(ai, due, taken.plus(Collections.emptyList(), extra), seen).pays(debt)) {
                     return code; // the play's own life loss, and its mana's pain, leave the pain no margin
                 }
             }
@@ -2169,11 +2269,28 @@ public final class DelayedLoss {
      * Script parameters, the copy's targets and, for a cost beyond mana, the reader's two scans.
      */
     public static boolean declinesFreeCast(final Player ai, final SpellAbility sa) {
+        return declinesFreeCast(ai, sa, null);
+    }
+
+    /** {@link #declinesFreeCast}, noting what it read in {@code seen} when the trace watches it (null: nothing). */
+    static boolean declinesFreeCast(final Player ai, final SpellAbility sa, final Seen seen) {
         if (ai == null || sa == null) {
             return false;
         }
-        return kind(sa) != null || copiedFlagged(sa) != null
-                || hasCostBeyondMana(sa.getPayCosts()) && !owed(ai, sa).isEmpty();
+        if (kind(sa) != null || copiedFlagged(sa) != null) {
+            if (seen != null) {
+                seen.flagged = true;
+            }
+            return true;
+        }
+        if (!hasCostBeyondMana(sa.getPayCosts())) {
+            return false;
+        }
+        final Debts owed = owed(ai, sa);
+        if (seen != null) {
+            seen.debts = owed;
+        }
+        return !owed.isEmpty();
     }
 
     /** Whether a cost has a part besides mana: a sacrifice, a discard, life, a tap. */
@@ -2219,20 +2336,39 @@ public final class DelayedLoss {
      * debt, which S6 pays. In a game where no Pact was cast the reader finds nothing and the cost is never read.
      */
     public static boolean declinesUnlessPayment(final Player ai, final SpellAbility sa, final Cost cost) {
-        return !isOwnPactDebt(ai, sa) && protection(ai, cost, sa, false) != null;
+        return unlessPaymentProblem(ai, sa, cost, null) != null;
+    }
+
+    /**
+     * Why S6b declines the unless payment ({@link #DEBT_DUE_NOW} or {@link #DEBT_UNPROTECTED}), or null: never for the
+     * AI's own Pact debt. {@code seen} notes what it read when the trace watches it (null: nothing).
+     */
+    static String unlessPaymentProblem(final Player ai, final SpellAbility sa, final Cost cost, final Seen seen) {
+        return isOwnPactDebt(ai, sa) ? null : protection(ai, cost, sa, false, seen);
     }
 
     private static String judge(final Player ai, final SpellAbility sa, final Kind kind, final String cost,
-                                final Supplier<ComboPlan> plan) {
+                                final Supplier<ComboPlan> plan, final Seen seen) {
         switch (kind) {
             case PACT:
                 if (libraryOutTurn(ai, plan == null ? null : plan.get())) {
                     return null; // today's waiver for Oops! All Spells (1.9)
                 }
-                if (!owed(ai, sa).isEmpty()) {
+                final Debts owed = owed(ai, sa);
+                if (seen != null) {
+                    seen.debts = owed;
+                }
+                if (!owed.isEmpty()) {
                     return PACT_DEBT_PENDING; // 1.3: one debt per upkeep, NOW or NEXT
                 }
-                return cost != null && count(ai, Due.NEXT, Removal.NONE).pays(Debt.of(cost)) ? null : PACT_UNPAYABLE;
+                if (cost == null) {
+                    return PACT_UNPAYABLE;
+                }
+                final Mana next = count(ai, Due.NEXT, Removal.NONE, seen);
+                if (seen != null) {
+                    seen.counted(Due.NEXT, ai, next);
+                }
+                return next.pays(Debt.of(cost)) ? null : PACT_UNPAYABLE;
             case EXTRA_TURN:
                 return EXTRA_TURN_LOSES;
             default:

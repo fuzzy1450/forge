@@ -2,6 +2,7 @@ package forge.ai.ability;
 
 import forge.ai.*;
 import forge.ai.simulation.DelayedLoss;
+import forge.ai.simulation.DelayedLossTrace;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
 import forge.game.cost.Cost;
@@ -109,6 +110,9 @@ public class DiscoverAi extends SpellAbilityAi {
      * of the eleven cards it answers false after reads only (DESIGN.md 1.10).
      */
     private static boolean declinesFreeCast(final Player ai, final SpellAbility spell) {
+        if (DelayedLossTrace.ON) {
+            return DelayedLossTrace.declinesFreeCast(DelayedLossTrace.S5B, ai, spell); // the same judgment, traced
+        }
         try {
             return DelayedLoss.declinesFreeCast(ai, spell);
         } catch (final AITimeoutTracker.Expired e) {

@@ -72,7 +72,8 @@ public final class ComboGuard {
         // Another guard failing (a card with an odd mana ability, an unreadable script) must not let one through. If it
         // cannot be told, a Pact waits and a flagged card is refused, as an unreadable Pact always waited.
         try {
-            final String loss = DelayedLoss.problem(ai, sa, () -> plan);
+            final String loss = DelayedLossTrace.ON ? DelayedLossTrace.problem(DelayedLossTrace.S1, ai, sa, () -> plan)
+                    : DelayedLoss.problem(ai, sa, () -> plan); // with the fix's trace on, the same judgment, traced
             if (loss != null) {
                 return loss;
             }

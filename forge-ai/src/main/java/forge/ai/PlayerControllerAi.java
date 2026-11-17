@@ -9,6 +9,7 @@ import forge.ai.combo.ComboExecute;
 import forge.ai.combo.ComboFetch;
 import forge.ai.simulation.ComboPlan;
 import forge.ai.simulation.DelayedLoss;
+import forge.ai.simulation.DelayedLossTrace;
 import forge.ai.simulation.OpeningHand;
 import forge.card.CardStateName;
 import forge.card.ColorSet;
@@ -1556,12 +1557,24 @@ public class PlayerControllerAi extends PlayerController {
         // pay-or-lose trigger's LosesGame, or a copy of it) the held-mana sets are cleared first, so every source the
         // count relied on pays: the payment refuses a source held for a later spell, and a hold can be made after the
         // Pact was cast or outlive the opponent's turn. A reservation is worth less than the game. AI memory only,
-        // written only at such a payment.
-        if (isOwnPactDebt(sa)) {
+        // written only at such a payment. With the fix's trace on (DelayedLossTrace, DESIGN.md 6.4), the payment's line
+        // gives the held sets' sizes before they are cleared, and whether the debt was paid.
+        final boolean ownDebt = isOwnPactDebt(sa);
+        final int[] heldBefore = ownDebt && DelayedLossTrace.ON ? heldManaSizes() : null;
+        if (ownDebt) {
             for (final AiCardMemory.MemorySet held : DelayedLoss.HELD_MANA_SETS) {
                 AiCardMemory.clearMemorySet(player, held);
             }
         }
+        final boolean paid = payUnlessCost(cost, sa, alreadyPaid, allPayers);
+        if (ownDebt && DelayedLossTrace.ON) {
+            DelayedLossTrace.paid(player, sa, heldBefore, paid);
+        }
+        return paid;
+    }
+
+    /** An unless cost's payment, as the AI decides it: the stock decision, the self-kill fix's S6b, the combo's. */
+    private boolean payUnlessCost(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
         if (SpellApiToAi.Converter.get(sa).willPayUnlessCost(player, sa, cost, alreadyPaid, allPayers)) {
             if (!ComputerUtilCost.canPayCost(cost, sa, player, true)) {
                 return false;
@@ -1604,12 +1617,28 @@ public class PlayerControllerAi extends PlayerController {
     }
 
     /**
+     * The sizes of the AI's held-mana sets, in DelayedLoss.HELD_MANA_SETS' order: the self-kill fix's trace's pay line
+     * (DelayedLossTrace), read only with the trace on, just before S6 clears them. AI memory, not game state.
+     */
+    private int[] heldManaSizes() {
+        final int[] sizes = new int[DelayedLoss.HELD_MANA_SETS.size()];
+        for (int i = 0; i < sizes.length; i++) {
+            final Set<Card> held = AiCardMemory.getMemorySet(player, DelayedLoss.HELD_MANA_SETS.get(i));
+            sizes[i] = held == null ? 0 : held.size();
+        }
+        return sizes;
+    }
+
+    /**
      * Whether DelayedLoss's debt protection declines this unless payment (MTG_DeckMaker's self-kill fix, DESIGN.md S6b,
      * D32): never the AI's own Pact debt, which S6 pays. A RuntimeException leaves the payment as it is today, as for a
      * play nothing flags (DESIGN.md S6b); AITimeoutTracker.Expired is rethrown. In a game where no Pact was cast the
      * debt reader finds nothing after two empty scans, and the payment is today's.
      */
     private boolean declinesUnlessPayment(final SpellAbility sa, final Cost cost) {
+        if (DelayedLossTrace.ON) {
+            return DelayedLossTrace.declinesUnlessPayment(player, sa, cost); // the same judgment and catch, traced
+        }
         try {
             return DelayedLoss.declinesUnlessPayment(player, sa, cost);
         } catch (final AITimeoutTracker.Expired e) {
@@ -1769,6 +1798,9 @@ public class PlayerControllerAi extends PlayerController {
      * game whose decks list none of the eleven cards it answers false after reads only (DESIGN.md 1.10).
      */
     private boolean declinesFreeCast(final SpellAbility sa) {
+        if (DelayedLossTrace.ON) {
+            return DelayedLossTrace.declinesFreeCast(DelayedLossTrace.S5, player, sa); // the same judgment, traced
+        }
         try {
             return DelayedLoss.declinesFreeCast(player, sa);
         } catch (final AITimeoutTracker.Expired e) {
