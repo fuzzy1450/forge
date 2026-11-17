@@ -286,7 +286,11 @@ public class AiReportScenarioTest extends AITest {
                 c -> { c.bf("Plains", 3, c.ai); c.hand("Solitary Confinement", c.ai); c.hand("Grizzly Bears", c.ai); c.hand("Wurmcoil Engine", c.ai); c.bf("Grizzly Bears", c.opp); }));
         l.add(play("4279", "Forge Anew with an equipment in play", Fid.APPROX, "MAIN2", true, "Forge Anew",
                 c -> { c.bf("Plains", 4, c.ai); c.hand("Forge Anew", c.ai); c.gy("Bonesplitter", c.ai); /* its enter trigger needs an Equipment in the graveyard */ c.bf("Grizzly Bears", c.ai); }));
-        l.add(play("4279", "Springleaf Drum with a creature to tap", Fid.EXACT, M1, true, "Springleaf Drum",
+        // the fair pass line: the heuristics cast the Drum in main 2 (MissingPhaseRestrictions in main 1), and passing is
+        // judged on that main 2, so main 1 waits; the Drum won main 1 only while the pass line cast nothing in main 2
+        l.add(noPlay("4279", "Springleaf Drum with a creature to tap waits for main 2", Fid.EXACT, M1, true, "Springleaf Drum",
+                c -> { c.bf("Forest", 2, c.ai); c.hand("Springleaf Drum", c.ai); c.bf("Grizzly Bears", c.ai); }));
+        l.add(play("4279", "Springleaf Drum with a creature to tap, in main 2", Fid.EXACT, "MAIN2", true, "Springleaf Drum",
                 c -> { c.bf("Forest", 2, c.ai); c.hand("Springleaf Drum", c.ai); c.bf("Grizzly Bears", c.ai); }));
         l.add(play("4302", "Unmoored Ego against a full hand", Fid.EXACT, M1, true, "Unmoored Ego",
                 c -> { c.bf("Island", c.ai); c.bf("Swamp", 2, c.ai); /* {1}{U}{B} */ c.hand("Unmoored Ego", c.ai); c.hand("Lightning Bolt", c.opp); c.hand("Lightning Bolt", c.opp); }));
@@ -299,7 +303,10 @@ public class AiReportScenarioTest extends AITest {
                 c -> { c.bf("Plains", c.ai); c.hand("Gods Willing", c.ai); final Card birds = c.bf("Birds of Paradise", c.ai); /* Serra Angel (4 toughness) survives a Bolt, so nothing to save */ c.stack(c.opp, "Lightning Bolt", birds); }));
         l.add(play("5897", "Invert Polarity against a burn spell", Fid.APPROX, M1, false, "Invert Polarity",
                 c -> { c.richMana(); c.hand("Invert Polarity", c.ai); c.stack(c.opp, "Serra Angel"); /* the report: a spell worth 3+ mana (a Bolt is not) */ }));
-        l.add(play("7626", "Titan's Presence with a colorless creature to reveal", Fid.APPROX, M1, true, "Titan's Presence",
+        // the fair pass line: the heuristics cast it in main 2, and passing is judged on that main 2, so main 1 waits
+        l.add(noPlay("7626", "Titan's Presence with a colorless creature to reveal waits for main 2", Fid.APPROX, M1, true, "Titan's Presence",
+                c -> { c.bf("Forest", 3, c.ai); c.hand("Titan's Presence", c.ai); c.hand("Wurmcoil Engine", c.ai); c.bf("Grizzly Bears", c.opp); }));
+        l.add(play("7626", "Titan's Presence with a colorless creature to reveal, in main 2", Fid.APPROX, "MAIN2", true, "Titan's Presence",
                 c -> { c.bf("Forest", 3, c.ai); c.hand("Titan's Presence", c.ai); c.hand("Wurmcoil Engine", c.ai); c.bf("Grizzly Bears", c.opp); }));
         l.add(new Scenario("4113", "cascaded/free Glimpse of Tomorrow is resolved (not just exiled) with only lands in play", Fid.APPROX, M1, true,
                 c -> { c.bf("Mountain", 3, c.ai); c.bf("Forest", 2, c.ai); c.lib("Grizzly Bears", c.ai); c.lib("Serra Angel", c.ai); c.lib("Wurmcoil Engine", c.ai); },
@@ -465,7 +472,11 @@ public class AiReportScenarioTest extends AITest {
                 c -> c.plays("The Underworld Cookbook") ? null : "AI never activated The Underworld Cookbook" + c.why("The Underworld Cookbook")));
         l.add(play("6719", "Catapult Captain can kill the opponent by sacrificing a 0/6", Fid.EXACT, M1, true, "Catapult Captain",
                 c -> { c.bf("Swamp", 3, c.ai); c.bf("Catapult Fodder", c.ai).changeCardState("Transform", null, null); /* the Captain is its back face */ c.bf("Giant Ox", c.ai); c.opp.setLife(6, null); }));
-        l.add(play("4022", "Stoneforge Mystic with an equipment in hand (activate, don't attack)", Fid.EXACT, M1, true, "Stoneforge Mystic",
+        // the fair pass line: the heuristics activate it in main 2, untapped (the pass line's own combat leaves it home),
+        // and passing is judged on that main 2, so main 1 waits
+        l.add(noPlay("4022", "Stoneforge Mystic with an equipment in hand waits for main 2", Fid.EXACT, M1, true, "Stoneforge Mystic",
+                c -> { c.bf("Plains", 2, c.ai); c.bf("Stoneforge Mystic", c.ai); c.hand("Batterskull", c.ai); c.bf("Grizzly Bears", c.opp); }));
+        l.add(play("4022", "Stoneforge Mystic with an equipment in hand (activate, don't attack), in main 2", Fid.EXACT, "MAIN2", true, "Stoneforge Mystic",
                 c -> { c.bf("Plains", 2, c.ai); c.bf("Stoneforge Mystic", c.ai); c.hand("Batterskull", c.ai); c.bf("Grizzly Bears", c.opp); }));
         l.add(new Scenario("4023", "Stoneforge Mystic fetches the best equipment (Batterskull, not Bonesplitter)", Fid.APPROX, M1, true,
                 c -> { c.bf("Plains", 2, c.ai); c.bf("Stoneforge Mystic", c.ai); c.hand("Bonesplitter", c.ai); c.hand("Batterskull", c.ai); },
