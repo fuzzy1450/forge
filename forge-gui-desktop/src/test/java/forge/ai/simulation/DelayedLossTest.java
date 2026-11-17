@@ -633,6 +633,40 @@ public class DelayedLossTest extends FlatMcTestBase {
     }
 
     /**
+     * RULINGS-R3 M28: a cost that puts -1/-1 counters on a counted creature whose toughness is at most the counters
+     * removes it. A pending Summoner's Pact debt (2GG), Forest x3 and Devoted Druid: the Druid's untap puts a -1/-1
+     * counter on it, which kills it once it has one already (toughness 1).
+     */
+    @Test(timeOut = 300_000)
+    public void aMinusOneCounterCostThatKillsACountedCreatureTakesIt() {
+        for (final int already : new int[] { 1, 0 }) {
+            Scoped.under(new SimScope(59L), () -> {
+                resolveASummonersPact();
+                put("Forest", 3, ai, ZoneType.Battlefield);
+                final Card druid = put("Devoted Druid", ai, ZoneType.Battlefield);
+                druid.setCounters(CounterEnumType.M1M1, already);
+                assertEquals(druid.getNetToughness(), 2 - already, "Devoted Druid's toughness");
+                assertTrue(counted(DelayedLoss.Due.NEXT).contains(druid), "the Druid's G is counted: 4 for 2GG");
+                SpellAbility untap = null;
+                for (final SpellAbility sa : druid.getSpellAbilities()) {
+                    if (sa.getApi() == ApiType.Untap) {
+                        untap = sa;
+                    }
+                }
+                assertNotNull(untap, "Devoted Druid's untap ability");
+                untap.setActivatingPlayer(ai);
+                final String v = problemOf(untap);
+                if (already == 1) {
+                    assertEquals(v, DelayedLoss.DEBT_UNPROTECTED, "a second counter kills the Druid: 3 G for 2GG");
+                } else {
+                    assertNull(v, "the first counter leaves it at toughness 1");
+                }
+                return null;
+            });
+        }
+    }
+
+    /**
      * DESIGN.md section 4 (finding I5), with RULINGS-R3 M29(d): the same two boards built in three orders (seeded
      * shuffles of the order the AI's permanents are made in, so of their ids) give the same verdicts. Neither board
      * holds two painful sources of different colors with the same pain, so (pain, card id) order never chooses

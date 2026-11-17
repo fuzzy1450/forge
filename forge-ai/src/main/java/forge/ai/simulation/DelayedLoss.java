@@ -34,6 +34,7 @@ import forge.game.cost.CostPart;
 import forge.game.cost.CostPartMana;
 import forge.game.cost.CostPayLife;
 import forge.game.cost.CostPutCardToLib;
+import forge.game.cost.CostPutCounter;
 import forge.game.cost.CostReturn;
 import forge.game.cost.CostSacrifice;
 import forge.game.cost.CostTap;
@@ -449,7 +450,8 @@ public final class DelayedLoss {
          * <ul>
          *   <li>either: a sacrifice, a return, an exile or a put-into-library from the battlefield, or a gain of
          *       control (the AI's battlefield cards valid for the part's type; a part paid from its source takes the
-         *       source), and a life payment or damage to the AI;</li>
+         *       source), -1/-1 counters that kill a creature of the AI's (RULINGS-R3 M28), and a life payment or
+         *       damage to the AI;</li>
          *   <li>{@link Due#NOW}: also a tap of the source, or of untapped permanents of a type: nothing untaps before
          *       the trigger resolves. A hand part is free then, no land drop being counted;</li>
          *   <li>{@link Due#NEXT}: also a discard, or an exile or a put-into-library from the hand, while the land drop
@@ -492,6 +494,9 @@ public final class DelayedLoss {
                         }
                     } else if (fromBattlefield(part)) {
                         choose(ai, part, host, judged, ZoneType.Battlefield, cards, oneOf);
+                    } else if (part instanceof CostPutCounter && ((CostPutCounter) part).getCounter() != null
+                            && ((CostPutCounter) part).getCounter().is(CounterEnumType.M1M1)) {
+                        killed(ai, (CostPutCounter) part, host, judged, cards, oneOf);
                     } else if (!now && fromHand(part)) {
                         if (dropToCome == null) {
                             dropToCome = landMayBePlayed(ai);
@@ -563,6 +568,35 @@ public final class DelayedLoss {
                 cards.addAll(choices);
             } else if (n == 1 && !choices.isEmpty()) {
                 oneOf.add(choices);
+            }
+        }
+
+        /**
+         * RULINGS-R3 M28: -1/-1 counters put as a cost kill a creature of the AI's whose toughness is at most their
+         * number (Devoted Druid's untap): the source itself, or, a group, the creatures of the part's type that die
+         * of them. An amount that is not a number kills whatever it may go on.
+         */
+        private static void killed(final Player ai, final CostPutCounter part, final Card host,
+                                   final SpellAbility judged, final List<Card> cards, final List<List<Card>> oneOf) {
+            final Integer n = part.convertAmount();
+            final List<Card> candidates = new ArrayList<>();
+            if (!part.payCostFromSource()) {
+                candidates.addAll(CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield),
+                        part.getType().split(";"), ai, host, judged));
+            } else if (host != null) {
+                candidates.add(host);
+            }
+            final List<Card> dies = new ArrayList<>();
+            for (final Card c : candidates) {
+                if (c.isCreature() && c.isInZone(ZoneType.Battlefield) && ai.equals(c.getController())
+                        && (n == null || c.getNetToughness() <= n)) {
+                    dies.add(c);
+                }
+            }
+            if (part.payCostFromSource() || n == null) {
+                cards.addAll(dies);
+            } else if (!dies.isEmpty()) {
+                oneOf.add(dies);
             }
         }
 
