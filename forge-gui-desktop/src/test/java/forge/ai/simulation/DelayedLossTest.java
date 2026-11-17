@@ -285,7 +285,9 @@ public class DelayedLossTest extends FlatMcTestBase {
      * opponent's first main phase) {@code problem} of Pact of Negation and {@code declinesFreeCast} of it with no debt,
      * then, a Pact of the Titan's debt pending, {@code problem} and {@code declinesFreeCast} of Crop Rotation; on the
      * second (the AI's upkeep, Pact of Negation's trigger on the stack under an opponent's spell) {@code problem} of
-     * Daze's alternative cost and of Counterspell, and {@code declinesUnlessPayment} of a {1} the opponent asks.
+     * Daze's alternative cost and of Counterspell, {@code declinesUnlessPayment} of a {1} the opponent asks, and
+     * {@code problem} of Ad Nauseam and Austere Command, whose parts hang under additional abilities (T2 review
+     * finding 2: the walk that reads them).
      */
     @Test(timeOut = 300_000)
     public void theCoverageReadTakesNoIdAndDrawsNothing() {
@@ -370,6 +372,8 @@ public class DelayedLossTest extends FlatMcTestBase {
             final SpellAbility leak = put("Mana Leak", opp, ZoneType.Hand).getFirstSpellAbility();
             leak.setActivatingPlayer(opp);
             final Cost one = new Cost("1", true);
+            final SpellAbility nauseam = spell("Ad Nauseam"); // its loss hangs under its Repeat's RepeatSubAbility
+            final SpellAbility austere = spell("Austere Command"); // its DestroyAll modes are its Choices
             askEveryCardsAbilities();
             theirs.setCounters(CounterEnumType.SHIELD, 1);
             islands.get(0).setCounters(CounterEnumType.STUN, 1);
@@ -383,13 +387,17 @@ public class DelayedLossTest extends FlatMcTestBase {
                 second.add(problemOf(counterspell));
                 second.add(String.valueOf(DelayedLoss.declinesUnlessPayment(ai, leak, one)));
                 second.add(String.valueOf(DelayedLoss.isOwnPactDebt(ai, trigger)));
+                second.add(problemOf(nauseam));
+                second.add(problemOf(austere));
             }
             assertEquals(counters(scope), before, "the second board: no SimScope counter moved "
                     + List.of(SimScope.Counter.values()) + "; verdicts " + second);
             assertEquals(random2.draws, 0, "and nothing was drawn");
-            assertEquals(second, Arrays.asList(null, DelayedLoss.DEBT_DUE_NOW, "true", "true", null,
-                    DelayedLoss.DEBT_DUE_NOW, "true", "true"), "Daze's return leaves four Islands and Mana Confluence;"
-                    + " Counterspell and the {1} would tap Islands the trigger needs; the trigger is the AI's own debt");
+            assertEquals(second, Arrays.asList(null, DelayedLoss.DEBT_DUE_NOW, "true", "true", DelayedLoss.DEBT_DUE_NOW,
+                    DelayedLoss.DEBT_DUE_NOW, null, DelayedLoss.DEBT_DUE_NOW, "true", "true", DelayedLoss.DEBT_DUE_NOW,
+                    DelayedLoss.DEBT_DUE_NOW), "Daze's return leaves four Islands and Mana Confluence; Counterspell and"
+                    + " the {1} would tap Islands the trigger needs; the trigger is the AI's own debt; Ad Nauseam's 3BB"
+                    + " and Austere Command's 4WW would too");
             return null;
         });
     }
@@ -865,6 +873,68 @@ public class DelayedLossTest extends FlatMcTestBase {
                 final String v = problemOf(spell("Culling Ritual"));
                 if (forests == 2) {
                     assertEquals(v, DelayedLoss.DEBT_UNPROTECTED, "the debt needs Sol Ring's CC: two Forests are left");
+                } else {
+                    assertNull(v, "four Forests cover 2GG without Sol Ring");
+                }
+                return null;
+            });
+        }
+    }
+
+    /**
+     * RULINGS-R3 M17, T2 review finding 2: a play's own life loss is read where it hangs under an additional ability,
+     * not only along its sub-abilities. A pending Pact of Negation debt (3UU), Island x3 and Ancient Tomb, tapped now
+     * (no mana of the play's can cost life), the opponent's end step: the cover needs the Tomb. Ad Nauseam's loss (X,
+     * each card's mana value) sits under its Repeat's RepeatSubAbility: not a number. Hoarder's Greed's 2 life sits
+     * under a Repeat that runs while it wins its clashes: no number of times. Abzan Charm's 2 life is under one of its
+     * Choices, a number: refused at 6 life (6 - 2 = 4, and the Tomb's 2 + 3 < 4 fails), allowed at 40. With Island x5
+     * the painless sources cover 3UU and nothing is budgeted.
+     */
+    @Test(timeOut = 300_000)
+    public void anOwnLifeLossUnderAnAdditionalAbilityIsRead() {
+        Scoped.under(new SimScope(83L), () -> {
+            resolveAPactOfNegation();
+            put("Island", 3, ai, ZoneType.Battlefield);
+            put("Ancient Tomb", ai, ZoneType.Battlefield).setTapped(true);
+            at(PhaseType.END_OF_TURN, opp);
+            ai.setLife(20, null);
+            assertEquals(DelayedLoss.count(ai, DelayedLoss.Due.NEXT, DelayedLoss.Removal.NONE).units().size(), 5,
+                    "the Tomb untaps for the upkeep and fits at 20 life: 3 + 2 for 3UU");
+            final List<String> verdicts = new ArrayList<>();
+            verdicts.add(problemOf(spell("Ad Nauseam")));
+            verdicts.add(problemOf(spell("Hoarder's Greed")));
+            ai.setLife(6, null);
+            verdicts.add(problemOf(spell("Abzan Charm")));
+            ai.setLife(40, null);
+            verdicts.add(problemOf(spell("Abzan Charm")));
+            put("Island", 2, ai, ZoneType.Battlefield);
+            ai.setLife(20, null);
+            verdicts.add(problemOf(spell("Ad Nauseam")));
+            verdicts.add(problemOf(spell("Hoarder's Greed")));
+            assertEquals(verdicts, Arrays.asList(DelayedLoss.DEBT_UNPROTECTED, DelayedLoss.DEBT_UNPROTECTED,
+                    DelayedLoss.DEBT_UNPROTECTED, null, null, null), "Island x3 and the Tomb: Ad Nauseam's X under its"
+                    + " Repeat, Hoarder's Greed's 2 life repeated while it wins its clashes, Abzan Charm's mode's 2 life"
+                    + " at 6 life and at 40; Island x5: Ad Nauseam, Hoarder's Greed; verdicts " + verdicts);
+            return null;
+        });
+    }
+
+    /**
+     * RULINGS-R3 M18, T2 review finding 2: a board-wide removal under an additional ability is read too. A pending
+     * Summoner's Pact debt (2GG): Austere Command's modes are its Choices, and one destroys every artifact, Sol Ring
+     * among them; every mode is read, whichever two the AI would choose.
+     */
+    @Test(timeOut = 300_000)
+    public void aBoardWideRemovalUnderAnAdditionalAbilityTakesTheSourcesItMatches() {
+        for (final int forests : new int[] { 2, 4 }) {
+            Scoped.under(new SimScope(89L), () -> {
+                resolveASummonersPact();
+                put("Forest", forests, ai, ZoneType.Battlefield);
+                put("Sol Ring", ai, ZoneType.Battlefield);
+                final String v = problemOf(spell("Austere Command"));
+                if (forests == 2) {
+                    assertEquals(v, DelayedLoss.DEBT_UNPROTECTED,
+                            "its artifact mode takes Sol Ring, whose CC the debt needs: two Forests are left");
                 } else {
                     assertNull(v, "four Forests cover 2GG without Sol Ring");
                 }

@@ -47,6 +47,7 @@ import forge.game.player.Player;
 import forge.game.replacement.ReplacementEffect;
 import forge.game.replacement.ReplacementType;
 import forge.game.spellability.AbilityManaPart;
+import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityRestriction;
 import forge.game.spellability.SpellAbilityStackInstance;
@@ -100,7 +101,11 @@ public final class DelayedLoss {
     static final int DAMAGE_MARGIN = 3;
     /** With this few cards left in a library-out deck's library its turn is taken as won (from ComboGuard). */
     static final int PACT_LIBRARY_OUT_LEFT = 3;
-    /** How deep an extra turn's execute is followed to its loss (Effect triggers, sub-abilities). */
+    /**
+     * How deep a script is followed: an extra turn's execute to its loss (Effect triggers, sub-abilities), and a play's
+     * additional abilities under one another ({@link #parts}; no spell or activated ability of the cardsfolder nests
+     * more than four).
+     */
     static final int REACH_DEPTH = 4;
 
     /** The colors of a unit or a pip, as bits: MagicColor's five, and colorless. */
@@ -1846,14 +1851,88 @@ public final class DelayedLoss {
         return null;
     }
 
+    /** One part of a play's script, and whether a Repeat or RepeatEach above it runs it an unknown number of times. */
+    static final class Part {
+        final SpellAbility sa;
+        final boolean repeated;
+
+        Part(final SpellAbility sa, final boolean repeated) {
+            this.sa = sa;
+            this.repeated = repeated;
+        }
+    }
+
+    /**
+     * Every part of a play's script, in a fixed order (T2 review finding 2): the play and its sub-abilities, and after
+     * each part the abilities it holds as additional abilities, with their own sub-abilities and so on: a Repeat's or
+     * RepeatEach's {@code RepeatSubAbility} (Ad Nauseam's loss hangs there), a Charm's {@code Choices}, a coin flip's,
+     * a clash's or a branch's outcomes, a delayed trigger's {@code Execute}, a die roll's results. Each part's maps are
+     * read in their keys' sorted order, the single abilities before the lists, to {@link #REACH_DEPTH} levels; a part
+     * under a {@code RepeatSubAbility} is marked repeated. Null when a part at that depth holds more: what cannot be
+     * read is not counted on. Field and map reads only: no ability is built, nothing is drawn.
+     */
+    static List<Part> parts(final SpellAbility play) {
+        final List<Part> out = new ArrayList<>();
+        return addParts(play, false, REACH_DEPTH, out) ? out : null;
+    }
+
+    private static boolean addParts(final SpellAbility first, final boolean repeated, final int depth,
+                                    final List<Part> out) {
+        for (SpellAbility p = first; p != null; p = p.getSubAbility()) {
+            out.add(new Part(p, repeated));
+            final Map<String, SpellAbility> single = p.getAdditionalAbilities();
+            final Map<String, List<AbilitySub>> lists = p.getAdditionalAbilityLists();
+            final boolean holdsSingle = single != null && !single.isEmpty();
+            final boolean holdsLists = lists != null && !lists.isEmpty();
+            if (!holdsSingle && !holdsLists) {
+                continue;
+            }
+            if (depth <= 0) {
+                return false;
+            }
+            if (holdsSingle) {
+                for (final String key : sortedKeys(single)) {
+                    if (!addParts(single.get(key), repeated || "RepeatSubAbility".equals(key), depth - 1, out)) {
+                        return false;
+                    }
+                }
+            }
+            if (holdsLists) {
+                for (final String key : sortedKeys(lists)) {
+                    for (final AbilitySub sub : lists.get(key)) {
+                        if (!addParts(sub, repeated, depth - 1, out)) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    /** A map's keys, sorted: the order a part's additional abilities are read in, whatever the map's own. */
+    private static List<String> sortedKeys(final Map<String, ?> map) {
+        final List<String> keys = new ArrayList<>(map.keySet());
+        Collections.sort(keys);
+        return keys;
+    }
+
     /**
      * RULINGS-R3 M17 (i): the life the play's own effects cost the AI: every LoseLife of its own (not targeted,
-     * {@code Defined$} absent, You or Player) and every DealDamage with {@code Defined$} You or Player in its chain.
-     * Null when such an amount is not a number (an X, a count): it cannot be budgeted. Script parameters only.
+     * {@code Defined$} absent, You or Player) and every DealDamage with {@code Defined$} You or Player among its
+     * {@link #parts}, along its sub-abilities or under an additional ability (Ad Nauseam's, under its Repeat; every
+     * mode of a Charm). Null when such an amount is not a number (an X, a count), when a Repeat runs it an unknown
+     * number of times (Hoarder's Greed), or when the parts nest deeper than they are read: it cannot be budgeted.
+     * Script parameters only.
      */
     static Integer ownLifeLoss(final SpellAbility play) {
+        final List<Part> parts = parts(play);
+        if (parts == null) {
+            return null;
+        }
         int loss = 0;
-        for (SpellAbility p = play; p != null; p = p.getSubAbility()) {
+        for (final Part part : parts) {
+            final SpellAbility p = part.sa;
             final String amount;
             if (p.getApi() == ApiType.LoseLife && !p.usesTargeting() && own(p.getParam("Defined"), true)) {
                 amount = p.getParam("LifeAmount");
@@ -1862,7 +1941,7 @@ public final class DelayedLoss {
             } else {
                 continue;
             }
-            final Integer n = number(amount);
+            final Integer n = part.repeated ? null : number(amount);
             if (n == null) {
                 return null;
             }
@@ -1873,11 +1952,18 @@ public final class DelayedLoss {
 
     /**
      * RULINGS-R3 M18: the counted sources the board-wide removals of the AI's own play take, each matched by its
-     * filter over the counted sources only ({@code CardLists.getValidCards}).
+     * filter over the counted sources only ({@code CardLists.getValidCards}), among all its {@link #parts} (every mode
+     * of a Charm: Austere Command's artifact mode is one). Every counted source when the parts nest deeper than they
+     * are read.
      */
     static List<Card> boardWide(final Player ai, final SpellAbility play, final List<Card> counted) {
+        final List<Part> parts = parts(play);
+        if (parts == null) {
+            return new ArrayList<>(counted);
+        }
         final List<Card> out = new ArrayList<>();
-        for (SpellAbility p = play; p != null; p = p.getSubAbility()) {
+        for (final Part part : parts) {
+            final SpellAbility p = part.sa;
             final String valid = wipeFilter(p);
             if (valid == null) {
                 continue;
@@ -1891,10 +1977,17 @@ public final class DelayedLoss {
         return out;
     }
 
-    /** Whether the play's chain holds a board-wide removal (M18). Script parameters only. */
+    /**
+     * Whether the play's {@link #parts} hold a board-wide removal (M18), or nest deeper than they are read. Script
+     * parameters only.
+     */
     private static boolean wipesBoard(final SpellAbility play) {
-        for (SpellAbility p = play; p != null; p = p.getSubAbility()) {
-            if (wipeFilter(p) != null) {
+        final List<Part> parts = parts(play);
+        if (parts == null) {
+            return true;
+        }
+        for (final Part part : parts) {
+            if (wipeFilter(part.sa) != null) {
                 return true;
             }
         }
