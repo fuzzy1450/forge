@@ -898,7 +898,10 @@ public class AiController {
             AiPlayDecision opinion = canPlayAndPayFor(sa);
             //PhaseHandler ph = game.getPhaseHandler();
             // System.out.printf("Ai thinks '%s' of %s @ %s %s >>> \n", opinion, sa, Lang.getPossesive(ph.getPlayerTurn().getName()), ph.getPhase());
-            if (opinion == AiPlayDecision.WillPlay) {
+            // MTG_DeckMaker's self-kill fix, S3: a counterspell DelayedLoss refuses (an uncovered Pact, an answer whose
+            // cost a pending debt needs) is passed over after its own judgment, so every counter is still judged, in the
+            // same order with the same draws, and the next one is picked
+            if (opinion == AiPlayDecision.WillPlay && !refusedByDelayedLoss(sa, () -> deckPlan(player).combos)) {
                 final int restrictionLevel = ComputerUtil.counterSpellRestriction(player, sa);
                 if (bestSA == null || restrictionLevel > bestRestriction) {
                     bestRestriction = restrictionLevel;
@@ -910,6 +913,32 @@ public class AiController {
         // TODO - "Look" at Targeted SA and "calculate" the threshold
         // if (bestRestriction < targetedThreshold) return false;
         return bestSA;
+    }
+
+    /**
+     * Whether DelayedLoss refuses the play (MTG_DeckMaker's self-kill fix, DESIGN.md S3 and S3b): a Pact the next
+     * upkeep cannot pay or with another debt pending, an extra turn that ends in a loss, Glorious End, a copy of one, a
+     * play whose cost a pending debt needs. The sites ask it after the heuristics approved the play, so every play is
+     * judged in the same order with the same draws. The plan is read only for a Pact, through {@code plan}: a game's
+     * first plan read is never made here.
+     */
+    private boolean refusedByDelayedLoss(final SpellAbility sa, final Supplier<ComboPlan> plan) {
+        return delayedLossProblem(sa, plan) != null;
+    }
+
+    /**
+     * DelayedLoss's refusal of the play, its code, or null, with ComboGuard's catches (DESIGN.md 1.11):
+     * AITimeoutTracker.Expired is rethrown, and a play that cannot be judged is refused only when it is a Pact or a card
+     * DelayedLoss flags (DelayedLoss.refusalWhenUnread). Reads only (DESIGN.md 1.10).
+     */
+    private String delayedLossProblem(final SpellAbility sa, final Supplier<ComboPlan> plan) {
+        try {
+            return DelayedLoss.problem(player, sa, plan);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return DelayedLoss.refusalWhenUnread(sa);
+        }
     }
 
     public SpellAbility predictSpellToCastInMain2(ApiType exceptSA) {
@@ -3818,6 +3847,11 @@ public class AiController {
                         continue;
                     }
 
+                    // MTG_DeckMaker's self-kill fix, S3b: a play DelayedLoss refuses is passed over after its own
+                    // judgment, and the walk goes on to its next play; the plan is the one read above, before this thread
+                    if (refusedByDelayedLoss(sa, () -> combos)) {
+                        continue;
+                    }
                     // TODO could continue to try find another with higher rating (weighted by priority ordering)
                     approvedPlays.add(sa);
                     if (approvedPlays.size() >= maxResults) {
