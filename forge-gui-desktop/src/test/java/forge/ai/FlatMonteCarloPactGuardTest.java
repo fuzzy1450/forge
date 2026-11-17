@@ -679,4 +679,17 @@ public class FlatMonteCarloPactGuardTest extends AITest {
             }
         }
     }
+
+    /** Review t1-1, proof D: 0 counts 0, no max(1, ...) (1.4). */
+    @Test
+    public void reviewGaeasCradleWithNoCreature() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        addCards("Island", 4, ai);
+        addCard("Gaea's Cradle", ai);
+        AssertJUnit.assertEquals("no creature: the Cradle makes nothing", "pact-unpayable",
+                verdict(ai, onTheirTurn(game, ai, "Pact of Negation")));
+        addCard("Memnite", ai);
+        assertAllowed("one creature: one G", verdict(ai, fromHand(ai, "Pact of Negation")));
+    }
 }
