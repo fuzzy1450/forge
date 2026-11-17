@@ -692,4 +692,21 @@ public class FlatMonteCarloPactGuardTest extends AITest {
         addCard("Memnite", ai);
         assertAllowed("one creature: one G", verdict(ai, fromHand(ai, "Pact of Negation")));
     }
+
+    /** Review t1-1, proof E: a Combo ability makes only the letters canProduce answers (1.4). */
+    @Test
+    public void reviewTalismanOnlyItsColors() {
+        for (final String talisman : new String[] { "Talisman of Creativity", "Talisman of Dominance" }) {
+            final Game game = initAndCreateGame();
+            final Player ai = game.getPlayers().get(1);
+            addCards("Island", 2, ai);
+            addCard(talisman, ai);
+            final String v = verdict(ai, onTheirTurn(game, ai, "Slaughter Pact"));
+            if ("Talisman of Creativity".equals(talisman)) {
+                AssertJUnit.assertEquals("U or R: no B for 2B", "pact-unpayable", v);
+            } else {
+                assertAllowed("U or B: the B", v);
+            }
+        }
+    }
 }
