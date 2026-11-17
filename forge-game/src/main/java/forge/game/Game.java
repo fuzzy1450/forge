@@ -297,8 +297,9 @@ public class Game {
     }
 
     /**
-     * How many whole-zone last-known copies are being made right now ({@link Zone#getLKICopy}): the snapshots of the
-     * battlefield and the graveyards that {@link #copyLastState()} and {@link #copyLastState(ZoneType)} take.
+     * How many copies for a snapshot of the battlefield or the graveyards are being made right now: the whole-zone
+     * last-known copies ({@link Zone#getLKICopy}) that {@link #copyLastState()} and {@link #copyLastState(ZoneType)}
+     * take, and the single card {@link #updateLastStateForCard} puts into the game's snapshot.
      * {@link forge.game.replacement.ReplacementEffect#copy(Card, boolean, boolean)} reads it.
      */
     private int zoneSnapshotsInProgress;
@@ -328,7 +329,13 @@ public class Game {
         if (lookup != null) {
             lastStateBattlefield.remove(c);
             lastStateGraveyard.remove(c);
-            lookup.add(CardCopyService.getLKICopy(c));
+            // the card's place in the snapshot is taken by a new copy: a snapshot's copy like the others
+            beginZoneSnapshot();
+            try {
+                lookup.add(CardCopyService.getLKICopy(c));
+            } finally {
+                endZoneSnapshot();
+            }
         }
     }
 

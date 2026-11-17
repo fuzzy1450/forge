@@ -201,16 +201,21 @@ public abstract class ReplacementEffect extends TriggerReplacementBase {
                     // runs: the snapshot of the battlefield and the graveyards (SpellAbility keeps a collection of
                     // its cards) and the mark of a replacement ability. The ability's own later readers use them (a
                     // prevention effect's buffered sub-ability is resolved after the run), so the game's effect
-                    // keeps them. A copy made for a snapshot of a zone (Game.copyLastState, through
-                    // Zone.getLKICopy) must not: SpellAbility.copy clones the reference, so the card's copy in the
-                    // new snapshot pointed at the cards of the snapshot the effect last saw, whose copy of the card
-                    // pointed further back, and every snapshot kept the one before it alive for the rest of the
-                    // game. The snapshot's copy is left as the ability of an effect that has not run. When the
+                    // keeps them. A copy made for the game's snapshot (Game.copyLastState through
+                    // Zone.getLKICopy, and Game.updateLastStateForCard) must not: SpellAbility.copy clones the
+                    // reference, so the card's copy in the new snapshot pointed at the cards of the snapshot the
+                    // effect last saw, whose copy of the card pointed further back, and every snapshot kept the
+                    // one before it alive for the rest of the game. The snapshot's copy is left without the pair
+                    // and without the mark, as the ability of an effect that has not run has neither. When the
                     // effect runs from a snapshot's card (a permanent that leaves the battlefield is replaced
-                    // through its last-known state), executeReplacement sets both again before anything reads them.
-                    // Every other last-known copy (of a single card, of a simulation's card) is made as before.
-                    // CardCopyService.getLKICopy cuts a card's cast ability in a similar way: it gives it empty
-                    // collections.
+                    // through its last-known state), executeReplacement sets both again before the ability
+                    // resolves. A copy that is later made FROM a snapshot's card (a token that copies a creature
+                    // that died) starts without them too, where it used to start with the original's mark and
+                    // its stale snapshot: the one place a reader can tell the difference, and only one that
+                    // evaluates that copy's ability before its effect has run (the damage prediction of a
+                    // prevention effect whose amount counts permanents). Every other last-known copy (of a single
+                    // card, of a simulation's card) is made as before. CardCopyService.getLKICopy cuts a card's
+                    // cast ability in a similar way: it gives it empty collections.
                     overridingAbilityCopy.clearLastState();
                     overridingAbilityCopy.setReplacementEffect(null);
                 }

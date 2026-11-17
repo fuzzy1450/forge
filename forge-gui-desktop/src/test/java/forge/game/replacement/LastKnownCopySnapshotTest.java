@@ -111,6 +111,36 @@ public class LastKnownCopySnapshotTest extends SimulationTest {
     }
 
     @Test
+    public void aCardRefreshedInTheSnapshotIsASnapshotsCopyToo() {
+        final Game game = initAndCreateGame();
+        final Player p = game.getPlayers().get(0);
+        final Card ancient = ancientAfterOneRun(game, p);
+        final Card before = lastKnown(game, ancient);
+
+        game.updateLastStateForCard(ancient); // what a counter put on the card, or a cost paid with it, does
+        final Card refreshed = lastKnown(game, ancient);
+        AssertJUnit.assertNotSame("the snapshot holds a new copy of the card", before, refreshed);
+        final SpellAbility copied = manaReplacement(refreshed);
+        AssertJUnit.assertNull("which takes the original's snapshot along no more than the others", copied.getLastStateBattlefield());
+        AssertJUnit.assertNull(copied.getLastStateGraveyard());
+        AssertJUnit.assertFalse(copied.isReplacementAbility());
+        AssertJUnit.assertTrue("the game's own effect is as it was", manaReplacement(ancient).isReplacementAbility());
+        AssertJUnit.assertFalse("and the snapshot is over", game.isTakingZoneSnapshot());
+    }
+
+    @Test
+    public void snapshotsInProgressAreCounted() {
+        final Game game = initAndCreateGame();
+        AssertJUnit.assertFalse(game.isTakingZoneSnapshot());
+        game.beginZoneSnapshot();
+        game.beginZoneSnapshot();
+        game.endZoneSnapshot();
+        AssertJUnit.assertTrue("one of two is still being taken", game.isTakingZoneSnapshot());
+        game.endZoneSnapshot();
+        AssertJUnit.assertFalse(game.isTakingZoneSnapshot());
+    }
+
+    @Test
     public void aLastKnownCopyMadeOutsideASnapshotKeepsWhatTheOriginalHas() {
         final Game game = initAndCreateGame();
         final Player p = game.getPlayers().get(0);
