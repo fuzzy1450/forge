@@ -14,9 +14,11 @@ import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
 
 /**
- * The final veto (MTG_DeckMaker's self-kill fix, DESIGN.md S4, RULINGS-R3 M23), asked through AiController's own
- * {@code vetoDelayedLoss}. These rows call what the fix added, so they do not compile at the parent 65940c9d323; the
- * rows that drive the AI and compile there are DelayedLossVetoTest's.
+ * The final veto (MTG_DeckMaker's self-kill fix, DESIGN.md S4, RULINGS-R3 M23): its answers, asked through
+ * AiController's own {@code vetoDelayedLoss}, and its place at each of chooseSpellAbilityToPlayImpl's three spell
+ * returns (the full simulation's, the play-before-land pass's and getSpellAbilityToPlay()'s), through an AiController
+ * whose veto refuses the decision's own pick. These rows call what the fix added, so they do not compile at the parent
+ * 65940c9d323; the rows that drive the AI and compile there are DelayedLossVetoTest's.
  */
 public class DelayedLossVetoApiTest extends AITest {
 
@@ -177,6 +179,25 @@ public class DelayedLossVetoApiTest extends AITest {
         final String stock = describe(brainOf(ai).chooseSpellAbilityToPlay());
         final String vetoed = describe(vetoing(ai, "Grizzly Bears").chooseSpellAbilityToPlay());
         AssertJUnit.assertEquals("[the stock pick, the pick with Grizzly Bears vetoed at the last return]",
+                Arrays.asList("Grizzly Bears", null), Arrays.asList(stock, vetoed));
+    }
+
+    /**
+     * DESIGN.md S4, D16 (review TA, finding 2): the veto at the full-simulation return. SpellAbilityPicker asks neither
+     * ComboGuard nor DelayedLoss, so for a seat the full simulation plays, this veto is the only DelayedLoss check its
+     * play meets. {@link #bearsInTheSecondMainPhase}'s board with both controllers set to the full simulation: the
+     * stock pick is Grizzly Bears, the picker's; with Grizzly Bears vetoed the decision is a pass.
+     */
+    @Test(timeOut = 120_000)
+    public void theFullSimulationReturnPassesTheVeto() {
+        final Player ai = bearsInTheSecondMainPhase();
+        final AiController stockBrain = brainOf(ai);
+        stockBrain.setUseSimulation(AIOption.USE_FULL_SIMULATION);
+        final AiController vetoingBrain = vetoing(ai, "Grizzly Bears");
+        vetoingBrain.setUseSimulation(AIOption.USE_FULL_SIMULATION);
+        final String stock = describe(stockBrain.chooseSpellAbilityToPlay());
+        final String vetoed = describe(vetoingBrain.chooseSpellAbilityToPlay());
+        AssertJUnit.assertEquals("[the full simulation's stock pick, its pick with Grizzly Bears vetoed]",
                 Arrays.asList("Grizzly Bears", null), Arrays.asList(stock, vetoed));
     }
 }
