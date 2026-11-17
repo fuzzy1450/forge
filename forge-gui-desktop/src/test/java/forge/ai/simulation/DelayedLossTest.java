@@ -146,6 +146,22 @@ public class DelayedLossTest extends FlatMcTestBase {
     }
 
     /**
+     * Summoner's Pact resolved in the AI's own first main phase, with no AI deadline: a debt due at the AI's next upkeep
+     * (2GG). Run it inside {@code Scoped.under}. The AI controls nothing yet.
+     */
+    private void resolveASummonersPact() {
+        setUpGame();
+        noDeadline();
+        fillLibrary(ai, 10);
+        fillLibrary(opp, 10);
+        at(PhaseType.MAIN1, ai);
+        onStack("Summoner's Pact", ai, null);
+        game.getPhaseHandler().onStackResolved();
+        playUntilStackClear(game);
+        assertTrue(DelayedLoss.owed(ai, null).hasNext(), "the resolved Pact's debt is due at the next upkeep");
+    }
+
+    /**
      * The AI's upkeep with its Pact of Negation's trigger on the stack, a debt due now (3UU): the Pact resolved as in
      * {@link #resolveAPactOfNegation}, then the game played into the AI's upkeep. Run it inside {@code Scoped.under}.
      * The AI controls nothing yet; the trigger (a WrappedAbility) is returned.
@@ -591,6 +607,29 @@ public class DelayedLossTest extends FlatMcTestBase {
             assertNull(problemOf(spell("Vampiric Tutor")), "five Islands cover 3UU without the Tomb: nothing to budget");
             return null;
         });
+    }
+
+    /**
+     * RULINGS-R3 M18: a board-wide removal of the AI's own play takes the counted sources its filter matches. A pending
+     * Summoner's Pact debt (2GG): Culling Ritual destroys each nonland permanent with mana value 2 or less, Sol Ring
+     * among them.
+     */
+    @Test(timeOut = 300_000)
+    public void anOwnBoardWideRemovalTakesTheSourcesItMatches() {
+        for (final int forests : new int[] { 2, 4 }) {
+            Scoped.under(new SimScope(53L), () -> {
+                resolveASummonersPact();
+                put("Forest", forests, ai, ZoneType.Battlefield);
+                put("Sol Ring", ai, ZoneType.Battlefield);
+                final String v = problemOf(spell("Culling Ritual"));
+                if (forests == 2) {
+                    assertEquals(v, DelayedLoss.DEBT_UNPROTECTED, "the debt needs Sol Ring's CC: two Forests are left");
+                } else {
+                    assertNull(v, "four Forests cover 2GG without Sol Ring");
+                }
+                return null;
+            });
+        }
     }
 
     /**

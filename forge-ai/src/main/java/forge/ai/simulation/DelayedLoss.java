@@ -1738,7 +1738,8 @@ public final class DelayedLoss {
      * RULINGS-R3 M17: while a debt's cover needs a painful unit (the painless count does not cover it), the life the
      * play's own effects cost (a LoseLife or DealDamage of its own) and T times the largest pain of an untapped
      * painful source (the play's own mana payment may tap it) come off the life budget too; an amount that is not a
-     * number refuses the play.
+     * number refuses the play. RULINGS-R3 M18: a board-wide removal of the play's own (a DestroyAll, a SacrificeAll, a
+     * ChangeZoneAll from the battlefield) takes the counted sources its filter matches.
      * <p>
      * The reader comes first: in a game where no Pact was cast it finds nothing after two empty scans, and the cost is
      * never looked at.
@@ -1758,7 +1759,7 @@ public final class DelayedLoss {
         return owed.hasNext() ? guard(ai, cost, judged, Due.NEXT, owed.next(), t) : null;
     }
 
-    /** Debt protection against the debts due at one time (DESIGN.md 1.7, RULINGS-R3 M17). */
+    /** Debt protection against the debts due at one time (DESIGN.md 1.7, RULINGS-R3 M17 and M18). */
     private static String guard(final Player ai, final Cost cost, final SpellAbility judged, final Due due,
                                 final Debt debt, final int t) {
         final boolean now = due == Due.NOW;
@@ -1766,15 +1767,18 @@ public final class DelayedLoss {
         if (now && t < 0) {
             return code; // an X is chosen after the decision: it may spend anything
         }
-        final Removal removal = Removal.of(ai, cost, judged, due);
+        final Removal cut = Removal.of(ai, cost, judged, due);
         final boolean spends = now && t > 0; // for a debt due next upkeep mana costs nothing: every counted source untaps
-        final boolean takes = !removal.isEmpty() || spends;
+        final boolean wipes = wipesBoard(judged);                   // M18
         final Integer ownLoss = ownLifeLoss(judged);                // M17 (i); null: not a number
         final int manaPain = t != 0 ? largestUntappedPain(ai) : 0;  // M17 (ii); -1: unreadable
-        if (!takes && ownLoss != null && ownLoss == 0 && manaPain == 0) {
+        if (cut.isEmpty() && !spends && !wipes && ownLoss != null && ownLoss == 0 && manaPain == 0) {
             return null;
         }
         final List<Card> counted = count(ai, due, Removal.NONE).cards();
+        final List<Card> wiped = wipes ? boardWide(ai, judged, counted) : Collections.emptyList();
+        final Removal removal = wiped.isEmpty() ? cut : cut.plus(wiped, 0);
+        final boolean takes = !removal.isEmpty() || spends;
         final Predicate<Card> relevant = c -> counted.contains(c) || c.isArtifact() || c.isInZone(ZoneType.Hand);
         for (final Removal taken : removal.cases(relevant)) {
             final Mana left = count(ai, due, taken);
@@ -1823,6 +1827,52 @@ public final class DelayedLoss {
             loss += n;
         }
         return loss;
+    }
+
+    /**
+     * RULINGS-R3 M18: the counted sources the board-wide removals of the AI's own play take, each matched by its
+     * filter over the counted sources only ({@code CardLists.getValidCards}).
+     */
+    static List<Card> boardWide(final Player ai, final SpellAbility play, final List<Card> counted) {
+        final List<Card> out = new ArrayList<>();
+        for (SpellAbility p = play; p != null; p = p.getSubAbility()) {
+            final String valid = wipeFilter(p);
+            if (valid == null) {
+                continue;
+            }
+            for (final Card c : CardLists.getValidCards(counted, valid, ai, p.getHostCard(), p)) {
+                if (!out.contains(c)) {
+                    out.add(c);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** Whether the play's chain holds a board-wide removal (M18). Script parameters only. */
+    private static boolean wipesBoard(final SpellAbility play) {
+        for (SpellAbility p = play; p != null; p = p.getSubAbility()) {
+            if (wipeFilter(p) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The filter of a board-wide removal: a DestroyAll's or SacrificeAll's {@code ValidCards$}, or the
+     * {@code ChangeType$} of a ChangeZoneAll from the battlefield; null for any other part.
+     */
+    private static String wipeFilter(final SpellAbility p) {
+        final ApiType api = p.getApi();
+        if (api == ApiType.DestroyAll || api == ApiType.SacrificeAll) {
+            return p.getParam("ValidCards");
+        }
+        if (api == ApiType.ChangeZoneAll) {
+            final String origin = p.getParam("Origin");
+            return origin != null && origin.contains("Battlefield") ? p.getParam("ChangeType") : null;
+        }
+        return null;
     }
 
     /** A {@code Defined$} that takes in the AI itself: You, or Player (each player); absent where that means You. */
