@@ -438,6 +438,21 @@ public class FlatMonteCarloActivationTest extends AITest {
     }
 
     @Test
+    public void aFirstEquipOntoItsOwnCreatureIsTheTurnsEquip() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card angel = old("Serra Angel");
+        final Card bears = old("Grizzly Bears");
+        final Card boots = attached("Swiftfoot Boots", angel);
+        move(boots, angel); // the move that does nothing, which the search could always choose: it is on the record
+        final SpellAbility sa = equip(boots);
+        AssertJUnit.assertTrue("that was the turn's Equip: not onto its own creature a second time",
+                ActivationGuard.equipTargetClosed(ai, sa, angel));
+        AssertJUnit.assertTrue("nor onto a creature of earlier turns", ActivationGuard.equipTargetClosed(ai, sa, bears));
+        AssertJUnit.assertEquals("no-valid-targets", ActivationGuard.problem(ai, sa));
+    }
+
+    @Test
     public void anEquipWhoseOnlyTargetIsItsOwnCreatureIsIdle() {
         setUp();
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
@@ -590,7 +605,7 @@ public class FlatMonteCarloActivationTest extends AITest {
         AssertJUnit.assertEquals("no-valid-targets", ActivationGuard.problem(ai, sa));
         // a combo of the catalogue, whole on the AI's side of the table, with the Equipment as one of its pieces
         catalogue("win | Lightning Greaves + Grizzly Bears | Lightning Greaves | Grizzly Bears");
-        AssertJUnit.assertFalse("the combo pays for every attachment: the search aims as the combo needs",
+        AssertJUnit.assertFalse("the Equipment is a piece of a combo that is whole in play: the search aims as the combo needs",
                 ActivationGuard.equipTargetClosed(ai, sa, bears));
         AssertJUnit.assertNull("and the Equip is no idle play", ActivationGuard.problem(ai, sa));
         AssertJUnit.assertSame(bears, FlatMonteCarloPicker.loyaltyTarget(ai, sa));
