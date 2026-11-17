@@ -138,28 +138,20 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         SpellAbility debtPaid;
         Player winnerAi;
         SpellAbility winnerPact;
+        SpellAbility winnerSlaughter;
+        Player coveredAi;
+        SpellAbility coveredPact;
+        Player coveredCopyAi;
+        SpellAbility coveredCopyPact;
         final List<Game> games = new ArrayList<>();
     }
 
     /**
-     * Four boards, with every card's abilities asked afterwards:
-     * <ul>
-     *   <li>the threat board: the AI's own second main phase, a land played, life 6, Ancient Tomb and Forest x2, the
-     *       opponent's Memnite, Summoner's Pact in hand ({2}{G}{G}): with Memnite's 1 power to come, the Tomb's 2
-     *       damage leaves no margin (2 + 3 &lt; 5 fails) and the Pact is refused; with no threat term it is allowed
-     *       (FlatMonteCarloPactGuardTest.reviewThreatOnOwnTurnAfterCombat). A simulation copy of it too;</li>
-     *   <li>the debt board: Summoner's Pact resolved in the AI's first main phase ({2}{G}{G} due), Forest x2 and
-     *       Mountain x2, exactly the debt; Crop Rotation, Lightning Bolt and Final Fortune in hand, and a free copy of
-     *       Final Fortune as cascade casts it;</li>
-     *   <li>the upkeep board: the AI's upkeep with its Pact of Negation's trigger on the stack ({3}{U}{U} due now),
-     *       Island x5, and the opponent's Mana Leak;</li>
-     *   <li>the winner board: the AI's first main phase, its Thassa's Oracle's trigger on the stack, Island x2, and
-     *       Pact of Negation in hand.</li>
-     * </ul>
+     * The AI's own second main phase, a land played, life 6, Ancient Tomb and {@code forests} Forests, and the
+     * opponent's Memnite: with Memnite's 1 power to come, the Tomb's 2 damage leaves no margin (2 + 3 &lt; 5 fails),
+     * so a Summoner's Pact ({2}{G}{G}) is counted from the Forests alone.
      */
-    private Boards boards() {
-        final Boards b = new Boards();
-
+    private void tombAndForests(final int forests) {
         setUpGame();
         noDeadline();
         fillLibrary(ai, 10);
@@ -168,22 +160,58 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         ai.setLandsPlayedThisTurn(1);
         ai.setLife(6, null);
         put("Ancient Tomb", ai, ZoneType.Battlefield);
-        put("Forest", 2, ai, ZoneType.Battlefield);
+        put("Forest", forests, ai, ZoneType.Battlefield);
         put("Memnite", opp, ZoneType.Battlefield);
-        b.threatAi = ai;
-        b.threatPact = spell(ai, "Summoner's Pact");
+    }
+
+    /**
+     * A simulation copy of the game, as Flat MC's rollouts make one, and the copy's own Summoner's Pact, the copy's AI
+     * its activator. The game and its copy join the boards.
+     */
+    private SpellAbility copysSummonersPact(final Boards b) {
         final GameSimulator copy = new GameSimulator(game, ai);
-        b.copyAi = copy.getSimulatedAiPlayer();
-        for (final Card c : b.copyAi.getCardsIn(ZoneType.Hand)) {
+        final Player copyAi = copy.getSimulatedAiPlayer();
+        SpellAbility pact = null;
+        for (final Card c : copyAi.getCardsIn(ZoneType.Hand)) {
             if ("Summoner's Pact".equals(c.getName())) {
-                b.copyPact = c.getFirstSpellAbility();
-                b.copyPact.setActivatingPlayer(b.copyAi);
+                pact = c.getFirstSpellAbility();
+                pact.setActivatingPlayer(copyAi);
             }
         }
-        assertTrue(copy.getSimulatedGameState().isSimulationCopy() && b.copyPact != null,
-                "a simulation copy of the threat board, with its Summoner's Pact");
+        assertTrue(copy.getSimulatedGameState().isSimulationCopy() && pact != null,
+                "a simulation copy of the board, with its Summoner's Pact");
         b.games.add(game);
         b.games.add(copy.getSimulatedGameState());
+        return pact;
+    }
+
+    /**
+     * Five boards, with every card's abilities asked afterwards:
+     * <ul>
+     *   <li>the threat board: {@link #tombAndForests} with Forest x2, Summoner's Pact in hand: refused, two units for
+     *       {2}{G}{G}; with no threat term the Tomb's two count too and it is allowed
+     *       (FlatMonteCarloPactGuardTest.reviewThreatOnOwnTurnAfterCombat). A simulation copy of it too;</li>
+     *   <li>the debt board: Summoner's Pact resolved in the AI's first main phase ({2}{G}{G} due), Forest x2 and
+     *       Mountain x2, exactly the debt; Crop Rotation, Lightning Bolt and Final Fortune in hand, and a free copy of
+     *       Final Fortune as cascade casts it;</li>
+     *   <li>the upkeep board: the AI's upkeep with its Pact of Negation's trigger on the stack ({3}{U}{U} due now),
+     *       Island x5, and the opponent's Mana Leak;</li>
+     *   <li>the winner board: the AI's first main phase, its Thassa's Oracle's trigger on the stack, Island x2 and a
+     *       Swamp; Pact of Negation in hand, refused (three units for {3}{U}{U}), and Slaughter Pact, covered
+     *       ({2}{B});</li>
+     *   <li>the covered board: {@link #tombAndForests} with Forest x4, Summoner's Pact in hand: the threat term still
+     *       leaves the Tomb out, and the four Forests cover {2}{G}{G}: allowed, the threat costing the count the Tomb's
+     *       two units and the verdict nothing. A simulation copy of it too.</li>
+     * </ul>
+     */
+    private Boards boards() {
+        final Boards b = new Boards();
+
+        tombAndForests(2);
+        b.threatAi = ai;
+        b.threatPact = spell(ai, "Summoner's Pact");
+        b.copyPact = copysSummonersPact(b);
+        b.copyAi = b.copyPact.getActivatingPlayer();
 
         setUpGame();
         noDeadline();
@@ -231,6 +259,7 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         fillLibrary(opp, 10);
         at(PhaseType.MAIN1, ai);
         put("Island", 2, ai, ZoneType.Battlefield);
+        put("Swamp", ai, ZoneType.Battlefield);
         onStack("Thassa's Oracle", ai, null);
         game.getPhaseHandler().onStackResolved();
         for (int i = 0; i < 50 && !game.isGameOver() && !oraclesTriggerOnTop(); i++) {
@@ -239,7 +268,14 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         assertTrue(oraclesTriggerOnTop(), "Thassa's Oracle's trigger on the stack:\n" + gameStateToString(game));
         b.winnerAi = ai;
         b.winnerPact = spell(ai, "Pact of Negation");
+        b.winnerSlaughter = spell(ai, "Slaughter Pact");
         b.games.add(game);
+
+        tombAndForests(4);
+        b.coveredAi = ai;
+        b.coveredPact = spell(ai, "Summoner's Pact");
+        b.coveredCopyPact = copysSummonersPact(b);
+        b.coveredCopyAi = b.coveredCopyPact.getActivatingPlayer();
 
         for (final Game g : b.games) {
             askEveryCardsAbilities(g);
@@ -275,6 +311,10 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         out.add(DelayedLoss.kind(b.fortune) != null);
         out.add(DelayedLoss.declinesUnlessPayment(b.nowAi, b.leak, new Cost("1", true)));
         out.add(DelayedLoss.problem(b.winnerAi, b.winnerPact, PLAN));
+        out.add(DelayedLoss.problem(b.coveredAi, b.coveredPact, PLAN));
+        out.add(DelayedLoss.problem(b.coveredAi, b.coveredPact, PLAN));
+        out.add(DelayedLoss.problem(b.winnerAi, b.winnerSlaughter, PLAN));
+        out.add(DelayedLoss.problem(b.coveredCopyAi, b.coveredCopyPact, PLAN));
         return out;
     }
 
@@ -296,6 +336,13 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         out.add(trace.judgeUnlessPayment(b.nowAi, b.leak, new Cost("1", true)));
         trace.pay(b.nowAi, b.debtPaid, new int[] { 0, 1, 0, 1 }, true);
         out.add(trace.judgePlay(DelayedLossTrace.S1, b.winnerAi, b.winnerPact, PLAN, null));
+        // review TB-2: allowed judgments (at S4 with a heard word, at S3b, with a winner's trigger on the stack), a
+        // copy's allowed judgment, and a payment that did not pay
+        out.add(trace.judgePlay(DelayedLossTrace.S4, b.coveredAi, b.coveredPact, PLAN, DelayedLossTrace.HEARD_STOCK));
+        out.add(trace.judgePlay(DelayedLossTrace.S3B, b.coveredAi, b.coveredPact, PLAN, null));
+        out.add(trace.judgePlay(DelayedLossTrace.S1, b.winnerAi, b.winnerSlaughter, PLAN, null));
+        out.add(trace.judgePlay(DelayedLossTrace.S1, b.coveredCopyAi, b.coveredCopyPact, PLAN, null));
+        trace.pay(b.nowAi, b.debtPaid, new int[] { 1, 2, 3, 4 }, false);
         return out;
     }
 
@@ -306,8 +353,11 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
         final String debt = head + "turn=1\tphase=MAIN1\t";
         final String upkeep = head + "turn=2\tphase=UPKEEP\t";
         final String twoForests = "NEXT(life=6,threat=1):2{Forest=G;Forest=G}";
+        final String fourForests = "NEXT(life=6,threat=1):4{Forest=G;Forest=G;Forest=G;Forest=G}";
+        final String islandsAndSwamp = "NEXT(life=20,threat=0):3{Island=U;Island=U;Swamp=B}";
         final String none = "\tcopy_judged=0\tcopy_refused=0";
         final String one = "\tcopy_judged=1\tcopy_refused=1"; // the copy's judgment is counted, printed or not
+        final String two = "\tcopy_judged=2\tcopy_refused=1"; // and the copy's allowed one: judged, not refused
         final List<String> lines = new ArrayList<>();
         if (markers) {
             lines.add("decision\t1\tMAIN2\tseed=" + seed + "\tplayers=p2|p1");
@@ -332,8 +382,20 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
                 + "NOW(life=20,threat=0):5{Island=U;Island=U;Island=U;Island=U;Island=U}" + one);
         lines.add(upkeep + "site=pay\tverdict=ok\tcard=Pact of Negation\tdebts=NOW:5:U+U\tunits=-\theld=0,1,0,1"
                 + "\tpaid=yes" + one);
-        lines.add(debt + "site=S1\tverdict=pact-unpayable\tcard=Pact of Negation\tdebts=-\tunits="
-                + "NEXT(life=20,threat=0):2{Island=U;Island=U}\twinner=Thassa's Oracle" + one);
+        lines.add(debt + "site=S1\tverdict=pact-unpayable\tcard=Pact of Negation\tdebts=-\tunits=" + islandsAndSwamp
+                + "\twinner=Thassa's Oracle" + one);
+        // review TB-2: an allowed S4 judgment is written as S4, not as a veto, and with no heard; an allowed judgment
+        // carries no refusal tag, though its count had a threat term (no threat) or a winner's trigger is on the stack
+        // (no winner); a copy's allowed judgment counts as judged, not as refused; a payment that failed says paid=no
+        lines.add(threat + "site=S4\tverdict=ok\tcard=Summoner's Pact\tdebts=-\tunits=" + fourForests + one);
+        lines.add(threat + "site=S3b\tverdict=ok\tcard=Summoner's Pact\tdebts=-\tunits=" + fourForests + one);
+        lines.add(debt + "site=S1\tverdict=ok\tcard=Slaughter Pact\tdebts=-\tunits=" + islandsAndSwamp + one);
+        if (copies) {
+            lines.add(head + "turn=1\tphase=copy\tsite=S1\tverdict=ok\tcard=Summoner's Pact\tdebts=-\tunits="
+                    + fourForests + two);
+        }
+        lines.add(upkeep + "site=pay\tverdict=ok\tcard=Pact of Negation\tdebts=NOW:5:U+U\tunits=-\theld=1,2,3,4"
+                + "\tpaid=no" + two);
         return lines;
     }
 
@@ -393,7 +455,7 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
             assertEquals(random.draws - drawsDirect, 0, "and the sites draw nothing either");
             assertEquals(direct, Arrays.asList(DelayedLoss.PACT_UNPAYABLE, DelayedLoss.PACT_UNPAYABLE,
                     DelayedLoss.PACT_UNPAYABLE, DelayedLoss.PACT_UNPAYABLE, DelayedLoss.DEBT_UNPROTECTED, null, true,
-                    true, true, true, DelayedLoss.PACT_UNPAYABLE), "the judgments' answers");
+                    true, true, true, DelayedLoss.PACT_UNPAYABLE, null, null, null, null), "the judgments' answers");
             assertEquals(sites, Arrays.asList(DelayedLoss.PACT_UNPAYABLE, DelayedLoss.DEBT_UNPROTECTED,
                     DelayedLoss.PACT_UNPAYABLE, false), "the sites' answers: refused, the free Final Fortune declined");
             return null;
@@ -406,11 +468,12 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
     /**
      * RULINGS-R3 C and F, the printing path through the seam, for each combination of the copies and markers flags: on
      * {@link #boards()}, every kind of line (S1, a veto, an M19 judgment that threw, a copy's judgment, S3, S5, S5b, an
-     * S2 skip, S6b, a payment, a refusal with a winner's trigger on the stack), each field in its order, the bound
-     * scope's seed in each, the copy's judgment counted and printed only with the copies on, the marker only with the
-     * markers on and only for a real game. The trace's judgments answer as DelayedLoss's own, and leave the seven
-     * SimScope counters and the draws of a counting random where the same judgments asked of DelayedLoss directly
-     * leave them: unchanged.
+     * S2 skip, S6b, a payment, a refusal with a winner's trigger on the stack; and, review TB-2's, allowed judgments at
+     * S4, S3b and S1 with no veto, heard, threat or winner field, a copy's allowed judgment and a payment that failed),
+     * each field in its order, the bound scope's seed in each, the copies' judgments counted, judged and refused apart,
+     * and printed only with the copies on, the marker only with the markers on and only for a real game. The trace's
+     * judgments answer as DelayedLoss's own, and leave the seven SimScope counters and the draws of a counting random
+     * where the same judgments asked of DelayedLoss directly leave them: unchanged.
      */
     @Test(timeOut = 600_000)
     public void theLinesCarryTheirFieldsInOrderAndTheTraceOnlyPrints() throws IOException {
