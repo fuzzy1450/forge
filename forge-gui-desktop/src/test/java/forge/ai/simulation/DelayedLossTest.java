@@ -1357,4 +1357,34 @@ public class DelayedLossTest extends FlatMcTestBase {
         assertEquals(verdicts, Arrays.asList(DelayedLoss.DEBT_UNPROTECTED, null),
                 "[one Ornithopter, two] = " + verdicts);
     }
+
+    /**
+     * Review wf-1, mutant W5: a Pact the opponent resolved is the opponent's debt, never the AI's (DESIGN.md 1.3). The
+     * AI's first main phase: the opponent's Pact of Negation counters the AI's Grizzly Bears and leaves its
+     * pay-or-lose trigger waiting for the opponent's upkeep. The AI owes nothing, and its own Pact of Negation over
+     * Island x5 is allowed.
+     */
+    @Test(timeOut = 300_000)
+    public void reviewTheOpponentsPactIsNotTheAIsDebt() {
+        final List<Object> seen = Scoped.under(new SimScope(211L), () -> {
+            setUpGame();
+            noDeadline();
+            fillLibrary(ai, 10);
+            fillLibrary(opp, 10);
+            at(PhaseType.MAIN1, ai);
+            final SpellAbility bears = onStack("Grizzly Bears", ai, null);
+            onStack("Pact of Negation", opp, bears);
+            game.getPhaseHandler().onStackResolved();
+            playUntilStackClear(game);
+            put("Island", 5, ai, ZoneType.Battlefield);
+            final List<Object> out = new ArrayList<>();
+            out.add(game.getTriggerHandler().getDelayedTriggersView().size());
+            out.add(DelayedLoss.owed(opp, null).hasNext());
+            out.add(DelayedLoss.owed(ai, null).isEmpty());
+            out.add(pactOfNegation());
+            return out;
+        });
+        assertEquals(seen, Arrays.asList(1, true, true, null), "[the delayed triggers, the opponent owes a debt, the AI"
+                + " owes none, the AI's Pact of Negation over Island x5] = " + seen);
+    }
 }
