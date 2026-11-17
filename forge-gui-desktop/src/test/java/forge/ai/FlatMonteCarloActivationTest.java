@@ -480,6 +480,24 @@ public class FlatMonteCarloActivationTest extends AITest {
     }
 
     @Test
+    public void anotherEquipmentsMovesAreItsOwn() {
+        setUp();
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        final Card bears = old("Grizzly Bears");
+        final Card giant = old("Hill Giant");
+        final Card ogre = old("Gray Ogre");
+        final Card greaves = greavesOn(bears);
+        final Card shuko = addCardToZone("Shuko", ai, ZoneType.Battlefield);
+        shuko.attachToEntity(giant, null);
+        game.getAction().checkStateEffects(true);
+        move(shuko, ogre); // the Shuko's first move of the turn
+        final SpellAbility sa = equip(greaves);
+        AssertJUnit.assertFalse("the Greaves have not moved this turn", ActivationGuard.equipTargetClosed(ai, sa, giant));
+        AssertJUnit.assertNull(ActivationGuard.problem(ai, sa));
+        AssertJUnit.assertTrue("the Shuko has", ActivationGuard.equipTargetClosed(ai, equip(shuko), giant));
+    }
+
+    @Test
     public void anotherAttachAbilityIsNoMoveOfTheEquip() {
         setUp();
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
