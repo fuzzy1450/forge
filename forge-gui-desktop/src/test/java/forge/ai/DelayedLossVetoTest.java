@@ -14,6 +14,7 @@ import forge.game.Game;
 import forge.game.GameActionUtil;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
+import forge.game.cost.Cost;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostReturn;
 import forge.game.phase.PhaseHandler;
@@ -21,6 +22,7 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
+import forge.util.collect.FCollection;
 
 /**
  * The self-kill fix's priority-decision sites, asked through the AI's own decision (MTG_DeckMaker's self-kill fix,
@@ -384,6 +386,51 @@ public class DelayedLossVetoTest extends AITest {
                 Arrays.asList(ai.hasLost(),
                         AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK),
                         AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2)));
+    }
+
+    // --------------------------------------------------------------------------------------------- S6b
+
+    /** Rhystic Study on {@code opp}'s battlefield, and the draw its trigger offers them unless the AI pays {1}. */
+    private SpellAbility rhysticStudysDraw(final Player opp) {
+        final SpellAbility draw = addCard("Rhystic Study", opp).getTriggers().get(0).ensureAbility();
+        draw.setActivatingPlayer(opp);
+        return draw;
+    }
+
+    /** Whether the AI pays the {1} the ability asks of it, asked as an unless cost asks it: payCostToPreventEffect. */
+    private static boolean paysOne(final Player ai, final SpellAbility asking) {
+        return ai.getController().payCostToPreventEffect(new Cost("1", true), asking, false, new FCollection<>(ai));
+    }
+
+    /**
+     * S6b (DESIGN.md D32, round 2's B1): an unless payment is declined when it would spend the mana of the AI's own
+     * debt due now. The AI's upkeep with its Pact of Negation's trigger on the stack ({3}{U}{U}), Island x5 untapped:
+     * exactly the debt. The opponent's Rhystic Study asks the AI for {1}, as after a free Force of Will in that window:
+     * declined, and no Island is tapped. With a sixth untapped Island the {1} is paid (6 - 1 >= 5); and with no debt at
+     * all (another game, the AI's upkeep, Island x5) it is paid. Today the stock path pays the {1} at five Islands too,
+     * and the trigger then finds four.
+     */
+    @Test(timeOut = 300_000)
+    public void anUnlessPaymentDoesNotSpendThePactsMana() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        upkeepWithThePactsTrigger(game, ai);
+        final List<Card> islands = addCards("Island", 5, ai);
+        final SpellAbility draw = rhysticStudysDraw(opponentOf(game, ai));
+        final boolean paidAtFive = paysOne(ai, draw);
+        final int tappedAtFive = tapped(islands);
+        addCard("Island", ai);
+        final boolean paidAtSix = paysOne(ai, draw);
+
+        final Game noDebt = initAndCreateGame();
+        noDeadline(noDebt);
+        final Player ai2 = noDebt.getPlayers().get(1);
+        noDebt.getPhaseHandler().devModeSet(PhaseType.UPKEEP, ai2);
+        addCards("Island", 5, ai2);
+        final boolean paidWithNoDebt = paysOne(ai2, rhysticStudysDraw(opponentOf(noDebt, ai2)));
+        AssertJUnit.assertEquals("[the {1} paid at Island x5, the Islands tapped then, the {1} paid at Island x6, the"
+                        + " {1} paid with no debt]", Arrays.asList(false, 0, true, true),
+                Arrays.asList(paidAtFive, tappedAtFive, paidAtSix, paidWithNoDebt));
     }
 
     // The play-before-land return's veto (RULINGS-R3 M23) has no row here: no board reaches that return with a play
