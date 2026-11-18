@@ -238,6 +238,7 @@ public class GameCopier {
 
         newGame.getAction().checkStateEffects(true); //ensure state based effects and triggers are updated
         SicknessProbe.afterCopy(origGame, cardMap::get); // print-only, off unless -Dflatmc.sicknessprobe is set
+        keepHasteTheCopyLost();
         newGame.getTriggerHandler().resetActiveTriggers();
 
         if (copyStack)
@@ -380,6 +381,24 @@ public class GameCopier {
         }
 
         copyLeftThisTurn(newGame, aiPlayer);
+    }
+
+    /**
+     * A creature the original has unsick through haste must not be sick in the copy. The copy takes the raw flag and
+     * recomputes its own keywords, so where it lost that haste (the copier did not carry what grants it: Dash's reads
+     * the ability the card was cast with, which a copy of a copy no longer has), it reads sick at once. Such a copy keeps
+     * the value the copier gave before it took the raw flag: not sick, as the real game has it. A haste the copy does
+     * carry (an Equipment's, an Aura's, a lord's, a pump's) is left alone, and leaves with its source in the copy.
+     */
+    private void keepHasteTheCopyLost() {
+        for (Card card : origGame.getCardsIn(ZoneType.Battlefield)) {
+            if (card.isFirstTurnControlled() && !card.hasSickness()) {
+                final Card copy = cardMap.get(card);
+                if (copy != null && copy.isInZone(ZoneType.Battlefield) && copy.hasSickness()) {
+                    copy.setSickness(false);
+                }
+            }
+        }
     }
 
     /**

@@ -10,6 +10,8 @@ import forge.game.card.Card;
 import forge.game.combat.CombatUtil;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.spellability.SpellAbility;
+import forge.game.zone.ZoneType;
 
 /**
  * Summoning sickness in a rollout copy (MTG_DeckMaker docs/superpowers/specs/2026-11-18-flatmc-copier-sickness-design.md).
@@ -187,6 +189,39 @@ public class GameCopierSicknessTest extends SimulationTest {
         move(copy, copier.find(greaves), copier.find(fresh));
         AssertJUnit.assertTrue(CombatUtil.canAttack(cGiant));
         AssertJUnit.assertTrue(CombatUtil.canAttack(copier.find(fresh)));
+    }
+
+    /**
+     * Dash's haste is a static that reads the ability the card was cast with, which a copy does not carry. A first copy
+     * keeps the haste anyway (an entry of the original's static survives the copy), but a copy of that copy has lost
+     * it, and the evaluator's combat look-ahead makes such copies. The anti-goal (a creature that can attack in the real
+     * game must not be sick in the copy): a copy that reads a creature sick although its original is not keeps the value
+     * the copier gave it before, not sick (found by GameSimulationTest.testDash's copy-score check).
+     */
+    @Test
+    public void aDashedCreatureIsNotSickInACopyOfACopy() {
+        setUp(false);
+        addCard("Mountain", ai);
+        addCard("Mountain", ai);
+        final Card inHand = addCardToZone("Lightning Berserker", ai, ZoneType.Hand);
+        final SpellAbility dash = findSAWithPrefix(inHand, "Dash");
+        final GameSimulator sim = createSimulator(ai);
+        sim.simulateSpellAbility(dash);
+        final Game dashedGame = sim.getSimulatedGameState();
+        final Card dashed = findCardWithName(dashedGame, "Lightning Berserker");
+        AssertJUnit.assertTrue("it arrived this turn", dashed.isFirstTurnControlled());
+        AssertJUnit.assertFalse("dashed, it has haste", dashed.isSick());
+
+        final GameCopier copier = new GameCopier(dashedGame);
+        final Game copy = copier.makeCopy();
+        final Card cDashed = copier.find(dashed);
+        AssertJUnit.assertFalse(cDashed.isSick());
+
+        final GameCopier copier2 = new GameCopier(copy);
+        copier2.makeCopy();
+        final Card c2Dashed = copier2.find(cDashed);
+        AssertJUnit.assertFalse("the copy of the copy must not read it sick", c2Dashed.isSick());
+        AssertJUnit.assertTrue(CombatUtil.canAttack(c2Dashed));
     }
 
     /** The card property Siren's Call and its kind read (firstTurnControlled) says on the copy what it says in the game. */
