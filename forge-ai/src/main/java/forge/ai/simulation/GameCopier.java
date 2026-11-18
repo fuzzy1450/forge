@@ -339,7 +339,9 @@ public class GameCopier {
             Card otherCard = cardMap.get(card);
             otherCard.setGameTimestamp(card.getGameTimestamp());
             otherCard.setLayerTimestamp(card.getLayerTimestamp());
-            otherCard.setSickness(card.hasSickness());
+            // The raw flag the rules read, not hasSickness() (sick and without haste): the copy recomputes its own
+            // keywords (removeMapped, then the state check below), so a haste that leaves in the copy leaves it sick.
+            otherCard.setSickness(card.isFirstTurnControlled());
             otherCard.setState(card.getCurrentStateName(), false);
             if (card.isAttachedToEntity()) {
                 GameEntity ge = gameObjectMap.map(card.getEntityAttachedTo());
