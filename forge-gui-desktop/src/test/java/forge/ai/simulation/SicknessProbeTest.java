@@ -11,6 +11,7 @@ import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.zone.ZoneType;
 import forge.util.SimScope;
 
 /**
@@ -124,6 +125,35 @@ public class SicknessProbeTest extends SimulationTest {
             final int count = lines.size();
             new GameCopier(game).makeCopy(); // no scope bound: the GUI's case
             AssertJUnit.assertEquals("no scope, no line", count, lines.size());
+        } finally {
+            SicknessProbe.swapSink(before);
+        }
+    }
+
+    /**
+     * A dashed creature: its first copy cannot re-derive Dash's haste (it reads the cast ability, which a copy does not
+     * carry) and holds it only in a stale cache. The probe prints LOST for it, and the copier's guard then gives it the
+     * old value (raw flag false).
+     */
+    @Test
+    public void aLostHasteIsPrintedThroughAfterCopy() {
+        setUp();
+        addCard("Mountain", ai);
+        addCard("Mountain", ai);
+        final Card inHand = addCardToZone("Lightning Berserker", ai, ZoneType.Hand);
+        final GameSimulator sim = createSimulator(ai);
+        sim.simulateSpellAbility(findSAWithPrefix(inHand, "Dash"));
+        final Game dashedGame = sim.getSimulatedGameState();
+        final Card dashed = findCardWithName(dashedGame, "Lightning Berserker");
+        final List<String> lines = new ArrayList<>();
+        final Consumer<String> before = SicknessProbe.swapSink(lines::add);
+        try {
+            final GameCopier copier = new GameCopier(dashedGame);
+            Scoped.under(new SimScope(80L), () -> copier.makeCopy());
+            final List<String> lost = startingWith(withSeed(lines, 80L), "LOST seed=80 ");
+            AssertJUnit.assertEquals(String.valueOf(lines), 1, lost.size());
+            AssertJUnit.assertTrue(lost.get(0), lost.get(0).contains(" card=" + dashed.getId() + ":"));
+            AssertJUnit.assertFalse("the guard gave it the old value", copier.find(dashed).isFirstTurnControlled());
         } finally {
             SicknessProbe.swapSink(before);
         }

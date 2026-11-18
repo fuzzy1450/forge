@@ -32,9 +32,10 @@ import forge.util.SimScope;
  * <ul>
  * <li>{@code D* seed=S turn=T phase=P cards=ID:NAME,...}, once a game, at its first copy holding an affected card;</li>
  * <li>{@code AFFECTED seed=S turn=T phase=P card=ID:NAME}, once a card a game, the first time it is affected;</li>
- * <li>{@code LOST seed=S turn=T phase=P card=ID:NAME copies=N}, once a card a game, the first time the copy reads it
- * sick although the original has the haste that keeps it from being so: the copier lost that haste, which the old
- * copier's masked flag hid (the design's anti-goal). {@code N} counts that game's copies with such a card so far.</li>
+ * <li>{@code LOST seed=S turn=T phase=P card=ID:NAME copies=N}, once a card a game, the first time the copy does not
+ * carry every haste grant the original has (it reads the card sick, or holds fewer haste grants in its keyword-change
+ * table: a haste only a stale keyword cache still shows), which the copier's guard then repairs with the old value (the
+ * design's anti-goal). {@code N} counts that game's copies with such a card so far.</li>
  * </ul>
  * With no scope bound (the GUI) it prints nothing.
  */
@@ -56,9 +57,13 @@ final class SicknessProbe {
         return original.isInZone(ZoneType.Battlefield) && original.isFirstTurnControlled() && !original.hasSickness();
     }
 
-    /** The copy, still on its battlefield after its state check, reads sick: it lost the haste the original has. */
+    /**
+     * The copy does not carry every haste grant the original has (GameCopier.hasteNotCarried, the copier's guard's own
+     * test): it reads sick, or holds fewer haste grants in its keyword-change table. The guard then gives it the old
+     * value; the probe reads first.
+     */
     static boolean lostHaste(final Card original, final Card copy) {
-        return affected(original) && copy != null && copy.isInZone(ZoneType.Battlefield) && copy.hasSickness();
+        return affected(original) && GameCopier.hasteNotCarried(original, copy);
     }
 
     /** Called by the copier after the copy's own state check; does nothing while the probe is off or no scope is bound. */

@@ -13,6 +13,9 @@ import forge.game.ability.effects.DetachedCardEffect;
 import forge.game.card.*;
 import forge.game.card.token.TokenInfo;
 import forge.game.combat.Combat;
+import forge.game.keyword.Keyword;
+import forge.game.keyword.KeywordInterface;
+import forge.game.keyword.KeywordsChange;
 import forge.game.mana.Mana;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
@@ -341,8 +344,9 @@ public class GameCopier {
             Card otherCard = cardMap.get(card);
             otherCard.setGameTimestamp(card.getGameTimestamp());
             otherCard.setLayerTimestamp(card.getLayerTimestamp());
-            // The raw flag the rules read, not hasSickness() (sick and without haste): the copy recomputes its own
-            // keywords (removeMapped, then the state check below), so a haste that leaves in the copy leaves it sick.
+            // The raw flag the rules read, not hasSickness() (sick and without haste): a haste the copy re-derives (an
+            // Equipment's, an Aura's, a lord's, a pump's) leaves with its source in the copy, and the creature is sick
+            // there as it would be in the game. One the copy cannot re-derive: keepHasteTheCopyLost.
             otherCard.setSickness(card.isFirstTurnControlled());
             otherCard.setState(card.getCurrentStateName(), false);
             if (card.isAttachedToEntity()) {
@@ -384,21 +388,53 @@ public class GameCopier {
     }
 
     /**
-     * A creature the original has unsick through haste must not be sick in the copy. The copy takes the raw flag and
-     * recomputes its own keywords, so where it lost that haste (the copier did not carry what grants it: Dash's reads
-     * the ability the card was cast with, which a copy of a copy no longer has), it reads sick at once. Such a copy keeps
-     * the value the copier gave before it took the raw flag: not sick, as the real game has it. A haste the copy does
-     * carry (an Equipment's, an Aura's, a lord's, a pump's) is left alone, and leaves with its source in the copy.
+     * A creature the original has unsick through haste must not be sick in the copy because the copy cannot re-derive
+     * that haste. The copy takes the raw flag; where it does not carry every haste grant the original has
+     * ({@link #hasteNotCarried}), the creature keeps the value the copier gave before it took the raw flag: not sick,
+     * so it plays as it did before (hasSickness as in the game, isFirstTurnControlled as the old copier had it). Every
+     * creature whose haste grants the copy all re-derives keeps the raw flag, the Lightning Greaves storms' among them.
      */
     private void keepHasteTheCopyLost() {
         for (Card card : origGame.getCardsIn(ZoneType.Battlefield)) {
-            if (card.isFirstTurnControlled() && !card.hasSickness()) {
-                final Card copy = cardMap.get(card);
-                if (copy != null && copy.isInZone(ZoneType.Battlefield) && copy.hasSickness()) {
-                    copy.setSickness(false);
+            final Card copy = cardMap.get(card);
+            if (hasteNotCarried(card, copy)) {
+                copy.setSickness(false);
+            }
+        }
+    }
+
+    /**
+     * Whether the copy fails to carry the haste that keeps a creature of the original from being sick: the original is
+     * sick and hasted, its copy is on the copy's battlefield (the game's own list: a copy its state check moved leaves
+     * an object behind that still names the zone), and the copy reads sick or holds fewer haste grants in its
+     * keyword-change table than the original does. The table, not the copy's keyword cache: StaticEffect.removeMapped
+     * drops the original's static entries from the copied table without refreshing the cache, so a haste the copy
+     * cannot re-derive (Dash's and Blitz's read the ability the card was cast with, which a copy does not hold) stays in
+     * the cache, stale, until anything rebuilds the card's keywords, and a haste it re-derives beside it (an Equipment's)
+     * rebuilds the cache without it. Reads only.
+     */
+    static boolean hasteNotCarried(final Card original, final Card copy) {
+        if (copy == null || !original.isFirstTurnControlled() || original.hasSickness()) {
+            return false;
+        }
+        if (!copy.getGame().getCardsIn(ZoneType.Battlefield).contains(copy)) {
+            return false;
+        }
+        return copy.hasSickness() || hasteGrants(copy) < hasteGrants(original);
+    }
+
+    /** How many entries of the card's keyword-change table (a pump's, an animation's, a static's) give it haste. */
+    static int hasteGrants(final Card c) {
+        int n = 0;
+        for (final KeywordsChange change : c.getChangedCardKeywords().values()) {
+            for (final KeywordInterface kw : change.getKeywords()) {
+                if (kw.getKeyword() == Keyword.HASTE) {
+                    n++;
+                    break;
                 }
             }
         }
+        return n;
     }
 
     /**

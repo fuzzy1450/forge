@@ -5,6 +5,7 @@ import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotEquals;
 
 import java.util.List;
+import java.util.Set;
 
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -80,6 +81,10 @@ public class FlatMcCopierSicknessTest extends FlatMcTestBase {
 
         final Result r = decide(equipMove(greaves, second), 41L);
         assertNotEquals(r.reason, "wins", String.valueOf(r));
+        // and not by failing: both lines were rolled out and compared
+        assertEquals(r.candidatesEvaluated, 2, String.valueOf(r));
+        assertFalse(Set.of("error", "deadline", "heuristic-unsimulatable", "no-time", "too-slow", "low-memory",
+                "single-candidate").contains(r.reason), String.valueOf(r));
     }
 
     /** A preservation pin: the move that really adds an attacker still wins, before the fix and after it. */

@@ -129,6 +129,7 @@ public class GameCopierSicknessTest extends SimulationTest {
         final Game copy = copier.makeCopy();
         final Card cGoblin = copier.find(goblin);
         AssertJUnit.assertTrue(CombatUtil.canAttack(cGoblin));
+        AssertJUnit.assertTrue("the copy carries its haste: it keeps the raw flag", cGoblin.isFirstTurnControlled());
         move(copy, copier.find(greaves), copier.find(other));
         AssertJUnit.assertTrue(CombatUtil.canAttack(cGoblin));
     }
@@ -144,7 +145,9 @@ public class GameCopierSicknessTest extends SimulationTest {
 
         final GameCopier copier = new GameCopier(game);
         copier.makeCopy();
-        AssertJUnit.assertTrue(CombatUtil.canAttack(copier.find(giant)));
+        final Card cGiant = copier.find(giant);
+        AssertJUnit.assertTrue(CombatUtil.canAttack(cGiant));
+        AssertJUnit.assertTrue("the copy carries the pump's haste: it keeps the raw flag", cGiant.isFirstTurnControlled());
     }
 
     /** Haste from another permanent's static that is not an Equipment: it leaves with that permanent, in the copy too. */
@@ -192,15 +195,10 @@ public class GameCopierSicknessTest extends SimulationTest {
     }
 
     /**
-     * Dash's haste is a static that reads the ability the card was cast with, which a copy does not carry. A first copy
-     * keeps the haste anyway (an entry of the original's static survives the copy), but a copy of that copy has lost
-     * it, and the evaluator's combat look-ahead makes such copies. The anti-goal (a creature that can attack in the real
-     * game must not be sick in the copy): a copy that reads a creature sick although its original is not keeps the value
-     * the copier gave it before, not sick (found by GameSimulationTest.testDash's copy-score check).
+     * A game in main 1 where the AI has just cast Lightning Berserker for its Dash cost (a GameSimulator's copy, where the
+     * cast resolved): it arrived this turn, and Dash's haste is all that keeps it from being sick.
      */
-    @Test
-    public void aDashedCreatureIsNotSickInACopyOfACopy() {
-        setUp(false);
+    private Game dashedBerserkerGame() {
         addCard("Mountain", ai);
         addCard("Mountain", ai);
         final Card inHand = addCardToZone("Lightning Berserker", ai, ZoneType.Hand);
@@ -211,6 +209,22 @@ public class GameCopierSicknessTest extends SimulationTest {
         final Card dashed = findCardWithName(dashedGame, "Lightning Berserker");
         AssertJUnit.assertTrue("it arrived this turn", dashed.isFirstTurnControlled());
         AssertJUnit.assertFalse("dashed, it has haste", dashed.isSick());
+        return dashedGame;
+    }
+
+    /**
+     * Dash's haste is a static that reads the ability the card was cast with, which a copy does not carry, so the copy
+     * cannot re-derive it. A first copy still reads the haste, from a stale keyword cache (removeMapped drops the
+     * original's static entry from the card's keyword-change table without refreshing the cache); a copy of that copy,
+     * whose cache is built from the table, does not, and the evaluator's combat look-ahead makes such copies (found by
+     * GameSimulationTest.testDash's copy-score check). The anti-goal (a creature that can attack in the real game must
+     * not be sick in the copy): a creature whose haste the copy does not carry keeps the old copier's value, not sick.
+     */
+    @Test
+    public void aDashedCreatureIsNotSickInACopyOfACopy() {
+        setUp(false);
+        final Game dashedGame = dashedBerserkerGame();
+        final Card dashed = findCardWithName(dashedGame, "Lightning Berserker");
 
         final GameCopier copier = new GameCopier(dashedGame);
         final Game copy = copier.makeCopy();
@@ -222,6 +236,51 @@ public class GameCopierSicknessTest extends SimulationTest {
         final Card c2Dashed = copier2.find(cDashed);
         AssertJUnit.assertFalse("the copy of the copy must not read it sick", c2Dashed.isSick());
         AssertJUnit.assertTrue(CombatUtil.canAttack(c2Dashed));
+    }
+
+    /**
+     * In a FIRST copy the dashed creature's haste is a stale cached keyword: anything in the rollout that rebuilds its
+     * keywords (a pump that grants one, a keyword counter) drops it. In the game Dash still hastes it, so it must not
+     * turn sick in the copy (review I1 (a)).
+     */
+    @Test
+    public void aDashedCreatureStaysUnsickWhenItsKeywordsAreRebuiltInTheCopy() {
+        setUp(false);
+        final Game dashedGame = dashedBerserkerGame();
+        final Card dashed = findCardWithName(dashedGame, "Lightning Berserker");
+
+        final GameCopier copier = new GameCopier(dashedGame);
+        final Game copy = copier.makeCopy();
+        final Card cDashed = copier.find(dashed);
+        cDashed.addChangedCardKeywords(List.of("Trample"), null, false, copy.getNextTimestamp(), null);
+        copy.getAction().checkStateEffects(true);
+        AssertJUnit.assertFalse("a rebuild of its keywords must not make it sick", cDashed.isSick());
+        AssertJUnit.assertTrue(CombatUtil.canAttack(cDashed));
+    }
+
+    /**
+     * Two hastes, one the copy re-derives (Lightning Greaves') and one it cannot (Dash's). Moving the Greaves off it in
+     * the copy must leave it unsick, as Dash leaves it in the game (review I1 (b): the mirror image of the storm, an
+     * attacker the rollouts would miss).
+     */
+    @Test
+    public void aDashedCreatureWearingGreavesStaysUnsickWhenTheGreavesMoves() {
+        setUp(false);
+        final Game dashedGame = dashedBerserkerGame();
+        final Card dashed = findCardWithName(dashedGame, "Lightning Berserker");
+        final Player owner = dashed.getController();
+        final Card greaves = addCard("Lightning Greaves", owner);
+        greaves.attachToEntity(dashed, null);
+        final Card fresh = arrived(addCard("Hill Giant", owner));
+        dashedGame.getAction().checkStateEffects(true);
+        AssertJUnit.assertFalse(dashed.isSick());
+
+        final GameCopier copier = new GameCopier(dashedGame);
+        final Game copy = copier.makeCopy();
+        move(copy, copier.find(greaves), copier.find(fresh));
+        final Card cDashed = copier.find(dashed);
+        AssertJUnit.assertFalse("Dash still hastes it in the game", cDashed.isSick());
+        AssertJUnit.assertTrue(CombatUtil.canAttack(cDashed));
     }
 
     /** The card property Siren's Call and its kind read (firstTurnControlled) says on the copy what it says in the game. */
