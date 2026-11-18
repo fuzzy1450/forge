@@ -237,6 +237,7 @@ public class GameCopier {
         }
 
         newGame.getAction().checkStateEffects(true); //ensure state based effects and triggers are updated
+        SicknessProbe.afterCopy(origGame, cardMap::get); // print-only, off unless -Dflatmc.sicknessprobe is set
         newGame.getTriggerHandler().resetActiveTriggers();
 
         if (copyStack)
