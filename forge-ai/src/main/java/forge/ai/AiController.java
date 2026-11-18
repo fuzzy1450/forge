@@ -127,6 +127,13 @@ public class AiController {
     private int flatMcTurn = -1;
     private long flatMcTurnSpentNanos;
     private FlatMonteCarloPicker.Result lastFlatMcResult;
+    /**
+     * The self-kill fix's trace only (DelayedLossTrace, DESIGN.md 6.4, finding I7): the play this decision's loop
+     * driver heard (noteStockPlay) and the play Flat MC's tally of it recorded, so a veto of either says so. Written
+     * and read only with the trace on.
+     */
+    private SpellAbility traceStockHeard;
+    private SpellAbility traceTallyHeard;
     /** Circuit breaker: Monte Carlo switches itself off for this player after repeated errors or hopeless slowness. */
     private int flatMcErrors;
     private int flatMcSlowStreak;
@@ -898,7 +905,11 @@ public class AiController {
             AiPlayDecision opinion = canPlayAndPayFor(sa);
             //PhaseHandler ph = game.getPhaseHandler();
             // System.out.printf("Ai thinks '%s' of %s @ %s %s >>> \n", opinion, sa, Lang.getPossesive(ph.getPlayerTurn().getName()), ph.getPhase());
-            if (opinion == AiPlayDecision.WillPlay) {
+            // MTG_DeckMaker's self-kill fix, S3: a counterspell DelayedLoss refuses (an uncovered Pact, an answer whose
+            // cost a pending debt needs) is passed over after its own judgment, so every counter is still judged, in the
+            // same order with the same draws, and the next one is picked
+            if (opinion == AiPlayDecision.WillPlay
+                    && !refusedByDelayedLoss(DelayedLossTrace.S3, sa, () -> deckPlan(player).combos)) {
                 final int restrictionLevel = ComputerUtil.counterSpellRestriction(player, sa);
                 if (bestSA == null || restrictionLevel > bestRestriction) {
                     bestRestriction = restrictionLevel;
@@ -910,6 +921,34 @@ public class AiController {
         // TODO - "Look" at Targeted SA and "calculate" the threshold
         // if (bestRestriction < targetedThreshold) return false;
         return bestSA;
+    }
+
+    /**
+     * Whether DelayedLoss refuses the play (MTG_DeckMaker's self-kill fix, DESIGN.md S3 and S3b): a Pact the next
+     * upkeep cannot pay or with another debt pending, an extra turn that ends in a loss, Glorious End, a copy of one, a
+     * play whose cost a pending debt needs. The sites ask it after the heuristics approved the play, so every play is
+     * judged in the same order with the same draws. The plan is read only for a Pact, through {@code plan}: a game's
+     * first plan read is never made here. With the fix's trace on (DelayedLossTrace), the same judgment is traced as
+     * {@code site}'s.
+     */
+    private boolean refusedByDelayedLoss(final String site, final SpellAbility sa, final Supplier<ComboPlan> plan) {
+        return (DelayedLossTrace.ON ? DelayedLossTrace.problem(site, player, sa, plan) : delayedLossProblem(sa, plan))
+                != null;
+    }
+
+    /**
+     * DelayedLoss's refusal of the play, its code, or null, with ComboGuard's catches (DESIGN.md 1.11):
+     * AITimeoutTracker.Expired is rethrown, and a play that cannot be judged is refused only when it is a Pact or a card
+     * DelayedLoss flags (DelayedLoss.refusalWhenUnread). Reads only (DESIGN.md 1.10).
+     */
+    private String delayedLossProblem(final SpellAbility sa, final Supplier<ComboPlan> plan) {
+        try {
+            return DelayedLoss.problem(player, sa, plan);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return DelayedLoss.refusalWhenUnread(sa);
+        }
     }
 
     public SpellAbility predictSpellToCastInMain2(ApiType exceptSA) {
@@ -2276,6 +2315,13 @@ public class AiController {
     }
 
     private List<SpellAbility> chooseSpellAbilityToPlayImpl() {
+        if (DelayedLossTrace.ON) {
+            // the self-kill fix's trace (DESIGN.md 6.4): a real game's decision opens with a marker, and what the last
+            // decision's loop driver and Flat MC tally heard is forgotten
+            traceStockHeard = null;
+            traceTallyHeard = null;
+            DelayedLossTrace.decision(player);
+        }
         AiCache.clear();
         // Reset cached predicted combat, as it may be stale. It will be
         // re-created if needed and used for any AI logic that needs it.
@@ -2291,7 +2337,7 @@ public class AiController {
         }
 
         if (usesFullSimulation()) {
-            return singleSpellAbilityList(simPicker.chooseSpellAbilityToPlay(null));
+            return singleSpellAbilityList(vetoDelayedLoss(simPicker.chooseSpellAbilityToPlay(null)));
         }
 
         CardCollection playBeforeLand = CardLists.filter(
@@ -2301,7 +2347,9 @@ public class AiController {
             SpellAbility wantToPlayBeforeLand = chooseSpellAbilityToPlayFromList(
                     ComputerUtilAbility.getSpellAbilities(playBeforeLand, player), false
             );
-            if (wantToPlayBeforeLand != null) {
+            // RULINGS-R3 M23: the self-kill fix's veto sits inside the condition, so a vetoed pick falls through to the
+            // land play and the walk below instead of passing priority
+            if (wantToPlayBeforeLand != null && vetoDelayedLoss(wantToPlayBeforeLand) != null) {
                 return singleSpellAbilityList(wantToPlayBeforeLand);
             }
         }
@@ -2333,7 +2381,40 @@ public class AiController {
             }
         }
 
-        return singleSpellAbilityList(getSpellAbilityToPlay());
+        return singleSpellAbilityList(vetoDelayedLoss(getSpellAbilityToPlay()));
+    }
+
+    /**
+     * The last word on every spell the priority decision returns (MTG_DeckMaker's self-kill fix, DESIGN.md S4): a play
+     * DelayedLoss refuses is not made. The refusal is noted in FlatMonteCarloStats as "DelayedLoss:" and its code, and
+     * the play is a failed cast for the rest of the turn, so the heuristics do not offer it again (canPlaySa); null is a
+     * pass. Every other play is returned itself, and nothing is written. There is no exemption: the counter pick, the
+     * walk, Flat MC's lists and the storm solver refuse upstream, so the veto meets only the paths that ask none of them
+     * (combo-table loops, the sure plays, a search-only seat's own choice). The plan is read only for a Pact.
+     * Package-private: DelayedLossVetoApiTest asks it directly.
+     */
+    SpellAbility vetoDelayedLoss(final SpellAbility chosen) {
+        if (chosen == null) {
+            return null;
+        }
+        final String problem = DelayedLossTrace.ON
+                ? DelayedLossTrace.veto(player, chosen, () -> deckPlan(player).combos, heardBy(chosen))
+                : delayedLossProblem(chosen, () -> deckPlan(player).combos);
+        if (problem == null) {
+            return chosen;
+        }
+        FlatMonteCarloStats.noteRejected("DelayedLoss:" + problem);
+        noteFailedCast(castKey(chosen));
+        return null;
+    }
+
+    /**
+     * The self-kill fix's trace only (DESIGN.md S4, finding I7): whether this decision's loop driver (noteStockPlay) or
+     * Flat MC's tally of it had heard the play the veto judges.
+     */
+    private String heardBy(final SpellAbility chosen) {
+        return chosen == traceStockHeard ? DelayedLossTrace.HEARD_STOCK
+                : chosen == traceTallyHeard ? DelayedLossTrace.HEARD_TALLY : DelayedLossTrace.HEARD_NONE;
     }
 
     /**
@@ -2857,6 +2938,9 @@ public class AiController {
         if (chosenSa == null) {
             chosenSa = loopDriver.afterStockWalk();
         } else {
+            if (DelayedLossTrace.ON && loopDriver.handedToWalk()) {
+                traceStockHeard = chosenSa; // the self-kill fix's trace: the driver hears this play (finding I7)
+            }
             loopDriver.noteStockPlay(chosenSa);
         }
 
@@ -3198,6 +3282,9 @@ public class AiController {
             st.noteDecision(player.getId(), result);
         }
         FlatMonteCarloStats.record(result);
+        if (DelayedLossTrace.ON) {
+            traceTallyHeard = result.choice; // the self-kill fix's trace: the tally has this choice (finding I7)
+        }
         flatMcTurnSpentNanos += result.elapsedNanos;
         noteFlatMcOutcome(result.reason);
         if (result.hold) {
@@ -3818,6 +3905,11 @@ public class AiController {
                         continue;
                     }
 
+                    // MTG_DeckMaker's self-kill fix, S3b: a play DelayedLoss refuses is passed over after its own
+                    // judgment, and the walk goes on to its next play; the plan is the one read above, before this thread
+                    if (refusedByDelayedLoss(DelayedLossTrace.S3B, sa, () -> combos)) {
+                        continue;
+                    }
                     // TODO could continue to try find another with higher rating (weighted by priority ordering)
                     approvedPlays.add(sa);
                     if (approvedPlays.size() >= maxResults) {

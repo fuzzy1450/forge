@@ -220,6 +220,9 @@ public final class StormSolver {
             final Step pending = line.steps.get(index);
             for (final SpellAbility sa : movesOf(ai)) {
                 if (pending.matches(sa)) {
+                    if (refused(ai, combos, sa, pending)) {
+                        return null;
+                    }
                     index++;
                     lastNote = "follow " + pending;
                     aimAt(ai, sa);
@@ -244,6 +247,9 @@ public final class StormSolver {
             final Step step = line.steps.get(index);
             for (final SpellAbility sa : moves) {
                 if (step.matches(sa)) {
+                    if (refused(ai, combos, sa, step)) {
+                        return null;
+                    }
                     index++;
                     lastNote = "follow " + step;
                     aimAt(ai, sa);
@@ -294,6 +300,9 @@ public final class StormSolver {
                 index = 0;
                 for (final SpellAbility sa : moves) {
                     if (setup.get(0).matches(sa)) {
+                        if (refused(ai, combos, sa, setup.get(0))) {
+                            return null;
+                        }
                         index = 1;
                         lastNote = "setup " + setup;
                         aimAt(ai, sa);
@@ -309,6 +318,9 @@ public final class StormSolver {
         final Step step = line.steps.get(0);
         for (final SpellAbility sa : moves) {
             if (step.matches(sa)) {
+                if (refused(ai, combos, sa, step)) {
+                    return null;
+                }
                 index = 1;
                 lastNote = "start " + line.steps + " (" + line.nodes + " states, " + line.nanos / 1_000_000 + " ms)";
                 aimAt(ai, sa);
@@ -318,6 +330,37 @@ public final class StormSolver {
         line = null;
         lastNote = "first step not playable";
         return null;
+    }
+
+    /**
+     * RULINGS-R3 M19: whether DelayedLoss refuses the real game's play a step of the line matched, as the final veto
+     * would (debt protection: a Crop Rotation whose sacrifice takes a land a pending Pact's debt needs). The search
+     * cannot ask it, since a copy holds no delayed trigger, and the search's moves read no failed cast, so a refused
+     * step would be returned, vetoed into a pass and found again at the next priority. A refusal drops the line and
+     * marks this state as searched, as a search that found nothing marks it: the solver returns nothing in it again
+     * this turn, and Flat Monte Carlo decides. A play that cannot be judged is refused only when it is a Pact or a card
+     * DelayedLoss flags. In a game whose decks list none of the eleven cards, DelayedLoss answers null after reads only.
+     */
+    private boolean refused(final Player ai, final ComboPlan combos, final SpellAbility sa, final Step step) {
+        String problem;
+        if (DelayedLossTrace.ON) {
+            problem = DelayedLossTrace.problem(DelayedLossTrace.M19, ai, sa, () -> combos); // the same, traced
+        } else {
+            try {
+                problem = DelayedLoss.problem(ai, sa, () -> combos);
+            } catch (final AITimeoutTracker.Expired e) {
+                throw e;
+            } catch (final RuntimeException e) {
+                problem = DelayedLoss.refusalWhenUnread(sa);
+            }
+        }
+        if (problem == null) {
+            return false;
+        }
+        line = null;
+        failed.add(stateKey(ai));
+        lastNote = "step refused (" + problem + "): " + step;
+        return true;
     }
 
     /**
@@ -538,6 +581,9 @@ public final class StormSolver {
         List<Step> bestSteps = first.steps;
         String bestState = describe(root.getSimulatedAiPlayer()); // only text is kept, never a simulation
         final String startState = bestState;
+        // the self-kill fix's trace (DelayedLossTrace, DESIGN.md 6.4): the cards whose delayed-loss moves this search
+        // has left out and said so, one line each
+        final Set<Integer> skipTraced = DelayedLossTrace.ON ? new HashSet<>() : null;
         final StringBuilder trail = new StringBuilder();
         if (TRACE) {
             trail.append(" | picker: ").append(new SpellAbilityPicker(ai).explainCandidates());
@@ -567,8 +613,11 @@ public final class StormSolver {
             }
             for (final SpellAbility sa : moves) {
                 final Card host = sa.getHostCard();
-                if (sa.isLandAbility() || host == null || ComboPlan.isStormFinisher(host) || combos.wastesTutor(sa)) {
-                    continue; // lands are the AI's own business, and the storm card is kept for the lethal cast
+                if (sa.isLandAbility() || host == null || ComboPlan.isStormFinisher(host) || combos.wastesTutor(sa)
+                        || delayedLoss(ai, sa, skipTraced)) {
+                    // lands are the AI's own business, the storm card is kept for the lethal cast, and a Pact, an extra
+                    // turn that loses or Glorious End is never a step of a line, kill or setup (delayedLoss)
+                    continue;
                 }
                 final boolean fromGy = host.isInZone(ZoneType.Graveyard);
                 if (fromGy && node.gyCast.contains(host.getId())) {
@@ -670,6 +719,31 @@ public final class StormSolver {
         }
         child.releaseCopier(); // the play is applied: the child no longer needs its parent
         return child;
+    }
+
+    /**
+     * Whether the play is one of the delayed-loss cards (MTG_DeckMaker's self-kill fix, DESIGN.md S2): a Pact, an extra
+     * turn that ends in a loss, Glorious End ({@link DelayedLoss#kind}). No line holds one, kill or setup: the kill test
+     * is arithmetic and the finisher is never resolved in the search, so a Pact or a Final Fortune in a line is a bet
+     * that the finisher is not answered, and a Pact's debt cannot be read in a copy, which holds no delayed trigger. A
+     * kill that needs one is not taken. False when the script cannot be read, as for a play nothing flags. Script
+     * parameters only: in a game whose decks list none of the eleven cards the search expands the same nodes. With the
+     * fix's trace on ({@code traced} not null), the first skip of each card in a search is traced with the real game's
+     * turn and phase ({@code ai}, the search's root player): one line per card left out, not one per node.
+     */
+    private static boolean delayedLoss(final Player ai, final SpellAbility sa, final Set<Integer> traced) {
+        final boolean flagged;
+        try {
+            flagged = DelayedLoss.kind(sa) != null;
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return false;
+        }
+        if (flagged && traced != null && traced.add(sa.getHostCard().getId())) {
+            DelayedLossTrace.skipped(ai, sa);
+        }
+        return flagged;
     }
 
     /** Lets the node keep its game; the node that has kept it longest lets go of its game when there are too many. */

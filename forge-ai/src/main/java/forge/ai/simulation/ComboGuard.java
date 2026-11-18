@@ -19,13 +19,13 @@ import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CardCollectionView;
 import forge.game.combat.CombatUtil;
-import forge.game.cost.CostDiscard;
 import forge.game.cost.CostSacrifice;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
+import forge.util.AITimeoutTracker;
 
 /**
  * Plays that Flat Monte Carlo must not spend a card on, whatever the rollouts think of them. Three kinds:
@@ -67,16 +67,22 @@ public final class ComboGuard {
         if (ai == null || sa == null) {
             return null;
         }
-        // A Pact first and on its own: another guard failing (a card with an odd mana ability, an unreadable script) must
-        // not let a Pact through that cannot be paid, which loses the game at the next upkeep. If it cannot be told,
-        // the Pact waits.
+        // The delayed-loss cards first and on their own (DelayedLoss, MTG_DeckMaker's self-kill fix, DESIGN.md S1): a Pact
+        // whose debt the next upkeep cannot pay, or with another debt pending, and every extra turn or end-step loss.
+        // Another guard failing (a card with an odd mana ability, an unreadable script) must not let one through. If it
+        // cannot be told, a Pact waits and a flagged card is refused, as an unreadable Pact always waited.
         try {
-            if (pactUnpayable(ai, sa, plan)) {
-                return "pact-unpayable";
+            final String loss = DelayedLossTrace.ON ? DelayedLossTrace.problem(DelayedLossTrace.S1, ai, sa, () -> plan)
+                    : DelayedLoss.problem(ai, sa, () -> plan); // with the fix's trace on, the same judgment, traced
+            if (loss != null) {
+                return loss;
             }
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
         } catch (final RuntimeException e) {
-            if (isPact(sa)) {
-                return "pact-unpayable";
+            final String unread = DelayedLoss.refusalWhenUnread(sa);
+            if (unread != null) {
+                return unread;
             }
         }
         try {
@@ -192,10 +198,6 @@ public final class ComboGuard {
         if (endsAirbendLoop(ai, sa, plan)) {
             return "airbend-loop-transform";
         }
-        // a Pact: the cost at the next upkeep must be payable, or the game is lost, unless this turn wins the game
-        if (pactUnpayable(ai, sa, plan)) {
-            return "pact-unpayable";
-        }
         // Cabal Therapy aimed at the AI itself, with nothing of its own worth naming, discards nothing
         if (isNamedDiscard(sa)) {
             final Player target = aim instanceof Player ? (Player) aim : NamedDiscard.discardTarget(sa);
@@ -281,131 +283,6 @@ public final class ComboGuard {
         }
         return null;
     }
-
-    /**
-     * Whether casting the Pact would lose the game: the AI would not be able to pay the cost at its next upkeep (with
-     * the costs of the Pacts it already cast this turn), and this turn is not the one that wins. The mana counted is
-     * what its permanents make again after they untap (not Lotus Petal or Lion's Eye Diamond), and a land that can
-     * still be played this turn.
-     */
-    static boolean pactUnpayable(final Player ai, final SpellAbility sa, final ComboPlan plan) {
-        final String cost = pactCost(sa);
-        if (cost == null) {
-            return false;
-        }
-        final int[] colors = new int[5];
-        int owed = addPactCost(cost, colors);
-        for (final SpellAbility cast : ai.getGame().getStack().getSpellsCastThisTurn()) {
-            if (ai.equals(cast.getActivatingPlayer()) && cast != sa && pactCost(cast) != null) {
-                owed += addPactCost(pactCost(cast), colors);
-            }
-        }
-        int total = 0;
-        final int[] canMake = new int[5];
-        final List<Card> sources = toList(ai.getCardsIn(ZoneType.Battlefield));
-        final boolean ownTurn = ai.getGame().getPhaseHandler().getPlayerTurn() == ai;
-        if (ownTurn && ai.getLandsPlayedThisTurn() < ai.getMaxLandPlays()) {
-            for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
-                if (c.isLand()) {
-                    sources.add(c); // the land drop still to come
-                    break;
-                }
-            }
-        }
-        for (final Card c : sources) {
-            int best = 0;
-            final boolean[] makes = new boolean[5];
-            for (final SpellAbility ma : c.getManaAbilities()) {
-                if (ma.getPayCosts() != null && (ma.getPayCosts().hasSpecificCostType(CostSacrifice.class)
-                        || ma.getPayCosts().hasSpecificCostType(CostDiscard.class))) {
-                    continue; // used up by making the mana
-                }
-                ManaConversion.withActivator(ma); // asking what it makes checks its conditions, which want an activator
-                try {
-                    best = Math.max(best, Math.max(1, ma.amountOfManaGenerated(false)));
-                    for (int i = 0; i < 5; i++) {
-                        makes[i] |= ma.canProduce(String.valueOf("WUBRG".charAt(i)));
-                    }
-                } catch (final RuntimeException e) {
-                    best = Math.max(best, 1); // an odd mana ability (Chrome Mox, Gemstone Mine): one mana, of no color we can name
-                }
-            }
-            total += best;
-            for (int i = 0; i < 5; i++) {
-                if (makes[i] && best > 0) {
-                    canMake[i]++;
-                }
-            }
-        }
-        boolean payable = total >= owed;
-        for (int i = 0; i < 5 && payable; i++) {
-            payable = canMake[i] >= colors[i];
-        }
-        if (payable) {
-            return false;
-        }
-        return !winsThisTurn(ai, plan);
-    }
-
-    private static List<Card> toList(final CardCollectionView cards) {
-        final List<Card> list = new ArrayList<>();
-        for (final Card c : cards) {
-            list.add(c);
-        }
-        return list;
-    }
-
-    /** Adds one Pact cost ("2 G G") to the colored counts (WUBRG) and returns its total mana. */
-    private static int addPactCost(final String cost, final int[] colors) {
-        int total = 0;
-        for (final String token : cost.trim().split("\\s+")) {
-            final int at = "WUBRG".indexOf(token);
-            if (at >= 0 && token.length() == 1) {
-                colors[at]++;
-                total++;
-            } else if (token.matches("\\d+")) {
-                total += Integer.parseInt(token);
-            } else if (!token.isEmpty()) {
-                total++;
-            }
-        }
-        return total;
-    }
-
-    /**
-     * Whether the game is won this turn, so that a Pact that cannot be paid does not matter: a lethal attack is
-     * still to come, or the library of a library-out deck (Oops! All Spells) is nearly gone on its own turn.
-     */
-    static boolean winsThisTurn(final Player ai, final ComboPlan plan) {
-        final PhaseHandler ph = ai.getGame().getPhaseHandler();
-        if (ph.getPlayerTurn() != ai) {
-            return false;
-        }
-        if (plan != null && plan.has(ComboPlan.Kind.LIBRARY_OUT)
-                && ai.getCardsIn(ZoneType.Library).size() <= PACT_LIBRARY_OUT_LEFT) {
-            return true;
-        }
-        final Player opp = ai.getWeakestOpponent();
-        if (opp == null || ai.getOpponents().size() != 1 || !ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)) {
-            return false;
-        }
-        final List<Card> attackers = new ArrayList<>();
-        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
-            if (c.isCreature() && CombatUtil.canAttack(c, opp)) {
-                attackers.add(c);
-            }
-        }
-        final List<Card> blockers = new ArrayList<>();
-        for (final Card c : opp.getCardsIn(ZoneType.Battlefield)) {
-            if (c.isCreature() && !c.isTapped()) {
-                blockers.add(c);
-            }
-        }
-        return opp.getLife() > 0 && unblockedDamage(attackers, blockers) >= opp.getLife();
-    }
-
-    /** With this few cards left in the library the library-out deck is taken to win the turn it is cast in. */
-    private static final int PACT_LIBRARY_OUT_LEFT = 3;
 
     /**
      * Whether the spell would cut both libraries (Doomsday Excruciator cast, or Superior Spider-Man whose only creature

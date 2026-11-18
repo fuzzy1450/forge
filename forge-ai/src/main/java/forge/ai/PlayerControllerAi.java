@@ -8,6 +8,8 @@ import forge.ai.ability.PutStickerAi;
 import forge.ai.combo.ComboExecute;
 import forge.ai.combo.ComboFetch;
 import forge.ai.simulation.ComboPlan;
+import forge.ai.simulation.DelayedLoss;
+import forge.ai.simulation.DelayedLossTrace;
 import forge.ai.simulation.OpeningHand;
 import forge.card.CardStateName;
 import forge.card.ColorSet;
@@ -1551,8 +1553,37 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public boolean payCostToPreventEffect(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
+        // MTG_DeckMaker's self-kill fix, S6 (DESIGN.md D28, round 1's L4): at the AI's payment of its own Pact debt (its
+        // pay-or-lose trigger's LosesGame, or a copy of it) the held-mana sets are cleared first, so every source the
+        // count relied on pays: the payment refuses a source held for a later spell, and a hold can be made after the
+        // Pact was cast or outlive the opponent's turn. A reservation is worth less than the game. AI memory only,
+        // written only at such a payment. With the fix's trace on (DelayedLossTrace, DESIGN.md 6.4), the payment's line
+        // gives the held sets' sizes before they are cleared, and whether the debt was paid.
+        final boolean ownDebt = isOwnPactDebt(sa);
+        final int[] heldBefore = ownDebt && DelayedLossTrace.ON ? heldManaSizes() : null;
+        if (ownDebt) {
+            for (final AiCardMemory.MemorySet held : DelayedLoss.HELD_MANA_SETS) {
+                AiCardMemory.clearMemorySet(player, held);
+            }
+        }
+        final boolean paid = payUnlessCost(cost, sa, alreadyPaid, allPayers);
+        if (ownDebt && DelayedLossTrace.ON) {
+            DelayedLossTrace.paid(player, sa, heldBefore, paid);
+        }
+        return paid;
+    }
+
+    /** An unless cost's payment, as the AI decides it: the stock decision, the self-kill fix's S6b, the combo's. */
+    private boolean payUnlessCost(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
         if (SpellApiToAi.Converter.get(sa).willPayUnlessCost(player, sa, cost, alreadyPaid, allPayers)) {
             if (!ComputerUtilCost.canPayCost(cost, sa, player, true)) {
+                return false;
+            }
+            // MTG_DeckMaker's self-kill fix, S6b (DESIGN.md D32, round 2's B1): an unless cost that is not the AI's own
+            // Pact debt is declined when paying it would spend a debt due now (the Pact's trigger on the stack: its
+            // mana, whichever sources the payment taps) or uncover a pending one (a sacrifice, a return, the life the
+            // count needs). After the stock decision and its canPayCost, whose draws stay the stock path's.
+            if (declinesUnlessPayment(sa, cost)) {
                 return false;
             }
             // Combo-aware AI (spec 2026-10-22-combo-aware-ai-core-design.md section 6.4, follow-up 2, G3; follow-up 3,
@@ -1568,6 +1599,53 @@ public class PlayerControllerAi extends PlayerController {
             return pay.payComputerCosts(new AiCostDecision(player, sa, true));
         }
         return false;
+    }
+
+    /**
+     * Whether the unless cost being paid is the AI's own pay-or-lose debt (MTG_DeckMaker's self-kill fix, DESIGN.md S6,
+     * D28): an own LosesGame with an UnlessCost$, which only the five Pacts' scripts hold, read by its shape alone. A
+     * RuntimeException leaves the payment as it is today (DESIGN.md 1.11); AITimeoutTracker.Expired is rethrown.
+     */
+    private boolean isOwnPactDebt(final SpellAbility sa) {
+        try {
+            return DelayedLoss.isOwnPactDebt(player, sa);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * The sizes of the AI's held-mana sets, in DelayedLoss.HELD_MANA_SETS' order: the self-kill fix's trace's pay line
+     * (DelayedLossTrace), read only with the trace on, just before S6 clears them. AI memory, not game state.
+     */
+    private int[] heldManaSizes() {
+        final int[] sizes = new int[DelayedLoss.HELD_MANA_SETS.size()];
+        for (int i = 0; i < sizes.length; i++) {
+            final Set<Card> held = AiCardMemory.getMemorySet(player, DelayedLoss.HELD_MANA_SETS.get(i));
+            sizes[i] = held == null ? 0 : held.size();
+        }
+        return sizes;
+    }
+
+    /**
+     * Whether DelayedLoss's debt protection declines this unless payment (MTG_DeckMaker's self-kill fix, DESIGN.md S6b,
+     * D32): never the AI's own Pact debt, which S6 pays. A RuntimeException leaves the payment as it is today, as for a
+     * play nothing flags (DESIGN.md S6b); AITimeoutTracker.Expired is rethrown. In a game where no Pact was cast the
+     * debt reader finds nothing after two empty scans, and the payment is today's.
+     */
+    private boolean declinesUnlessPayment(final SpellAbility sa, final Cost cost) {
+        if (DelayedLossTrace.ON) {
+            return DelayedLossTrace.declinesUnlessPayment(player, sa, cost); // the same judgment and catch, traced
+        }
+        try {
+            return DelayedLoss.declinesUnlessPayment(player, sa, cost);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return false;
+        }
     }
 
     public boolean payCostDuringRoll(final Cost cost, final SpellAbility sa) {
@@ -1695,6 +1773,14 @@ public class PlayerControllerAi extends PlayerController {
                 || realState != null && realState.hasKeyword(Keyword.BARGAIN))) {
                 return ComputerUtil.playStack(tgtSA, player, getGame());
             }
+            // MTG_DeckMaker's self-kill fix, S5 (DESIGN.md D13): an optional free cast of a delayed-loss card (a Pact,
+            // an extra turn that loses, Glorious End), of a copy of one, or, while a pay-or-lose debt is pending, of a
+            // play with a cost beyond its waived mana is declined, covered or not: a cascaded card goes to the bottom,
+            // a Beseech the Mirror card to the hand, a Scepter copy is not cast. Asked before the generic check, so a
+            // declined cast draws nothing more; a mandatory cast is still cast.
+            if (optional && declinesFreeCast(tgtSA)) {
+                return false;
+            }
             // TODO if mandatory AI is only forced to use mana when it's already in the pool
             if (brains.canPlayFromEffectAI(spell, !optional, noManaCost) == AiPlayDecision.WillPlay || !optional) {
                 return ComputerUtil.playStack(tgtSA, player, getGame());
@@ -1702,6 +1788,26 @@ public class PlayerControllerAi extends PlayerController {
             return false; // didn't play spell
         }
         return true;
+    }
+
+    /**
+     * Whether DelayedLoss declines an optional free cast at resolution (MTG_DeckMaker's self-kill fix, DESIGN.md S5,
+     * D13): a delayed-loss card, a copy of one, or, while a debt is pending, a cost beyond the waived mana. No mana is
+     * counted: resolution is not a priority decision. The sites' catches (DESIGN.md 1.11): AITimeoutTracker.Expired is
+     * rethrown, and a cast that cannot be judged is declined only when it is a Pact or a card DelayedLoss flags. In a
+     * game whose decks list none of the eleven cards it answers false after reads only (DESIGN.md 1.10).
+     */
+    private boolean declinesFreeCast(final SpellAbility sa) {
+        if (DelayedLossTrace.ON) {
+            return DelayedLossTrace.declinesFreeCast(DelayedLossTrace.S5, player, sa); // the same judgment, traced
+        }
+        try {
+            return DelayedLoss.declinesFreeCast(player, sa);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return DelayedLoss.refusalWhenUnread(sa) != null;
+        }
     }
 
     @Override

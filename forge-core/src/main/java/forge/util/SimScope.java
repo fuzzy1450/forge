@@ -30,6 +30,8 @@ public final class SimScope {
     private static volatile boolean strict = false;
 
     private Random random;
+    /** The seed the scope was made with: the game's (MTG_DeckMaker's self-kill fix, RULINGS-R3 C). */
+    private final long seed;
     private final EnumMap<Counter, int[]> counters = new EnumMap<>(Counter.class);
     private final Map<Object, Object> scratch = new HashMap<>();
     private volatile boolean cancelled = false;
@@ -39,6 +41,7 @@ public final class SimScope {
     /** Counters start where a fresh JVM's statics start: 0 for the pre-incremented {@code maxId}
      *  counters, -2 for {@code CombatView.nextId}. */
     public SimScope(long seed) {
+        this.seed = seed;
         this.random = new Random(seed);
         for (Counter c : Counter.values()) {
             counters.put(c, new int[] { c == Counter.COMBAT_VIEW ? -2 : 0 });
@@ -48,6 +51,13 @@ public final class SimScope {
     public Random random() {
         checkpoint();
         return random;
+    }
+
+    /** The seed this scope was made with, whatever was drawn since or {@link MyRandom#setRandom} put in its stream's
+     *  place. Read only by MTG_DeckMaker's self-kill fix's trace, which names each line's game by it (RULINGS-R3 C). A
+     *  read, with no checkpoint: a cancelled scope answers too. */
+    public long seed() {
+        return seed;
     }
 
     /** {@link MyRandom#setRandom} re-seeds a bound scope through this. */
