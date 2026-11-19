@@ -1,6 +1,7 @@
 package forge.ai.simulation;
 
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 
@@ -68,8 +69,14 @@ public class FlatMcPassLineTest extends FlatMcTestBase {
     /** One main-phase decision under a fresh scope of seed {@code seed}, which leaves the seat's tally in {@link #tally}. */
     private Result decide(final List<SpellAbility> approved, final List<SpellAbility> extras, final Config cfg,
                           final long seed) {
+        return decide(approved, extras, cfg, seed, Mode.MAIN);
+    }
+
+    /** One decision in {@code mode} under a fresh scope of seed {@code seed}, which leaves the seat's tally in {@link #tally}. */
+    private Result decide(final List<SpellAbility> approved, final List<SpellAbility> extras, final Config cfg,
+                          final long seed, final Mode mode) {
         return Scoped.under(new SimScope(seed), () -> {
-            final Result r = FlatMonteCarloPicker.choose(ai, approved, extras, cfg, null, Mode.MAIN);
+            final Result r = FlatMonteCarloPicker.choose(ai, approved, extras, cfg, null, mode);
             tally = FlatMcGame.current().tally(ai.getId());
             return r;
         });
@@ -121,14 +128,43 @@ public class FlatMcPassLineTest extends FlatMcTestBase {
         assertEquals(r.rollouts, 1, "line 0 rolls first, and its win ends the decision");
     }
 
-    /** A pass line whose rollout passes the resolution cap leaves line 0 invalid: the decision keeps the pass. */
+    /**
+     * A pass line whose new main-2 playout passes the resolution cap leaves line 0 invalid: the decision keeps the pass,
+     * and throws nothing. At 9 resolutions a rollout gets through this board's combat but not the pass line's main 2;
+     * without that playout (65940c9d323) the same cap leaves line 0 valid and the decision holds.
+     */
     @Test
     public void anUnsimulatablePassLineKeepsThePass() {
         final Config cfg = oneRound();
-        cfg.resolutionsPerRollout = 1;
+        cfg.resolutionsPerRollout = 9;
         final Result r = decide(List.of(), List.of(runeclawAt(PhaseType.MAIN1)), cfg, 35L);
         assertEquals(r.reason, "heuristic-unsimulatable", String.valueOf(r));
         assertTrue(r.hold);
+        assertEquals(tally.playouts, 3L, "the pass line's main 2, where the cap is passed; the play's main 1 and main 2");
+    }
+
+    /**
+     * A reactive decision's pass is not the pass line (spec section 5.1: the flag is set in Mode.MAIN alone). At the
+     * opponent's end step, with nothing approved and a won position (a ready Grizzly Bears against 2 life, the AI's
+     * turn next), the pass's winning rollout does not end the decision: Fog, the discovered play, is rolled out too, and
+     * its win ends the decision, as at 65940c9d323. Whether a reactive pass should end a won decision is a question of
+     * its own, which this pins as the spec left it.
+     */
+    @Test
+    public void aReactivePassThatWinsDoesNotEndTheDecision() {
+        fillLibrary(ai, 20); // the AI's next turn draws
+        fillLibrary(opp, 20);
+        put("Grizzly Bears", ai, ZoneType.Battlefield).setSickness(false);
+        opp.setLife(2, null);
+        final Card fog = put("Fog", ai, ZoneType.Hand);
+        at(PhaseType.END_OF_TURN, opp);
+        game.getAction().checkStateEffects(true);
+        final SpellAbility sa = fog.getFirstSpellAbility();
+        sa.setActivatingPlayer(ai);
+        final Result r = decide(List.of(), List.of(sa), oneRound(), 37L, Mode.END_STEP);
+        assertEquals(r.rollouts, 2, "the pass's winning rollout does not end a reactive decision: " + r);
+        assertEquals(r.reason, "wins", "the position is won, and the next line's winning rollout ends it: " + r);
+        assertFalse(r.hold, String.valueOf(r));
     }
 
     /** With no scope bound, as in the GUI, the pass line plays main 2 all the same. */
