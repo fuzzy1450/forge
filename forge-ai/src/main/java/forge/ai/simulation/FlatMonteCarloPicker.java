@@ -38,7 +38,9 @@ import java.util.function.Predicate;
  * <p>
  * The heuristic AI walks its sorted list of spell abilities and plays the <em>first</em> one it approves of. This
  * class receives the first few approved plays (best heuristic choice first) and compares them, plus an optional
- * "hold" option (pass with mana up), by sampling:
+ * "hold" option (pass with mana up). When the heuristics approved nothing, what they would do is pass and play on: in
+ * the AI's own main phase that pass line's samples go on with the turn as theirs would. The lines are compared by
+ * sampling:
  * <ul>
  *   <li>every sample copies the game and re-deals the cards the AI cannot see ({@link HiddenInfoShuffler}), so the
  *       samples really differ and the AI does not peek at the opponent's hand;</li>
@@ -466,6 +468,13 @@ public final class FlatMonteCarloPicker {
          * what the heuristics wanted (see keepsMoreDangerousTarget).
          */
         final Card aim;
+        /**
+         * The pass line of a main-phase decision whose heuristics approved nothing: it stands for what they would do,
+         * passing now and playing the rest of the turn as they play it. So its rollout fights the combat and plays main
+         * 2, as a play line's does, and a rollout of it that wins ends the decision as a pass. False for the hold (pass
+         * with mana up, line 1 when something was approved), which plays no more of the turn, and for every play.
+         */
+        final boolean pass;
 
         Candidate(final Map<Card, GameEntity> attackers) {
             this.sa = null;
@@ -473,6 +482,7 @@ public final class FlatMonteCarloPicker {
             this.extra = false;
             this.attackers = attackers;
             this.aim = null;
+            this.pass = false;
         }
 
         Candidate(final SpellAbility sa) {
@@ -484,11 +494,21 @@ public final class FlatMonteCarloPicker {
         }
 
         Candidate(final SpellAbility sa, final GameObject target, final boolean extra) {
+            this(sa, target, extra, false);
+        }
+
+        private Candidate(final SpellAbility sa, final GameObject target, final boolean extra, final boolean pass) {
             this.sa = sa;
             this.target = target;
             this.extra = extra;
             this.attackers = null;
             this.aim = sa == null ? null : firstAimedCard(sa);
+            this.pass = pass;
+        }
+
+        /** The pass line (see {@link #pass}). */
+        static Candidate passLine() {
+            return new Candidate(null, null, false, true);
         }
 
         boolean isHold() {
@@ -690,9 +710,11 @@ public final class FlatMonteCarloPicker {
                     sum[c] += value;
                     vals[c][count[c]] = value;
                     count[c]++;
-                    if (value == WIN_VALUE && !cand.isHold()) {
-                        // This line wins the game outright: nothing needs comparing, and waiting only wastes time.
-                        return new Result(cand.sa, false, true, Math.max(evaluated, c + 1), rollouts,
+                    if (value == WIN_VALUE && (!cand.isHold() || cand.pass)) {
+                        // This line wins the game outright: nothing needs comparing, and waiting only wastes time. The
+                        // pass line is such a line too: when passing wins, the AI passes, on to its attack, where a free
+                        // play that also wins would be chosen at every priority and the turn would never reach combat.
+                        return new Result(cand.sa, cand.isHold(), true, Math.max(evaluated, c + 1), rollouts,
                                 FlatMcGame.nanoTime() - start, "wins", prunedCount, cand.target);
                     }
                 }
@@ -939,7 +961,9 @@ public final class FlatMonteCarloPicker {
         final List<SpellAbility> approved = approvedPlays.isEmpty() ? approvedPlays : dedupePlays(approvedPlays);
         final List<Candidate> cands = new ArrayList<>();
         // Index 0 is always what the heuristics would do: their favourite play, or passing when they approved nothing.
-        cands.add(approved.isEmpty() ? new Candidate((SpellAbility) null) : new Candidate(approved.get(0)));
+        // In the AI's own main phase that pass is the pass line, after which the turn goes on (see Candidate.pass).
+        cands.add(approved.isEmpty() ? (mode == Mode.MAIN ? Candidate.passLine() : new Candidate((SpellAbility) null))
+                : new Candidate(approved.get(0)));
         // On the opponent's turn passing is always an option, and the plays are compared against it; on the AI's own
         // turn holding is only worth comparing when there is an instant to keep the mana up for.
         final boolean passOption = mode != Mode.MAIN || cfg.considerHolding && !cfg.holdForbidden && isHoldPossible(player);
@@ -1867,6 +1891,11 @@ public final class FlatMonteCarloPicker {
         }
     }
 
+    /**
+     * One sample of a main-phase line: the play and the rest of main 1 as the heuristics play it, then, before main 2,
+     * the combat and main 2 as they play it. The pass line skips main 1 (passing ends it) and plays the rest, as the AI
+     * does after passing; a hold plays nothing more, so that the mana stays up. Scored at main 2.
+     */
     private static Long rolloutMain(final GameSimulator sim, final Game simGame, final Player simAi, final Candidate cand,
                                     final Config cfg, final int playoutPlays) {
         if (!cand.isHold()) {
@@ -1882,7 +1911,7 @@ public final class FlatMonteCarloPicker {
             // Run the combat of this turn, so that plays before and after it are told apart.
             ph.devAdvanceToPhase(PhaseType.MAIN2,
                     () -> GameSimulator.resolveStack(simGame, simAi.getWeakestOpponent()));
-            if (!cand.isHold()) {
+            if (!cand.isHold() || cand.pass) {
                 playOut(simGame, simAi, playoutPlays);
             }
         }
