@@ -714,8 +714,10 @@ public final class FlatMonteCarloPicker {
                         // This line wins the game outright: nothing needs comparing, and waiting only wastes time. The
                         // pass line is such a line too: when passing wins, the AI passes, on to its attack, where a free
                         // play that also wins would be chosen at every priority and the turn would never reach combat.
-                        return new Result(cand.sa, cand.isHold(), true, Math.max(evaluated, c + 1), rollouts,
+                        final Result won = new Result(cand.sa, cand.isHold(), true, Math.max(evaluated, c + 1), rollouts,
                                 FlatMcGame.nanoTime() - start, "wins", prunedCount, cand.target);
+                        won.attackers = cand.attackers; // an attack set that wins is the attack (null for every other line)
+                        return won;
                     }
                 }
                 if (r == 0) {
