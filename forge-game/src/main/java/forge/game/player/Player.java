@@ -2176,6 +2176,9 @@ public class Player extends GameEntity implements Comparable<Player> {
     }
 
     public final int getDescended() {
+        if (ArrivalProbe.watching()) {
+            ArrivalProbe.descendRead(this); // print-only, off unless -Dflatmc.arrivalprobe is set
+        }
         return descended;
     }
     public final void descend() {
@@ -2183,6 +2186,9 @@ public class Player extends GameEntity implements Comparable<Player> {
     }
     public final void setDescended(final int n) {
         descended = n;
+        if (ArrivalProbe.watching()) {
+            ArrivalProbe.descendSet(this);
+        }
     }
 
     public final boolean hasDelirium() {

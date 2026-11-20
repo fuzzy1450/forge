@@ -174,6 +174,9 @@ public class GameCopier {
         PhaseHandler origPhaseHandler = origGame.getPhaseHandler();
         Player newPlayerTurn = playerMap.get(origPhaseHandler.getPlayerTurn());
         newGame.getPhaseHandler().devModeSet(origPhaseHandler.getPhase(), newPlayerTurn, origPhaseHandler.getTurn());
+        if (ArrivalProbe.watching()) {
+            ArrivalProbe.copyMade(newGame, origPhaseHandler.getTurn()); // print-only, before any card is added
+        }
         newGame.getTriggerHandler().suppressMode(TriggerType.ChangesZone);
         for (Player p : newGame.getPlayers()) {
             ((PlayerZoneBattlefield) p.getZone(ZoneType.Battlefield)).setTriggers(false);
@@ -183,7 +186,12 @@ public class GameCopier {
         // Zone.add counted a descend for each permanent card copyGameState put in a graveyard, as if each had just been put
         // there: each copy player takes the original's count back.
         for (Player origPlayer : origGame.getPlayers()) {
-            playerMap.get(origPlayer).setDescended(origPlayer.getDescended());
+            final Player copyPlayer = playerMap.get(origPlayer);
+            final int oldCopierCount = copyPlayer.getDescended();
+            copyPlayer.setDescended(origPlayer.getDescended());
+            if (ArrivalProbe.watching()) {
+                ArrivalProbe.descendCopied(copyPlayer, origPlayer, oldCopierCount, origPlayer.getDescended());
+            }
         }
 
         // copyCommandersToSnapshot skips a commander the copy does not hold, such as one that left the game with

@@ -2106,6 +2106,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final int getTurnInZone() {
+        if (ArrivalProbe.watching()) {
+            ArrivalProbe.read(this, turnInZone); // print-only, off unless -Dflatmc.arrivalprobe is set
+        }
         return turnInZone;
     }
     public final void setTurnInZone(final int turn) {
@@ -2113,7 +2116,11 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final boolean enteredThisTurn() {
-        return getTurnInZone() == game.getPhaseHandler().getTurn();
+        final int now = game.getPhaseHandler().getTurn();
+        if (ArrivalProbe.watching()) {
+            ArrivalProbe.entered(this, turnInZone, now); // print-only, off unless -Dflatmc.arrivalprobe is set
+        }
+        return turnInZone == now;
     }
 
     public final Player getTurnInController() {
