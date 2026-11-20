@@ -211,4 +211,49 @@ public class GameCopierTurnInZoneTest extends SimulationTest {
         copier.makeCopy();
         AssertJUnit.assertEquals(0, copier.find(bolt).getTurnInZone());
     }
+
+    /** Two permanent cards in the AI's graveyard since turn 2; then the AI's count of descends this turn is set. */
+    private void oldGraveyard(final Player p, final int cards, final int descendedThisTurn) {
+        for (int i = 0; i < cards; i++) {
+            old(addCardToZone("Hill Giant", p, ZoneType.Graveyard)); // Zone.add counts a descend for each: reset below
+        }
+        p.setDescended(descendedThisTurn);
+    }
+
+    /** "If you descended this turn" (Enterprising Scallywag, Zoyowa Lava-Tongue): a graveyard from earlier turns is none. */
+    @Test
+    public void aGraveyardFromEarlierTurnsIsNoDescendInTheCopy() {
+        setUp();
+        final Card scallywag = addCard("Enterprising Scallywag", ai);
+        oldGraveyard(ai, 2, 0);
+        final GameCopier copier = new GameCopier(game);
+        copier.makeCopy();
+        final Player cAi = copier.find(ai);
+        AssertJUnit.assertEquals("the copy's count is the game's", 0, cAi.getDescended());
+        AssertJUnit.assertFalse(ai.isValid("You.descended", ai, scallywag, null));
+        AssertJUnit.assertFalse("the AI did not descend this turn in the copy either",
+                cAi.isValid("You.descended", cAi, copier.find(scallywag), null));
+    }
+
+    @Test
+    public void aDescendThisTurnKeepsItsCountInTheCopy() {
+        setUp();
+        oldGraveyard(ai, 2, 1);
+        final GameCopier copier = new GameCopier(game);
+        copier.makeCopy();
+        AssertJUnit.assertEquals(1, copier.find(ai).getDescended());
+    }
+
+    /** Every player of a pod gets the game's count back, a third one too. */
+    @Test
+    public void aPodsThirdPlayerGetsItsCountBack() {
+        game = initAndCreateThreePlayerGame();
+        ai = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai, NOW);
+        final Player third = game.getPlayers().get(2);
+        oldGraveyard(third, 1, 0);
+        final GameCopier copier = new GameCopier(game);
+        copier.makeCopy();
+        AssertJUnit.assertEquals(0, copier.find(third).getDescended());
+    }
 }

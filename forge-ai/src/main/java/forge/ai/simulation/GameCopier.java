@@ -180,6 +180,11 @@ public class GameCopier {
         }
 
         copyGameState(newGame, aiPlayer);
+        // Zone.add counted a descend for each permanent card copyGameState put in a graveyard, as if each had just been put
+        // there: each copy player takes the original's count back.
+        for (Player origPlayer : origGame.getPlayers()) {
+            playerMap.get(origPlayer).setDescended(origPlayer.getDescended());
+        }
 
         // copyCommandersToSnapshot skips a commander the copy does not hold, such as one that left the game with
         // its owner but is still named by another player's commander damage; the strict map would throw instead.
