@@ -656,6 +656,12 @@ public class GameCopier {
             newGame.getStackZone().add(newCard);
         } else {
             zoneOwner.getZone(zone).add(newCard);
+            if (!newCard.isImmutable()) {
+                // Zone.add read the fresh copy as arriving now and stamped it with the copy's turn, so in every rollout
+                // each card would have entered this turn: the copy takes the turn the card really entered its zone.
+                // As in Zone.add, the stack's cards and immutable ones keep what they have.
+                newCard.setTurnInZone(c.getTurnInZone());
+            }
         }
     }
 
