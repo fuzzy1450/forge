@@ -37,6 +37,15 @@ public class GameCopierTurnInZoneTest extends SimulationTest {
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai, NOW);
     }
 
+    /** A commander in the AI's command zone (Zone.add puts a commander first there). */
+    private Card commander(final String name) {
+        final Card c = createCard(name, ai);
+        c.setCommander(true);
+        c.setGameTimestamp(game.getNextTimestamp());
+        ai.getZone(ZoneType.Command).add(c);
+        return c;
+    }
+
     /** A card that entered its zone on turn 2, as GameState puts a card there. */
     private static Card old(final Card c) {
         c.setTurnInZone(EARLIER);
@@ -88,7 +97,7 @@ public class GameCopierTurnInZoneTest extends SimulationTest {
                 old(addCardToZone("Lightning Bolt", ai, ZoneType.Graveyard)),
                 old(addCardToZone("Behold the Multiverse", ai, ZoneType.Exile)),
                 old(addCardToZone("Hill Giant", ai, ZoneType.Library)),
-                old(addCardToZone("Llanowar Elves", ai, ZoneType.Command)));
+                old(commander("Llanowar Elves")));
         final Card fresh = addCard("Hill Giant", ai);
         final GameCopier copier = new GameCopier(game);
         copier.makeCopy();

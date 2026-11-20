@@ -49,6 +49,12 @@ import forge.util.SimScope;
  * A reader is the first stack frame outside the probe and the card (or player): {@code class.method:line}. With no
  * scope bound (the GUI) it prints nothing.
  *
+ * <p>One case breaks the rule's premise: a game restart (Karn Liberated) sets the turn back to 0 while the cards it
+ * leaves in the command zone keep the turns they entered it, so the real value can be above a copy's first turn.
+ * A read that differs there goes unmarked, and such a game shows as an identity alarm, never as a false pass.
+ * A failure inside the probe, a {@code StackOverflowError} included (its stack walk near the stack's limit), is
+ * swallowed.
+ *
  * <p>It lives in forge-game, not beside the copier in forge-ai: {@code Card} and {@code Player} call it. A copy is
  * known by its {@code Game} (identity), and a copy player by its game and id: {@code GameEntity.equals} takes a copy
  * player for its original.
@@ -102,7 +108,7 @@ public final class ArrivalProbe {
         }
         try {
             COPIES.put(copy, new Copy(firstTurn));
-        } catch (final RuntimeException e) {
+        } catch (final RuntimeException | StackOverflowError e) {
             // print-only: a probe must never break a copy
         }
     }
@@ -132,7 +138,7 @@ public final class ArrivalProbe {
             } else {
                 copy.descend.remove(copyPlayer.getId());
             }
-        } catch (final RuntimeException e) {
+        } catch (final RuntimeException | StackOverflowError e) {
             // print-only
         }
     }
@@ -160,7 +166,7 @@ public final class ArrivalProbe {
                 return; // turnInZone < turn: the same either way after the copy's first turn
             }
             markCard(c, game, reader(frame));
-        } catch (final RuntimeException e) {
+        } catch (final RuntimeException | StackOverflowError e) {
             // print-only
         }
     }
@@ -178,7 +184,7 @@ public final class ArrivalProbe {
             }
             final StackWalker.StackFrame frame = callerOutside(CARD);
             markCard(c, game, frame == null ? "?" : reader(frame));
-        } catch (final RuntimeException e) {
+        } catch (final RuntimeException | StackOverflowError e) {
             // print-only
         }
     }
@@ -220,7 +226,7 @@ public final class ArrivalProbe {
                             + difference);
                 }
             }
-        } catch (final RuntimeException e) {
+        } catch (final RuntimeException | StackOverflowError e) {
             // print-only
         }
     }
@@ -236,7 +242,7 @@ public final class ArrivalProbe {
             if (copy != null) {
                 copy.descend.remove(p.getId());
             }
-        } catch (final RuntimeException e) {
+        } catch (final RuntimeException | StackOverflowError e) {
             // print-only
         }
     }

@@ -312,8 +312,29 @@ public class ArrivalProbeTest extends SimulationTest {
         AssertJUnit.assertEquals(String.valueOf(lines), 0, withSeed(lines, 92L).size());
     }
 
+    /** A probe failure, an Error included (its stack walk near the stack's limit), never reaches the game. */
+    @Test
+    public void aProbeErrorNeverReachesTheGame() {
+        setUp();
+        final Card giant = old(addCard("Hill Giant", ai));
+        final Consumer<String> before = ArrivalProbe.swapSink(line -> {
+            throw new StackOverflowError("the probe's own");
+        });
+        try {
+            under(93L, () -> {
+                final GameCopier copier = new GameCopier(game);
+                copier.makeCopy();
+                AssertJUnit.assertFalse(copier.find(giant).enteredThisTurn());
+                AssertJUnit.assertEquals(EARLIER, copier.find(giant).getTurnInZone());
+            });
+        } finally {
+            ArrivalProbe.swapSink(before);
+        }
+    }
+
     @Test
     public void offByDefault() {
+        AssertJUnit.assertFalse("off unless -Dflatmc.arrivalprobe is set", ArrivalProbe.watching());
         setUp();
         final Card giant = old(addCard("Hill Giant", ai));
         oldGraveyard();
