@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
@@ -38,7 +39,7 @@ import forge.util.SimScope;
  * in the copy's first turn, and every other reader is marked;</li>
  * <li>{@code getDescended()} while the copy player's difference stands, but the copier's own reads.</li>
  * </ul>
- * Keyed by the game scope's seed, it appends at most:
+ * Once per game (its scope: a JVM can play one seed twice), keyed in the lines by the scope's seed, it appends at most:
  * <ul>
  * <li>{@code D* seed=S turn=T phase=P reader=R card=ID:NAME} (or {@code player=ID}), once a game, at its first marked
  * read;</li>
@@ -68,10 +69,15 @@ public final class ArrivalProbe {
         }
     }
 
+    /** One game's lines so far, keyed by the game's scope: a JVM can play one seed twice (a walk pair, a replay). */
+    private static final class Lines {
+        boolean dstar;
+        final Set<String> reads = new HashSet<>();
+        final Set<Integer> descends = new HashSet<>();
+    }
+
     private static final Map<Game, Copy> COPIES = Collections.synchronizedMap(new WeakHashMap<>());
-    private static final Set<Long> D_STAR = ConcurrentHashMap.newKeySet();
-    private static final Set<String> READ_SEEN = ConcurrentHashMap.newKeySet();
-    private static final Set<String> DESCEND_SEEN = ConcurrentHashMap.newKeySet();
+    private static final Map<SimScope, Lines> LINES = Collections.synchronizedMap(new WeakHashMap<>());
     private static final StackWalker WALKER = StackWalker.getInstance();
 
     private static final String PROBE = ArrivalProbe.class.getName();
@@ -201,14 +207,18 @@ public final class ArrivalProbe {
             if (scope == null || out == null) {
                 return;
             }
-            final long seed = scope.seed();
-            final String where = where(seed, game);
+            final String where = where(scope.seed(), game);
             final String reader = reader(frame);
-            if (D_STAR.add(seed)) {
-                out.accept("D* " + where + " reader=" + reader + " player=" + p.getId());
-            }
-            if (DESCEND_SEEN.add(seed + "|" + p.getId())) {
-                out.accept("DESCEND " + where + " reader=" + reader + " player=" + p.getId() + " offset=" + difference);
+            final Lines seen = LINES.computeIfAbsent(scope, k -> new Lines());
+            synchronized (seen) {
+                if (!seen.dstar) {
+                    seen.dstar = true;
+                    out.accept("D* " + where + " reader=" + reader + " player=" + p.getId());
+                }
+                if (seen.descends.add(p.getId())) {
+                    out.accept("DESCEND " + where + " reader=" + reader + " player=" + p.getId() + " offset="
+                            + difference);
+                }
             }
         } catch (final RuntimeException e) {
             // print-only
@@ -243,18 +253,21 @@ public final class ArrivalProbe {
         if (scope == null) {
             return;
         }
-        final long seed = scope.seed();
-        final String where = where(seed, game);
+        final String where = where(scope.seed(), game);
         final String card = c.getId() + ":" + c.getName();
         final Consumer<String> out = sink;
         if (out == null) {
             return;
         }
-        if (D_STAR.add(seed)) {
-            out.accept("D* " + where + " reader=" + reader + " card=" + card);
-        }
-        if (READ_SEEN.add(seed + "|" + reader + "|" + c.getId())) {
-            out.accept("READ " + where + " reader=" + reader + " card=" + card);
+        final Lines seen = LINES.computeIfAbsent(scope, k -> new Lines());
+        synchronized (seen) {
+            if (!seen.dstar) {
+                seen.dstar = true;
+                out.accept("D* " + where + " reader=" + reader + " card=" + card);
+            }
+            if (seen.reads.add(reader + "|" + c.getId())) {
+                out.accept("READ " + where + " reader=" + reader + " card=" + card);
+            }
         }
     }
 

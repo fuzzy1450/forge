@@ -258,6 +258,60 @@ public class ArrivalProbeTest extends SimulationTest {
         AssertJUnit.assertEquals(String.valueOf(lines), 1, startingWith(withSeed(lines, 87L), "D* seed=87 ").size());
     }
 
+    /** One JVM plays a seed twice (a walk pair, a replay): each game gets its own D*, its own READ lines. */
+    @Test
+    public void twoGamesWithOneSeedEachGetTheirOwnDStar() {
+        setUp();
+        final Card giant = old(addCard("Hill Giant", ai));
+        final List<String> lines = probed(() -> {
+            for (int i = 0; i < 2; i++) {
+                under(90L, () -> {
+                    final GameCopier copier = new GameCopier(game);
+                    copier.makeCopy();
+                    copier.find(giant).enteredThisTurn();
+                });
+            }
+        });
+        AssertJUnit.assertEquals(String.valueOf(lines), 2, startingWith(withSeed(lines, 90L), "D* seed=90 ").size());
+        AssertJUnit.assertEquals(String.valueOf(lines), 2, startingWith(withSeed(lines, 90L), "READ seed=90 ").size());
+    }
+
+    /**
+     * The upkeep's reset of cameUnderControlSinceLastUpkeep reads turnInZone < turn at the upkeep's end
+     * (PhaseHandler.onPhaseEnd): a copy made before it ends, in its first turn, reads it differently.
+     */
+    @Test
+    public void aFirstTurnUpkeepReadIsMarked() {
+        game = initAndCreateGame();
+        ai = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.UNTAP, ai, NOW);
+        old(addCard("Hill Giant", ai));
+        final List<String> lines = probed(() -> under(91L, () -> {
+            final GameCopier copier = new GameCopier(game);
+            final Game copy = copier.makeCopy();
+            copy.getPhaseHandler().devAdvanceToPhase(PhaseType.DRAW, null); // through the upkeep's end
+        }));
+        final List<String> dstar = startingWith(withSeed(lines, 91L), "D* seed=91 ");
+        AssertJUnit.assertEquals(String.valueOf(lines), 1, dstar.size());
+        AssertJUnit.assertTrue(dstar.get(0), dstar.get(0).contains(" reader=forge.game.phase.PhaseHandler."));
+    }
+
+    /** Past the copy's first turn the next upkeep's reset reads alike, and the copy's cleanup cleared the descend count. */
+    @Test
+    public void theNextTurnsUpkeepAndAClearedDescendAreNotMarked() {
+        setUp();
+        old(addCard("Hill Giant", game.getPlayers().get(0))); // the opponent's: its upkeep comes next
+        oldGraveyard();
+        final List<String> lines = probed(() -> under(92L, () -> {
+            final GameCopier copier = new GameCopier(game);
+            final Game copy = copier.makeCopy();
+            AssertJUnit.assertTrue(copy.getPhaseHandler().devAdvanceThroughTurnEnd(PhaseType.UPKEEP, null));
+            AssertJUnit.assertEquals(NOW + 1, copy.getPhaseHandler().getTurn());
+            AssertJUnit.assertEquals(0, copier.find(ai).getDescended());
+        }));
+        AssertJUnit.assertEquals(String.valueOf(lines), 0, withSeed(lines, 92L).size());
+    }
+
     @Test
     public void offByDefault() {
         setUp();
