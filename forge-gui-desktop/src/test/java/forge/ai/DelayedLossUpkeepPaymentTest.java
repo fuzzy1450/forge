@@ -536,9 +536,12 @@ public class DelayedLossUpkeepPaymentTest extends AITest {
      * Mountain x2 with Mystic Gate in hand for Pact of Negation (U, R, R, the Signet's U+B and the drop's C: six for
      * five and the Signet's {1}); Gruul Signet, Forest and Mountain with Wooded Bastion (five for four and one) or
      * with Shimmering Grotto for Summoner's Pact; Mountain x4 with Mystic Gate or Wooded Bastion for Pact of the Titan
-     * (five for five, no filter at all). So a land in hand with such an ability gives the land drop no unit and sets
-     * the flag: refused, each row, and the AI, which plays the land, loses as it did. [the count's verdict, the AI
-     * lost, the AI played the land] per row.
+     * (five for five, no filter at all). The last two rows need the flag alone: the battlefield covers the debt without
+     * the drop, leaning on the Signet (Dimir Signet, Island and Mountain x3 with Mystic Gate in hand, six for five and
+     * one; Gruul Signet, Forest and Mountain x2 with Wooded Bastion, five for four and one), and the upkeep boards are
+     * chain-1's rows 5 and 38, lost. So a land in hand with such an ability gives the land drop no unit and sets the
+     * flag: refused, each row, and the AI, which plays the land, loses as it did. [the count's verdict, the AI lost,
+     * the AI played the land] per row.
      */
     @Test(timeOut = 900_000)
     public void aFilterLandInHandGivesTheLandDropNoUnitAndLeavesNoFilterToLeanOn() {
@@ -548,7 +551,10 @@ public class DelayedLossUpkeepPaymentTest extends AITest {
                 List.of("Summoner's Pact", "Gruul Signet,Forest,Mountain", "Wooded Bastion"),
                 List.of("Pact of the Titan", "Mountain,Mountain,Mountain,Mountain", "Mystic Gate"),
                 List.of("Pact of the Titan", "Mountain,Mountain,Mountain,Mountain", "Wooded Bastion"),
-                List.of("Summoner's Pact", "Gruul Signet,Forest,Mountain", "Shimmering Grotto"));
+                List.of("Summoner's Pact", "Gruul Signet,Forest,Mountain", "Shimmering Grotto"),
+                // the flag alone: the battlefield covers the debt without the drop, leaning on the Signet
+                List.of("Pact of Negation", "Dimir Signet,Island,Mountain,Mountain,Mountain", "Mystic Gate"),
+                List.of("Summoner's Pact", "Gruul Signet,Forest,Mountain,Mountain", "Wooded Bastion"));
         final List<List<Object>> seen = new ArrayList<>();
         for (final List<String> row : rows) {
             seen.add(payBoardWithALandInHand(row.get(0), row.get(1), row.get(2)));

@@ -1694,4 +1694,34 @@ public class DelayedLossTest extends FlatMcTestBase {
             return null;
         });
     }
+
+    /**
+     * RU-37 (review-chain m-3): a card a removal takes is still read for the flag that leaves the count no counted
+     * filter to lean on. Past Removal.MAX_CASES a one-of removal takes every choice at once while the payment takes
+     * one, so a taken card may still be there; the count does not guess which. Gruul Signet x2, Forest and Mountain x2
+     * on the opponent's turn, a removal taking the first Signet, against {2}{G}{G}: the second Signet is counted (G, R,
+     * R and its R+G, five for four and one), but the first is a filter-like card the count does not lean on, so the
+     * second is not leaned on either, and three units do not cover four. The control: one Gruul Signet, Forest and
+     * Mountain x3, a removal taking a Mountain: covered. [the first board covered, the control covered].
+     */
+    @Test(timeOut = 300_000)
+    public void aCardARemovalTakesStillLeavesNoFilterToLeanOn() {
+        final DelayedLoss.Debt debt = DelayedLoss.Debt.of("2 G G");
+        opponentsTurn();
+        final Card taken = put("Gruul Signet", ai, ZoneType.Battlefield);
+        put("Gruul Signet", ai, ZoneType.Battlefield);
+        put("Forest", ai, ZoneType.Battlefield);
+        put("Mountain", 2, ai, ZoneType.Battlefield);
+        final boolean signetTaken = DelayedLoss.count(ai, DelayedLoss.Due.NEXT,
+                new DelayedLoss.Removal(List.of(taken), 0)).pays(debt);
+
+        opponentsTurn();
+        put("Gruul Signet", ai, ZoneType.Battlefield);
+        put("Forest", ai, ZoneType.Battlefield);
+        final List<Card> mountains = put("Mountain", 3, ai, ZoneType.Battlefield);
+        final boolean mountainTaken = DelayedLoss.count(ai, DelayedLoss.Due.NEXT,
+                new DelayedLoss.Removal(List.of(mountains.get(0)), 0)).pays(debt);
+        assertEquals(Arrays.asList(signetTaken, mountainTaken), Arrays.asList(false, true),
+                "[a Signet taken beside a second Signet covered, a Mountain taken beside one Signet covered]");
+    }
 }
