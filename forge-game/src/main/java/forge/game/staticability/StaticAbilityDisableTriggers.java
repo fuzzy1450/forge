@@ -11,7 +11,7 @@ import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
 import org.apache.commons.lang3.ArrayUtils;
 
-import java.util.HashSet;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -26,7 +26,7 @@ public class StaticAbilityDisableTriggers {
             if (lki == null) {
                 lki = game.getLastStateBattlefield();
             }
-            zones = new HashSet<>(zones);
+            zones = EnumSet.copyOf(zones); // enum order: a HashSet of enums iterates in identity-hash order
             zones.remove(ZoneType.Battlefield);
             cardList = Iterables.concat(lki, game.getCardsIn(zones));
         } else {

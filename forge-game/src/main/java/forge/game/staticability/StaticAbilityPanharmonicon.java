@@ -16,7 +16,7 @@ import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
 
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -65,7 +65,7 @@ public class StaticAbilityPanharmonicon {
             if (lki == null) {
                 lki = game.getLastStateBattlefield();
             }
-            zones = new HashSet<>(zones);
+            zones = EnumSet.copyOf(zones); // enum order: a HashSet of enums iterates in identity-hash order
             zones.remove(ZoneType.Battlefield);
             cardList = Iterables.concat(lki, game.getCardsIn(zones));
         } else {
