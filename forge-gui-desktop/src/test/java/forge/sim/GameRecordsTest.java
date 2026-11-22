@@ -73,8 +73,9 @@ public class GameRecordsTest {
         // decided games won by different seats, so that a record naming one seat whatever happened cannot pass (the
         // second was 7_000_003 until the merge of upstream's 626aa9f0735, after which seat 0 won both, then 7_000_002
         // until every default seat played full Flat MC, MTG_DeckMaker's tools/combo-ai/flat-mc/SHIP.md, design 2,
-        // after which seat 1 wins both, and 7_000_003, which seat 0 wins, again since).
-        Recorded other = play(runner, GameRunnerTest.spec(7_000_003L, 300), 1);
+        // after which seat 1 wins both, and 7_000_003, which seat 0 wins, again since, until the merge of upstream's
+        // ca782d4e6ff, after which seat 1 wins it and every seed up to 7_000_006 too, and 7_000_008, which seat 0 wins).
+        Recorded other = play(runner, GameRunnerTest.spec(7_000_008L, 300), 1);
         for (Recorded p : List.of(played, other)) {
             Assert.assertEquals(p.rec().get("winner_seat"), p.result().winnerSeat(), "the record's winner is the runner's");
             Assert.assertEquals(p.rec().get("end_reason"), p.result().endReason(), "the record's end_reason is the runner's");
@@ -82,9 +83,9 @@ public class GameRecordsTest {
             Assert.assertEquals(p.rec().get("first_seat"), p.result().firstSeat(), "the record's first_seat is the runner's");
         }
         Assert.assertNotNull(r.winnerSeat(), "seed 7_000_000 has a winner");
-        Assert.assertNotNull(other.result().winnerSeat(), "seed 7_000_003 has a winner");
+        Assert.assertNotNull(other.result().winnerSeat(), "seed 7_000_008 has a winner");
         Assert.assertNotEquals(other.result().winnerSeat(), r.winnerSeat(),
-                "seeds 7_000_000 and 7_000_003 are won by different seats; if an engine change breaks that, pick two that are");
+                "seeds 7_000_000 and 7_000_008 are won by different seats; if an engine change breaks that, pick two that are");
         if (rec.get("winner_seat") != null) {
             Assert.assertNotNull(rec.get("win_reason"), "a decided two-seat game says how the loser lost");
         }
