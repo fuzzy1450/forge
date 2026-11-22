@@ -57,9 +57,13 @@ public class FlatMcSearchOnlyTest extends FlatMcTestBase {
         FlatMcProfiles.restore();
     }
 
-    /** Opt is a cantrip, which a default seat's guard keeps while a win looks near; a search-only seat has no guard. */
+    /**
+     * Opt is a cantrip, which a default seat's guard keeps while a win looks near; a search-only seat has no guard. The
+     * library holds a card for Opt to draw: from an empty one LegalityGuard refuses it first, as draw-would-lose.
+     */
     @Test
     public void theGuardPassesEveryPlayOfASearchOnlySeat() {
+        put("Island", ai, ZoneType.Library);
         final SpellAbility opt = put("Opt", ai, ZoneType.Hand).getSpellAbilities().get(0);
         assertEquals(Reflect.call(brain(), "guardProblem", opt, null, true), "cantrip-saved");
         brain().setFlatMcSeat(FlatMcSeat.parse("flat_mc"));
@@ -69,6 +73,7 @@ public class FlatMcSearchOnlyTest extends FlatMcTestBase {
     /** A full seat is no search-only seat: its guard still keeps Opt while a win looks near. */
     @Test
     public void theGuardStandsForAFullSeat() {
+        put("Island", ai, ZoneType.Library);
         final SpellAbility opt = put("Opt", ai, ZoneType.Hand).getSpellAbilities().get(0);
         brain().setFlatMcSeat(FlatMcSeat.parse("default"));
         assertEquals(Reflect.call(brain(), "guardProblem", opt, null, true), "cantrip-saved");
