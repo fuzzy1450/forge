@@ -52807,6 +52807,17 @@ public class SpecialCardAi {
                     && "Land".equals(shift.getParam("ChangeType")) && shift.hasParam("Tapped");
         }
 
+        // Scapeshift has two owners (merge 2026-11-22, ruling RU-2): upstream's Valakut line (RampPlan, its
+        // canPlaySa wait, its lethal exemption in the candidate filter, RampPlan.nextPick and its sacrifice
+        // chooser) decides while a Valakut land is in the deck's hand, library or play; this Field of the Dead
+        // row decides otherwise. Both keys below answer false for a Valakut deck, so the cast (readmit and
+        // SacrificeAi's consider), the search pick (ChangeZoneAi.deadCardPickDecides and choosePick) and the
+        // sacrifice chooser (ComputerUtil.choosePermanentsToSacrifice) all fall to upstream's line together.
+        // A zone read; no random draw.
+        static boolean valakutsLine(final Player ai) {
+            return forge.ai.simulation.RampPlan.valakutAccessible(ai);
+        }
+
         // the owner's own paid cast of the root spell from hand (the readmit's key, rule B3-2)
         public static boolean isOwnHandCast(final Player ai, final SpellAbility sa) {
             final Card host = sa.getHostCard();
@@ -52816,7 +52827,7 @@ public class SpecialCardAi {
                     || !host.isInZone(ZoneType.Hand)) {
                 return false;
             }
-            return reviewedShape(sa);
+            return reviewedShape(sa) && !valakutsLine(ai);
         }
 
         // our Main 2 with an empty stack
@@ -52839,7 +52850,7 @@ public class SpecialCardAi {
             return host != null && host.getRules() != null && NAME.equals(host.getRules().getName())
                     && !host.isCopiedSpell() && !sa.isCopied()
                     && decider.equals(host.getOwner()) && decider.equals(sa.getActivatingPlayer())
-                    && reviewedShape(sa.getRootAbility());
+                    && reviewedShape(sa.getRootAbility()) && !valakutsLine(decider);
         }
 
         // ---- the decision (SacrificeAi.canPlay, behind isOwnHandCast) ----
