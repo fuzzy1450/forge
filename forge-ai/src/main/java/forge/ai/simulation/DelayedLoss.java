@@ -800,11 +800,35 @@ public final class DelayedLoss {
             return n;
         }
 
-        /** Whether the debt is covered (DESIGN.md 1.6): units for its total and the filters' inputs, and a distinct
-         *  unit of a fitting color for each pip (a bipartite matching). */
+        /**
+         * Whether the debt is covered (DESIGN.md 1.6): units for its total and the filters' inputs, and a distinct unit
+         * of a fitting color for each pip (a bipartite matching), with at most one counted filter. The AI's payment
+         * tests a payment before it makes it, and that test refuses a filter chosen right after another filter
+         * (ComputerUtilMana.payManaCost, "chaining filters risks misplay") and keeps it out of the rest of the payment;
+         * it pays the pips first, one after another, so two filters paying the two pips, or a second filter the
+         * generic part needs, leave the debt unpaid (RU-29, review selfkill-mana F1). With two or more filters the
+         * debt is covered when it is with every filter but one left out, for some one.
+         */
         public boolean pays(final Debt debt) {
             if (debt == null) {
                 return true;
+            }
+            final List<Source> filters = new ArrayList<>();
+            for (final Source s : sources) {
+                final Option o = option(s);
+                if (o != null && o.filterInput > 0) {
+                    filters.add(s);
+                }
+            }
+            if (filters.size() > 1) {
+                for (final Source kept : filters) {
+                    final List<Source> left = new ArrayList<>(filters);
+                    left.remove(kept);
+                    if (without(left).pays(debt)) {
+                        return true;
+                    }
+                }
+                return false;
             }
             final List<Integer> units = units();
             if (units.size() < debt.total + filterInput()) {
