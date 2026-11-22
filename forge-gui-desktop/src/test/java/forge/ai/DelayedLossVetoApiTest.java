@@ -189,6 +189,88 @@ public class DelayedLossVetoApiTest extends AITest {
     }
 
     /**
+     * RULINGS-R3 M23's placement on upstream's Khalni Heart Expedition step (RampPlan.expeditionStep, merge 2026-11-22,
+     * RU-32's M01): the veto sits inside the step's condition, so a vetoed step falls through to the land play. The AI's
+     * own second main phase, Forest x2 in play, Khalni Heart Expedition and a Forest in hand, basic lands in the library:
+     * the stock pick is the Expedition, the step's cast; with the Expedition vetoed the AI plays the Forest.
+     */
+    @Test(timeOut = 120_000)
+    public void aVetoedExpeditionStepFallsThroughToTheLandPlay() {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        final Player ai = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+        addCards("Forest", 2, ai);
+        addCardToZone("Khalni Heart Expedition", ai, ZoneType.Hand);
+        addCardToZone("Forest", ai, ZoneType.Hand);
+        for (int i = 0; i < 5; i++) {
+            addCardToZone("Forest", ai, ZoneType.Library);
+        }
+        game.getAction().checkStateEffects(true);
+        final String stock = describe(brainOf(ai).chooseSpellAbilityToPlay());
+        final String vetoed = describe(vetoing(ai, "Khalni Heart Expedition").chooseSpellAbilityToPlay());
+        AssertJUnit.assertEquals("[the stock pick, the pick with Khalni Heart Expedition vetoed]",
+                Arrays.asList("Khalni Heart Expedition", "Forest (land)"), Arrays.asList(stock, vetoed));
+    }
+
+    /**
+     * M23's placement on upstream's token-mana step (RampPlan.tokenManaStep, RU-32's M02): AiReportScenarioTest's
+     * 12986-rumble-first board (Overgrown Tomb x3, Malevolent Rumble and Emperor of Bones in hand, Forests in the
+     * library) with a Forest in hand, in the AI's own second main phase: the stock pick is Malevolent Rumble, whose
+     * Spawn pays for the Emperor; with Rumble vetoed the AI plays the Forest.
+     */
+    @Test(timeOut = 120_000)
+    public void aVetoedTokenManaStepFallsThroughToTheLandPlay() {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        final Player ai = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN2, ai);
+        addCards("Overgrown Tomb", 3, ai);
+        addCardToZone("Malevolent Rumble", ai, ZoneType.Hand);
+        addCardToZone("Emperor of Bones", ai, ZoneType.Hand);
+        addCardToZone("Forest", ai, ZoneType.Hand);
+        for (int i = 0; i < 4; i++) {
+            addCardToZone("Forest", ai, ZoneType.Library);
+        }
+        game.getAction().checkStateEffects(true);
+        final String stock = describe(brainOf(ai).chooseSpellAbilityToPlay());
+        final String vetoed = describe(vetoing(ai, "Malevolent Rumble").chooseSpellAbilityToPlay());
+        AssertJUnit.assertEquals("[the stock pick, the pick with Malevolent Rumble vetoed]",
+                Arrays.asList("Malevolent Rumble", "Forest (land)"), Arrays.asList(stock, vetoed));
+    }
+
+    /**
+     * M23's placement on upstream's landfall step (LandfallGuard.payoffsFirst, RU-32's M03): a Flat Monte Carlo seat
+     * (the step's gate) in its own first main phase, Forest x2, Plains x3 and Grizzly Bears in play, Maja, Bretagard
+     * Protector (a landfall permanent the lands in play pay for, which the walk casts in Main 1 beside a creature of
+     * ours: PlayMain1) and a Forest in hand: the stock pick is Maja, cast before the land so the land triggers it; with
+     * Maja vetoed the AI plays the Forest.
+     */
+    @Test(timeOut = 300_000)
+    public void aVetoedLandfallPayoffFallsThroughToTheLandPlay() {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        game.AI_FLAT_MONTE_CARLO = true;
+        final Player ai = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        addCards("Forest", 2, ai);
+        addCards("Plains", 3, ai);
+        addCard("Grizzly Bears", ai);
+        addCardToZone("Maja, Bretagard Protector", ai, ZoneType.Hand);
+        addCardToZone("Forest", ai, ZoneType.Hand);
+        for (int i = 0; i < 20; i++) {
+            addCardToZone("Forest", ai, ZoneType.Library);
+            addCardToZone("Plains", opponentOf(game, ai), ZoneType.Library);
+        }
+        game.getAction().checkStateEffects(true);
+        AssertJUnit.assertTrue("the landfall step's gate", brainOf(ai).flatMonteCarloActive());
+        final String stock = describe(brainOf(ai).chooseSpellAbilityToPlay());
+        final String vetoed = describe(vetoing(ai, "Maja, Bretagard Protector").chooseSpellAbilityToPlay());
+        AssertJUnit.assertEquals("[the stock pick, the pick with Maja vetoed]",
+                Arrays.asList("Maja, Bretagard Protector", "Forest (land)"), Arrays.asList(stock, vetoed));
+    }
+
+    /**
      * DESIGN.md S4, D12 (review TA, finding 1): the veto at the last return, getSpellAbilityToPlay()'s. On target it is
      * the only DelayedLoss check of the paths that ask no other site: the combo-table loops (LoopDriver's response and
      * main-phase action, LoopRunner), ComboExecute.goOffFirst, the sure plays, and a search-only seat's own Flat MC

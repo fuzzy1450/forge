@@ -7,6 +7,7 @@ import org.testng.annotations.Test;
 
 import forge.ai.ability.ChangeZoneAi;
 import forge.ai.simulation.ComboPlan;
+import forge.ai.simulation.RampPlan;
 import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
@@ -137,6 +138,64 @@ public class DeadCardPicksBeforeDeckPlanTest extends AITest {
         AssertJUnit.assertSame(field, SpecialCardAi.Scapeshift.choosePick(p, lands));
         AssertJUnit.assertSame(field, aic.chooseCardToHiddenOriginChangeZone(ZoneType.Battlefield, fromLibrary, shift,
                 new CardCollection(lands), p, p));
+    }
+
+    /** RampPlan.nextPick's board for the next two tests: Valakut in the graveyard (a Valakut deck to RampPlan, whose
+     *  isValakutDeck reads the graveyard, but no Valakut line: valakutAccessible reads hand, library and battlefield),
+     *  Scapeshift in hand, Field of the Dead and seven Mountains in the library. Returns the library's lands. */
+    private CardCollection valakutInTheGraveyard(final Player p) {
+        addCardToZone("Valakut, the Molten Pinnacle", p, ZoneType.Graveyard);
+        addCardToZone("Field of the Dead", p, ZoneType.Library);
+        for (int i = 0; i < 7; i++) {
+            addCardToZone("Mountain", p, ZoneType.Library);
+        }
+        final CardCollection lands = new CardCollection();
+        for (final Card c : p.getCardsIn(ZoneType.Library)) {
+            if (c.isLand()) {
+                lands.add(c);
+            }
+        }
+        return lands;
+    }
+
+    /** Upstream's RampPlan.nextPick sits inside the dead-card gate (merge 2026-11-22, R5; RU-32's M06): on a board
+     *  where nextPick has a pick, our own Scapeshift's search (no Valakut line, so the fork's dead-card pick decides
+     *  it) takes the fork's Field of the Dead, not nextPick's Mountain. */
+    @Test
+    public void ourScapeshiftsSearchIsTheForksPickWhereTheRampPickHasOne() {
+        final Game game = newGame();
+        final Player p = game.getPlayers().get(1);
+        final Card scapeshift = addCardToZone("Scapeshift", p, ZoneType.Hand);
+        final CardCollection lands = valakutInTheGraveyard(p);
+        final SpellAbility shift = shiftOf(scapeshift, p);
+        final Card field = p.getCardsIn(ZoneType.Library).stream()
+                .filter(c -> c.getName().equals("Field of the Dead")).findFirst().get();
+        AssertJUnit.assertFalse(RampPlan.valakutAccessible(p));
+        AssertJUnit.assertTrue(RampPlan.isValakutDeck(p));
+        final Card rampPick = RampPlan.nextPick(p, new CardCollection(lands), 1);
+        AssertJUnit.assertNotNull("upstream's ramp pick has a pick here", rampPick);
+        AssertJUnit.assertNotSame("the ramp pick is not the fork's", field, rampPick);
+        AssertJUnit.assertTrue(ChangeZoneAi.deadCardPickDecides(ZoneType.Battlefield, shift, p, p));
+        AssertJUnit.assertSame(field, SpecialCardAi.Scapeshift.choosePick(p, lands));
+        AssertJUnit.assertSame(field, aiOf(p).chooseCardToHiddenOriginChangeZone(ZoneType.Battlefield,
+                List.of(ZoneType.Library), shift, new CardCollection(lands), p, p));
+    }
+
+    /** The same board's search of a card no dead-card pick decides (Rampant Growth's) is upstream's RampPlan.nextPick:
+     *  the gate is what separates the two. */
+    @Test
+    public void anUngatedSearchOnThatBoardIsTheRampPick() {
+        final Game game = newGame();
+        final Player p = game.getPlayers().get(1);
+        addCardToZone("Scapeshift", p, ZoneType.Hand);
+        final CardCollection lands = valakutInTheGraveyard(p);
+        final SpellAbility growth = addCardToZone("Rampant Growth", p, ZoneType.Hand).getFirstSpellAbility();
+        growth.setActivatingPlayer(p);
+        AssertJUnit.assertFalse(ChangeZoneAi.deadCardPickDecides(ZoneType.Battlefield, growth, p, p));
+        final Card rampPick = RampPlan.nextPick(p, new CardCollection(lands), 1);
+        AssertJUnit.assertNotNull(rampPick);
+        AssertJUnit.assertSame(rampPick, aiOf(p).chooseCardToHiddenOriginChangeZone(ZoneType.Battlefield,
+                List.of(ZoneType.Library), growth, new CardCollection(lands), p, p));
     }
 
     /** The key: the three searches, Praetor's Grasp's among them, and not a plain tutor, an imprint's or the Grasp's

@@ -4491,9 +4491,10 @@ public class ComboExecuteAiTest extends AITest {
         return consultation;
     }
 
-    // ---- merge 2026-11-22: the go-off decides before upstream's plays (RU-26) ----
+    // ---- merge 2026-11-22: the go-off decides before upstream's plays (RU-26, RU-32's M04) ----
 
     private static final String DISPUTE = "Deadly Dispute";
+    private static final String SCAPESHIFT = "Scapeshift";
 
     /** RU-26's board, our Main 1: Thassa's Oracle, Demonic Consultation (when {@code consultation}) and Deadly Dispute
      *  in hand, Island, Island and Swamp, a tapped Sol Ring for Dispute to sacrifice, a 20-card library. Dispute ({1}{B})
@@ -4531,5 +4532,32 @@ public class ComboExecuteAiTest extends AITest {
         disputeBoard(false);
         assertEquals(t.executable(), List.of());
         assertEquals(decision(), DISPUTE, "upstream's token-mana step was lost");
+    }
+
+    /** RULINGS RU-4 and RU-32 (M04's Scapeshift twin): upstream's lethal Valakut Scapeshift is asked after the go-off.
+     *  Our Main 1, AiReportScenarioTest's scapeshift-valakut-library-lethal board (three of each basic land, Scapeshift
+     *  in hand, Valakut and seven Mountains in the library) with the Oracle line ready beside it. With no line the
+     *  lethal Scapeshift is the play; with the line the Oracle is cast first. */
+    @Test
+    public void theGoOffPrecedesUpstreamsLethalScapeshift() {
+        start(ORACLE_CONSULTATION);
+        for (final String land : new String[] { "Plains", "Island", "Swamp", "Mountain", "Forest" }) {
+            lands(land, land, land);
+        }
+        hand(ORACLE);
+        hand(CONSULTATION);
+        hand(SCAPESHIFT);
+        library("Valakut, the Molten Pinnacle");
+        for (int i = 0; i < 7; i++) {
+            library("Mountain");
+        }
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        assertTrue(forge.ai.simulation.RampPlan.valakutAccessible(ai));
+        assertTrue(forge.ai.simulation.RampPlan.scapeshiftLethal(ai));
+        t.useLines(List.of());
+        assertEquals(decision(), SCAPESHIFT, "with no line upstream's lethal Scapeshift is the play");
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertEquals(decision(), ORACLE, "upstream's lethal Scapeshift came before the go-off");
     }
 }
