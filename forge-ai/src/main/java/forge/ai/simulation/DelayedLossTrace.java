@@ -67,7 +67,14 @@ import forge.util.SimScope;
  *   <li>after them, on a judgment's line only and only when a count it made counted two or more filters (sources whose
  *       mana costs mana to make: a Signet, Prophetic Prism), {@code filters=N}, the most any of its counts counted
  *       (RULINGS-R3 F, amended 2026-11-22; RU-34, review FW-6): such a count covers a debt only with each filter taken
- *       alone (RU-33), which its units do not show. A line with fewer is what it was before the key.</li>
+ *       alone (RU-33), which its units do not show. A line with fewer is what it was before the key. The key sits
+ *       after {@code copy_refused}, the last key then; N is the largest filter count over the counts the line's
+ *       {@code units} field prints, which for a Pact verdict are the counts its debt is covered with, so N describes
+ *       the Pact verdict's count only (RU-36, review M-3): debt protection covers a debt due now also on counts the
+ *       line does not print (the count left after the play's removal, its painless form, the count with extra life,
+ *       the count with the sources a payment may tap left out), and N says nothing of the filters those counted. N
+ *       counts the counted filters also where RU-35 leaves every one of them out (the AI controlling a filter the
+ *       count does not count).</li>
  * </ul>
  * A judgment inside a simulation copy is counted and printed only with {@code -Dselfkill.trace.copies=true}. With
  * {@code -Dselfkill.trace.markers=true} each real-game priority decision also opens with a marker,
