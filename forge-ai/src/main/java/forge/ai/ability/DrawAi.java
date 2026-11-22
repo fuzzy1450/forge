@@ -22,6 +22,9 @@ import java.util.Map;
 
 import forge.ai.*;
 import forge.ai.combo.ComboExecute;
+import forge.ai.simulation.AiCardLists;
+import forge.ai.simulation.AlurenPlan;
+import forge.ai.simulation.DoomsdayPile;
 import forge.game.Game;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
@@ -373,7 +376,7 @@ public class DrawAi extends SpellAbilityAi {
             }
             final int numCards = sa.hasParam("NumCards")
                     ? AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("NumCards"), sa) : 1;
-            return forge.ai.simulation.DoomsdayPile.drawsThroughPile(ai, numCards);
+            return DoomsdayPile.drawsThroughPile(ai, numCards);
         } catch (final RuntimeException e) {
             return false;
         }
@@ -420,9 +423,12 @@ public class DrawAi extends SpellAbilityAi {
             // stock path below runs. Draws nothing. Same shape as the Biomantic Mastery gate above.
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
-        if (targetAI(ai, sa, sa.isTrigger() && sa.getHostCard().isInPlay())) {
+        // upstream (d1619928091): a trigger's draw is mandatory for targetAI unless the trigger is optional,
+        // where it read "the host is in play" before
+        if (targetAI(ai, sa, sa.isTrigger() && !sa.isOptionalTrigger())) {
             // Tataru Taru's tempo floor on the symmetric-draw approval: judged only after targetAI
             // approved and only off resolution, so every stock path and every random draw is unchanged
+            // (the off-resolution test is the fork's own, kept as written: not a trigger of a host in play)
             if ((!sa.isTrigger() || !sa.getHostCard().isInPlay()) && isOwnDrawThenOptionalOpponentDraw(sa)
                     && castDisplacesManaSource(ai, sa.getHostCard())) {
                 sa.resetTargets();
@@ -545,7 +551,7 @@ public class DrawAi extends SpellAbilityAi {
         }
 
         if (sa.costHasManaX() && sa.getRootAbility().getXManaCostPaid() == null && source != null
-                && forge.ai.simulation.AiCardLists.has(forge.ai.simulation.AiCardLists.Role.DREDGE_REFILL, source)) {
+                && AiCardLists.has(AiCardLists.Role.DREDGE_REFILL, source)) {
             // Breakthrough for the dredge line: X=0 draws four and throws the hand away, which is the point.
             sa.getRootAbility().setXManaCostPaid(0);
         }
@@ -702,7 +708,7 @@ public class DrawAi extends SpellAbilityAi {
             // if spell is not mandatory
             if (aiTarget && !ai.cantLose()) {
                 if (numCards >= computerLibrarySize - 3
-                        && !(pileDrawOn(ai) && forge.ai.simulation.DoomsdayPile.drawsThroughPile(ai, numCards))) {
+                        && !(pileDrawOn(ai) && DoomsdayPile.drawsThroughPile(ai, numCards))) {
                     if (xPaid) {
                         numCards = computerLibrarySize - 1;
                         if (numCards <= 0 && !mandatory) {
@@ -831,7 +837,7 @@ public class DrawAi extends SpellAbilityAi {
             }
 
             if (numCards >= computerLibrarySize - 3
-                    && !(pileDrawOn(ai) && forge.ai.simulation.DoomsdayPile.drawsThroughPile(ai, numCards))) {
+                    && !(pileDrawOn(ai) && DoomsdayPile.drawsThroughPile(ai, numCards))) {
                 // combo-aware AI (spec 2026-10-22 section 6.4): or the draw that finishes a line on our emptied library
                 // (finishesLine needs an empty library and drawsThroughPile a non-empty one, so they never meet)
                 if ((ai.isCardInPlay("Laboratory Maniac") && !ai.cantWin()) || ComboExecute.finishesLine(ai, sa)) {
@@ -841,7 +847,8 @@ public class DrawAi extends SpellAbilityAi {
                 return false;
             }
 
-            if ((computerHandSize + numCards > computerMaxHandSize)) {
+            if (computerHandSize + numCards > computerMaxHandSize
+                    && !AlurenPlan.digging(ai)) {
                 // Don't draw too many cards and then risk discarding cards at EOT
                  if (game.getPhaseHandler().isPlayerTurn(ai)
                         && !sa.isTrigger()
@@ -972,6 +979,10 @@ public class DrawAi extends SpellAbilityAi {
      */
     @Override
     public boolean confirmAction(Player player, SpellAbility sa, PlayerActionConfirmMode mode, String message, Map<String, Object> params) {
+        if ("AttackTaxDraw".equals(sa.getParam("AILogic"))
+                && !forge.ai.AttackRestrictionDeal.worthTaking(player, sa.getHostCard().getController())) {
+            return false; // The Second Doctor: the card is not worth an attack it wants to make
+        }
         int numCards = sa.hasParam("NumCards") ? AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("NumCards"), sa) : 1;
         // AI shouldn't mill itself
         if (numCards < player.getZone(ZoneType.Library).size())

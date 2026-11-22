@@ -39,10 +39,26 @@ import forge.game.zone.ZoneType;
  */
 public class StaticAbilityCantAttackBlock {
 
+    /**
+     * @return the keyword text preventing attacker from attacking, or null if it doesn't have one
+     */
+    public static String getCantAttackKeyword(final Card attacker) {
+        if (attacker.hasKeyword("CARDNAME can't attack.")) {
+            return "CARDNAME can't attack.";
+        }
+        if (attacker.hasKeyword("CARDNAME can't attack or block.")) {
+            return "CARDNAME can't attack or block.";
+        }
+        return null;
+    }
+
+    /**
+     * The keyword, Detained and CantAttack static ability checks in one answer, as this class answered before
+     * upstream split it (#12053) into {@link #getCantAttackKeyword}, {@link Card#isDetained} and
+     * {@link #findCantAttackAbility}; kept for the fork's callers (the mode flag tests).
+     */
     public static boolean cantAttack(final Card attacker, final GameEntity defender) {
-        // Keywords
-        // replace with Static Ability if able
-        if (attacker.hasKeyword("CARDNAME can't attack.") || attacker.hasKeyword("CARDNAME can't attack or block.")) {
+        if (getCantAttackKeyword(attacker) != null) {
             return true;
         }
 
@@ -50,19 +66,26 @@ public class StaticAbilityCantAttackBlock {
             return true;
         }
 
+        return findCantAttackAbility(attacker, defender) != null;
+    }
+
+    /**
+     * @return the first CantAttack static ability preventing attacker from attacking defender, or null
+     */
+    public static StaticAbility findCantAttackAbility(final Card attacker, final GameEntity defender) {
         final Game game = attacker.getGame();
         if (!game.mayHaveStaticAbilityMode(StaticAbilityMode.CantAttack)) {
             // no static ability of this game has the mode, so the scan would find none
             if (StaticAbilityModeProbe.listener != null) {
                 StaticAbilityModeProbe.skipped(game, StaticAbilityMode.CantAttack,
-                        () -> !cantAttackScan(attacker, defender));
+                        () -> findCantAttackAbilityScan(attacker, defender) == null);
             }
-            return false;
+            return null;
         }
-        return cantAttackScan(attacker, defender);
+        return findCantAttackAbilityScan(attacker, defender);
     }
 
-    private static boolean cantAttackScan(final Card attacker, final GameEntity defender) {
+    private static StaticAbility findCantAttackAbilityScan(final Card attacker, final GameEntity defender) {
         for (final Card ca : attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.CantAttack)) {
@@ -70,11 +93,11 @@ public class StaticAbilityCantAttackBlock {
                 }
 
                 if (applyCantAttackAbility(stAb, attacker, defender)) {
-                    return true;
+                    return stAb;
                 }
             }
         }
-        return false;
+        return null;
     }
 
     /**

@@ -28,6 +28,11 @@ import forge.game.zone.ZoneType;
  * to Ashes and Maelstrom Pulse took the best opposing permanent without their evaluators' group rules; Carpet of
  * Flowers' trigger took the lowest-life opponent, not the one with the most Islands. Each test fails that way with the
  * scripts on TargetOnly and passes with their Pump lines.
+ * <p>
+ * The merge of upstream ca782d4e6ff (#12876) moved Aetherspouts' root from Pump to Bookkeeping without a conflict:
+ * NothingAi refuses every Bookkeeping root it is asked to start (CantPlayAi), so the Aetherspouts hook at the end of
+ * PumpAi.checkApiLogic's untargeted branch never ran. Its test fails that way with the script on Bookkeeping and passes
+ * with its Pump line.
  */
 public class ForkPumpRoutingTest extends AITest {
 
@@ -195,6 +200,33 @@ public class ForkPumpRoutingTest extends AITest {
         Assert.assertTrue(decision.willingToPlay(), "the AI takes Carpet of Flowers' mana: " + decision.decision());
         Assert.assertSame(trigger.getTargets().getFirstTargetedPlayer(), islands,
                 "the trigger counts the Islands of the opponent who has them");
+    }
+
+    /** An opponent's declare blockers step, their two Craw Wurms (6/4) attacking the AI unblocked at 10 life, and five
+     *  untapped Islands of the AI's: the attack would leave it dead. The AI casts Aetherspouts (SpecialCardAi
+     *  .Aetherspouts' danger rule). */
+    @Test
+    public void aetherspoutsAnswersALethalAttackInTheDeclareBlockersStep() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        final Player opp = game.getPlayers().get(0);
+        final Card wurmA = addCard("Craw Wurm", opp);
+        final Card wurmB = addCard("Craw Wurm", opp);
+        addCards("Island", 5, ai);
+        ai.setLife(10, null);
+        final SpellAbility sa = spell("Aetherspouts", ai);
+        game.getPhaseHandler().devModeSet(PhaseType.COMBAT_DECLARE_BLOCKERS, opp);
+        final Combat combat = new Combat(opp);
+        for (final Card wurm : List.of(wurmA, wurmB)) {
+            wurm.setSickness(false);
+            wurm.setTapped(true);
+            combat.addAttacker(wurm, ai);
+        }
+        game.getPhaseHandler().setCombat(combat);
+
+        Assert.assertEquals(sa.getApi(), ApiType.Pump, "Aetherspouts' root is the fork's Pump line");
+        final AiAbilityDecision decision = ask(ai, sa);
+        Assert.assertTrue(decision.willingToPlay(), "the AI casts Aetherspouts: " + decision.decision());
     }
 
     // `attacker` attacks `defender` with `creature` in `step` of the attacker's turn

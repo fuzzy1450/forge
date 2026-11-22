@@ -31,31 +31,67 @@ public class StaticAbilityMustAttack {
     }
 
     private static List<GameEntity> entitiesMustAttackScan(final Card attacker, final List<GameEntity> entityList) {
+        for (final StaticAbility stAb : mustAttackSourcesScan(attacker)) {
+            if (stAb.hasParam("MustAttack")) {
+                entityList.addAll(definedMustAttack(stAb));
+            } else {
+                // if the list is only the attacker, the attacker must attack, but no specific entity
+                entityList.add(attacker);
+            }
+        }
+        return entityList;
+    }
+
+    /**
+     * @return the entities the MustAttack static ability requires to be attacked,
+     *         empty if it doesn't require a specific entity to be attacked
+     */
+    public static List<GameEntity> definedMustAttack(final StaticAbility stAb) {
+        final List<GameEntity> entityList = new ArrayList<>();
+        if (!stAb.hasParam("MustAttack")) {
+            return entityList;
+        }
+        final Game game = stAb.getHostCard().getGame();
+        for (GameEntity e : AbilityUtils.getDefinedEntities(stAb.getHostCard(), stAb.getParam("MustAttack"), stAb)) {
+            if ((e instanceof Player attackPl && game.getPhaseHandler().isPlayerTurn(attackPl)) ||
+                    ((e instanceof Card attackPw && game.getPhaseHandler().isPlayerTurn(attackPw.getController())))) {
+                // CR 506.2
+                continue;
+            }
+            entityList.add(e);
+        }
+        return entityList;
+    }
+
+    /**
+     * @return the MustAttack static abilities that apply to the attacker
+     */
+    public static List<StaticAbility> mustAttackSources(final Card attacker) {
         final Game game = attacker.getGame();
-        for (final Card ca : game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
+        if (!game.mayHaveStaticAbilityMode(StaticAbilityMode.MustAttack)) {
+            // no static ability of this game has the mode, so the scan would find none
+            if (StaticAbilityModeProbe.listener != null) {
+                StaticAbilityModeProbe.skipped(game, StaticAbilityMode.MustAttack,
+                        () -> mustAttackSourcesScan(attacker).isEmpty());
+            }
+            return new ArrayList<>();
+        }
+        return mustAttackSourcesScan(attacker);
+    }
+
+    private static List<StaticAbility> mustAttackSourcesScan(final Card attacker) {
+        final List<StaticAbility> result = new ArrayList<>();
+        for (final Card ca : attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.MustAttack)) {
                     continue;
                 }
                 if (stAb.matchesValidParam("ValidCreature", attacker)) {
-                    if (stAb.hasParam("MustAttack")) {
-                        List<GameEntity> def = AbilityUtils.getDefinedEntities(stAb.getHostCard(), stAb.getParam("MustAttack"), stAb);
-                        for (GameEntity e : def) {
-                            if ((e instanceof Player attackPl && game.getPhaseHandler().isPlayerTurn(attackPl)) ||
-                                    ((e instanceof Card attackPw && game.getPhaseHandler().isPlayerTurn(attackPw.getController())))) {
-                                // CR 506.2
-                                continue;
-                            }
-                            entityList.add(e);
-                        }
-                    } else {
-                        // if the list is only the attacker, the attacker must attack, but no specific entity
-                        entityList.add(attacker);
-                    }
+                    result.add(stAb);
                 }
             }
         }
-        return entityList;
+        return result;
     }
 
     public static Multimap<GameEntity, StaticAbility> mustAttackSpecific(final Player attackingPlayer, final FCollectionView<GameEntity> possibleDefenders) {
