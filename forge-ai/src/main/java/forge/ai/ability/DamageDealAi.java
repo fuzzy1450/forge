@@ -326,7 +326,7 @@ public class DamageDealAi extends DamageAiBase {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAfford);
             }
             if (ComputerUtil.preventRunAwayActivations(sa)) {
-                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+                return new AiAbilityDecision(0, AiPlayDecision.StopRunawayActivations);
             }
             final int stormDmg = calculateDamageAmount(sa, source, sa.getParam("NumDmg"));
             if (!damageTargetAI(ai, sa, stormDmg, false) || !SpecialCardAi.IonStorm.worthTarget(ai, sa)) {
