@@ -1474,4 +1474,203 @@ public class DelayedLossTest extends FlatMcTestBase {
         });
         assertEquals(verdicts, Arrays.asList(null, null), "[Vampiric Tutor, Brainstorm] = " + verdicts);
     }
+
+    // --------------------------------------------------------------------------------------------- the upstream merge's
+    // mana sources (RU-30, RU-31; review selfkill-mana F2, F3, F4). Upstream's getAIPlayableMana now admits mana
+    // abilities rooted in ChoosePlayer or ChooseColor and a wider set of filters (ca782d4e6ff's d9dc6298db5 and
+    // a72da5e30d4); these rows pin what the count makes of them.
+
+    /** The counted units of one source, as the trace writes them ({@code Island=U}), or null when it is not counted. */
+    private String unitsOf(final String name) {
+        for (final String entry : DelayedLoss.count(ai, DelayedLoss.Due.NEXT, DelayedLoss.Removal.NONE).describe()
+                .split(";")) {
+            if (entry.startsWith(name + "=")) {
+                return entry;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * RU-30 (F2): Three Tree City's {2},{T} ability, X mana of one colour for the creatures of its chosen type, is
+     * counted at the board of the cast, as Gaea's Cradle is (DESIGN.md R2). Pact of Negation (3UU), Island x3 and Three
+     * Tree City naming Human beside four Humans: three U units and the City's four any-colour ones, seven for the debt's
+     * five and the City's {2}. Allowed.
+     */
+    @Test
+    public void threeTreeCityIsCountedAtTheBoardOfTheCast() {
+        opponentsTurn();
+        put("Island", 3, ai, ZoneType.Battlefield);
+        put("Three Tree City", ai, ZoneType.Battlefield).setChosenType("Human");
+        put("Elite Vanguard", 4, ai, ZoneType.Battlefield);
+        game.getAction().checkStateEffects(true);
+        assertEquals(Arrays.asList(
+                        DelayedLoss.count(ai, DelayedLoss.Due.NEXT, DelayedLoss.Removal.NONE).units().size(),
+                        unitsOf("Three Tree City"), pactOfNegation()),
+                Arrays.asList(7, "Three Tree City=WUBRG+WUBRG+WUBRG+WUBRG", null),
+                "[the units, the City's, the verdict]");
+    }
+
+    /**
+     * RU-31 (F3): Spectral Searchlight ({T}: a chosen player adds one mana of any colour) is counted: Pact of Negation
+     * (3UU), Island x4 is refused, and with the Searchlight beside them allowed.
+     */
+    @Test
+    public void spectralSearchlightIsCounted() {
+        opponentsTurn();
+        put("Island", 4, ai, ZoneType.Battlefield);
+        final String without = pactOfNegation();
+        put("Spectral Searchlight", ai, ZoneType.Battlefield);
+        assertEquals(Arrays.asList(without, unitsOf("Spectral Searchlight"), pactOfNegation()),
+                Arrays.asList(DelayedLoss.PACT_UNPAYABLE, "Spectral Searchlight=WUBRG", null),
+                "[Island x4, the Searchlight's units, Island x4 and the Searchlight]");
+    }
+
+    /**
+     * RU-31 (F3): Victory Chimes ({T}: a chosen player adds {C}) is counted: Pact of the Titan (4R), Mountain x4 is
+     * refused, and with the Chimes beside them allowed.
+     */
+    @Test
+    public void victoryChimesIsCounted() {
+        opponentsTurn();
+        put("Mountain", 4, ai, ZoneType.Battlefield);
+        final String without = problemOf(spell("Pact of the Titan"));
+        put("Victory Chimes", ai, ZoneType.Battlefield);
+        assertEquals(Arrays.asList(without, unitsOf("Victory Chimes"), problemOf(spell("Pact of the Titan"))),
+                Arrays.asList(DelayedLoss.PACT_UNPAYABLE, "Victory Chimes=C", null),
+                "[Mountain x4, the Chimes' units, Mountain x4 and the Chimes]");
+    }
+
+    /**
+     * RU-31 (F3): a certain fixer, Prophetic Prism ({1},{T}: one mana of any colour), is counted with its input owed:
+     * Slaughter Pact (2B), Island x3 has no B and is refused; with the Prism, three U units and its one, four for the
+     * debt's three and the Prism's {1}, the Prism paying the B. Allowed.
+     */
+    @Test
+    public void aCertainFixerIsCounted() {
+        opponentsTurn();
+        put("Island", 3, ai, ZoneType.Battlefield);
+        final String without = problemOf(spell("Slaughter Pact"));
+        put("Prophetic Prism", ai, ZoneType.Battlefield);
+        assertEquals(Arrays.asList(without, unitsOf("Prophetic Prism"), problemOf(spell("Slaughter Pact"))),
+                Arrays.asList(DelayedLoss.PACT_UNPAYABLE, "Prophetic Prism=WUBRG", null),
+                "[Island x3, the Prism's units, Island x3 and the Prism]");
+    }
+
+    /**
+     * RU-31 (F3): Chromatic Star ({1},{T}, sacrifice it: one mana of any colour), which upstream's filter rule now
+     * admits, is still not counted: its sacrifice is a cost part the count refuses. Slaughter Pact (2B) with Island x3
+     * and the Star: refused, as without it.
+     */
+    @Test
+    public void chromaticStarIsNotCounted() {
+        opponentsTurn();
+        put("Island", 3, ai, ZoneType.Battlefield);
+        put("Chromatic Star", ai, ZoneType.Battlefield);
+        assertEquals(Arrays.asList(unitsOf("Chromatic Star"), problemOf(spell("Slaughter Pact"))),
+                Arrays.asList(null, DelayedLoss.PACT_UNPAYABLE), "[the Star's units, the verdict]");
+    }
+
+    /**
+     * RU-31 (F3): Nykthos's devotion ability and Nyx Lotus's are not counted (their Amount is the chosen colour's
+     * devotion, 0 while no colour is chosen); Nykthos's {C} ability is. Three Coral Merfolk give devotion to blue 3.
+     * Nykthos beside Island x4: its unit is one {C}. Nyx Lotus beside Island x2: not counted, and Pact of Negation
+     * (3UU), which its three U would cover, is refused.
+     */
+    @Test
+    public void theDevotionAbilitiesAreNotCounted() {
+        opponentsTurn();
+        put("Coral Merfolk", 3, ai, ZoneType.Battlefield);
+        put("Island", 4, ai, ZoneType.Battlefield);
+        put("Nykthos, Shrine to Nyx", ai, ZoneType.Battlefield);
+        final String nykthos = unitsOf("Nykthos, Shrine to Nyx");
+
+        opponentsTurn();
+        put("Coral Merfolk", 3, ai, ZoneType.Battlefield);
+        put("Island", 2, ai, ZoneType.Battlefield);
+        put("Nyx Lotus", ai, ZoneType.Battlefield);
+        assertEquals(Arrays.asList(nykthos, unitsOf("Nyx Lotus"), pactOfNegation()),
+                Arrays.asList("Nykthos, Shrine to Nyx=C", null, DelayedLoss.PACT_UNPAYABLE),
+                "[Nykthos's units, Nyx Lotus's units, Pact of Negation beside Island x2 and Nyx Lotus]");
+    }
+
+    /**
+     * RU-31 (F4): {@link #theCoverageReadTakesNoIdAndDrawsNothing}'s first board with Nykthos, Shrine to Nyx beside its
+     * sources: upstream's filter rule reads the devotion ability's amount through an LKI copy of the land
+     * (AbilityManaPart.amountsIfChosen), which the count reaches through getAIPlayableMana. The same calls twice, with
+     * the seven SimScope counters and a counting random's draws compared; the verdicts are the original board's, the
+     * Nykthos {C} unit changing none of them. The second board is a game of its own that Nykthos never reaches.
+     */
+    @Test(timeOut = 300_000)
+    public void theCoverageReadWithNykthosTakesNoIdAndDrawsNothing() {
+        Scoped.under(new SimScope(7L), () -> {
+            setUpGame();
+            noDeadline();
+            fillLibrary(ai, 10);
+            fillLibrary(opp, 10);
+            at(PhaseType.MAIN1, ai);
+            onStack("Pact of the Titan", ai, null);
+            game.getPhaseHandler().onStackResolved();
+            playUntilStackClear(game);
+            final List<Trigger> titanDebt = new ArrayList<>(game.getTriggerHandler().getDelayedTriggersView());
+            assertEquals(titanDebt.size(), 1, "Pact of the Titan's upkeep trigger");
+            at(PhaseType.MAIN1, opp);
+            for (final String name : List.of("Island", "Ancient Tomb", "Mana Confluence", "City of Brass",
+                    "Tarnished Citadel", "Gemstone Caverns", "City of Traitors", "Mox Opal", "Mox Amber", "Chrome Mox",
+                    "Mana Vault", "Dimir Signet", "Talisman of Creativity", "Exotic Orchard", "Bloom Tender",
+                    "Vivi Ornitier", "Springleaf Drum", "The Cabbage Merchant", "Lotus Petal", "Teferi's Isle",
+                    "Lavinia, Foil to Conspiracy", "Nykthos, Shrine to Nyx")) {
+                put(name, ai, ZoneType.Battlefield);
+            }
+            final Card birds = put("Birds of Paradise", ai, ZoneType.Battlefield);
+            birds.setTapped(true);
+            final Card ring = put("Sol Ring", ai, ZoneType.Battlefield);
+            final Card elves = put("Llanowar Elves", ai, ZoneType.Battlefield);
+            put("Claustrophobia", opp, ZoneType.Battlefield).attachToEntity(elves, null);
+            final Card marsh = put("Cinder Marsh", ai, ZoneType.Battlefield);
+            SpellAbility colored = null;
+            for (final SpellAbility ma : marsh.getManaAbilities()) {
+                if (ma.getSubAbility() != null && ma.getSubAbility().getApi() == ApiType.Effect) {
+                    colored = ma;
+                }
+            }
+            assertNotNull(colored, "Cinder Marsh's {B} or {R} ability");
+            colored.setActivatingPlayer(ai);
+            marsh.setTapped(true);
+            AbilityUtils.resolve(colored.getSubAbility()); // its effect keeps the Marsh tapped
+            assertEquals(game.getCardsIn(ZoneType.Command).size(), 1, "the effect that remembers Cinder Marsh");
+            put("Mountain", opp, ZoneType.Battlefield);
+            final Card bears = put("Grizzly Bears", opp, ZoneType.Battlefield);
+            put("Island", ai, ZoneType.Hand);
+            final SpellAbility pon = spell("Pact of Negation");
+            final SpellAbility crop = spell("Crop Rotation");
+            game.getTriggerHandler().clearDelayedTrigger(); // the Titan's debt waits outside the handler for now
+            askEveryCardsAbilities();
+            bears.setCounters(CounterEnumType.SHIELD, 1);
+            put("History of Benalia", opp, ZoneType.Battlefield);
+            birds.setCounters(CounterEnumType.STUN, 1);
+            ring.setCounters(CounterEnumType.STUN, 1);
+
+            final SimScope scope = SimScope.current();
+            final CountingRandom random = new CountingRandom(7L);
+            MyRandom.setRandom(random);
+            final int[] before = counters(scope);
+            final List<String> first = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                first.add(problemOf(pon));
+                first.add(String.valueOf(DelayedLoss.declinesFreeCast(ai, pon)));
+            }
+            game.getTriggerHandler().registerDelayedTrigger(titanDebt.get(0)); // a list's add: the debt is pending
+            for (int i = 0; i < 2; i++) {
+                first.add(problemOf(crop));
+                first.add(String.valueOf(DelayedLoss.declinesFreeCast(ai, crop)));
+            }
+            assertEquals(counters(scope), before, "the first board with Nykthos: no SimScope counter moved "
+                    + List.of(SimScope.Counter.values()) + "; verdicts " + first);
+            assertEquals(random.draws, 0, "and nothing was drawn");
+            assertEquals(first, Arrays.asList(null, "true", null, "true", null, "true", null, "true"),
+                    "the original board's verdicts, Nykthos's {C} beside them");
+            return null;
+        });
+    }
 }

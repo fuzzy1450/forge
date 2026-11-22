@@ -384,6 +384,25 @@ public class DelayedLossVetoTest extends AITest {
     }
 
     /**
+     * RU-31 (review selfkill-mana F3 b): the Pact's unless payment at its trigger's resolution takes Victory Chimes'
+     * ChoosePlayer-rooted mana ability, which upstream's getAIPlayableMana now lists. Pact of the Titan resolved in the
+     * AI's first main phase ({4}{R} due at its next upkeep), Mountain x4 and Victory Chimes, then the game played on
+     * through the AI's next upkeep: the AI is still in the game, and the Chimes and the four Mountains paid the debt.
+     */
+    @Test(timeOut = 300_000)
+    public void victoryChimesPaysThePactAtTheUpkeep() {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        final Player ai = game.getPlayers().get(1);
+        final List<Card> mountains = addCards("Mountain", 4, ai);
+        final Card chimes = addCard("Victory Chimes", ai);
+        resolvePactOfTheTitan(game, ai);
+        playThroughTheNextUpkeep(game, ai, game.getPhaseHandler().getTurn());
+        AssertJUnit.assertEquals("[whether the AI lost, its Mountains tapped, the Chimes tapped, once its upkeep is over]",
+                Arrays.asList(false, 4, true), Arrays.asList(ai.hasLost(), tapped(mountains), chimes.isTapped()));
+    }
+
+    /**
      * T-UPK-HELD (DESIGN.md S6, D28, round 1's L4): a mana source the AI holds for a later spell still pays its Pact.
      * Pact of the Titan resolved in the AI's first main phase ({4}{R} due at its next upkeep), Mountain x5, exactly the
      * debt; then, in the opponent's turn, one Mountain held for the opponent's declare-blockers step and one for the
