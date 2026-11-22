@@ -807,7 +807,9 @@ public final class DelayedLoss {
          * (ComputerUtilMana.payManaCost, "chaining filters risks misplay") and keeps it out of the rest of the payment;
          * it pays the pips first, one after another, so two filters paying the two pips, or a second filter the
          * generic part needs, leave the debt unpaid (RU-29, review selfkill-mana F1). With two or more filters the
-         * debt is covered when it is with every filter but one left out, for some one.
+         * debt is covered only when it is covered with EACH counted filter taken alone, every other filter left out
+         * (RU-33): the payer may take any one of them first and then refuse the others as chained, so the count does
+         * not lean on which one it takes. With no filter or one, the count is the plain one.
          */
         public boolean pays(final Debt debt) {
             if (debt == null) {
@@ -824,11 +826,11 @@ public final class DelayedLoss {
                 for (final Source kept : filters) {
                     final List<Source> left = new ArrayList<>(filters);
                     left.remove(kept);
-                    if (without(left).pays(debt)) {
-                        return true;
+                    if (!without(left).pays(debt)) {
+                        return false;
                     }
                 }
-                return false;
+                return true;
             }
             final List<Integer> units = units();
             if (units.size() < debt.total + filterInput()) {
