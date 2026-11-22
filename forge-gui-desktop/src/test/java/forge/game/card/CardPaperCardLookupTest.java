@@ -287,7 +287,8 @@ public class CardPaperCardLookupTest extends AITest {
         count = assertCounted(count, "a new art preference");
         db.setCardArtPreference(true, false, false);
         Assert.assertEquals(CardDb.getChangeCount(), count, "the same art preference again changes nothing");
-        db.setPreferredLanguageAvailability(null);
+        // a fresh database's predicate is null, and setting null again writes nothing (upstream ec670ed5042): set one
+        db.setPreferredLanguageAvailability((setCode, collectorNumber) -> false);
         count = assertCounted(count, "a preferred language");
         db.initialize(false, false, false);
         count = assertCounted(count, "initialize");
