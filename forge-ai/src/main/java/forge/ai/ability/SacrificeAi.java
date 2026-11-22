@@ -202,6 +202,12 @@ public class SacrificeAi extends SpellAbilityAi {
         if ("BirthingRitual".equals(sa.getParam("AILogic"))) {
             return birthingRitualPaysOff(player, sa);
         }
+        if (sa.isKeyword(Keyword.EXPLOIT)) {
+            // the chooser decides, as before SacrificeWorth: ComputerUtil.choosePermanentsToSacrifice asks the Exploited
+            // trigger (Overcharged Amalgam's counter among them), then holds the creature to its threshold. SacrificeWorth
+            // counts only the sacrifice's own subs, and exploit's has none: its payoff is a separate trigger.
+            return true;
+        }
         if (SacrificeWorth.applies(sa)) {
             return SacrificeWorth.confirm(player, sa);
         }
