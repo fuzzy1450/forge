@@ -372,4 +372,127 @@ public class DelayedLossUpkeepPaymentTest extends AITest {
                     seen.get(i).get(0) == null && (Boolean) seen.get(i).get(1));
         }
     }
+
+    /**
+     * RU-35, the filter land's own unit: when the payer pays a generic part it may take a filter land's filter ability
+     * ({W/U},{T}: two mana) rather than its {T}: {C}, and then its hybrid input needs a source of one of the input's
+     * colours that is left; with none, the payment stops. Before RU-35 the count took the land as its {C} and allowed
+     * each board below (Pact of the Titan, {4}{R}: five units for five, or six for five and a Prism's {1}), and the AI
+     * lost at its upkeep, nothing tapped: Wooded Bastion or Mystic Gate beside Mountains only, which make no G, W or U;
+     * the Bastion beside a Prophetic Prism, the one source of G or W, which the chain clause refuses right after the
+     * Bastion; Mystic Gate beside a Plateau and Wastes, the Plateau the one source of R and of W, needed for the {R}
+     * pip; Wooded Bastion beside Wastes and a Mountain; Mystic Gate and Wooded Bastion together beside Mountains. So a
+     * source the payer may use as a filter the count does not count is not counted either: refused, each row, and the
+     * AI loses as it did. [the count's verdict, the AI lost by the end of its upkeep] per row.
+     */
+    @Test(timeOut = 900_000)
+    public void aFilterLandTheCountCannotCountAsAFilterGivesNoUnit() {
+        final List<List<String>> rows = List.of(
+                List.of("Pact of the Titan", "Wooded Bastion,Mountain,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Mystic Gate,Mountain,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Wooded Bastion,Prophetic Prism,Mountain,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Prophetic Prism,Wooded Bastion,Mountain,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Mystic Gate,Plateau,Wastes,Wastes,Wastes", ""),
+                List.of("Pact of the Titan", "Plateau,Mystic Gate,Wastes,Wastes,Wastes", ""),
+                List.of("Pact of the Titan", "Wooded Bastion,Wastes,Wastes,Wastes,Mountain", ""),
+                List.of("Pact of the Titan", "Mystic Gate,Wooded Bastion,Mountain,Mountain,Mountain", ""));
+        final List<List<Object>> seen = new ArrayList<>();
+        for (final List<String> row : rows) {
+            seen.add(payRow(row, new ArrayList<>()));
+        }
+        final List<List<Object>> expected = new ArrayList<>();
+        for (int i = 0; i < rows.size(); i++) {
+            expected.add(Arrays.asList(DelayedLoss.PACT_UNPAYABLE, true));
+        }
+        AssertJUnit.assertEquals("[the count's verdict, the AI lost] per row", expected, seen);
+        for (int i = 0; i < seen.size(); i++) {
+            AssertJUnit.assertFalse("row " + i + " " + rows.get(i) + ": allowed and lost",
+                    seen.get(i).get(0) == null && (Boolean) seen.get(i).get(1));
+        }
+    }
+
+    /**
+     * RU-35's search beside the two tests above: every other board it ran, each [the count's verdict, the AI lost by
+     * the end of its upkeep], played through the real upkeep payment. No row is allowed and lost. The rows the count
+     * refuses though the payer pays them are RU-35's cost, marked in {@code refusedThoughPaid} as RU-33's are: with a
+     * filter the count does not count on the battlefield (Mystic Gate, Wooded Bastion, Fire-Lit Thicket, Chromatic
+     * Star) the count leans on no counted filter, and a filter land whose filter's input asks a color gives no unit,
+     * so these boards, each paid (by the hand's colours in three of them, Griselbrand's B and Craterhoof Behemoth's G),
+     * are refused; two of them (Wooded Bastion with a Forest and two Mountains, Mystic Gate with an Island and three
+     * Mountains, for G G and U U the count reads no Bastion or Gate pip from) were refused before as well. The rows
+     * that are lost are refused, and were before (a Chromatic Star the count never counted; Shimmering Grotto beside a
+     * Gruul Signet, which RU-33 refuses). Allowed and paid: Wooded Bastion beside Forest x2 and Mountain x2, where the
+     * lands alone pay; Chromatic Star beside five Mountains; Forest x2 and Mountain x2 with no filter.
+     */
+    @Test(timeOut = 900_000)
+    public void aFilterTheCountDoesNotCountRefusesNoBoardItLoses() {
+        final List<List<String>> rows = List.of(
+                List.of("Pact of Negation", "Mystic Gate,Dimir Signet,Island,Mountain,Mountain", "Griselbrand"),
+                List.of("Pact of Negation", "Island,Mountain,Mountain,Mystic Gate,Dimir Signet", "Griselbrand"),
+                List.of("Summoner's Pact", "Wooded Bastion,Prophetic Prism,Forest,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Prophetic Prism,Wooded Bastion,Forest,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Wooded Bastion,Gruul Signet,Forest,Mountain", "Craterhoof Behemoth"),
+                List.of("Pact of the Titan", "Mystic Gate,Dimir Signet,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Dimir Signet,Mystic Gate,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Mystic Gate,Boros Signet,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Wooded Bastion,Selesnya Signet,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Selesnya Signet,Wooded Bastion,Mountain,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Chromatic Star,Gruul Signet,Forest,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Gruul Signet,Chromatic Star,Forest,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Fire-Lit Thicket,Boros Signet,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Boros Signet,Fire-Lit Thicket,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Wooded Bastion,Forest,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Mystic Gate,Plains,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Fire-Lit Thicket,Mountain,Mountain,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Wooded Bastion,Forest,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Wooded Bastion,Gruul Signet,Forest,Forest", ""),
+                List.of("Summoner's Pact", "Wooded Bastion,Prophetic Prism,Forest,Forest,Mountain", ""),
+                List.of("Pact of the Titan", "Wooded Bastion,Boros Signet,Forest,Mountain,Mountain", ""),
+                List.of("Pact of Negation", "Mystic Gate,Island,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of Negation", "Mystic Gate,Island,Island,Mountain,Mountain", ""),
+                List.of("Pact of Negation", "Mystic Gate,Prophetic Prism,Island,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Mystic Gate,Plateau,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Wooded Bastion,Savannah,Mountain,Wastes,Wastes", ""),
+                List.of("Pact of the Titan", "Wooded Bastion,Prophetic Prism,Forest,Mountain,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Chromatic Star,Selesnya Signet,Forest,Mountain", ""),
+                List.of("Pact of the Titan", "Chromatic Star,Dimir Signet,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Dimir Signet,Chromatic Star,Mountain,Mountain,Mountain", ""),
+                List.of("Pact of Negation", "Chromatic Star,Dimir Signet,Island,Mountain,Mountain", ""),
+                List.of("Pact of Negation", "Chromatic Star,Dimir Signet,Island,Mountain,Mountain", "Griselbrand"),
+                List.of("Summoner's Pact", "Chromatic Star,Prophetic Prism,Forest,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Prophetic Prism,Chromatic Star,Forest,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Shimmering Grotto,Gruul Signet,Forest,Mountain", ""),
+                List.of("Summoner's Pact", "Wooded Bastion,Forest,Forest,Mountain,Mountain", ""),
+                List.of("Pact of the Titan", "Chromatic Star,Mountain,Mountain,Mountain,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Forest,Forest,Mountain,Mountain", ""));
+        final List<Object> refusedPaid = Arrays.asList(DelayedLoss.PACT_UNPAYABLE, false);
+        final List<Object> refusedLost = Arrays.asList(DelayedLoss.PACT_UNPAYABLE, true);
+        final List<Object> allowedPaid = Arrays.asList(null, false);
+        // RU-35's accepted cost: the rows the count refuses though the payer pays them, by index (0 to 26)
+        final int paidButRefused = 27;
+        final Set<Integer> refusedThoughPaid = new java.util.HashSet<>();
+        final List<List<Object>> expected = new ArrayList<>();
+        for (int i = 0; i < rows.size(); i++) {
+            if (i < paidButRefused) {
+                refusedThoughPaid.add(i);
+                expected.add(refusedPaid);
+            } else if (i < rows.size() - 3) {
+                expected.add(refusedLost);
+            } else {
+                expected.add(allowedPaid);
+            }
+        }
+        final List<List<Object>> seen = new ArrayList<>();
+        for (final List<String> row : rows) {
+            seen.add(payRow(row, new ArrayList<>()));
+        }
+        AssertJUnit.assertEquals("[the count's verdict, the AI lost] per row", expected, seen);
+        for (int i = 0; i < seen.size(); i++) {
+            final boolean allowed = seen.get(i).get(0) == null;
+            final boolean lost = (Boolean) seen.get(i).get(1);
+            AssertJUnit.assertFalse("row " + i + " " + rows.get(i) + ": allowed and lost", allowed && lost);
+            AssertJUnit.assertEquals("row " + i + " " + rows.get(i) + ": refused though paid only where marked",
+                    refusedThoughPaid.contains(i), !allowed && !lost);
+        }
+    }
 }

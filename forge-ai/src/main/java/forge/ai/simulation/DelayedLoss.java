@@ -1028,7 +1028,10 @@ public final class DelayedLoss {
      *       budget {@code life}, and per-turn limits refused too;</li>
      *   <li>painless abilities first, then painful ones in (pain, card id) order, each while it fits its kind's margin
      *       and the total fits; one ability per source, the one with the most units, one-unit abilities pooling their
-     *       colors; a unit with no color is dropped.</li>
+     *       colors; a unit with no color is dropped;</li>
+     *   <li>RU-35: a card the payer may use as a filter the count gives no filter option is noted
+     *       ({@link Mana#uncountedFilter}), and such a card whose filter's input asks a color (Mystic Gate) is not
+     *       counted.</li>
      * </ul>
      * Total: a source whose reads throw is not counted.
      */
@@ -1089,22 +1092,24 @@ public final class DelayedLoss {
             Source s = null;
             try {
                 s = source(ai, c, now, stops, lasting, landMayBePlayed);
-                if (s != null) {
-                    sources.add(s);
-                }
             } catch (final AITimeoutTracker.Expired e) {
                 throw e;
             } catch (final RuntimeException e) {
                 // an unreadable source is not counted (DESIGN.md 1.11: every method is total)
             }
-            if (!uncountedFilter) {
+            int uncounted = NOT_A_FILTER;
+            if (s != null || !uncountedFilter) {
                 try {
-                    uncountedFilter = uncountedFilter(ai, c, s, now, stops);
+                    uncounted = uncountedFilter(ai, c, s, now, stops);
                 } catch (final AITimeoutTracker.Expired e) {
                     throw e;
                 } catch (final RuntimeException e) {
-                    uncountedFilter = true; // unreadable: it may be one
+                    uncounted = COLORED_INPUT; // unreadable: it may be one
                 }
+            }
+            uncountedFilter |= uncounted != NOT_A_FILTER;
+            if (s != null && uncounted != COLORED_INPUT) {
+                sources.add(s); // RU-35: a filter whose input asks a color, uncounted, gives its card no unit
             }
         }
         fitPain(sources, budget);
@@ -1121,31 +1126,39 @@ public final class DelayedLoss {
         return new Mana(sources, drop, false, uncountedFilter);
     }
 
+    /** {@link #uncountedFilter}'s answers: not such a card; one whose inputs are all generic; one with a colored one. */
+    private static final int NOT_A_FILTER = 0;
+    private static final int GENERIC_INPUT = 1;
+    private static final int COLORED_INPUT = 2;
+
     /**
      * RU-35 (review-close M-1): whether this card, there for the payment, has a mana ability the payer may use that
      * costs mana to activate, so that its test payment's chain clause applies to it, while the count gives the card no
      * filter option ({@code s}, its source, null when it gives nothing): a filter land's hybrid- or colored-input
-     * ability, counted only as its {T}: {C}, or Chromatic Star's, which sacrifices it. Reads only.
+     * ability, counted only as its {T}: {C}, or Chromatic Star's, which sacrifices it. {@link #COLORED_INPUT} when one
+     * such ability's input is not pure generic (Mystic Gate's {W/U}): the payer may take that ability for a generic
+     * part, the land's {C} then never made, and its input stays unpaid when no source left makes one of its colors.
+     * Reads only.
      */
-    private static boolean uncountedFilter(final Player ai, final Card c, final Source s, final boolean now,
-                                           final Restrictors stops) {
+    private static int uncountedFilter(final Player ai, final Card c, final Source s, final boolean now,
+                                       final Restrictors stops) {
         if (s != null && (s.painless != null && s.painless.filterInput > 0
                 || s.painful != null && s.painful.filterInput > 0)) {
-            return false;
+            return NOT_A_FILTER;
         }
-        boolean costsMana = false;
+        int found = NOT_A_FILTER;
         for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(c)) {
             final Cost cost = ma.getPayCosts();
             final CostPartMana part = cost == null || !cost.hasManaCost() ? null : cost.getCostMana();
-            if (part != null && part.getMana() != null && part.getMana().getCMC() > 0) {
-                costsMana = true;
-                break;
+            final ManaCost input = part == null ? null : part.getMana();
+            if (input != null && input.getCMC() > 0) {
+                found = Math.max(found, input.isPureGeneric() ? GENERIC_INPUT : COLORED_INPUT);
             }
         }
-        if (!costsMana) {
-            return false;
+        if (found == NOT_A_FILTER) {
+            return NOT_A_FILTER;
         }
-        return s != null || !c.isPhasedOut() && (now ? !c.isTapped() : willUntap(ai, c, stops));
+        return s != null || !c.isPhasedOut() && (now ? !c.isTapped() : willUntap(ai, c, stops)) ? found : NOT_A_FILTER;
     }
 
     /** The AI's own turn, before its end step, with a land play left. */
