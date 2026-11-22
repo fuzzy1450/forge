@@ -57250,6 +57250,11 @@ public class SpecialCardAi {
     // ritual-style only: on our own main phase with an empty stack, when one mana
     // of the colour we will pick at resolution turns a spell we want to cast from
     // unaffordable into affordable. The mana always goes to us (AILogic$ Pump).
+    // Since upstream's d9dc6298db5 the payer does take a ChoosePlayer root (getAIPlayableMana) and pays a
+    // spell with the Searchlight's mana itself, so the ritual never buys a cast: while the payer can use
+    // the tap, its one mana would be counted twice below (credited here, then counted again by
+    // canPayManaCost), and the tap floated mana a spell could not use. Upstream's payer is the one
+    // prediction kept (merge 2026-11-22, ruling RU-3); this answers no then, and still refuses the idle tap.
     public static class SpectralSearchlight {
         public static boolean consider(final Player ai, final SpellAbility sa) {
             final Game game = ai.getGame();
@@ -57257,6 +57262,9 @@ public class SpecialCardAi {
             if (!ph.isPlayerTurn(ai) || ph.getPhase() == null || !ph.getPhase().isMain()
                     || !game.getStack().isEmpty()) {
                 return false; // ritual-style only; the mana drains at end of step
+            }
+            if (sa.getHostCard() != null && ComputerUtilMana.getAIPlayableMana(sa.getHostCard()).contains(sa)) {
+                return false; // the payer taps it for the spell itself
             }
             final AbilitySub mana = sa.getSubAbility();
             if (mana == null || mana.getApi() != ApiType.Mana) {

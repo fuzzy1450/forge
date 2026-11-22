@@ -21,9 +21,9 @@ public class ChoosePlayerAi extends SpellAbilityAi {
     protected AiAbilityDecision canPlay(Player ai, SpellAbility sa) {
         if ("Spectral Searchlight".equals(ComputerUtilAbility.getAbilitySourceName(sa))
                 && sa.getParent() == null && sa.isManaAbility()) {
-            // The AI mana payer never taps this (ComputerUtilMana.getAIPlayableMana
-            // skips non-Mana roots), so the only useful activation is ritual-style:
-            // tap only when the mana lets us cast something now. Otherwise the stock
+            // Ritual-style only: tap only when the mana lets us cast something now, and
+            // never while the AI mana payer can tap it for the spell itself (it can since
+            // upstream's d9dc6298db5; merge 2026-11-22, RU-3). Otherwise the stock
             // unconditional WillPlay below idle-taps it into an emptying pool.
             return SpecialCardAi.SpectralSearchlight.consider(ai, sa)
                     ? new AiAbilityDecision(100, AiPlayDecision.WillPlay)
