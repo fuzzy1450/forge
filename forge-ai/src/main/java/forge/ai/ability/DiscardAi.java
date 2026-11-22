@@ -246,6 +246,10 @@ public class DiscardAi extends SpellAbilityAi {
         if (mode == PlayerActionConfirmMode.Random) {
             // TODO For now AI will always discard Random used currently with: Balduvian Horde and similar cards
             if ("Hand".equals(sa.getParam("Mode"))) {
+                if (SpecialCardAi.SailIntoTheWest.NAME.equals(ComputerUtilAbility.getAbilitySourceName(sa))
+                        && player.equals(sa.getActivatingPlayer())) {
+                    return true; // the caster's wheel is what SpecialCardAi.SailIntoTheWest.consider priced the cast on
+                }
                 return MayDecisions.discardHandForNew(player, sa); // each player may discard their hand and draw N
             }
             return true;
