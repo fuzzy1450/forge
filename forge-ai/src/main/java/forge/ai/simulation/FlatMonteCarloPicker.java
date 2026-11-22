@@ -1033,9 +1033,8 @@ public final class FlatMonteCarloPicker {
                 extrasLeft--;
                 continue;
             }
-            if (ComputerUtil.cannotPayPact(player, sa)) {
-                continue; // a pact that cannot be paid at the next upkeep loses the game
-            }
+            // Upstream's unpayable-Pact skip here (fc65fb7a6ae: ComputerUtil.cannotPayPact) is not taken: the fork's
+            // DelayedLoss is the one Pact rule, and its veto judges every play returned (merge 2026-11-22, RU-1).
             final SpellAbility targeting = singleTargetingAbility(sa);
             if (targeting != null && targeting.getTargetRestrictions() != null && targeting.getTargetRestrictions().isRandomTarget()) {
                 continue; // "chosen at random" (Goblin Test Pilot): aiming it would make the AI the one who chooses

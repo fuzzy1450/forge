@@ -115,6 +115,43 @@ public class FlatMonteCarloPactGuardTest extends AITest {
         AssertJUnit.assertNull(ComboGuard.problem(ai, sa, null, ComboPlan.EMPTY));
     }
 
+    /**
+     * The fork's Pact rule is the one Flat Monte Carlo's candidate build obeys (merge 2026-11-22, RU-1): four Mountains in
+     * play and a Mountain in hand in the AI's first main phase pay Pact of the Titan's {4}{R} at the next upkeep once the
+     * land is played, so DelayedLoss allows the cast. Upstream's ComputerUtil.cannotPayPact (fc65fb7a6ae) counts the four
+     * Mountains alone and refuses it; while it was asked in the extras loop the Pact never reached the rollouts and the
+     * decision was the pass line alone ("single-candidate").
+     */
+    @Test(timeOut = 300_000)
+    public void flatMcOffersAPactTheLandDropStillToComePaysFor() {
+        final Game game = initAndCreateGame();
+        final Player ai = game.getPlayers().get(1);
+        final Player opp = opponentOf(game, ai);
+        for (int i = 0; i < 10; i++) {
+            addCardToZone("Mountain", ai, ZoneType.Library);
+            addCardToZone("Plains", opp, ZoneType.Library);
+        }
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        addCards("Mountain", 4, ai);
+        addCardToZone("Mountain", ai, ZoneType.Hand);
+        final SpellAbility titan = fromHand(ai, "Pact of the Titan");
+        game.getAction().checkStateEffects(true);
+        assertAllowed("the land drop pays the fifth mana", verdict(ai, titan));
+        AssertJUnit.assertTrue("upstream's count refuses this Pact (the board this row is about)",
+                ComputerUtil.cannotPayPact(ai, titan));
+
+        final AiController brain = ((PlayerControllerAi) ai.getController()).getAi();
+        final forge.ai.simulation.FlatMonteCarloPicker.Config cfg = forge.ai.simulation.FlatMonteCarloPicker.Config.fromProfile(brain, ai);
+        cfg.rolloutsPerCandidate = 1;
+        cfg.extraRounds = 0;
+        cfg.budgetNanos = java.util.concurrent.TimeUnit.SECONDS.toNanos(30); // the test is about the candidates, not speed
+        final forge.ai.simulation.FlatMonteCarloPicker.Result r = forge.ai.simulation.FlatMonteCarloPicker.choose(ai,
+                java.util.Collections.emptyList(), java.util.Collections.singletonList(titan), cfg, null,
+                forge.ai.simulation.FlatMonteCarloPicker.Mode.MAIN);
+        AssertJUnit.assertFalse("the Pact must reach the rollouts beside the pass line: " + r,
+                "single-candidate".equals(r.reason));
+    }
+
     /** From a real game: Summoner's Pact with a Chrome Mox and one land in play cannot be paid (2GG) and lost the game. */
     @Test
     public void summonersPactWithAChromeMoxAndOneLandIsRefused() {
