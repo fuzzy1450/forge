@@ -340,7 +340,8 @@ public final class CardRules implements ICardCharacteristics {
 
         if (type.isSpacecraft()) { // a Spacecraft card with one or more power/toughness boxes
             for (String staticAbility : mainPart.getStaticAbilities()) {
-                if (staticAbility.contains("Station$ True") && staticAbility.contains("AddType$ Creature") && staticAbility.contains("SetPower$ ")) {
+                // a station threshold: every Station script writes its number ("Station$ 8"), none "Station$ True"
+                if (staticAbility.contains("Station$ ") && staticAbility.contains("AddType$ Creature") && staticAbility.contains("SetPower$ ")) {
                     return true;
                 }
             }
