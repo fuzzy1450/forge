@@ -74,6 +74,13 @@ import forge.util.AITimeoutTracker;
  * only field written is the activator {@code ManaConversion.withActivator} stamps on a mana ability that has none, the
  * value ComboGuard's Pact check and the AI's own mana estimate stamp. A game whose decks list none of the eleven cards
  * reads only script parameters and two empty lists here.
+ * <p>
+ * Filters in the count (RU-29, RU-33, RU-35, RU-37). A mana ability is filter-like when the AI's payer's chain clause
+ * applies to it: it costs mana to activate, whatever its input and whatever else it costs. The count leans on at most
+ * one counted filter; with two or more, a debt is covered only when it is covered with each taken alone; and with none
+ * at all while another filter-like ability is on the battlefield (not phased out, in any state) or on a land in the
+ * AI's hand. These follow the payer as it was observed on 2026-11-22, which refuses a filter chosen right after another
+ * (H:/mtg-combo-lanes/release-2026-11-22/merge/chain-1.md and filter-1.md).
  */
 public final class DelayedLoss {
     private DelayedLoss() {
@@ -749,8 +756,9 @@ public final class DelayedLoss {
         final int landDrop;
         final boolean painlessOnly;
         /**
-         * RU-35: the AI controls a mana ability that costs mana to activate, which the payer's chain clause applies
-         * to, and the count gives it no filter option (Mystic Gate's {W/U},{T}, Chromatic Star's sacrifice).
+         * RU-35, RU-37: the AI has a filter-like mana ability, one that costs mana to activate, which the payer's chain
+         * clause applies to, on a card the count gives no filter option (Mystic Gate's {W/U},{T}, Chromatic Star's
+         * sacrifice, a tapped or non-untapping filter, a card a removal takes) or on a land in its hand.
          */
         final boolean uncountedFilter;
 
@@ -822,8 +830,8 @@ public final class DelayedLoss {
          * (RU-33): the payer may take any one of them first and then refuse the others as chained, so the count does
          * not lean on which one it takes. With no filter or one, the count is the plain one. The chain clause applies
          * to every ability that costs mana to activate, also one the count gives no filter option; while the AI
-         * controls one ({@link #uncountedFilter}) the payer may take it first and then refuse any counted filter, so
-         * the debt is covered only without the counted filters (RU-35).
+         * controls one, or holds a land with one ({@link #otherFilter}), the payer may take it first and then refuse
+         * any counted filter, so the debt is covered only without the counted filters (RU-35, RU-37).
          */
         public boolean pays(final Debt debt) {
             if (debt == null) {
@@ -836,7 +844,7 @@ public final class DelayedLoss {
                     filters.add(s);
                 }
             }
-            if (uncountedFilter && !filters.isEmpty()) {
+            if (!filters.isEmpty() && otherFilter()) {
                 return without(filters).pays(debt);
             }
             if (filters.size() > 1) {
@@ -854,6 +862,23 @@ public final class DelayedLoss {
                 return false;
             }
             return matches(debt.pips, units);
+        }
+
+        /**
+         * RU-37: a filter-like ability the count does not lean on is there: {@link #uncountedFilter}, or a source with a
+         * filter option this count does not count it with (a painful filter the pain budget, or the painless form,
+         * leaves out; review-chain m-2).
+         */
+        private boolean otherFilter() {
+            if (uncountedFilter) {
+                return true;
+            }
+            for (final Source s : sources) {
+                if (!isFilter(option(s)) && (isFilter(s.painless) || isFilter(s.painful))) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /** The same sources counted without pain: each with its painless option, a source with none left out. */
@@ -1029,9 +1054,10 @@ public final class DelayedLoss {
      *   <li>painless abilities first, then painful ones in (pain, card id) order, each while it fits its kind's margin
      *       and the total fits; one ability per source, the one with the most units, one-unit abilities pooling their
      *       colors; a unit with no color is dropped;</li>
-     *   <li>RU-35: a card the payer may use as a filter the count gives no filter option is noted
-     *       ({@link Mana#uncountedFilter}), and such a card whose filter's input asks a color (Mystic Gate) is not
-     *       counted.</li>
+     *   <li>RU-35, RU-37: a card not phased out that the payer may use as a filter and the count gives no filter
+     *       option, in any state and whether or not the removal takes it, is noted ({@link Mana#uncountedFilter}), and
+     *       such a card whose filter's input asks a color (Mystic Gate) is not counted; so is a land in hand with such
+     *       an ability, and the land drop then gives no unit.</li>
      * </ul>
      * Total: a source whose reads throw is not counted.
      */
@@ -1086,21 +1112,27 @@ public final class DelayedLoss {
         final List<Source> sources = new ArrayList<>();
         boolean uncountedFilter = false;
         for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
-            if (taken.takes(c)) {
+            if (c.isPhasedOut()) {
                 continue;
             }
             Source s = null;
-            try {
-                s = source(ai, c, now, stops, lasting, landMayBePlayed);
-            } catch (final AITimeoutTracker.Expired e) {
-                throw e;
-            } catch (final RuntimeException e) {
-                // an unreadable source is not counted (DESIGN.md 1.11: every method is total)
+            if (!taken.takes(c)) { // RU-37 (m-3): a card a removal takes is still read for the flag
+                try {
+                    s = source(ai, c, now, stops, lasting, landMayBePlayed);
+                } catch (final AITimeoutTracker.Expired e) {
+                    throw e;
+                } catch (final RuntimeException e) {
+                    // an unreadable source is not counted (DESIGN.md 1.11: every method is total)
+                }
+            }
+            if (s != null && (isFilter(s.painless) || isFilter(s.painful))) {
+                sources.add(s); // a filter the count may lean on: Mana.otherFilter reads whether it does (RU-37, m-2)
+                continue;
             }
             int uncounted = NOT_A_FILTER;
             if (s != null || !uncountedFilter) {
                 try {
-                    uncounted = uncountedFilter(ai, c, s, now, stops);
+                    uncounted = filterLike(c);
                 } catch (final AITimeoutTracker.Expired e) {
                     throw e;
                 } catch (final RuntimeException e) {
@@ -1113,8 +1145,17 @@ public final class DelayedLoss {
             }
         }
         fitPain(sources, budget);
+        boolean handFilter;
+        try {
+            handFilter = handFilterLand(ai);
+        } catch (final AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            handFilter = true; // unreadable: it may be one
+        }
+        uncountedFilter |= handFilter;
         int drop = 0;
-        if (!now && landPlay != null && landPlay) {
+        if (!now && landPlay != null && landPlay && !handFilter) { // RU-37 (C-1): such a hand land gives no drop
             try {
                 drop = landDrop(ai, taken);
             } catch (final AITimeoutTracker.Expired e) {
@@ -1131,21 +1172,22 @@ public final class DelayedLoss {
     private static final int GENERIC_INPUT = 1;
     private static final int COLORED_INPUT = 2;
 
+    /** An option that is a counted filter's: it needs mana to activate. */
+    static boolean isFilter(final Option o) {
+        return o != null && o.filterInput > 0;
+    }
+
     /**
-     * RU-35 (review-close M-1): whether this card, there for the payment, has a mana ability the payer may use that
-     * costs mana to activate, so that its test payment's chain clause applies to it, while the count gives the card no
-     * filter option ({@code s}, its source, null when it gives nothing): a filter land's hybrid- or colored-input
-     * ability, counted only as its {T}: {C}, or Chromatic Star's, which sacrifices it. {@link #COLORED_INPUT} when one
-     * such ability's input is not pure generic (Mystic Gate's {W/U}): the payer may take that ability for a generic
-     * part, the land's {C} then never made, and its input stays unpaid when no source left makes one of its colors.
-     * Reads only.
+     * RU-35 (review-close M-1) and RU-37: whether this card has a filter-like mana ability, one the payer may use that
+     * costs mana to activate (whatever its input, whatever else it costs), so that its test payment's chain clause
+     * applies to it; read whatever the card's state, tapped or not, untapping or not. The caller asks it of a card the
+     * count gives no filter option: a filter land's hybrid- or colored-input ability, counted only as its {T}: {C},
+     * Chromatic Star's, which sacrifices it, or a filter on a card the count does not count at all. {@link
+     * #COLORED_INPUT} when one such ability's input is not pure generic (Mystic Gate's {W/U}): the payer may take that
+     * ability for a generic part, the land's {C} then never made, and its input stays unpaid when no source left makes
+     * one of its colors. Reads only.
      */
-    private static int uncountedFilter(final Player ai, final Card c, final Source s, final boolean now,
-                                       final Restrictors stops) {
-        if (s != null && (s.painless != null && s.painless.filterInput > 0
-                || s.painful != null && s.painful.filterInput > 0)) {
-            return NOT_A_FILTER;
-        }
+    private static int filterLike(final Card c) {
         int found = NOT_A_FILTER;
         for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(c)) {
             final Cost cost = ma.getPayCosts();
@@ -1155,10 +1197,22 @@ public final class DelayedLoss {
                 found = Math.max(found, input.isPureGeneric() ? GENERIC_INPUT : COLORED_INPUT);
             }
         }
-        if (found == NOT_A_FILTER) {
-            return NOT_A_FILTER;
+        return found;
+    }
+
+    /**
+     * RU-37 (review-chain C-1): a land in the AI's hand with a filter-like mana ability ({@link #filterLike}). Played
+     * after the Pact it is on the battlefield at the payment, so it gives the land drop no unit and leaves the count no
+     * counted filter to lean on. Every hand land is read, a removal's too. Reads only; the caller takes a read that
+     * throws as such a land.
+     */
+    private static boolean handFilterLand(final Player ai) {
+        for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+            if (c.isLand() && filterLike(c) != NOT_A_FILTER) {
+                return true;
+            }
         }
-        return s != null || !c.isPhasedOut() && (now ? !c.isTapped() : willUntap(ai, c, stops)) ? found : NOT_A_FILTER;
+        return false;
     }
 
     /** The AI's own turn, before its end step, with a land play left. */

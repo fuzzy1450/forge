@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.function.BiConsumer;
 
 import org.testng.AssertJUnit;
 import org.testng.annotations.Test;
@@ -14,6 +15,7 @@ import forge.ai.simulation.ComboPlan;
 import forge.ai.simulation.DelayedLoss;
 import forge.game.Game;
 import forge.game.card.Card;
+import forge.game.card.CounterEnumType;
 import forge.game.event.GameEventCardTapped;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
@@ -277,6 +279,17 @@ public class DelayedLossUpkeepPaymentTest extends AITest {
      */
     private List<Object> payBoard(final String pact, final List<String> battlefield, final List<String> hand,
                                   final List<String> tapOrder) {
+        return payBoard(pact, battlefield, hand, tapOrder, (game, ai) -> { }, new ArrayList<>());
+    }
+
+    /**
+     * {@link #payBoard(String, List, List, List)} with {@code setup} run on the board before the count's verdict (a
+     * stun counter, the AI's life, an opponent's creature), and the names of the AI's battlefield cards after its
+     * upkeep added to {@code after}.
+     */
+    private List<Object> payBoard(final String pact, final List<String> battlefield, final List<String> hand,
+                                  final List<String> tapOrder, final BiConsumer<Game, Player> setup,
+                                  final List<String> after) {
         final Game game = initAndCreateGame();
         noDeadline(game);
         final Player ai = game.getPlayers().get(1);
@@ -290,6 +303,7 @@ public class DelayedLossUpkeepPaymentTest extends AITest {
         for (final String name : hand) {
             addCardToZone(name, ai, ZoneType.Hand);
         }
+        setup.accept(game, ai);
         game.getAction().checkStateEffects(true);
         final boolean counter = "Pact of Negation".equals(pact);
         final SpellAbility bears = counter ? onStack(game, "Grizzly Bears", opp) : null;
@@ -321,6 +335,9 @@ public class DelayedLossUpkeepPaymentTest extends AITest {
         game.subscribeToEvents(taps);
         playThroughTheNextUpkeep(game, ai, game.getPhaseHandler().getTurn());
         tapOrder.addAll(taps.names);
+        for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            after.add(c.getName());
+        }
         return Arrays.asList(verdict, ai.hasLost());
     }
 
@@ -494,5 +511,227 @@ public class DelayedLossUpkeepPaymentTest extends AITest {
             AssertJUnit.assertEquals("row " + i + " " + rows.get(i) + ": refused though paid only where marked",
                     refusedThoughPaid.contains(i), !allowed && !lost);
         }
+    }
+
+    /**
+     * {@link #payBoard} with one land in the AI's hand at the cast: [the count's verdict, the AI lost by the end of its
+     * upkeep, the AI's own main phase put the land onto its battlefield before that upkeep]. The land is not played by
+     * the test: the AI plays it in its first main phase after the Pact resolves, as the turn is driven through.
+     */
+    private List<Object> payBoardWithALandInHand(final String pact, final String battlefield, final String land) {
+        final List<String> onBattlefield = Arrays.asList(battlefield.split(","));
+        final List<String> after = new ArrayList<>();
+        final List<Object> seen = new ArrayList<>(payBoard(pact, onBattlefield, List.of(land), new ArrayList<>(),
+                (game, ai) -> { }, after));
+        seen.add(after.stream().filter(land::equals).count() > onBattlefield.stream().filter(land::equals).count());
+        return seen;
+    }
+
+    /**
+     * RU-37 (review-chain C-1): a filter land in the AI's HAND at the cast. The count credits a hand land as the land
+     * drop still to come, and it read Mystic Gate, Wooded Bastion and Shimmering Grotto as their {T}: {C}, the drop
+     * one {C} unit, while the land's filter ability ({W/U},{T}, {G/W},{T}, {1},{T}) never set the flag that leaves the
+     * count no counted filter to lean on. The AI plays the land in its first main phase after the Pact, and the board
+     * of its upkeep is one RU-35 recorded as lost (chain-1.md rows 1-3, 8-9, 32, 14 and 45): Dimir Signet, Island and
+     * Mountain x2 with Mystic Gate in hand for Pact of Negation (U, R, R, the Signet's U+B and the drop's C: six for
+     * five and the Signet's {1}); Gruul Signet, Forest and Mountain with Wooded Bastion (five for four and one) or
+     * with Shimmering Grotto for Summoner's Pact; Mountain x4 with Mystic Gate or Wooded Bastion for Pact of the Titan
+     * (five for five, no filter at all). So a land in hand with such an ability gives the land drop no unit and sets
+     * the flag: refused, each row, and the AI, which plays the land, loses as it did. [the count's verdict, the AI
+     * lost, the AI played the land] per row.
+     */
+    @Test(timeOut = 900_000)
+    public void aFilterLandInHandGivesTheLandDropNoUnitAndLeavesNoFilterToLeanOn() {
+        final List<List<String>> rows = List.of(
+                List.of("Pact of Negation", "Dimir Signet,Island,Mountain,Mountain", "Mystic Gate"),
+                List.of("Pact of Negation", "Island,Mountain,Mountain,Dimir Signet", "Mystic Gate"),
+                List.of("Summoner's Pact", "Gruul Signet,Forest,Mountain", "Wooded Bastion"),
+                List.of("Pact of the Titan", "Mountain,Mountain,Mountain,Mountain", "Mystic Gate"),
+                List.of("Pact of the Titan", "Mountain,Mountain,Mountain,Mountain", "Wooded Bastion"),
+                List.of("Summoner's Pact", "Gruul Signet,Forest,Mountain", "Shimmering Grotto"));
+        final List<List<Object>> seen = new ArrayList<>();
+        for (final List<String> row : rows) {
+            seen.add(payBoardWithALandInHand(row.get(0), row.get(1), row.get(2)));
+        }
+        final List<List<Object>> expected = new ArrayList<>();
+        for (int i = 0; i < rows.size(); i++) {
+            expected.add(Arrays.asList(DelayedLoss.PACT_UNPAYABLE, true, true));
+        }
+        AssertJUnit.assertEquals("[the count's verdict, the AI lost, the AI played the land] per row", expected, seen);
+        for (int i = 0; i < seen.size(); i++) {
+            AssertJUnit.assertFalse("row " + i + " " + rows.get(i) + ": allowed and lost",
+                    seen.get(i).get(0) == null && (Boolean) seen.get(i).get(1));
+        }
+    }
+
+    /**
+     * The control of {@link #aFilterLandInHandGivesTheLandDropNoUnitAndLeavesNoFilterToLeanOn}: the same boards with a
+     * plain land in hand instead (an Island, a Forest, a Mountain), whose drop is its own color, and no filter-like
+     * ability but the one counted Signet. Allowed, as before RU-37, and paid, the AI playing the land. [the count's
+     * verdict, the AI lost, the AI played the land] per row.
+     */
+    @Test(timeOut = 900_000)
+    public void aPlainLandInHandIsTheLandDropTheCountCounts() {
+        final List<List<String>> rows = List.of(
+                List.of("Pact of Negation", "Dimir Signet,Island,Mountain,Mountain", "Island"),
+                List.of("Summoner's Pact", "Gruul Signet,Forest,Mountain", "Forest"),
+                List.of("Summoner's Pact", "Gruul Signet,Forest,Mountain", "Mountain"),
+                List.of("Pact of the Titan", "Mountain,Mountain,Mountain,Mountain", "Mountain"));
+        final List<List<Object>> seen = new ArrayList<>();
+        for (final List<String> row : rows) {
+            seen.add(payBoardWithALandInHand(row.get(0), row.get(1), row.get(2)));
+        }
+        final List<List<Object>> expected = new ArrayList<>();
+        for (int i = 0; i < rows.size(); i++) {
+            expected.add(Arrays.asList(null, false, true));
+        }
+        AssertJUnit.assertEquals("[the count's verdict, the AI lost, the AI played the land] per row", expected, seen);
+    }
+
+    /**
+     * RU-37 (review-chain m-1): a filter with no tap cost works on a tapped card. Bog Initiate ({1}: {B}) tapped with
+     * a stun counter does not untap at the AI's next untap step, so the count gives it nothing, and before RU-37 it set
+     * no flag either; but the payer can still activate it at the upkeep, and its chain clause applies to it. Beside a
+     * counted Signet the count leans on: Gruul Signet, Forest and Mountain x2 for Summoner's Pact (G, R, R and the
+     * Signet's R+G, five for four and one), Dimir Signet, Island and Mountain x3 for Pact of Negation (U, R, R, R and
+     * the Signet's U+B, six for five and one). Before RU-37 the count allowed these three rows. Now refused, since the
+     * count leans on no counted filter while the Initiate is there. The payment, as it was seen on 2026-11-22, is in
+     * the expectations: refused though paid where marked in {@code refusedThoughPaid}, as the table's rows are. The
+     * last row is the same board with Prismite ({2}: one mana of any colour) stunned instead: the payer's own list
+     * leaves out a filter that makes less than it costs (ComputerUtilMana.isFilterManaAbility), so it is no filter
+     * the payer may take, the count's predicate reads the same list, and the row is allowed and paid. [the count's
+     * verdict, the AI lost] per row.
+     */
+    @Test(timeOut = 900_000)
+    public void aStunnedFilterWithNoTapCostIsStillAFilterThePayerMayTake() {
+        final List<List<String>> rows = List.of(
+                List.of("Summoner's Pact", "Bog Initiate,Gruul Signet,Forest,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Gruul Signet,Forest,Mountain,Mountain,Bog Initiate", ""),
+                List.of("Pact of Negation", "Bog Initiate,Dimir Signet,Island,Mountain,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Prismite,Gruul Signet,Forest,Mountain,Mountain", ""));
+        final List<List<Object>> seen = new ArrayList<>();
+        final List<List<String>> taps = new ArrayList<>();
+        for (final List<String> row : rows) {
+            final List<String> tapOrder = new ArrayList<>();
+            seen.add(payBoard(row.get(0), Arrays.asList(row.get(1).split(",")), List.of(), tapOrder, (game, ai) -> {
+                for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                    if ("Bog Initiate".equals(c.getName()) || "Prismite".equals(c.getName())) {
+                        c.setTapped(true);
+                        c.setCounters(CounterEnumType.STUN, 1);
+                    }
+                }
+            }, new ArrayList<>()));
+            taps.add(tapOrder);
+        }
+        final List<Object> refusedPaid = Arrays.asList(DelayedLoss.PACT_UNPAYABLE, false);
+        assertRows(rows, seen, taps, List.of(refusedPaid, refusedPaid, refusedPaid, Arrays.asList(null, false)),
+                Set.of(0, 1, 2));
+    }
+
+    /**
+     * [the count's verdict, the AI lost] per row as {@code expected}, no row allowed and lost, and a row refused
+     * though the payer pays it only where marked in {@code refusedThoughPaid}; {@code taps} is printed with a failure.
+     */
+    private static void assertRows(final List<List<String>> rows, final List<List<Object>> seen,
+                                   final List<List<String>> taps, final List<List<Object>> expected,
+                                   final Set<Integer> refusedThoughPaid) {
+        AssertJUnit.assertEquals("[the count's verdict, the AI lost] per row; taps " + taps, expected, seen);
+        for (int i = 0; i < seen.size(); i++) {
+            final boolean allowed = seen.get(i).get(0) == null;
+            final boolean lost = (Boolean) seen.get(i).get(1);
+            AssertJUnit.assertFalse("row " + i + " " + rows.get(i) + ": allowed and lost", allowed && lost);
+            AssertJUnit.assertEquals("row " + i + " " + rows.get(i) + ": refused though paid only where marked",
+                    refusedThoughPaid.contains(i), !allowed && !lost);
+        }
+    }
+
+    /**
+     * RU-37 (review-chain m-2): a painful filter the pain budget drops, the nearest board the cardsfolder builds.
+     * Standing Stones ({1},{T}, pay 1 life: one mana of any colour), the AI at 4 life against an opponent's Wall of
+     * Swords (power 3, the threat term, so the budget is 1), beside a Gruul Signet the count leans on (Forest,
+     * Mountain x2), Summoner's Pact. The payer's own list leaves out a mana-costing ability with any cost but mana, a
+     * tap or a noncreature's self-sacrifice (ComputerUtilMana.isFilterManaAbility), so the Stones' pay-life filter is
+     * none it may take, and the count reads the same list: the Stones count nothing and set no flag, before RU-37 and
+     * after, and the row is allowed and paid (seen on 2026-11-22: a Mountain, the Gruul Signet, the Forest and a
+     * Mountain). No filter of the cardsfolder the payer may take has a pain of its own (a self-damage sub-ability or a
+     * tap trigger of its card), so a count whose filter option is painful and dropped by the budget is not built here;
+     * Mana.otherFilter covers it by reading each source's options, not the pain budget's choice. [the count's verdict,
+     * the AI lost] per row.
+     */
+    @Test(timeOut = 900_000)
+    public void aPayLifeFilterThePayerCannotTakeIsNoFilterToTheCount() {
+        final List<List<String>> rows = List.of(
+                List.of("Summoner's Pact", "Standing Stones,Gruul Signet,Forest,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Gruul Signet,Forest,Mountain,Mountain,Standing Stones", ""));
+        final List<List<Object>> seen = new ArrayList<>();
+        final List<List<String>> taps = new ArrayList<>();
+        for (final List<String> row : rows) {
+            final List<String> tapOrder = new ArrayList<>();
+            seen.add(payBoard(row.get(0), Arrays.asList(row.get(1).split(",")), List.of(), tapOrder, (game, ai) -> {
+                ai.setLife(4, null);
+                addCard("Wall of Swords", opponentOf(game, ai));
+            }, new ArrayList<>()));
+            taps.add(tapOrder);
+        }
+        final List<Object> allowedPaid = Arrays.asList(null, false);
+        assertRows(rows, seen, taps, List.of(allowedPaid, allowedPaid), Set.of());
+    }
+
+    /** The count of these cards on the AI's battlefield in its first main phase, nothing in its hand. */
+    private DelayedLoss.Mana countOf(final List<String> battlefield, final DelayedLoss.Due due) {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        final Player ai = game.getPlayers().get(1);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        for (final String name : battlefield) {
+            addCard(name, ai);
+        }
+        game.getAction().checkStateEffects(true);
+        return DelayedLoss.count(ai, due, DelayedLoss.Removal.NONE);
+    }
+
+    /**
+     * RU-37 (review-chain m-4): debt protection reads the count's painless form ({@code painless()}), and that form
+     * carries the flag. Mystic Gate (a filter the count does not count), Dimir Signet, Island and Mountain x3 against
+     * {3}{U}{U}: U, R, R, R and the Signet's U+B are six for five and the Signet's {1}, but with the Gate there the
+     * count leans on no counted filter, and four units do not cover five. The same board without the Gate is covered.
+     * [covered, covered by the painless form] per board: the Gate's row fails if {@code painless()} drops the flag.
+     */
+    @Test(timeOut = 300_000)
+    public void thePainlessCountCarriesTheFlag() {
+        final DelayedLoss.Debt debt = DelayedLoss.Debt.of("3 U U");
+        final List<List<Boolean>> seen = new ArrayList<>();
+        for (final List<String> board : List.of(
+                List.of("Mystic Gate", "Dimir Signet", "Island", "Mountain", "Mountain", "Mountain"),
+                List.of("Dimir Signet", "Island", "Mountain", "Mountain", "Mountain"))) {
+            final DelayedLoss.Mana mana = countOf(board, DelayedLoss.Due.NEXT);
+            seen.add(List.of(mana.pays(debt), mana.painless().pays(debt)));
+        }
+        AssertJUnit.assertEquals("[covered, covered by the painless form]: with Mystic Gate, without",
+                List.of(List.of(false, false), List.of(true, true)), seen);
+    }
+
+    /**
+     * RU-37 (review-chain m-4): debt protection's payment while a debt is due now ({@code paysAfterAnyTapped}) reads
+     * the count with the sources a payment may tap left out ({@code without}), and that count carries the flag.
+     * Gilded Lotus, Sol Ring, Dimir Signet, Mountain x2 and Mystic Gate against {2}{R}, a payment of mana value 1: it
+     * may tap two sources (one, and one for the Signet's {1}), the two with the most units the Lotus and the Sol Ring,
+     * and what is left is the Signet and the Mountains: R, R and the Signet's U+B cover three and its {1}, but with the
+     * Gate there the count leans on no counted filter, and two units do not cover three. Covered before any tap, the
+     * Lotus and the Sol Ring there. Without the Gate, covered both ways. [covered, covered whichever source a payment of
+     * mana value 1 taps] per board: the Gate's row fails if {@code without} drops the flag.
+     */
+    @Test(timeOut = 300_000)
+    public void theCountWithTappedSourcesLeftOutCarriesTheFlag() {
+        final DelayedLoss.Debt debt = DelayedLoss.Debt.of("2 R");
+        final List<List<Boolean>> seen = new ArrayList<>();
+        for (final List<String> board : List.of(
+                List.of("Gilded Lotus", "Sol Ring", "Dimir Signet", "Mountain", "Mountain", "Mystic Gate"),
+                List.of("Gilded Lotus", "Sol Ring", "Dimir Signet", "Mountain", "Mountain"))) {
+            final DelayedLoss.Mana mana = countOf(board, DelayedLoss.Due.NOW);
+            seen.add(List.of(mana.pays(debt), mana.paysAfterAnyTapped(debt, 1)));
+        }
+        AssertJUnit.assertEquals("[covered, covered whichever a payment of mana value 1 taps]: with Mystic Gate, without",
+                List.of(List.of(true, false), List.of(true, true)), seen);
     }
 }
