@@ -458,9 +458,15 @@ public final class LoopRunner {
         return sa != null && sa.getApi() == ApiType.Counter;
     }
 
+    private static final String PACT_OF_NEGATION = "Pact of Negation";
+
     /**
      * The mana kept back for a counterspell in the hand when the finisher is cast, so that it can be backed up
      * against a counter of the opponent's: the price of the cheapest one, nothing when one is free (Force of Will).
+     * Pact of Negation is free only while the fork's Pact rule would let it be cast (merge 2026-11-22, RU-27, RU-1's
+     * one Pact rule: DelayedLoss.problem is null for it, with AiController's catches); a Pact it refuses (another debt
+     * pending, an upkeep that cannot pay {3}{U}{U}) is no counter here, and a priced one in hand still sets the reserve.
+     * DelayedLoss reads only (DESIGN.md 1.10), and only for a Pact of Negation in hand.
      */
     public static int counterReserve(final Player ai) {
         int cheapest = -1;
@@ -469,11 +475,30 @@ public final class LoopRunner {
                 continue;
             }
             if (FREE_COUNTERS.contains(c.getName())) {
-                return 0;
+                if (!PACT_OF_NEGATION.equals(c.getName()) || pactCastable(ai, c)) {
+                    return 0;
+                }
+                continue;
             }
             cheapest = cheapest < 0 ? c.getCMC() : Math.min(cheapest, c.getCMC());
         }
         return Math.max(0, cheapest);
+    }
+
+    // whether the fork's Pact rule lets this Pact of Negation be cast now: DelayedLoss's verdict null, read as
+    // AiController.delayedLossProblem reads it (the plan the deck's, read only for a Pact; a timeout rethrown; a play
+    // that cannot be judged refused only when DelayedLoss.refusalWhenUnread refuses it)
+    private static boolean pactCastable(final Player ai, final Card pact) {
+        final SpellAbility sa = pact.getFirstSpellAbility();
+        final java.util.function.Supplier<ComboPlan> plan = () -> ai.getController() instanceof forge.ai.PlayerControllerAi
+                ? ((forge.ai.PlayerControllerAi) ai.getController()).getAi().deckPlan(ai).combos : null;
+        try {
+            return DelayedLoss.problem(ai, sa, plan) == null;
+        } catch (final forge.util.AITimeoutTracker.Expired e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            return DelayedLoss.refusalWhenUnread(sa) == null;
+        }
     }
 
     /** A finisher that draws X (Stroke of Genius, Blue Sun's Zenith): {X}{2}{U} or {X}{U}{U}{U}, three mana besides X. */

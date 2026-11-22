@@ -902,6 +902,45 @@ public class DelayedLossTest extends FlatMcTestBase {
     }
 
     /**
+     * Merge 2026-11-22, RU-27 (interplay I-3): upstream's High Tide plan keeps no mana back for a counterspell when a
+     * free one is in hand (LoopRunner.counterReserve), and it counts Pact of Negation free only when this rule would let
+     * it be cast. High Tide resolved in the AI's own first main phase, five Islands, Stroke of Genius, Pact of Negation
+     * and Counterspell in hand. With a Summoner's Pact debt pending the Pact is refused (pact-debt-pending), so the
+     * reserve is Counterspell's two; with no debt the Pact can be cast, and the reserve is nothing.
+     */
+    @Test(timeOut = 300_000)
+    public void aPactOfNegationIsAFreeCounterOnlyWhenItCouldBeCast() {
+        for (final boolean debt : new boolean[] { true, false }) {
+            Scoped.under(new SimScope(61L), () -> {
+                if (debt) {
+                    resolveASummonersPact();
+                } else {
+                    setUpGame();
+                    noDeadline();
+                    fillLibrary(ai, 10);
+                    fillLibrary(opp, 10);
+                    at(PhaseType.MAIN1, ai);
+                }
+                put("Island", 5, ai, ZoneType.Battlefield);
+                onStack("High Tide", ai, null);
+                game.getPhaseHandler().onStackResolved();
+                playUntilStackClear(game);
+                put("Stroke of Genius", ai, ZoneType.Hand);
+                put("Counterspell", ai, ZoneType.Hand);
+                final SpellAbility pact = spell("Pact of Negation");
+                if (debt) {
+                    assertEquals(problemOf(pact), DelayedLoss.PACT_DEBT_PENDING);
+                    assertEquals(LoopRunner.counterReserve(ai), 2, "a Pact this rule refuses is no free counter");
+                } else {
+                    assertNull(problemOf(pact));
+                    assertEquals(LoopRunner.counterReserve(ai), 0, "a Pact that can be cast is a free counter");
+                }
+                return null;
+            });
+        }
+    }
+
+    /**
      * RULINGS-R3 M18: a board-wide removal of the AI's own play takes the counted sources its filter matches. A pending
      * Summoner's Pact debt (2GG): Culling Ritual destroys each nonland permanent with mana value 2 or less, Sol Ring
      * among them.
