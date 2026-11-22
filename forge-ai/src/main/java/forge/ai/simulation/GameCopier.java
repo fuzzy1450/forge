@@ -174,12 +174,25 @@ public class GameCopier {
         PhaseHandler origPhaseHandler = origGame.getPhaseHandler();
         Player newPlayerTurn = playerMap.get(origPhaseHandler.getPlayerTurn());
         newGame.getPhaseHandler().devModeSet(origPhaseHandler.getPhase(), newPlayerTurn, origPhaseHandler.getTurn());
+        if (ArrivalProbe.watching()) {
+            ArrivalProbe.copyMade(newGame, origPhaseHandler.getTurn()); // print-only, before any card is added
+        }
         newGame.getTriggerHandler().suppressMode(TriggerType.ChangesZone);
         for (Player p : newGame.getPlayers()) {
             ((PlayerZoneBattlefield) p.getZone(ZoneType.Battlefield)).setTriggers(false);
         }
 
         copyGameState(newGame, aiPlayer);
+        // Zone.add counted a descend for each permanent card copyGameState put in a graveyard, as if each had just been put
+        // there: each copy player takes the original's count back.
+        for (Player origPlayer : origGame.getPlayers()) {
+            final Player copyPlayer = playerMap.get(origPlayer);
+            final int oldCopierCount = copyPlayer.getDescended();
+            copyPlayer.setDescended(origPlayer.getDescended());
+            if (ArrivalProbe.watching()) {
+                ArrivalProbe.descendCopied(copyPlayer, origPlayer, oldCopierCount, origPlayer.getDescended());
+            }
+        }
 
         // copyCommandersToSnapshot skips a commander the copy does not hold, such as one that left the game with
         // its owner but is still named by another player's commander damage; the strict map would throw instead.
@@ -656,6 +669,12 @@ public class GameCopier {
             newGame.getStackZone().add(newCard);
         } else {
             zoneOwner.getZone(zone).add(newCard);
+            if (!newCard.isImmutable()) {
+                // Zone.add read the fresh copy as arriving now and stamped it with the copy's turn, so in every rollout
+                // each card would have entered this turn: the copy takes the turn the card really entered its zone.
+                // As in Zone.add, the stack's cards and immutable ones keep what they have.
+                newCard.setTurnInZone(c.getTurnInZone());
+            }
         }
     }
 
