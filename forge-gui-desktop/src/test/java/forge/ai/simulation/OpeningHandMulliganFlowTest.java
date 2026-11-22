@@ -41,14 +41,19 @@ import forge.game.zone.ZoneType;
  * Each question records what the service said and the size it left the hand at, then the test deals the hand of that
  * question and restocks the library, so the odds do not depend on a shuffle: 40 cards, 17 lands, none green, on the
  * play. OpeningHand's formula gives, for a plan reading MIDRANGE (three lands by turn four, on the play three draws):
- * DEAR_SIX 40.9, BEARS 49.1, ONE_LAND_FIVE 41.1, DEAR_FIVE 13.2. The bars are 55 at seven, 45 at six and 30 at five.
+ * DEAR_SIX 20.9 at six and 40.9 as the five it was judged as, BEARS 49.0, ONE_LAND_FIVE 41.1, DEAR_FIVE 13.2. The bars
+ * are 55 at seven, 45 at six and 30 at five. Every hand casts something with its own lands (upstream's
+ * OpeningHand.castsSomething, 852e7a4f741, refuses one that does not at any size), so each is judged by its score.
  */
 public class OpeningHandMulliganFlowTest extends AITest {
     private static final String ISLAND = "Island";
     private static final String MOUNTAIN = "Mountain";
     private static final String GIANT = "Hill Giant";
-    /** Cheap enough for nothing: mana value 6, past the plan's four, so no early play and no key card. */
-    private static final String DREADMAW = "Colossal Dreadmaw";
+    /**
+     * Cheap enough for nothing: mana value 6, past the plan's four, so no early play and no key card. Colourless, so a
+     * hand of two lands and these casts something (Colossal Dreadmaw's {G}{G} made such a hand a mulligan at any size).
+     */
+    private static final String HULK = "Phyrexian Hulk";
     /** A key card, and no early play: nothing in the hand or the library makes green. */
     private static final String BEARS = "Grizzly Bears";
 
@@ -72,15 +77,18 @@ public class OpeningHandMulliganFlowTest extends AITest {
 
     /** Three lands and three plays, every part of the score full: well over six's bar. */
     private static final String[] GOOD_SIX = cards(ISLAND, 2, MOUNTAIN, 1, GIANT, 3);
-    /** Two lands and nothing to cast: 40.9, under six's bar of 45 and over five's of 30. */
-    private static final String[] DEAR_SIX = cards(ISLAND, 1, MOUNTAIN, 1, DREADMAW, 4);
-    /** A land and four spells: 41.1, over five's bar of 30. */
-    private static final String[] ONE_LAND_FIVE = cards(ISLAND, 1, GIANT, 4);
-    /** A land and nothing to cast: 13.2, under five's bar of 30. */
-    private static final String[] DEAR_FIVE = cards(ISLAND, 1, DREADMAW, 4);
-    /** Two lands and one key card: 49.1, under seven's bar of 55 and over six's of 45. */
-    private static final String[] BEARS_SEVEN = cards(ISLAND, 1, MOUNTAIN, 1, BEARS, 1, DREADMAW, 4);
-    private static final String[] LAND_FOUR = cards(ISLAND, 1, GIANT, 3);
+    /**
+     * Two lands and nothing to cast early: 20.9 at six (a six with no early play and no key card loses 20, upstream's
+     * 852e7a4f741), under six's bar of 45, and 40.9 judged as five, over five's bar of 30.
+     */
+    private static final String[] DEAR_SIX = cards(ISLAND, 1, MOUNTAIN, 1, HULK, 4);
+    /** A land and four spells it makes the colour of: 41.1, over five's bar of 30. */
+    private static final String[] ONE_LAND_FIVE = cards(MOUNTAIN, 1, GIANT, 4);
+    /** A land and nothing to cast early: 13.2, under five's bar of 30. */
+    private static final String[] DEAR_FIVE = cards(ISLAND, 1, HULK, 4);
+    /** Two lands and one key card: 49.0, under seven's bar of 55 and over six's of 45. */
+    private static final String[] BEARS_SEVEN = cards(ISLAND, 1, MOUNTAIN, 1, BEARS, 1, HULK, 4);
+    private static final String[] LAND_FOUR = cards(MOUNTAIN, 1, GIANT, 3);
 
     private final class Seat extends PlayerControllerAi {
         private final Deque<String[]> deals;
@@ -186,7 +194,7 @@ public class OpeningHandMulliganFlowTest extends AITest {
     public void aSixHeldToSixesPlayableRule() {
         final Game game = initAndCreateGame();
         final Player ai = seatOf(game);
-        final Seat seat = run(game, ai, landless(7), cards(ISLAND, 1, GIANT, 5), ONE_LAND_FIVE);
+        final Seat seat = run(game, ai, landless(7), cards(MOUNTAIN, 1, GIANT, 5), ONE_LAND_FIVE);
         assertFlow(seat, List.of(7, 6, 5), List.of(0, 1, 2), List.of(false, false, true));
     }
 
@@ -238,7 +246,7 @@ public class OpeningHandMulliganFlowTest extends AITest {
         final Game game = initAndCreateThreePlayerGame();
         final Player ai = seatOf(game);
         final Seat seat = run(game, ai, landless(7), BEARS_SEVEN, DEAR_SIX, ONE_LAND_FIVE);
-        // 49.1 clears six's bar and not seven's; 40.9 clears five's bar and not six's
+        // 49.0 clears six's bar and not seven's; DEAR_SIX clears five's bar and not six's
         assertFlow(seat, List.of(7, 7, 6, 5), List.of(0, 0, 1, 2), List.of(false, false, false, true));
         assertEquals(3, ai.getStats().getMulliganCount());
     }
