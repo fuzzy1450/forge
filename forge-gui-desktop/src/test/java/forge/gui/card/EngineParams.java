@@ -74,7 +74,8 @@ final class EngineParams {
             throw new UncheckedIOException(e);
         }
         List<Read> reads = scanner.result();
-        Map<String, Set<String>> origins = origins(scanner.callGraph(false), scanner.callGraph(true));
+        Map<String, Set<String>> origins = origins(withoutCardAiCalls(scanner.callGraph(false)),
+            withoutCardAiCalls(scanner.callGraph(true)));
         Set<String> declaring = new TreeSet<>();
         CardScriptParams.FRAMEWORK.forEach(c -> declaring.add(c.getName().replace('.', '/')));
         // AI helpers read effect params of other abilities too (e.g. the stack); only AI-only hints count
@@ -98,7 +99,10 @@ final class EngineParams {
             if (r.kind() != ParamReadScanner.Kind.READ && r.kind() != ParamReadScanner.Kind.VALID) {
                 continue;
             }
-            if (r.context() == ParamReadScanner.Context.ABILITY && isAi(cls) && handlerBase(cls) == null
+            // the fork: a card's own AI also reads effect params off a param map or a trait (see isCardAi)
+            if ((r.context() == ParamReadScanner.Context.ABILITY
+                    || r.context() == ParamReadScanner.Context.ANY && isCardAi(r.cls()))
+                    && isAi(cls) && handlerBase(cls) == null
                     && !declaring.contains(cls) && effectOwn.contains(r.name())) {
                 continue;
             }
@@ -285,6 +289,34 @@ final class EngineParams {
 
     private static boolean isAi(String cls) {
         return cls.startsWith("forge/ai/");
+    }
+
+    /**
+     * The fork (MTG_DeckMaker's mtgsim-ai): AI written for particular cards, a SpecialCardAi card class
+     * or the combo package. The fork carries hundreds of these, and they look at other abilities' params
+     * the way the AI helpers above do, but through a param map or a trait and from inside an engine
+     * method's call graph, so a scan that counted them would make Defined, NumCards, TokenOwner and
+     * NewController shared params and move Hidden, Origin and CantCopy between layers. They decide what
+     * the AI plays and never what a script may say, so they define no layer. On upstream's own tree this
+     * changes nothing: its card classes make no such read, and their calls into the engine move no param.
+     */
+    private static boolean isCardAi(String cls) {
+        return cls.startsWith("forge/ai/SpecialCardAi$") || cls.startsWith("forge/ai/combo/");
+    }
+
+    /** The call graph without the calls a card's own AI (isCardAi) makes into the engine. */
+    private static Map<String, Set<String>> withoutCardAiCalls(Map<String, Set<String>> calls) {
+        calls.forEach((m, targets) -> {
+            if (isCardAi(owner(m))) {
+                targets.removeIf(t -> owner(t).startsWith("forge/game/"));
+            }
+        });
+        return calls;
+    }
+
+    /** "owner.name(desc)" -> "owner" */
+    private static String owner(String method) {
+        return method.substring(0, method.lastIndexOf('.', method.indexOf('(')));
     }
 
     private static Class<?> loadHandlerBase(String cls) {
