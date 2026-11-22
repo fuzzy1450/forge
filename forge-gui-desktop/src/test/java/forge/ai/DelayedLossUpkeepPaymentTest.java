@@ -266,4 +266,110 @@ public class DelayedLossUpkeepPaymentTest extends AITest {
                     refusedThoughPaid.contains(i), !allowed && !lost);
         }
     }
+
+    /**
+     * RU-35's form of {@link #castAndPay}: {@code pact} judged from the AI's hand in its first main phase, with
+     * {@code battlefield} put onto its battlefield in that order and {@code hand} in its hand in that order (the hand
+     * copy of the Pact the count judged is taken out again, so the hand is exactly {@code hand}); then the Pact
+     * resolved (Pact of Negation over an opponent's Grizzly Bears) and the game played through the AI's next upkeep.
+     * [the count's verdict, whether the AI lost by the end of that upkeep]; the cards the AI tapped in that upkeep are
+     * added to {@code tapOrder}, in order.
+     */
+    private List<Object> payBoard(final String pact, final List<String> battlefield, final List<String> hand,
+                                  final List<String> tapOrder) {
+        final Game game = initAndCreateGame();
+        noDeadline(game);
+        final Player ai = game.getPlayers().get(1);
+        final Player opp = opponentOf(game, ai);
+        fillLibrary(ai, 10); // Runeclaw Bears: the green creature Summoner's Pact finds
+        fillLibrary(opp, 10);
+        game.getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
+        for (final String name : battlefield) {
+            addCard(name, ai);
+        }
+        for (final String name : hand) {
+            addCardToZone(name, ai, ZoneType.Hand);
+        }
+        game.getAction().checkStateEffects(true);
+        final boolean counter = "Pact of Negation".equals(pact);
+        final SpellAbility bears = counter ? onStack(game, "Grizzly Bears", opp) : null;
+        final Card inHand = addCardToZone(pact, ai, ZoneType.Hand);
+        final SpellAbility fromHand = inHand.getFirstSpellAbility();
+        fromHand.setActivatingPlayer(ai);
+        if (counter) {
+            fromHand.getTargets().add(bears);
+        }
+        final String verdict = DelayedLoss.problem(ai, fromHand, () -> ComboPlan.EMPTY);
+        ai.getZone(ZoneType.Hand).remove(inHand);
+
+        final Card pactCard = createCard(pact, ai);
+        pactCard.setGameTimestamp(game.getNextTimestamp());
+        game.getStackZone().add(pactCard);
+        final SpellAbility cast = pactCard.getFirstSpellAbility();
+        cast.setActivatingPlayer(ai);
+        if (counter) {
+            cast.getTargets().add(bears);
+        }
+        game.getStack().add(cast);
+        if (counter) {
+            game.getPhaseHandler().onStackResolved();
+        }
+        playUntilStackClear(game);
+        AssertJUnit.assertTrue(pact + " resolved: its debt is due at the next upkeep",
+                DelayedLoss.owed(ai, null).hasNext());
+        final UpkeepTaps taps = new UpkeepTaps(game, ai);
+        game.subscribeToEvents(taps);
+        playThroughTheNextUpkeep(game, ai, game.getPhaseHandler().getTurn());
+        tapOrder.addAll(taps.names);
+        return Arrays.asList(verdict, ai.hasLost());
+    }
+
+    /** {@link #payBoard} for one row: {pact, battlefield names comma-separated in order, hand names likewise}. */
+    private List<Object> payRow(final List<String> row, final List<String> tapOrder) {
+        final List<String> hand = row.get(2).isEmpty() ? List.of() : Arrays.asList(row.get(2).split(","));
+        return payBoard(row.get(0), Arrays.asList(row.get(1).split(",")), hand, tapOrder);
+    }
+
+    /**
+     * RU-35 (review-close M-1): the payer's chain clause (ComputerUtilMana.payManaCost, "chaining filters risks
+     * misplay") applies to every mana ability that costs mana to activate, also those the count gives no filter
+     * option: a filter land's hybrid-input ability (Mystic Gate's {W/U},{T}, Wooded Bastion's {G/W},{T}), counted only
+     * as its {T}: {C}. Each board below has one such land beside one counted filter, and before RU-35 the count allowed
+     * it, the counted filter's mana needed (Pact of Negation, {3}{U}{U}: Mystic Gate as {C}, Dimir Signet's {U}{B}
+     * for its {1}, an Island, Mountains; Summoner's Pact, {2}{G}{G}: Wooded Bastion as {C}, a Gruul or Selesnya
+     * Signet's G for one pip, a Forest for the other, a Mountain), and the AI lost at its upkeep, with nothing of the
+     * board's colours in its hand, in every battlefield order tried, with Worldfire in hand, and with a Mountain more
+     * than the debt needs. Its payment tapped the Island (the Forest) for the Signet's {1}, then the Signet, and
+     * stopped there. With a
+     * black card in hand (Griselbrand) the Gate board is paid, and with a green one (Craterhoof Behemoth) the Bastion
+     * board is: the payer's order follows the hand's colours, which the count does not read. So when the AI controls
+     * a filter the count does not count, the count leans on no counted filter: refused, each row, and the AI loses
+     * as it did. [the count's verdict, the AI lost by the end of its upkeep] per row.
+     */
+    @Test(timeOut = 900_000)
+    public void aFilterTheCountDoesNotCountLeavesItNoFilterToLeanOn() {
+        final List<List<String>> rows = List.of(
+                List.of("Pact of Negation", "Mystic Gate,Dimir Signet,Island,Mountain,Mountain", ""),
+                List.of("Pact of Negation", "Dimir Signet,Mystic Gate,Island,Mountain,Mountain", ""),
+                List.of("Pact of Negation", "Island,Mountain,Mountain,Dimir Signet,Mystic Gate", ""),
+                List.of("Pact of Negation", "Mystic Gate,Dimir Signet,Island,Mountain,Mountain,Mountain", ""),
+                List.of("Summoner's Pact", "Wooded Bastion,Gruul Signet,Forest,Mountain", ""),
+                List.of("Summoner's Pact", "Gruul Signet,Wooded Bastion,Forest,Mountain", ""),
+                List.of("Summoner's Pact", "Forest,Mountain,Gruul Signet,Wooded Bastion", "Worldfire"),
+                List.of("Summoner's Pact", "Wooded Bastion,Selesnya Signet,Forest,Mountain", ""),
+                List.of("Summoner's Pact", "Wooded Bastion,Gruul Signet,Forest,Mountain,Mountain", ""));
+        final List<List<Object>> seen = new ArrayList<>();
+        for (final List<String> row : rows) {
+            seen.add(payRow(row, new ArrayList<>()));
+        }
+        final List<List<Object>> expected = new ArrayList<>();
+        for (int i = 0; i < rows.size(); i++) {
+            expected.add(Arrays.asList(DelayedLoss.PACT_UNPAYABLE, true));
+        }
+        AssertJUnit.assertEquals("[the count's verdict, the AI lost] per row", expected, seen);
+        for (int i = 0; i < seen.size(); i++) {
+            AssertJUnit.assertFalse("row " + i + " " + rows.get(i) + ": allowed and lost",
+                    seen.get(i).get(0) == null && (Boolean) seen.get(i).get(1));
+        }
+    }
 }

@@ -748,11 +748,22 @@ public final class DelayedLoss {
         final List<Source> sources;
         final int landDrop;
         final boolean painlessOnly;
+        /**
+         * RU-35: the AI controls a mana ability that costs mana to activate, which the payer's chain clause applies
+         * to, and the count gives it no filter option (Mystic Gate's {W/U},{T}, Chromatic Star's sacrifice).
+         */
+        final boolean uncountedFilter;
 
         Mana(final List<Source> sources, final int landDrop, final boolean painlessOnly) {
+            this(sources, landDrop, painlessOnly, false);
+        }
+
+        Mana(final List<Source> sources, final int landDrop, final boolean painlessOnly,
+             final boolean uncountedFilter) {
             this.sources = Collections.unmodifiableList(sources);
             this.landDrop = landDrop;
             this.painlessOnly = painlessOnly;
+            this.uncountedFilter = uncountedFilter;
         }
 
         private Option option(final Source s) {
@@ -809,7 +820,10 @@ public final class DelayedLoss {
          * generic part needs, leave the debt unpaid (RU-29, review selfkill-mana F1). With two or more filters the
          * debt is covered only when it is covered with EACH counted filter taken alone, every other filter left out
          * (RU-33): the payer may take any one of them first and then refuse the others as chained, so the count does
-         * not lean on which one it takes. With no filter or one, the count is the plain one.
+         * not lean on which one it takes. With no filter or one, the count is the plain one. The chain clause applies
+         * to every ability that costs mana to activate, also one the count gives no filter option; while the AI
+         * controls one ({@link #uncountedFilter}) the payer may take it first and then refuse any counted filter, so
+         * the debt is covered only without the counted filters (RU-35).
          */
         public boolean pays(final Debt debt) {
             if (debt == null) {
@@ -821,6 +835,9 @@ public final class DelayedLoss {
                 if (o != null && o.filterInput > 0) {
                     filters.add(s);
                 }
+            }
+            if (uncountedFilter && !filters.isEmpty()) {
+                return without(filters).pays(debt);
             }
             if (filters.size() > 1) {
                 for (final Source kept : filters) {
@@ -841,7 +858,7 @@ public final class DelayedLoss {
 
         /** The same sources counted without pain: each with its painless option, a source with none left out. */
         public Mana painless() {
-            return painlessOnly ? this : new Mana(sources, landDrop, true);
+            return painlessOnly ? this : new Mana(sources, landDrop, true, uncountedFilter);
         }
 
         /**
@@ -906,7 +923,7 @@ public final class DelayedLoss {
                     left.add(s);
                 }
             }
-            return new Mana(left, landDrop, painlessOnly);
+            return new Mana(left, landDrop, painlessOnly, uncountedFilter);
         }
 
         /**
@@ -1064,12 +1081,14 @@ public final class DelayedLoss {
         final boolean landMayBePlayed = landPlay == null || landPlay;
         final Lasting lasting = new Lasting(ai, taken);
         final List<Source> sources = new ArrayList<>();
+        boolean uncountedFilter = false;
         for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
             if (taken.takes(c)) {
                 continue;
             }
+            Source s = null;
             try {
-                final Source s = source(ai, c, now, stops, lasting, landMayBePlayed);
+                s = source(ai, c, now, stops, lasting, landMayBePlayed);
                 if (s != null) {
                     sources.add(s);
                 }
@@ -1077,6 +1096,15 @@ public final class DelayedLoss {
                 throw e;
             } catch (final RuntimeException e) {
                 // an unreadable source is not counted (DESIGN.md 1.11: every method is total)
+            }
+            if (!uncountedFilter) {
+                try {
+                    uncountedFilter = uncountedFilter(ai, c, s, now, stops);
+                } catch (final AITimeoutTracker.Expired e) {
+                    throw e;
+                } catch (final RuntimeException e) {
+                    uncountedFilter = true; // unreadable: it may be one
+                }
             }
         }
         fitPain(sources, budget);
@@ -1090,7 +1118,34 @@ public final class DelayedLoss {
                 drop = 0;
             }
         }
-        return new Mana(sources, drop, false);
+        return new Mana(sources, drop, false, uncountedFilter);
+    }
+
+    /**
+     * RU-35 (review-close M-1): whether this card, there for the payment, has a mana ability the payer may use that
+     * costs mana to activate, so that its test payment's chain clause applies to it, while the count gives the card no
+     * filter option ({@code s}, its source, null when it gives nothing): a filter land's hybrid- or colored-input
+     * ability, counted only as its {T}: {C}, or Chromatic Star's, which sacrifices it. Reads only.
+     */
+    private static boolean uncountedFilter(final Player ai, final Card c, final Source s, final boolean now,
+                                           final Restrictors stops) {
+        if (s != null && (s.painless != null && s.painless.filterInput > 0
+                || s.painful != null && s.painful.filterInput > 0)) {
+            return false;
+        }
+        boolean costsMana = false;
+        for (final SpellAbility ma : ComputerUtilMana.getAIPlayableMana(c)) {
+            final Cost cost = ma.getPayCosts();
+            final CostPartMana part = cost == null || !cost.hasManaCost() ? null : cost.getCostMana();
+            if (part != null && part.getMana() != null && part.getMana().getCMC() > 0) {
+                costsMana = true;
+                break;
+            }
+        }
+        if (!costsMana) {
+            return false;
+        }
+        return s != null || !c.isPhasedOut() && (now ? !c.isTapped() : willUntap(ai, c, stops));
     }
 
     /** The AI's own turn, before its end step, with a land play left. */
