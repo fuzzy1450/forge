@@ -9,6 +9,7 @@ import forge.game.card.Card;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
+import forge.util.SimScope;
 
 /**
  * Plays the High Tide turn out in a copy of the game before it is started: the loop of {@link LoopRunner} (every High
@@ -35,9 +36,21 @@ public final class TideSolver {
         return RUNNING.get();
     }
 
+    /**
+     * The answers already played out: the JVM's {@link #KNOWN}, or, in a game played under a SimScope (the sim
+     * harness, one serve JVM running many games side by side), that game's own, as DeckPlan's plans are kept. A memo
+     * the games of a JVM share is filled and cleared by the games beside one, so whether a game answers from memory
+     * or plays its loop out again (taking ids and random draws) would depend on them.
+     */
+    private static Map<String, Boolean> known() {
+        final SimScope scope = SimScope.current();
+        return scope == null ? KNOWN : scope.scratch(TideSolver.class, HashMap::new);
+    }
+
     private static String key(final Player ai) {
         final StringBuilder sb = new StringBuilder();
-        sb.append(System.identityHashCode(ai.getGame())).append('|').append(ai.getGame().getPhaseHandler().getTurn()).append('|')
+        // the game's id, not its identity hash: ids are the same on every run of a seed under its scope
+        sb.append(ai.getGame().getId()).append('|').append(ai.getGame().getPhaseHandler().getTurn()).append('|')
                 .append(ai.getManaPool().totalMana());
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
             sb.append('|').append(c.getName());
@@ -57,13 +70,14 @@ public final class TideSolver {
             return false;
         }
         final String key = key(ai);
-        synchronized (KNOWN) {
-            final Boolean known = KNOWN.get(key);
+        final Map<String, Boolean> memo = known();
+        synchronized (memo) {
+            final Boolean known = memo.get(key);
             if (known != null) {
                 return known;
             }
-            if (KNOWN.size() > 64) {
-                KNOWN.clear();
+            if (memo.size() > 64) {
+                memo.clear();
             }
         }
         boolean won = false;
@@ -90,8 +104,8 @@ public final class TideSolver {
         } finally {
             RUNNING.set(Boolean.FALSE);
         }
-        synchronized (KNOWN) {
-            KNOWN.put(key, won);
+        synchronized (memo) {
+            memo.put(key, won);
         }
         if (VetoLog.isEnabled()) {
             // what the solver was looking at: the hand (the pieces it has or lacks), the lands, the High Tides in play

@@ -17,6 +17,7 @@ import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
+import forge.util.SimScope;
 
 /**
  * The Elves decks (Glimpse of Nature, Heritage Druid, Nettle Sentinel, Elvish Visionary, Craterhoof Behemoth).
@@ -496,13 +497,14 @@ public final class ElfLoop {
             return false;
         }
         final String key = key(ai);
-        synchronized (KNOWN) {
-            final Boolean known = KNOWN.get(key);
+        final Map<String, Boolean> memo = known();
+        synchronized (memo) {
+            final Boolean known = memo.get(key);
             if (known != null) {
                 return known;
             }
-            if (KNOWN.size() > 64) {
-                KNOWN.clear();
+            if (memo.size() > 64) {
+                memo.clear();
             }
         }
         boolean won = false;
@@ -523,8 +525,8 @@ public final class ElfLoop {
         } finally {
             RUNNING.set(Boolean.FALSE);
         }
-        synchronized (KNOWN) {
-            KNOWN.put(key, won);
+        synchronized (memo) {
+            memo.put(key, won);
         }
         if (VetoLog.isEnabled()) {
             final StringBuilder seen = new StringBuilder();
@@ -541,9 +543,21 @@ public final class ElfLoop {
         return won;
     }
 
+    /**
+     * The answers already played out: the JVM's {@link #KNOWN}, or, in a game played under a SimScope (the sim
+     * harness, one serve JVM running many games side by side), that game's own, as DeckPlan's plans are kept. A memo
+     * the games of a JVM share is filled and cleared by the games beside one, so whether a game answers from memory
+     * or plays its chain out again (taking ids and random draws) would depend on them.
+     */
+    private static Map<String, Boolean> known() {
+        final SimScope scope = SimScope.current();
+        return scope == null ? KNOWN : scope.scratch(ElfLoop.class, HashMap::new);
+    }
+
     private static String key(final Player ai) {
         final StringBuilder sb = new StringBuilder();
-        sb.append(System.identityHashCode(ai.getGame())).append('|').append(ai.getGame().getPhaseHandler().getTurn());
+        // the game's id, not its identity hash: ids are the same on every run of a seed under its scope
+        sb.append(ai.getGame().getId()).append('|').append(ai.getGame().getPhaseHandler().getTurn());
         for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
             sb.append('|').append(c.getName());
         }
