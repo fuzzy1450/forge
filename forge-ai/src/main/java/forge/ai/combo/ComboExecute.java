@@ -143,6 +143,14 @@ public final class ComboExecute {
         return null;
     }
 
+    /** Whether {@code ai}'s deck holds a line that Thassa's Oracle wins, {@link #goOffFirst}'s own first gate on the
+     *  deck (AiController asks it before running its walk up to the go-off for upstream's early steps, RU-26). Reads
+     *  the tracker's deck lines alone; draws nothing. */
+    public static boolean holdsOracleLine(final Player ai) {
+        final ComboTracker t = ComboTracker.of(ai);
+        return t != null && names(t, Winner.ORACLE);
+    }
+
     /**
      * Whether Thassa's Oracle's Main-2 wait is lifted (follow-up 2, G1; PermanentCreatureAi.checkPhaseRestrictions,
      * beside Neera's commander lift, ahead of PermanentAi's wait for Main 2): our own hand cast of Oracle (not a copy,

@@ -4490,4 +4490,46 @@ public class ComboExecuteAiTest extends AITest {
         t.find(JACE, ZoneType.Battlefield).setCounters(CounterEnumType.LOYALTY, 4);
         return consultation;
     }
+
+    // ---- merge 2026-11-22: the go-off decides before upstream's plays (RU-26) ----
+
+    private static final String DISPUTE = "Deadly Dispute";
+
+    /** RU-26's board, our Main 1: Thassa's Oracle, Demonic Consultation (when {@code consultation}) and Deadly Dispute
+     *  in hand, Island, Island and Swamp, a tapped Sol Ring for Dispute to sacrifice, a 20-card library. Dispute ({1}{B})
+     *  and the Oracle ({U}{U}) cost one more than the three lands; Dispute's Treasure pays that one, so upstream's
+     *  RampPlan.tokenManaStep casts Dispute first. */
+    private void disputeBoard(final boolean consultation) {
+        start(ORACLE_CONSULTATION);
+        hand(ORACLE);
+        if (consultation) {
+            hand(CONSULTATION);
+        }
+        hand(DISPUTE);
+        lands("Island", "Island", "Swamp");
+        addCard("Sol Ring", ai).setTapped(true);
+        fillLibrary(ai, 20);
+    }
+
+    /** RU-26 (interplay I-1): the go-off decides before upstream's token-mana step in chooseSpellAbilityToPlayImpl.
+     *  With no line the step casts Deadly Dispute, which leaves two mana for the Oracle line's three; with the line
+     *  the Oracle is cast. */
+    @Test
+    public void theGoOffPrecedesUpstreamsTokenManaStep() {
+        disputeBoard(true);
+        assertEquals(ids(t.executable()), List.of("742-1295"));
+        t.useLines(List.of());
+        assertEquals(decision(), DISPUTE, "with no line upstream's token-mana step casts Deadly Dispute");
+        t.useLines(lines(ORACLE_CONSULTATION));
+        assertEquals(decision(), ORACLE, "Deadly Dispute took the go-off's mana");
+    }
+
+    /** RU-26's companion: without Demonic Consultation no line is ready, the go-off has no answer, and upstream's
+     *  token-mana step still casts Deadly Dispute ahead of the Oracle. */
+    @Test
+    public void withNoGoOffUpstreamsTokenManaStepStillCastsFirst() {
+        disputeBoard(false);
+        assertEquals(t.executable(), List.of());
+        assertEquals(decision(), DISPUTE, "upstream's token-mana step was lost");
+    }
 }

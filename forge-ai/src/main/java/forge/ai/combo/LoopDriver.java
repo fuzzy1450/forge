@@ -340,6 +340,14 @@ public final class LoopDriver {
         return refill(l, ph);
     }
 
+    /** Whether {@code ai}'s deck holds a loop line, {@link #mainPhaseAction}'s own gate on the deck (AiController asks
+     *  it before running its walk up to the driver for upstream's early steps, RU-26). Reads the tracker's deck lines
+     *  alone and writes nothing; draws nothing. */
+    public boolean holdsLoopLine() {
+        final ComboTracker t = ComboTracker.of(ai);
+        return t != null && holdsLoop(t);
+    }
+
     /** The stock walk's pick, when this decision's {@link #mainPhaseAction} passed it the priority at the target: a
      *  judged round of the go-off begins (the round record reads the board, not the pick), something is spent, and the
      *  next boundary measures afresh. Inert otherwise. */

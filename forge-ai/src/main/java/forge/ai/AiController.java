@@ -2457,8 +2457,7 @@ public class AiController {
             // M23 places it: a vetoed step falls through to the plays below instead of passing priority; a land play is
             // never vetoed, as refineLandChoice's are not
             if (ramp != null && (ramp.isLandAbility() || vetoDelayedLoss(ramp) != null)) {
-                forge.ai.simulation.VetoLog.note(player, "ramp-plan | " + ramp.getHostCard().getName());
-                return singleSpellAbilityList(ramp);
+                return afterForkGoOff(ramp, "ramp-plan | ");
             }
         }
 
@@ -2467,8 +2466,7 @@ public class AiController {
             final SpellAbility tokenMana = forge.ai.simulation.RampPlan.tokenManaStep(player, this::loopApproved);
             // the self-kill fix's final veto (S4, M23's placement) on upstream's new return
             if (tokenMana != null && vetoDelayedLoss(tokenMana) != null) {
-                forge.ai.simulation.VetoLog.note(player, "token-mana-first | " + tokenMana.getHostCard().getName());
-                return singleSpellAbilityList(tokenMana);
+                return afterForkGoOff(tokenMana, "token-mana-first | ");
             }
         }
 
@@ -2482,8 +2480,7 @@ public class AiController {
                 // the self-kill fix's final veto (S4, M23's placement) on upstream's new return: a vetoed payoff falls
                 // through to the land play (the walk above has asked S3b already, so this meets nothing it allowed)
                 if (first != null && vetoDelayedLoss(first) != null) {
-                    forge.ai.simulation.VetoLog.note(player, "landfall-payoff-before-land | " + first.getHostCard().getName());
-                    return singleSpellAbilityList(first);
+                    return afterForkGoOff(first, "landfall-payoff-before-land | ");
                 }
             }
         }
@@ -2513,7 +2510,30 @@ public class AiController {
             }
         }
 
-        return singleSpellAbilityList(vetoDelayedLoss(getSpellAbilityToPlay()));
+        return singleSpellAbilityList(vetoDelayedLoss(getSpellAbilityToPlay(null)));
+    }
+
+    /**
+     * Upstream's three early steps (RampPlan.expeditionStep, RampPlan.tokenManaStep, LandfallGuard.payoffsFirst; merge
+     * 2026-11-22, RU-26, R5) decide after the fork's combo go-off and loop driver: {@code step}, a play one of them
+     * chose and the self-kill fix's veto allowed, is returned only when neither ComboExecute.goOffFirst nor
+     * LoopDriver.mainPhaseAction has an answer at this decision. Both are asked where they always are, in
+     * getSpellAbilityToPlay, which is run up to them with {@code step} carried in and hands {@code step} back when
+     * neither answers (the loop driver hearing it as the walk's pick when it had passed the decision to the walk), so
+     * each runs once in the decision, on the list it always reads. A fork answer passes the same veto
+     * getSpellAbilityToPlay's return always does. Asked only for a deck holding a Thassa's Oracle line or a loop line,
+     * the two hooks' own first gates, and never for a land play, which goes before both hooks whatever chose it: for
+     * every other deck, and for a land, the step is returned as upstream returns it, nothing else read or drawn.
+     */
+    private List<SpellAbility> afterForkGoOff(final SpellAbility step, final String note) {
+        if (!step.isLandAbility() && (ComboExecute.holdsOracleLine(player) || loopDriver.holdsLoopLine())) {
+            final SpellAbility pick = getSpellAbilityToPlay(step);
+            if (pick != null && pick != step) {
+                return singleSpellAbilityList(vetoDelayedLoss(pick));
+            }
+        }
+        forge.ai.simulation.VetoLog.note(player, note + step.getHostCard().getName());
+        return singleSpellAbilityList(step);
     }
 
     /**
@@ -2813,7 +2833,10 @@ public class AiController {
         return null;
     }
 
-    private SpellAbility getSpellAbilityToPlay() {
+    // step: null, or a play of upstream's early steps that the fork's go-off and loop driver decide ahead of
+    // (afterForkGoOff): returned when neither answers, in our main phase on an empty stack, where nothing above them
+    // returns
+    private SpellAbility getSpellAbilityToPlay(final SpellAbility step) {
         if (skipped != null) {
             //FIXME: this is for failed SA to skip temporarily, don't know why AI computation for mana fails, maybe due to auto mana compute?
             for (SpellAbility sa : skipped) {
@@ -2990,6 +3013,15 @@ public class AiController {
         final SpellAbility loopPick = loopDriver.mainPhaseAction(saList);
         if (loopPick != null) {
             return loopPick;
+        }
+        if (step != null) {
+            // neither hook answers: upstream's early step is the play (RU-26), which the loop driver hears as the
+            // walk's pick when it passed this decision to the walk, as it would have heard the walk's
+            if (DelayedLossTrace.ON && loopDriver.handedToWalk()) {
+                traceStockHeard = step;
+            }
+            loopDriver.noteStockPlay(step);
+            return step;
         }
 
         // upstream's (moved here from before the candidate filter, see above): Hexmage's impending line, then the lethal
