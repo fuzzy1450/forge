@@ -4560,4 +4560,40 @@ public class ComboExecuteAiTest extends AITest {
         t.useLines(lines(ORACLE_CONSULTATION));
         assertEquals(decision(), ORACLE, "upstream's lethal Scapeshift came before the go-off");
     }
+
+    /** RU-34 (review FW-5): RU-26's land-play exemption (AiController.afterForkGoOff's {@code !step.isLandAbility()}).
+     *  Our Main 1, the Oracle line ready (Thassa's Oracle and Demonic Consultation in hand, Island, Island and Swamp),
+     *  Khalni Heart Expedition on our battlefield with no quest counter, Polluted Delta in hand and basic lands in the
+     *  library: upstream's RampPlan.expeditionStep picks the fetch land's land play, which goes before the fork's hooks
+     *  whatever they would answer, so the play is Polluted Delta with the line as without it. */
+    @Test
+    public void anExpeditionStepsFetchLandIsPlayedBeforeTheGoOff() {
+        start(ORACLE_CONSULTATION);
+        hand(ORACLE);
+        hand(CONSULTATION);
+        lands("Island", "Island", "Swamp");
+        addCard("Khalni Heart Expedition", ai);
+        hand("Polluted Delta");
+        library("Forest", "Swamp", "Island");
+        fillLibrary(ai, 20);
+        assertEquals(ids(t.executable()), List.of("742-1295"), "the go-off is ready");
+        t.useLines(List.of());
+        assertEquals(decision(), "Polluted Delta", "with no line upstream's expedition step plays the fetch land");
+        t.useLines(lines(ORACLE_CONSULTATION));
+        final boolean vetoLogWas = forge.ai.simulation.VetoLog.isEnabled();
+        final String withLine;
+        final List<String> noted;
+        forge.ai.simulation.VetoLog.reset();
+        forge.ai.simulation.VetoLog.setEnabled(true);
+        try {
+            withLine = decision();
+            noted = forge.ai.simulation.VetoLog.summaryOf(ai.getName());
+        } finally {
+            forge.ai.simulation.VetoLog.setEnabled(vetoLogWas);
+            forge.ai.simulation.VetoLog.reset();
+        }
+        assertEquals(withLine, "Polluted Delta", "the expedition step's land play waited for the go-off");
+        assertTrue(noted.contains("1x EVENT | ramp-plan | Polluted Delta"),
+                "the land play is the expedition step's, not the land drop's: " + noted);
+    }
 }

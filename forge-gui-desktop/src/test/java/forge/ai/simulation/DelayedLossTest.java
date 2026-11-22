@@ -906,38 +906,59 @@ public class DelayedLossTest extends FlatMcTestBase {
      * free one is in hand (LoopRunner.counterReserve), and it counts Pact of Negation free only when this rule would let
      * it be cast. High Tide resolved in the AI's own first main phase, five Islands, Stroke of Genius, Pact of Negation
      * and Counterspell in hand. With a Summoner's Pact debt pending the Pact is refused (pact-debt-pending), so the
-     * reserve is Counterspell's two; with no debt the Pact can be cast, and the reserve is nothing.
+     * reserve is Counterspell's two; with no debt the Pact can be cast, and the reserve is nothing. Each in two hand
+     * orders (RU-34, review FW-4): Counterspell before the Pact, and the Pact before Counterspell, where a refused Pact
+     * is met first and must not end the scan (LoopRunner.counterReserve's {@code continue}), so Counterspell still sets
+     * the reserve.
      */
     @Test(timeOut = 300_000)
     public void aPactOfNegationIsAFreeCounterOnlyWhenItCouldBeCast() {
-        for (final boolean debt : new boolean[] { true, false }) {
-            Scoped.under(new SimScope(61L), () -> {
-                if (debt) {
-                    resolveASummonersPact();
-                } else {
-                    setUpGame();
-                    noDeadline();
-                    fillLibrary(ai, 10);
-                    fillLibrary(opp, 10);
-                    at(PhaseType.MAIN1, ai);
-                }
-                put("Island", 5, ai, ZoneType.Battlefield);
-                onStack("High Tide", ai, null);
-                game.getPhaseHandler().onStackResolved();
-                playUntilStackClear(game);
-                put("Stroke of Genius", ai, ZoneType.Hand);
-                put("Counterspell", ai, ZoneType.Hand);
-                final SpellAbility pact = spell("Pact of Negation");
-                if (debt) {
-                    assertEquals(problemOf(pact), DelayedLoss.PACT_DEBT_PENDING);
-                    assertEquals(LoopRunner.counterReserve(ai), 2, "a Pact this rule refuses is no free counter");
-                } else {
-                    assertNull(problemOf(pact));
-                    assertEquals(LoopRunner.counterReserve(ai), 0, "a Pact that can be cast is a free counter");
-                }
-                return null;
-            });
+        for (final boolean pactFirst : new boolean[] { false, true }) {
+            for (final boolean debt : new boolean[] { true, false }) {
+                pactReserveBoard(pactFirst, debt);
+            }
         }
+    }
+
+    private void pactReserveBoard(final boolean pactFirst, final boolean debt) {
+        Scoped.under(new SimScope(61L), () -> {
+            if (debt) {
+                resolveASummonersPact();
+            } else {
+                setUpGame();
+                noDeadline();
+                fillLibrary(ai, 10);
+                fillLibrary(opp, 10);
+                at(PhaseType.MAIN1, ai);
+            }
+            put("Island", 5, ai, ZoneType.Battlefield);
+            onStack("High Tide", ai, null);
+            game.getPhaseHandler().onStackResolved();
+            playUntilStackClear(game);
+            put("Stroke of Genius", ai, ZoneType.Hand);
+            final SpellAbility pact;
+            if (pactFirst) {
+                pact = spell("Pact of Negation");
+                put("Counterspell", ai, ZoneType.Hand);
+                final List<String> hand = new ArrayList<>();
+                for (final Card c : ai.getCardsIn(ZoneType.Hand)) {
+                    hand.add(c.getName());
+                }
+                assertTrue(hand.indexOf("Pact of Negation") < hand.indexOf("Counterspell"),
+                        "the scan meets the Pact first: " + hand);
+            } else {
+                put("Counterspell", ai, ZoneType.Hand);
+                pact = spell("Pact of Negation");
+            }
+            if (debt) {
+                assertEquals(problemOf(pact), DelayedLoss.PACT_DEBT_PENDING);
+                assertEquals(LoopRunner.counterReserve(ai), 2, "a Pact this rule refuses is no free counter");
+            } else {
+                assertNull(problemOf(pact));
+                assertEquals(LoopRunner.counterReserve(ai), 0, "a Pact that can be cast is a free counter");
+            }
+            return null;
+        });
     }
 
     /**

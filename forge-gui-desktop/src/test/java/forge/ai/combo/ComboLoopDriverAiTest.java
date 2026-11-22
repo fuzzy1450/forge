@@ -1665,6 +1665,63 @@ public class ComboLoopDriverAiTest extends AITest {
         assertSame(act(), manaOf(basalt), "the driver's own go-off was ready");
     }
 
+    /** RU-34's board for upstream's token-mana step (review FW-5): Kinnan and an untapped Basalt Monolith on ours, two
+     *  G floating (the step's estimate of our mana, ComputerUtilMana.getAvailableManaEstimate, reads five here),
+     *  Malevolent Rumble ({1}{G}) and Hill Giant ({3}{R}) in hand (six, which only Rumble's Spawn makes fit, so
+     *  RampPlan.tokenManaStep casts Rumble first). No source of ours makes R, so the stock target is Rumble's 2, which
+     *  the pool holds at a boundary. Returns Rumble. */
+    private Card rumbleBoard() {
+        start();
+        kinnan();
+        final Card basalt = addCard(BASALT, ai);
+        final Card rumble = addCardToZone("Malevolent Rumble", ai, ZoneType.Hand);
+        addCardToZone("Hill Giant", ai, ZoneType.Hand);
+        for (int i = 0; i < 2; i++) {
+            ai.getManaPool().addMana(new Mana((byte) ManaAtom.GREEN, basalt, null, ai));
+        }
+        fillLibrary(ai, 20);
+        game.getAction().checkStateEffects(true);
+        return rumble;
+    }
+
+    // RU-26's hand-back (AiController.getSpellAbilityToPlay's `step != null` block, review FW-5): when the driver
+    // passes a decision to the walk at its target and upstream's token-mana step has a play, that play is the
+    // decision's, and the driver hears it as it hears the walk's pick (noteStockPlay): it is no longer waiting on the
+    // walk, and the judged round the play opened counts, so one more idle round stops it for the phase.
+    @Test
+    public void anEarlyStepsPlayIsHeardAsTheWalksPick() {
+        rumbleBoard();
+        assertNull(act(), "the pool at its target at a boundary: the walk's turn");
+        assertTrue(driver.handedToWalk(), "the driver passed this board to the walk");
+        final Card rumble = rumbleBoard();
+        final SpellAbility step = forge.ai.simulation.RampPlan.tokenManaStep(ai, sa -> true);
+        assertNotNull(step, "upstream's token-mana step has a play on this board (estimate "
+                + forge.ai.ComputerUtilMana.getAvailableManaEstimate(ai) + ")");
+        assertSame(step.getHostCard(), rumble);
+        final boolean vetoLogWas = forge.ai.simulation.VetoLog.isEnabled();
+        final List<SpellAbility> offered;
+        final List<String> noted;
+        forge.ai.simulation.VetoLog.reset();
+        forge.ai.simulation.VetoLog.setEnabled(true);
+        try {
+            offered = ComboLoopBoards.aiOf(ai).chooseSpellAbilityToPlay();
+            noted = forge.ai.simulation.VetoLog.summaryOf(ai.getName());
+        } finally {
+            forge.ai.simulation.VetoLog.setEnabled(vetoLogWas);
+            forge.ai.simulation.VetoLog.reset();
+        }
+        assertNotNull(offered, "the AI plays something");
+        assertSame(offered.get(0).getHostCard(), rumble, "upstream's token-mana step casts Rumble: " + offered);
+        assertTrue(noted.contains("1x EVENT | token-mana-first | Malevolent Rumble"),
+                "the play is the step's, handed back by getSpellAbilityToPlay, not the walk's: " + noted);
+        assertFalse(driver.handedToWalk(), "the driver heard the step's play");
+        assertNull(act(), "one idle round: the walk's turn again");
+        assertTrue(driver.handedToWalk());
+        driver.noteStockPlay(offered.get(0));
+        assertNull(act(), "two idle rounds: stopped for the phase");
+        assertFalse(driver.handedToWalk(), "stopped, not passing to the walk");
+    }
+
     // The AiController calls noteStockPlay or afterStockWalk after every walk, for every AI deck: neither draws, inert
     // (no go-off passed the walk the priority) or live (the round it begins, the go-off it ends). The parity tests
     // cannot see a draw here: they compare two runs of the same code, and a draw in a hook is in both.
