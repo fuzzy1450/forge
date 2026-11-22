@@ -63,7 +63,11 @@ import forge.util.SimScope;
  *       {@code winner=<card>} (a refusal made while a trigger of the AI's whose host DreadReturnWin.isWinner names is
  *       on the stack), {@code threat=threat-only} (a refusal the same judgment with no threat term would allow);</li>
  *   <li>last, {@code copy_judged} and {@code copy_refused}: the game's running counts of the judgments made inside its
- *       simulation copies, kept in its SimScope's scratch (per thread when no scope is bound), never per JVM.</li>
+ *       simulation copies, kept in its SimScope's scratch (per thread when no scope is bound), never per JVM;</li>
+ *   <li>after them, on a judgment's line only and only when a count it made counted two or more filters (sources whose
+ *       mana costs mana to make: a Signet, Prophetic Prism), {@code filters=N}, the most any of its counts counted
+ *       (RULINGS-R3 F, amended 2026-11-22; RU-34, review FW-6): such a count covers a debt only with each filter taken
+ *       alone (RU-33), which its units do not show. A line with fewer is what it was before the key.</li>
  * </ul>
  * A judgment inside a simulation copy is counted and printed only with {@code -Dselfkill.trace.copies=true}. With
  * {@code -Dselfkill.trace.markers=true} each real-game priority decision also opens with a marker,
@@ -362,7 +366,9 @@ public final class DelayedLossTrace {
                     line.add("threat", "threat-only");
                 }
             }
-            write(line.counts(counts));
+            final String text = line.counts(counts);
+            final int filters = filters(seen.counts);
+            write(filters >= 2 ? text + "\tfilters=" + filters : text);
         } catch (final AITimeoutTracker.Expired e) {
             throw e;
         } catch (final RuntimeException e) {
@@ -456,6 +462,15 @@ public final class DelayedLossTrace {
                     .append(c.mana().describe()).append('}');
         }
         return sb.toString();
+    }
+
+    /** The most filters any of these counts counted (DelayedLoss.Mana.filters), 0 for none: field reads only. */
+    static int filters(final List<DelayedLoss.Count> counts) {
+        int most = 0;
+        for (final DelayedLoss.Count c : counts) {
+            most = Math.max(most, c.mana().filters());
+        }
+        return most;
     }
 
     /**

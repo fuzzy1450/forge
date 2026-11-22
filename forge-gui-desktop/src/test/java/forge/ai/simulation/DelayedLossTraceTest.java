@@ -573,4 +573,57 @@ public class DelayedLossTraceTest extends FlatMcTestBase {
                 + "\tcopy_refused=0"), "one line, with no seed, and the players' names for the unnamed decks");
         assertFieldsInOrder(lines.get(0));
     }
+
+    /** The lines {@code trace} writes for S1's judgment of {@code name} from the AI's hand, in the AI's Main 1 with
+     *  {@code sources} on its battlefield, no scope bound. */
+    private List<String> oneS1Line(final String name, final String... sources) throws IOException {
+        final Path file = Files.createTempFile("selfkill-trace-", ".txt");
+        final DelayedLossTrace trace = new DelayedLossTrace(file, false, false);
+        try {
+            setUpGame();
+            at(PhaseType.MAIN1, ai);
+            for (final String source : sources) {
+                put(source, ai, ZoneType.Battlefield);
+            }
+            trace.judgePlay(DelayedLossTrace.S1, ai, spell(ai, name), PLAN, null);
+        } finally {
+            trace.close();
+        }
+        final List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        Files.delete(file);
+        return lines;
+    }
+
+    /**
+     * RU-34 (review FW-6): a judgment line whose count counted two or more filters says how many, {@code filters=N},
+     * after every other field, as the count keeps a debt payable only with each filter alone (RU-33). Mountain x4 and
+     * Prophetic Prism x2 for Summoner's Pact: the count's six units are listed as before, then {@code filters=2}.
+     */
+    @Test(timeOut = 120_000)
+    public void aCountOfTwoFiltersSaysFiltersTwo() throws IOException {
+        assertEquals(oneS1Line("Summoner's Pact", "Mountain", "Mountain", "Mountain", "Mountain", "Prophetic Prism",
+                "Prophetic Prism"), List.of("seed=-\tplayers=p2|p1\tturn=1\tphase=MAIN1\tsite=S1"
+                + "\tverdict=pact-unpayable\tcard=Summoner's Pact\tdebts=-\tunits=NEXT(life=20,threat=0):6{Mountain=R;"
+                + "Mountain=R;Mountain=R;Mountain=R;Prophetic Prism=WUBRG;Prophetic Prism=WUBRG}\tcopy_judged=0"
+                + "\tcopy_refused=0\tfilters=2"), "the two-Prism board's line, filters=2 last");
+    }
+
+    /**
+     * RU-34 (FW-6): a count with fewer than two filters writes no {@code filters} key, so its line is the one it was:
+     * Forest x4 for Summoner's Pact (no filter), and Forest x4 and one Prophetic Prism (one filter).
+     */
+    @Test(timeOut = 120_000)
+    public void aCountOfFewerThanTwoFiltersWritesNoFiltersKey() throws IOException {
+        final String head = "seed=-\tplayers=p2|p1\tturn=1\tphase=MAIN1\tsite=S1\tverdict=ok\tcard=Summoner's Pact"
+                + "\tdebts=-\tunits=NEXT(life=20,threat=0):";
+        final List<String> none = oneS1Line("Summoner's Pact", "Forest", "Forest", "Forest", "Forest");
+        assertEquals(none, List.of(head + "4{Forest=G;Forest=G;Forest=G;Forest=G}\tcopy_judged=0\tcopy_refused=0"),
+                "the no-filter board's line");
+        assertFieldsInOrder(none.get(0));
+        final List<String> one = oneS1Line("Summoner's Pact", "Forest", "Forest", "Forest", "Forest",
+                "Prophetic Prism");
+        assertEquals(one, List.of(head + "5{Forest=G;Forest=G;Forest=G;Forest=G;Prophetic Prism=WUBRG}"
+                + "\tcopy_judged=0\tcopy_refused=0"), "the one-filter board's line");
+        assertFieldsInOrder(one.get(0));
+    }
 }
