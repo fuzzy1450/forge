@@ -110,7 +110,9 @@ public class SacrificeEffect extends SpellAbilityEffect {
 
                 if (sacEachValid) { // Sacrifice maximum permanents in any combination of types specified by SacValid
                     String [] validArray = valid.split(" & ");
-                    String [] msgArray = msg.split(" & ");
+                    // a prompt for each type: the parts of a SacMessage, and where it has none (always, without one) the
+                    // type's own description. The description of the whole SacValid has no " & " left to split at.
+                    String [] msgArray = sa.hasParam("SacMessage") ? msg.split(" & ") : new String[0];
                     List<CardCollection> validTargetsList = new ArrayList<>(validArray.length);
                     for (String subValid : validArray) {
                         CardCollection validTargets = CardLists.filter(AbilityUtils.filterListByType(battlefield, subValid, sa), CardPredicates.canBeSacrificedBy(sa, true));
@@ -123,7 +125,9 @@ public class SacrificeEffect extends SpellAbilityEffect {
                         if (validTargets.size() > 1 && i < validArray.length - 1) {
                             removeCandidates(validTargets, validTargetsList, new HashSet<>(), i + 1, 0, amount);
                         }
-                        choosenToSacrifice = p.getController().choosePermanentsToSacrifice(sa, amount, amount, validTargets, msgArray[i]);
+                        String typeMsg = i < msgArray.length ? msgArray[i]
+                                : Lang.getInstance().buildValidDesc(List.of(validArray[i].split(",")), false);
+                        choosenToSacrifice = p.getController().choosePermanentsToSacrifice(sa, amount, amount, validTargets, typeMsg);
                         for (int j = i + 1; j < validArray.length; ++j) {
                             validTargetsList.get(j).removeAll(choosenToSacrifice);
                         }
