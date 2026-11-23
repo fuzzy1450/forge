@@ -2,6 +2,7 @@ package forge.ai.ability;
 
 import java.lang.reflect.Method;
 
+import forge.ai.AIOption;
 import forge.ai.AITest;
 import forge.ai.AiController;
 import forge.ai.AiPlayDecision;
@@ -29,10 +30,12 @@ import org.testng.annotations.Test;
  * SpecialCardAi.CyberdriveAwakener then answer in AiController.canPlayAndPayForFace after canPlaySa and before
  * canPayCost: no cast while we control an Equipment attached to a creature (CantPlayAi), none in a window real mana
  * cannot pay (G1, CantAfford). A decline must add no MyRandom draw to canPlaySa's own, as A's veto drew nothing after
- * canPlaySa. The seat plays the Default profile, as the stored games do: its RESERVE_MANA_FOR_MAIN2_CHANCE of 100 is
- * what makes canPayCost's test payment draw (ComputerUtilMana.isManaSourceReserved). Furystoke Giant, another
- * creature whose enters trigger is a root AnimateAll with no AILogic, keeps the veto: the fix is the one script and a
- * name compare.
+ * canPlaySa. The block binds only where A vetoed: a full_sim seat and an ETB-disabling static (Torpor Orb), where A
+ * said yes and went on to canPayCost, skip it and cast with an Equipment attached as A did. The seat plays the Default
+ * profile, as the stored games do: its RESERVE_MANA_FOR_MAIN2_CHANCE of 100 is what makes canPayCost's test payment
+ * draw (ComputerUtilMana.isManaSourceReserved). Furystoke Giant, another creature whose enters trigger is a root
+ * AnimateAll with no AILogic, keeps the veto: the fix is the one script and a name compare. Two methods are guards, green before the fix and after: the Main-1 wait (PermanentAi's hold answers
+ * inside canPlaySa, before the block) and Furystoke Giant's veto.
  */
 public class CyberdriveAwakenerCastAiTest extends AITest {
 
@@ -62,9 +65,7 @@ public class CyberdriveAwakenerCastAiTest extends AITest {
         // draws
         Player ai = setup(CARD, "Island", 3, true);
         AssertJUnit.assertFalse(SpecialCardAi.CyberdriveAwakener.castAffordable(ai, spell(ai, CARD)));
-        long e0 = MyRandom.callCount();
-        AssertJUnit.assertEquals(AiPlayDecision.WillPlay, brains(ai).canPlaySa(spell(ai, CARD)));
-        long evaluation = MyRandom.callCount() - e0;
+        long evaluation = canPlaySaDraws(ai);
         long before = MyRandom.callCount();
         AssertJUnit.assertEquals(AiPlayDecision.CantAfford, canPlayAndPayFor(ai, CARD));
         AssertJUnit.assertEquals("the G1 refusal drew beyond canPlaySa", evaluation, MyRandom.callCount() - before);
@@ -72,14 +73,13 @@ public class CyberdriveAwakenerCastAiTest extends AITest {
 
     @Test
     public void refusesWhileOurEquipmentIsAttachedDrawingNothingBeyondCanPlaySa() throws ReflectiveOperationException {
-        // the animation would make the Bonesplitter a creature and unattach it for good (rule 704.5q)
+        // the animation would make the Bonesplitter a creature and unattach it for good (the state-based unattach,
+        // GameAction.stateBasedAction704_attach)
         Player ai = setup(CARD, "Island", 6, true);
         Card bears = addCard("Grizzly Bears", ai);
         addCard("Bonesplitter", ai).attachToEntity(bears, null);
         AssertJUnit.assertTrue(SpecialCardAi.CyberdriveAwakener.stripsEquipment(ai));
-        long e0 = MyRandom.callCount();
-        AssertJUnit.assertEquals(AiPlayDecision.WillPlay, brains(ai).canPlaySa(spell(ai, CARD)));
-        long evaluation = MyRandom.callCount() - e0;
+        long evaluation = canPlaySaDraws(ai);
         long before = MyRandom.callCount();
         AssertJUnit.assertEquals(AiPlayDecision.CantPlayAi, canPlayAndPayFor(ai, CARD));
         AssertJUnit.assertEquals("the Equipment floor drew beyond canPlaySa", evaluation,
@@ -96,9 +96,59 @@ public class CyberdriveAwakenerCastAiTest extends AITest {
     }
 
     @Test
+    public void refusesWithoutBlueThoughTheTotalPays() throws ReflectiveOperationException {
+        // six Mountains and the Sol Ring make eight, none of it blue: G1's {U} shard refuses
+        Player ai = setup(CARD, "Mountain", 6, true);
+        AssertJUnit.assertFalse(SpecialCardAi.CyberdriveAwakener.castAffordable(ai, spell(ai, CARD)));
+        long evaluation = canPlaySaDraws(ai);
+        long before = MyRandom.callCount();
+        AssertJUnit.assertEquals(AiPlayDecision.CantAfford, canPlayAndPayFor(ai, CARD));
+        AssertJUnit.assertEquals("the {U} refusal drew beyond canPlaySa", evaluation, MyRandom.callCount() - before);
+    }
+
+    @Test
+    public void refusesWhileOurEquipmentIsOnAnOpposingCreature() throws ReflectiveOperationException {
+        // ours or not: our Bonesplitter on their creature falls off the same way
+        Player ai = setup(CARD, "Island", 6, true);
+        Player opponent = ai.getGame().getPlayers().get(0);
+        Card theirBears = addCard("Grizzly Bears", opponent);
+        Card bonesplitter = addCard("Bonesplitter", ai);
+        bonesplitter.attachToEntity(theirBears, null);
+        AssertJUnit.assertSame(theirBears, bonesplitter.getAttachedTo());
+        AssertJUnit.assertTrue(SpecialCardAi.CyberdriveAwakener.stripsEquipment(ai));
+        AssertJUnit.assertEquals(AiPlayDecision.CantPlayAi, canPlayAndPayFor(ai, CARD));
+    }
+
+    @Test
+    public void aFullSimulationSeatSkipsTheFloorsAsItSkippedTheVeto() throws ReflectiveOperationException {
+        // saSideEffects answered WillPlay before the dry run on a full_sim seat, in A too, and A went on to canPayCost:
+        // the block must not refuse there, Equipment or not
+        Player ai = setup(CARD, "Island", 6, true);
+        Card bears = addCard("Grizzly Bears", ai);
+        addCard("Bonesplitter", ai).attachToEntity(bears, null);
+        AssertJUnit.assertTrue(SpecialCardAi.CyberdriveAwakener.stripsEquipment(ai));
+        brains(ai).setUseSimulation(AIOption.USE_FULL_SIMULATION);
+        AssertJUnit.assertEquals(AiPlayDecision.WillPlay, canPlayAndPayFor(ai, CARD));
+    }
+
+    @Test
+    public void anEtbDisablingStaticSkipsTheFloorsAsItSkippedTheVeto() throws ReflectiveOperationException {
+        // Torpor Orb turns the trigger off: checkETBEffectsPreparedCard answered true in A, which went on to canPayCost,
+        // and with no animation the Bonesplitter stays on
+        Player ai = setup(CARD, "Island", 6, true);
+        Card bears = addCard("Grizzly Bears", ai);
+        addCard("Bonesplitter", ai).attachToEntity(bears, null);
+        addCard("Torpor Orb", ai);
+        AssertJUnit.assertTrue(SpecialCardAi.CyberdriveAwakener.stripsEquipment(ai));
+        AssertJUnit.assertTrue(SpecialCardAi.CyberdriveAwakener.triggerDisabled(spell(ai, CARD).getHostCard()));
+        AssertJUnit.assertEquals(AiPlayDecision.WillPlay, canPlayAndPayFor(ai, CARD));
+    }
+
+    @Test
     public void mainOneKeepsTheStockWaitAsForAnOrdinaryCreature() throws ReflectiveOperationException {
-        // PermanentAi's Main-2 hold answers inside canPlaySa (castPermanentInMain1 finds no reason on this board), and
-        // an ordinary 4/4 flyer with no enters trigger gets the same answer on the same board
+        // a guard, green before the fix and after. PermanentAi's Main-2 hold answers inside canPlaySa
+        // (castPermanentInMain1 finds no reason on this board), and an ordinary 4/4 flyer with no enters trigger gets the
+        // same answer on the same board
         Player ai = setup(CARD, "Island", 6, true);
         ai.getGame().getPhaseHandler().devModeSet(PhaseType.MAIN1, ai);
         AssertJUnit.assertEquals(AiPlayDecision.CantPlayAi, brains(ai).canPlaySa(spell(ai, CARD)));
@@ -111,7 +161,8 @@ public class CyberdriveAwakenerCastAiTest extends AITest {
 
     @Test
     public void furystokeGiantKeepsTheEtbVeto() {
-        // the same class of card (a root AnimateAll enters trigger, no AILogic, no OptionalDecider): unchanged
+        // a guard, green before the fix and after. The same class of card (a root AnimateAll enters trigger, no
+        // AILogic, no OptionalDecider): unchanged
         Player ai = setup("Furystoke Giant", "Mountain", 5, false);
         SpellAbility etb = etb(createCard("Furystoke Giant", ai));
         AssertJUnit.assertEquals(ApiType.AnimateAll, etb.getApi());
@@ -171,6 +222,21 @@ public class CyberdriveAwakenerCastAiTest extends AITest {
         }
         AssertJUnit.assertNotNull("no enters trigger on " + card, found);
         return found;
+    }
+
+    // canPlaySa's draws for the card's cast, with the host's castSA set first as canPlayAndPayFor sets it before its
+    // canPlaySa (a bare canPlaySa leaves checkETBEffects to set and clear it), so the baseline is the same evaluation
+    private static long canPlaySaDraws(Player ai) {
+        SpellAbility sa = spell(ai, CARD);
+        Card host = sa.getHostCard();
+        host.setCastSA(sa);
+        try {
+            long before = MyRandom.callCount();
+            AssertJUnit.assertEquals(AiPlayDecision.WillPlay, brains(ai).canPlaySa(sa));
+            return MyRandom.callCount() - before;
+        } finally {
+            host.setCastSA(null);
+        }
     }
 
     private static AiController brains(Player ai) {
