@@ -132,6 +132,24 @@ public class CyberdriveAwakenerCastAiTest extends AITest {
     }
 
     @Test
+    public void aHybridSimulationSeatSkipsTheFloors() throws ReflectiveOperationException {
+        // a hybrid_sim seat whose safety check accepts answered WillPlay before the dry run, in A too, and A went on
+        // to canPayCost: the block skips every hybrid seat (it cannot tell an accepting check from a failed game copy
+        // without making the check again), Equipment or not. On this board the check's game copy fails today (no static
+        // check ran after attachToEntity, so the original's Grizzly Bears read 2/2 and the copy's 4/2: "Hybrid safety
+        // check failed" in the log), the design's residual window, and the seat answers WillPlay; were the copy to
+        // match, the check would answer WillPlay or HybridSimRejected. Either way, never the Equipment floor's CantPlayAi
+        Player ai = setup(CARD, "Island", 6, true);
+        Card bears = addCard("Grizzly Bears", ai);
+        addCard("Bonesplitter", ai).attachToEntity(bears, null);
+        AssertJUnit.assertTrue(SpecialCardAi.CyberdriveAwakener.stripsEquipment(ai));
+        brains(ai).setUseSimulation(AIOption.USE_HYBRID_SIMULATION);
+        AiPlayDecision decision = canPlayAndPayFor(ai, CARD);
+        AssertJUnit.assertTrue("the hybrid seat answered " + decision,
+                decision == AiPlayDecision.WillPlay || decision == AiPlayDecision.HybridSimRejected);
+    }
+
+    @Test
     public void anEtbDisablingStaticSkipsTheFloorsAsItSkippedTheVeto() throws ReflectiveOperationException {
         // Torpor Orb turns the trigger off: checkETBEffectsPreparedCard answered true in A, which went on to canPayCost,
         // and with no animation the Bonesplitter stays on
