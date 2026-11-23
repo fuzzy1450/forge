@@ -12803,6 +12803,74 @@ public class SpecialCardAi {
         }
     }
 
+    // Cyberdrive Awakener (dead card of 2026-11-22; held by 18 registered decks, every one an artifact deck, two of
+    // them anchor precons: Counter Intelligence (EOC) and Buckle Up (NEC))
+    // {5}{U} Artifact Creature 4/4, flying. "Other artifact creatures you control have flying. When this creature
+    // enters, each noncreature artifact you control becomes a 4/4 artifact creature until end of turn." Held 827
+    // times in 14 decks on 2.0.15+65940c9d323 and never cast by its owner. Its TrigAnimate is a root DB$ AnimateAll
+    // with no AILogic, which AnimateAllAi.canPlay has no branch for (CantPlayAi at its last line), so the cast-time
+    // dry run (AiController.checkETBEffectsPreparedCard, doTrigger(exSA, false)) failed and saSideEffects vetoed
+    // every cast BadEtbEffects (batch-1 gate shape 4); the BadETB rescue there needs !isFullyTargetable, which an
+    // untargeted trigger never is. The exceptions: an ETB-disabling static (Torpor Orb, Hushbringer, Hushwing Gryff,
+    // Tocatli Honor Guard, Doorkeeper Thrull, Elesh Norn, Mother of Machines), and hybrid_sim and full_sim seats.
+    // The script's AILogic$ Always on SVar:TrigAnimate (Palinchron's, Nadaar's and Danitha's idiom) lets the dry run
+    // through (AnimateAllAi.canPlay's Always line, then SpellAbilityAi.doTriggerNoCostWithSubs); it states a true
+    // fact in every Main 2 but one, which stripsEquipment covers. The real trigger is mandatory and resolves through
+    // super.doTriggerNoCost as before (checkAiLogic reads only Never and Once, the logic-keyed phase test only
+    // AtOppEOT, and the same checkApiLogic follows), so what resolves, and what it draws, is unchanged, for a
+    // reanimated or flickered copy too.
+    // Floors, in AiController.canPlayAndPayForFace after canPlaySa (B3x-3's placement for new rows), both RNG-free:
+    // - stripsEquipment: no cast while we control an Equipment attached to a creature. An Equipment that becomes a
+    //   creature is unattached by the state-based check (rule 704.5q, GameAction's unattach list) and stays off when
+    //   the animation ends, so the cast would strip the kit and cost every re-equip. CantPlayAi, the value-floor
+    //   answer (Brass Squire, Goblin Archaeologist), which every opinion reader at this commit (isLegalDiscovery's
+    //   three tests) takes as it took A's BadEtbEffects. The four Voltron decks (Dimir Historic Voltron and its -old,
+    //   Mono-Blue Clues Voltron and its -old, 12 to 16 Equipment each) therefore keep the card in hand once a
+    //   creature is equipped: dead there by design.
+    // - castAffordable: G1 (CommanderCastCeiling.affordable, called unchanged under G4's widened contract; its frozen
+    //   caller list does not name this row), the total and {U}. CantAfford.
+    // The stock creature checks judge the rest: our own Main 2 unless castPermanentInMain1 (no PlayMain1 and no
+    // haste here; another card giving haste, or mana floating, still lifts it). Cast in Main 2 the animation ends
+    // before any combat, so the card is a six-mana 4/4 flyer whose trigger does nothing but strip Equipment. The
+    // card's best line, a first-main cast that sends the artifacts in as 4/4 flyers, is not played: AiAttackController
+    // has no notion of a creature until end of turn, and AnimateAi.becomeAnimated's LKI copy would lack this card's
+    // flying static, so a Main-1 window needs an attack plan in ArmedAndArmored.considerAttack's style first.
+    // RNG parity: A drew nothing after canPlaySa on its decline; B makes A's whole evaluation first (its draws, the
+    // LKI copy and checkETBEffectsPreparedCard's exSA copy), then only reads (willPayCosts on the trigger's empty
+    // cost, the rest of saSideEffects, the floors), so a held window that one floor declines keeps A's stream and its
+    // SpellAbility ids. B's first new draw is canPayCost's isManaSourceReserved, in a window both floors pass: a
+    // removed decline, divergent by design from the first such window. A Play-effect cast skips both floors (the
+    // precedent) and is now judged as an ordinary creature where A vetoed it.
+    // Reach: the 18 holders by name (one script, one face); a thief's or a MayPlay caster's regular cast meets both
+    // floors for its own side; the other canPlaySa readers (free casts, Play effects, the SpecialCardAi probes) see
+    // WillPlay where they saw BadEtbEffects. Residuals: a printed Vehicle above 4/4 shrinks for the turn; artifacts
+    // that came in this turn become summoning-sick creatures and lose their {T} abilities until end of turn; a
+    // Fortification on a land falls off as an Equipment does and is not floored; under broad discovery (the
+    // Experimental profile, Max) a floored window can still be offered to the rollouts, as A's could; the floor
+    // declines for a Bonesplitter on a 1/1 as for a commander's kit. Holds nothing, remembers nothing.
+    public static class CyberdriveAwakener {
+        public static final String NAME = "Cyberdrive Awakener";
+
+        public static boolean castAffordable(final Player ai, final SpellAbility sa) {
+            return CommanderCastCeiling.affordable(ai, sa);
+        }
+
+        // an Equipment we control (the animation's ValidCards: our noncreature artifacts) that is attached to a
+        // creature, ours or not. Reads only.
+        public static boolean stripsEquipment(final Player ai) {
+            for (final Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isEquipment() || c.isCreature()) {
+                    continue;
+                }
+                final Card equipped = c.getAttachedTo();
+                if (equipped != null && equipped.isCreature()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     // Dance of the Manse (dead-card batch 2, row 52; precon:Buckle Up (NEC))
     // "Return up to X target artifact and/or non-Aura enchantment cards each with mana value X or
     // less from your graveyard to the battlefield. If X is 6 or more, those permanents are 4/4

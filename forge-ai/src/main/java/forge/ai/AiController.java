@@ -1313,6 +1313,26 @@ public class AiController {
             return AiPlayDecision.CantAfford;
         }
 
+        // Dead card of 2026-11-22: Cyberdrive Awakener. canPlaySa approved the cast now that the script's AILogic$ Always
+        // lets its enters-trigger animation through checkETBEffectsPreparedCard's dry run; A declined it inside canPlaySa
+        // (BadEtbEffects at saSideEffects, after the same draws and the same LKI and exSA copies), so canPayCost never ran
+        // for it, and every window B now declines must draw nothing either. Two RNG-free floors answer here, before
+        // canPayCost's isManaSourceReserved rolls: no cast while we control an Equipment attached to a creature (the
+        // animation unattaches it for good, rule 704.5q; CantPlayAi, the value-floor answer), and none in a window real
+        // mana cannot pay (G1, CantAfford). Placed after canPlaySa, so B has made exactly A's evaluation first (B3x-3's
+        // rule for new rows), and after the Abigale block. Own paid casts (from hand, or a thief's or graveyard caster's
+        // regular cast); a Play-effect cast never comes here. G1 under G4's contract, called not edited. A name compare:
+        // inert for every other SA. See the class comment.
+        if (sa.isSpell() && host != null && SpecialCardAi.CyberdriveAwakener.NAME.equals(host.getName())
+                && !sa.isCastFromPlayEffect()) {
+            if (SpecialCardAi.CyberdriveAwakener.stripsEquipment(player)) {
+                return AiPlayDecision.CantPlayAi;
+            }
+            if (!SpecialCardAi.CyberdriveAwakener.castAffordable(player, sa)) {
+                return AiPlayDecision.CantAfford;
+            }
+        }
+
         // upstream's guards (Manabarbs, a gift that exceeds its target, a pump outside combat, a bounce that feeds the
         // opponent) come after the fork's dead-card windows above, both before canPayCost
         if (ActivationGuard.tooPainfulToPay(player, sa)) {
